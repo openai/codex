@@ -75,7 +75,7 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
+    let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
@@ -97,7 +97,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_trace: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
-    })
+    }))
     .await?;
     if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {
         let thread_config = codex.thread_config_snapshot().await;
@@ -172,7 +172,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
-    let io = run_codex_thread_interactive(
+    let io = Box::pin(run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
@@ -181,7 +181,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         child_cancel.clone(),
         subagent_source,
         initial_history,
-    )
+    ))
     .await?;
 
     // Send the initial input to kick off the one-shot turn.

@@ -19,17 +19,67 @@ async fn spawn_command_under_sandbox(
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    use codex_core::seatbelt::spawn_command_under_seatbelt;
-    spawn_command_under_seatbelt(
-        command,
-        command_cwd,
+    use codex_core::exec::ExecCapturePolicy;
+    use codex_core::exec::ExecParams;
+    use codex_core::exec::build_exec_request;
+    use codex_core::sandboxing::SandboxPermissions;
+    use codex_protocol::config_types::WindowsSandboxLevel;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
+    use std::process::Stdio;
+
+    let codex_linux_sandbox_exe = None;
+    let exec_request = build_exec_request(
+        ExecParams {
+            command,
+            cwd: command_cwd,
+            expiration: 1000.into(),
+            capture_policy: ExecCapturePolicy::ShellTool,
+            env,
+            network: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            justification: None,
+            arg0: None,
+        },
         sandbox_policy,
+        &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_cwd),
+        NetworkSandboxPolicy::from(sandbox_policy),
         sandbox_cwd,
-        stdio_policy,
-        /*network*/ None,
-        env,
+        &codex_linux_sandbox_exe,
+        /*use_legacy_landlock*/ false,
     )
-    .await
+    .map_err(|err| io::Error::other(err.to_string()))?;
+
+    let (program, args) = exec_request
+        .command
+        .split_first()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "command args are empty"))?;
+
+    let mut child = tokio::process::Command::new(program);
+    if let Some(arg0) = exec_request.arg0.as_deref() {
+        child.arg0(arg0);
+    }
+    child.args(args);
+    child.current_dir(exec_request.cwd);
+    child.env_clear();
+    child.envs(exec_request.env);
+
+    match stdio_policy {
+        StdioPolicy::RedirectForShellTool => {
+            child.stdin(Stdio::null());
+            child.stdout(Stdio::piped()).stderr(Stdio::piped());
+        }
+        StdioPolicy::Inherit => {
+            child
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
+        }
+    }
+
+    child.kill_on_drop(true).spawn()
 }
 
 #[cfg(target_os = "linux")]

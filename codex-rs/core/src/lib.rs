@@ -139,7 +139,6 @@ pub use project_doc::discover_project_doc_paths;
 pub use project_doc::read_project_docs;
 mod rollout;
 pub(crate) mod safety;
-pub mod seatbelt;
 mod session_rollout_init_error;
 pub mod shell;
 pub(crate) mod shell_snapshot;
