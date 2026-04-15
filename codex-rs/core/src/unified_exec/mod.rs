@@ -89,6 +89,8 @@ impl UnifiedExecContext {
 pub(crate) struct ExecCommandRequest {
     pub command: Vec<String>,
     pub hook_command: String,
+    pub shell: Option<String>,
+    pub use_login_shell: bool,
     pub process_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,

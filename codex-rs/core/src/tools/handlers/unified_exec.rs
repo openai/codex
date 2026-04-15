@@ -208,10 +208,15 @@ impl ToolHandler for UnifiedExecHandler {
                     turn.tools_config.allow_login_shell,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
+                let use_login_shell =
+                    resolve_use_login_shell(args.login, turn.tools_config.allow_login_shell)
+                        .map_err(FunctionCallError::RespondToModel)?;
                 let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
+                let hook_command = args.cmd.clone();
 
                 let ExecCommandArgs {
                     workdir,
+                    shell,
                     tty,
                     yield_time_ms,
                     max_output_tokens,
@@ -314,7 +319,9 @@ impl ToolHandler for UnifiedExecHandler {
                     .exec_command(
                         ExecCommandRequest {
                             command,
-                            hook_command: args.cmd,
+                            hook_command,
+                            shell,
+                            use_login_shell,
                             process_id,
                             yield_time_ms,
                             max_output_tokens,
@@ -388,15 +395,7 @@ pub(crate) fn get_command(
     shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
 ) -> Result<Vec<String>, String> {
-    let use_login_shell = match args.login {
-        Some(true) if !allow_login_shell => {
-            return Err(
-                "login shell is disabled by config; omit `login` or set it to false.".to_string(),
-            );
-        }
-        Some(use_login_shell) => use_login_shell,
-        None => allow_login_shell,
-    };
+    let use_login_shell = resolve_use_login_shell(args.login, allow_login_shell)?;
 
     match shell_mode {
         UnifiedExecShellMode::Direct => {
@@ -413,6 +412,19 @@ pub(crate) fn get_command(
             if use_login_shell { "-lc" } else { "-c" }.to_string(),
             args.cmd.clone(),
         ]),
+    }
+}
+
+pub(crate) fn resolve_use_login_shell(
+    login: Option<bool>,
+    allow_login_shell: bool,
+) -> Result<bool, String> {
+    match login {
+        Some(true) if !allow_login_shell => {
+            Err("login shell is disabled by config; omit `login` or set it to false.".to_string())
+        }
+        Some(use_login_shell) => Ok(use_login_shell),
+        None => Ok(allow_login_shell),
     }
 }
 

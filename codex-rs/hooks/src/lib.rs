@@ -8,6 +8,7 @@ mod types;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;
 pub use events::permission_request::PermissionRequestRequest;
+pub use events::permission_request::PermissionRequestToolInput;
 pub use events::permission_request::PermissionUpdate;
 pub use events::permission_request::PermissionUpdateBehavior;
 pub use events::permission_request::PermissionUpdateDestination;

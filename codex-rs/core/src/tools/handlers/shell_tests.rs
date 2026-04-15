@@ -16,11 +16,19 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::registry::ToolHandler;
+use crate::tools::runtimes::shell::ShellRequest;
+use crate::tools::runtimes::shell::ShellRequestCommandInputKind;
+use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::sandboxing::Approvable;
+use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_hooks::PermissionRequestToolInput;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_shell_command::powershell::try_find_powershell_executable_blocking;
 use codex_shell_command::powershell::try_find_pwsh_executable_blocking;
 use serde_json::json;
+use std::collections::HashMap;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -197,6 +205,64 @@ fn shell_command_handler_rejects_login_when_disallowed() {
             .contains("login shell is disabled by config"),
         "unexpected error: {err}"
     );
+}
+
+#[tokio::test]
+async fn shell_runtime_rewrite_updates_command_and_justification() {
+    let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let req = ShellRequest {
+        command: session
+            .user_shell()
+            .derive_exec_args("echo original", /*use_login_shell*/ true),
+        command_input_kind: ShellRequestCommandInputKind::ShellString {
+            use_login_shell: true,
+        },
+        hook_command: "echo original".to_string(),
+        cwd: turn.cwd.clone(),
+        timeout_ms: None,
+        env: HashMap::new(),
+        explicit_env_overrides: HashMap::new(),
+        network: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        #[cfg(unix)]
+        additional_permissions_preapproved: false,
+        justification: Some("old justification".to_string()),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    };
+    let runtime = ShellRuntime::for_shell_command(super::ShellRuntimeBackend::ShellCommandClassic);
+
+    let updated = runtime
+        .updated_request_from_permission_request(
+            &req,
+            &PermissionRequestToolInput {
+                command: "echo rewritten".to_string(),
+                description: Some("new justification".to_string()),
+            },
+            &ApprovalCtx {
+                session: &session,
+                turn: &turn,
+                call_id: "call-1",
+                guardian_review_id: None,
+                retry_reason: None,
+                network_approval_context: None,
+            },
+        )
+        .expect("rewrite should succeed");
+
+    assert_eq!(
+        updated.command,
+        session
+            .user_shell()
+            .derive_exec_args("echo rewritten", /*use_login_shell*/ true)
+    );
+    assert_eq!(updated.hook_command, "echo rewritten");
+    assert_eq!(updated.justification, Some("new justification".to_string()));
 }
 
 #[tokio::test]

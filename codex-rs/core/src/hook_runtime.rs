@@ -165,8 +165,9 @@ pub(crate) async fn run_pre_tool_use_hooks(
 }
 
 // PermissionRequest hooks share the same preview/start/completed event flow as
-// other hook types, but they return an optional decision instead of mutating
-// tool input or post-run state.
+// other hook types, but they return an optional approval decision plus any
+// selected permission updates, and allow decisions may rewrite the hook-visible
+// command input before execution.
 pub(crate) async fn run_permission_request_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -197,6 +198,7 @@ pub(crate) async fn run_permission_request_hooks(
 
     if let Some(PermissionRequestDecision::Allow {
         updated_permissions,
+        updated_input: _,
     }) = &decision
     {
         apply_permission_updates_from_hook(sess, turn_context, updated_permissions).await;

@@ -2,6 +2,12 @@ use super::*;
 use crate::shell::default_user_shell;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::runtimes::unified_exec::UnifiedExecRequest;
+use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::sandboxing::Approvable;
+use crate::tools::sandboxing::ApprovalCtx;
+use crate::tools::sandboxing::ExecApprovalRequirement;
+use codex_hooks::PermissionRequestToolInput;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_tools::UnifiedExecShellMode;
@@ -9,6 +15,7 @@ use codex_tools::ZshForkConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -196,6 +203,81 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
         })
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn unified_exec_runtime_rewrite_updates_command_and_justification() {
+    let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let manager = UnifiedExecProcessManager::default();
+    let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+    let req = UnifiedExecRequest {
+        command: session
+            .user_shell()
+            .derive_exec_args("echo original", /*use_login_shell*/ true),
+        hook_command: "echo original".to_string(),
+        shell: Some("/bin/bash".to_string()),
+        use_login_shell: true,
+        process_id: 7,
+        cwd: turn.cwd.clone(),
+        env: HashMap::new(),
+        explicit_env_overrides: HashMap::new(),
+        network: None,
+        tty: false,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        #[cfg(unix)]
+        additional_permissions_preapproved: false,
+        justification: Some("old justification".to_string()),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    };
+
+    let updated = runtime
+        .updated_request_from_permission_request(
+            &req,
+            &PermissionRequestToolInput {
+                command: "echo rewritten".to_string(),
+                description: Some("new justification".to_string()),
+            },
+            &ApprovalCtx {
+                session: &session,
+                turn: &turn,
+                call_id: "call-1",
+                guardian_review_id: None,
+                retry_reason: None,
+                network_approval_context: None,
+            },
+        )
+        .expect("rewrite should succeed");
+
+    assert_eq!(
+        updated.command,
+        get_command(
+            &ExecCommandArgs {
+                cmd: "echo rewritten".to_string(),
+                workdir: None,
+                shell: Some("/bin/bash".to_string()),
+                login: Some(true),
+                tty: false,
+                yield_time_ms: 10_000,
+                max_output_tokens: None,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                justification: None,
+                prefix_rule: None,
+            },
+            session.user_shell(),
+            &UnifiedExecShellMode::Direct,
+            /*allow_login_shell*/ true,
+        )
+        .expect("command should build")
+    );
+    assert_eq!(updated.hook_command, "echo rewritten");
+    assert_eq!(updated.justification, Some("new justification".to_string()));
 }
 
 #[tokio::test]

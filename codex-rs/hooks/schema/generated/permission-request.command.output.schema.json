@@ -36,8 +36,12 @@
           "type": "string"
         },
         "updatedInput": {
-          "default": null,
-          "description": "Reserved for a future input-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionRequestToolInput"
+            }
+          ],
+          "default": null
         },
         "updatedPermissions": {
           "default": null,
@@ -69,6 +73,21 @@
       },
       "required": [
         "hookEventName"
+      ],
+      "type": "object"
+    },
+    "PermissionRequestToolInput": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
       ],
       "type": "object"
     },

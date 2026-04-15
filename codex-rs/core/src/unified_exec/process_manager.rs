@@ -688,6 +688,8 @@ impl UnifiedExecProcessManager {
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             hook_command: request.hook_command.clone(),
+            shell: request.shell.clone(),
+            use_login_shell: request.use_login_shell,
             process_id: request.process_id,
             cwd,
             env,
