@@ -242,6 +242,7 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     draw_stream: BroadcastStream<()>,
     resume_stream: WatchStream<()>,
     resize_watchdog: Option<ResizeWatchdog>,
+    terminal_name: TerminalName,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
     #[cfg(unix)]
@@ -264,6 +265,26 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         let enable_resize_watchdog =
             should_enable_superset_resize_watchdog(&terminal_info, has_superset_env_markers);
         tracing::info!(
+            event = "terminal_resize_event_stream_configured",
+            terminal_name = ?terminal_info.name,
+            term_program = ?terminal_info.term_program,
+            term_program_version = ?terminal_info.version,
+            term = ?terminal_info.term,
+            colorterm = ?std::env::var("COLORTERM").ok(),
+            target_os = std::env::consts::OS,
+            target_arch = std::env::consts::ARCH,
+            is_windows = cfg!(windows),
+            is_macos = cfg!(target_os = "macos"),
+            vscode_ipc_hook_cli_present = std::env::var_os("VSCODE_IPC_HOOK_CLI").is_some(),
+            vscode_injection_present = std::env::var_os("VSCODE_INJECTION").is_some(),
+            vscode_shell_login_present = std::env::var_os("VSCODE_SHELL_LOGIN").is_some(),
+            vscode_cwd_present = std::env::var_os("VSCODE_CWD").is_some(),
+            term_session_id_present = std::env::var_os("TERM_SESSION_ID").is_some(),
+            lc_terminal_present = std::env::var_os("LC_TERMINAL").is_some(),
+            resize_watchdog_enabled = enable_resize_watchdog,
+            "configured terminal resize event stream"
+        );
+        tracing::info!(
             event = "superset_resize_watchdog_configured",
             enabled = enable_resize_watchdog,
             terminal_name = ?terminal_info.name,
@@ -279,6 +300,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             draw_stream: BroadcastStream::new(draw_rx),
             resume_stream,
             resize_watchdog,
+            terminal_name: terminal_info.name,
             terminal_focused,
             poll_draw_first: false,
             #[cfg(unix)]
@@ -342,8 +364,22 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
     /// Poll the draw broadcast stream for the next draw event. Draw events are used to trigger a redraw of the TUI.
     pub fn poll_draw_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
         match Pin::new(&mut self.draw_stream).poll_next(cx) {
-            Poll::Ready(Some(Ok(()))) => Poll::Ready(Some(TuiEvent::Draw)),
+            Poll::Ready(Some(Ok(()))) => {
+                tracing::info!(
+                    event = "tui_draw_event_received",
+                    terminal_name = ?self.terminal_name,
+                    target_os = std::env::consts::OS,
+                    "received scheduled TUI draw event"
+                );
+                Poll::Ready(Some(TuiEvent::Draw))
+            }
             Poll::Ready(Some(Err(BroadcastStreamRecvError::Lagged(_)))) => {
+                tracing::warn!(
+                    event = "tui_draw_event_lagged",
+                    terminal_name = ?self.terminal_name,
+                    target_os = std::env::consts::OS,
+                    "scheduled TUI draw event lagged"
+                );
                 Poll::Ready(Some(TuiEvent::Draw))
             }
             Poll::Ready(None) => Poll::Ready(None),
@@ -388,6 +424,10 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                     event = "crossterm_resize_event_received",
                     cols,
                     rows,
+                    terminal_name = ?self.terminal_name,
+                    target_os = std::env::consts::OS,
+                    is_windows = cfg!(windows),
+                    is_macos = cfg!(target_os = "macos"),
                     watchdog_enabled = self.resize_watchdog.is_some(),
                     "received crossterm terminal resize event"
                 );

@@ -3385,12 +3385,34 @@ impl App {
         frame_requester: &tui::FrameRequester,
         resize_reflow_mode: tui::ResizeReflowMode,
     ) -> bool {
+        let pending_reflow_before = self.transcript_reflow.has_pending_reflow();
         let width = self.transcript_reflow.note_width(size.width);
+        tracing::info!(
+            event = "resize_width_observed",
+            cols = size.width,
+            rows = size.height,
+            last_known_cols = last_known_screen_size.width,
+            last_known_rows = last_known_screen_size.height,
+            width_changed = width.changed,
+            width_initialized = width.initialized,
+            pending_reflow_before,
+            resize_reflow_mode = ?resize_reflow_mode,
+            "observed terminal width during draw pre-render"
+        );
         if width.changed {
             self.chat_widget.on_terminal_resize(size.width);
             match resize_reflow_mode {
                 tui::ResizeReflowMode::Debounced => {
-                    if self.schedule_resize_reflow() {
+                    let due_now = self.schedule_resize_reflow();
+                    tracing::info!(
+                        event = "resize_reflow_scheduled_debounced",
+                        cols = size.width,
+                        rows = size.height,
+                        due_now,
+                        debounce_ms = TRANSCRIPT_REFLOW_DEBOUNCE.as_millis(),
+                        "scheduled debounced resize reflow"
+                    );
+                    if due_now {
                         frame_requester.schedule_frame();
                     } else {
                         frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
@@ -3451,7 +3473,16 @@ impl App {
         let Some(deadline) = self.transcript_reflow.pending_until() else {
             return Ok(());
         };
-        if Instant::now() < deadline || self.overlay.is_some() {
+        let now = Instant::now();
+        let due = now >= deadline;
+        let overlay_active = self.overlay.is_some();
+        if !due || overlay_active {
+            tracing::info!(
+                event = "resize_reflow_deferred",
+                due,
+                overlay_active,
+                "resize reflow remains pending"
+            );
             return Ok(());
         }
 
@@ -3463,7 +3494,18 @@ impl App {
         let reflow_ran_during_stream =
             !self.transcript_cells.is_empty() && self.should_mark_reflow_as_stream_time();
 
+        tracing::info!(
+            event = "resize_reflow_started",
+            transcript_cells = self.transcript_cells.len(),
+            reflow_ran_during_stream,
+            "running resize reflow"
+        );
         self.reflow_transcript_now(tui)?;
+        tracing::info!(
+            event = "resize_reflow_completed",
+            reflow_ran_during_stream,
+            "completed resize reflow"
+        );
 
         if reflow_ran_during_stream {
             self.transcript_reflow.mark_ran_during_stream();
@@ -4236,19 +4278,38 @@ impl App {
         event: TuiEvent,
     ) -> Result<AppRunControl> {
         let is_resize = matches!(event, TuiEvent::Resize);
+        let render_trigger = match &event {
+            TuiEvent::Draw => Some("draw"),
+            TuiEvent::Resize => Some("resize"),
+            TuiEvent::Key(_) | TuiEvent::Paste(_) => None,
+        };
         if is_resize {
             let terminal_size = tui.terminal.size().ok();
             tracing::info!(
                 event = "tui_resize_event_handled",
                 cols = terminal_size.map(|size| size.width),
                 rows = terminal_size.map(|size| size.height),
+                terminal_name = ?tui.terminal_name(),
                 resize_reflow_mode = ?tui.resize_reflow_mode(),
+                target_os = std::env::consts::OS,
+                is_windows = cfg!(windows),
+                is_macos = cfg!(target_os = "macos"),
                 "handling TUI resize event with forced full repaint"
             );
             tui.force_full_repaint();
         }
-        if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
+        if let Some(render_trigger) = render_trigger {
+            tracing::info!(
+                event = "tui_render_pre_render_started",
+                render_trigger,
+                "starting draw pre-render handling"
+            );
             self.handle_draw_pre_render(tui)?;
+            tracing::info!(
+                event = "tui_render_pre_render_completed",
+                render_trigger,
+                "completed draw pre-render handling"
+            );
         }
 
         if self.overlay.is_some() {
@@ -4267,6 +4328,7 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw | TuiEvent::Resize => {
+                    let render_trigger = render_trigger.unwrap_or("unknown");
                     if self.backtrack_render_pending {
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
@@ -4280,15 +4342,30 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    tui.draw(
-                        self.chat_widget.desired_height(tui.terminal.size()?.width),
-                        |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                                frame.set_cursor_position((x, y));
-                            }
-                        },
-                    )?;
+                    let terminal_size = tui.terminal.size()?;
+                    let desired_height = self.chat_widget.desired_height(terminal_size.width);
+                    tracing::info!(
+                        event = "tui_render_started",
+                        render_trigger,
+                        cols = terminal_size.width,
+                        rows = terminal_size.height,
+                        desired_height,
+                        "starting TUI render"
+                    );
+                    tui.draw(desired_height, |frame| {
+                        self.chat_widget.render(frame.area(), frame.buffer);
+                        if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            frame.set_cursor_position((x, y));
+                        }
+                    })?;
+                    tracing::info!(
+                        event = "tui_render_completed",
+                        render_trigger,
+                        cols = terminal_size.width,
+                        rows = terminal_size.height,
+                        desired_height,
+                        "completed TUI render"
+                    );
                     if self.chat_widget.external_editor_state() == ExternalEditorState::Requested {
                         self.chat_widget
                             .set_external_editor_state(ExternalEditorState::Active);

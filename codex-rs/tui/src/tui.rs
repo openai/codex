@@ -302,6 +302,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
     is_zellij: bool,
+    terminal_name: TerminalName,
     resize_reflow_mode: ResizeReflowMode,
     force_full_repaint: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
@@ -334,6 +335,19 @@ impl Tui {
             mode = ?resize_reflow_mode,
             terminal_name = ?terminal_info.name,
             term_program = ?terminal_info.term_program,
+            term_program_version = ?terminal_info.version,
+            term = ?terminal_info.term,
+            colorterm = ?std::env::var("COLORTERM").ok(),
+            target_os = std::env::consts::OS,
+            target_arch = std::env::consts::ARCH,
+            is_windows = cfg!(windows),
+            is_macos = cfg!(target_os = "macos"),
+            vscode_ipc_hook_cli_present = std::env::var_os("VSCODE_IPC_HOOK_CLI").is_some(),
+            vscode_injection_present = std::env::var_os("VSCODE_INJECTION").is_some(),
+            vscode_shell_login_present = std::env::var_os("VSCODE_SHELL_LOGIN").is_some(),
+            vscode_cwd_present = std::env::var_os("VSCODE_CWD").is_some(),
+            term_session_id_present = std::env::var_os("TERM_SESSION_ID").is_some(),
+            lc_terminal_present = std::env::var_os("LC_TERMINAL").is_some(),
             "configured terminal resize reflow mode"
         );
 
@@ -352,6 +366,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             is_zellij,
+            terminal_name: terminal_info.name,
             resize_reflow_mode,
             force_full_repaint: false,
             alt_screen_enabled: true,
@@ -382,6 +397,10 @@ impl Tui {
 
     pub(crate) fn resize_reflow_mode(&self) -> ResizeReflowMode {
         self.resize_reflow_mode
+    }
+
+    pub(crate) fn terminal_name(&self) -> TerminalName {
+        self.terminal_name
     }
 
     pub fn enhanced_keys_supported(&self) -> bool {
@@ -637,7 +656,26 @@ impl Tui {
             self.pending_viewport_area()?
         };
 
-        stdout().sync_update(|_| {
+        let terminal_size = self.terminal.size().ok();
+        let viewport_area = self.terminal.viewport_area;
+        tracing::info!(
+            event = "terminal_draw_started",
+            requested_height = height,
+            force_full_repaint,
+            pending_viewport_area = pending_viewport_area.is_some(),
+            pending_history_lines = self.pending_history_lines.len(),
+            terminal_cols = terminal_size.map(|size| size.width),
+            terminal_rows = terminal_size.map(|size| size.height),
+            viewport_x = viewport_area.x,
+            viewport_y = viewport_area.y,
+            viewport_width = viewport_area.width,
+            viewport_height = viewport_area.height,
+            terminal_name = ?self.terminal_name,
+            resize_reflow_mode = ?self.resize_reflow_mode,
+            "starting terminal draw"
+        );
+
+        let draw_result = stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -683,7 +721,25 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        })?;
+
+        match &draw_result {
+            Ok(()) => tracing::info!(
+                event = "terminal_draw_completed",
+                requested_height = height,
+                force_full_repaint,
+                "completed terminal draw"
+            ),
+            Err(err) => tracing::warn!(
+                event = "terminal_draw_failed",
+                requested_height = height,
+                force_full_repaint,
+                error = %err,
+                "terminal draw failed"
+            ),
+        }
+
+        draw_result
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
