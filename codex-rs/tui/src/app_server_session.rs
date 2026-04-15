@@ -30,6 +30,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadCloseParams;
+use codex_app_server_protocol::ThreadCloseResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
@@ -60,8 +62,6 @@ use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
-use codex_app_server_protocol::ThreadUnsubscribeParams;
-use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -512,18 +512,18 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {
+    pub(crate) async fn thread_close(&mut self, thread_id: ThreadId) -> Result<()> {
         let request_id = self.next_request_id();
-        let _: ThreadUnsubscribeResponse = self
+        let _: ThreadCloseResponse = self
             .client
-            .request_typed(ClientRequest::ThreadUnsubscribe {
+            .request_typed(ClientRequest::ThreadClose {
                 request_id,
-                params: ThreadUnsubscribeParams {
+                params: ThreadCloseParams {
                     thread_id: thread_id.to_string(),
                 },
             })
             .await
-            .wrap_err("thread/unsubscribe failed in TUI")?;
+            .wrap_err("thread/close failed in TUI")?;
         Ok(())
     }
 
