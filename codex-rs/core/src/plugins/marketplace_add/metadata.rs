@@ -299,8 +299,8 @@ mod tests {
         fs::write(
             codex_home.path().join(CONFIG_TOML_FILE),
             format!(
-                "[marketplaces.debug]\nsource_type = \"local\"\nsource = \"{}\"\n",
-                source_root.display()
+                "[marketplaces.debug]\nsource_type = \"local\"\nsource = {}\n",
+                toml::Value::String(source_root.display().to_string())
             ),
         )
         .unwrap();
