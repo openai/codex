@@ -243,6 +243,7 @@ impl GuardianReviewAnalyticsResult {
             terminal.had_prior_review_context = Some(metadata.had_prior_review_context);
             terminal.reviewed_action_truncated = metadata.reviewed_action_truncated;
             terminal.token_usage = metadata.token_usage;
+            terminal.time_to_first_token_ms = metadata.time_to_first_token_ms;
         }
 
         terminal
