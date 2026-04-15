@@ -77,7 +77,6 @@ pub mod legacy_core {
     pub use codex_core::ThreadsPage;
     pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
-    pub use codex_core::discover_project_doc_paths;
     pub use codex_core::find_thread_meta_by_name_str;
     pub use codex_core::find_thread_name_by_id;
     pub use codex_core::find_thread_names_by_ids;

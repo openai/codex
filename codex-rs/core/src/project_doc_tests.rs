@@ -11,11 +11,15 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 async fn get_user_instructions(config: &Config) -> Option<String> {
-    super::get_user_instructions_with_fs(config, LOCAL_FS.as_ref()).await
+    AgentsMdManager::new(config)
+        .user_instructions_with_fs(LOCAL_FS.as_ref())
+        .await
 }
 
-async fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf>> {
-    super::discover_project_doc_paths(config, LOCAL_FS.as_ref()).await
+async fn project_doc_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    AgentsMdManager::new(config)
+        .project_doc_paths(LOCAL_FS.as_ref())
+        .await
 }
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
@@ -101,7 +105,9 @@ async fn no_environment_returns_none() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
 
-    let res = super::get_user_instructions(&config, /*environment*/ None).await;
+    let res = AgentsMdManager::new(&config)
+        .user_instructions(/*environment*/ None)
+        .await;
 
     assert_eq!(res, None);
 }
@@ -187,10 +193,9 @@ async fn zero_byte_limit_disables_discovery() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
 
-    let discovery =
-        discover_project_doc_paths(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await)
-            .await
-            .expect("discover paths");
+    let discovery = project_doc_paths(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await)
+        .await
+        .expect("discover paths");
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
@@ -307,9 +312,7 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
     .await;
     cfg.cwd = nested.abs();
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = project_doc_paths(&cfg).await.expect("discover paths");
     let expected_parent = AbsolutePathBuf::try_from(
         dunce::canonicalize(root.path().join("AGENTS.md")).expect("canonical parent doc path"),
     )
@@ -324,6 +327,26 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
     assert_eq!(res, "parent doc\n\nchild doc");
+}
+
+#[tokio::test]
+async fn instruction_sources_include_global_before_project_docs() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    let global_agents = cfg.codex_home.join(DEFAULT_PROJECT_DOC_FILENAME);
+    cfg.user_instructions_path = Some(global_agents.clone());
+
+    let sources = AgentsMdManager::new(&cfg)
+        .instruction_sources(LOCAL_FS.as_ref())
+        .await;
+    let project_agents = AbsolutePathBuf::try_from(
+        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical project doc path"),
+    )
+    .expect("absolute project doc path");
+
+    assert_eq!(sources, vec![global_agents, project_agents]);
 }
 
 /// AGENTS.override.md is preferred over AGENTS.md when both are present.
@@ -341,9 +364,7 @@ async fn agents_local_md_preferred() {
 
     assert_eq!(res, "local");
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = project_doc_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert_eq!(
         discovery[0].file_name().unwrap().to_string_lossy(),
@@ -393,9 +414,7 @@ async fn agents_md_preferred_over_fallbacks() {
 
     assert_eq!(res, "primary");
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = project_doc_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert!(
         discovery[0]
@@ -416,9 +435,7 @@ async fn agents_md_directory_is_ignored() {
     let res = get_user_instructions(&cfg).await;
     assert_eq!(res, None);
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = project_doc_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
@@ -441,9 +458,7 @@ async fn agents_md_special_file_is_ignored() {
     let res = get_user_instructions(&cfg).await;
     assert_eq!(res, None);
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = project_doc_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
@@ -460,9 +475,7 @@ async fn override_directory_falls_back_to_agents_md_file() {
         .expect("AGENTS.md should be used when override is a directory");
     assert_eq!(res, "primary");
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = project_doc_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert_eq!(
         discovery[0]

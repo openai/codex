@@ -3,6 +3,8 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use crate::config_loader::RequirementSource;
 use crate::plugins::PluginsManager;
+use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
+use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::AgentRoleToml;

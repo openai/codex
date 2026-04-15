@@ -15,8 +15,7 @@ use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
-use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
+use crate::project_doc::AgentsMdManager;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -1446,7 +1445,7 @@ impl Config {
         } = config_layer_stack.requirements().clone();
 
         let (user_instructions, user_instructions_path) =
-            Self::load_instructions(Some(&codex_home))
+            AgentsMdManager::load_global_instructions(Some(&codex_home))
                 .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
                 .unwrap_or((None, None));
         let mut startup_warnings = Vec::new();
@@ -2209,23 +2208,6 @@ impl Config {
         Ok(config)
     }
 
-    fn load_instructions(codex_dir: Option<&AbsolutePathBuf>) -> Option<LoadedUserInstructions> {
-        let base = codex_dir?;
-        for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
-            let path = base.join(candidate);
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                let trimmed = contents.trim();
-                if !trimmed.is_empty() {
-                    return Some(LoadedUserInstructions {
-                        contents: trimmed.to_string(),
-                        path,
-                    });
-                }
-            }
-        }
-        None
-    }
-
     /// If `path` is `Some`, attempts to read the file at the given path and
     /// returns its contents as a trimmed `String`. If the file is empty, or
     /// is `Some` but cannot be read, returns an `Err`.
@@ -2291,11 +2273,6 @@ impl Config {
     pub fn bundled_skills_enabled(&self) -> bool {
         crate::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
-}
-
-struct LoadedUserInstructions {
-    contents: String,
-    path: AbsolutePathBuf,
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
