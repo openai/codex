@@ -596,7 +596,7 @@ pub struct GhostSnapshotToml {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    pub fn derive_sandbox_policy(
+    pub async fn derive_sandbox_policy(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
@@ -607,6 +607,11 @@ impl ConfigToml {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
             || profile_sandbox_mode.is_some()
             || self.sandbox_mode.is_some();
+        let active_project = if sandbox_mode_was_explicit {
+            None
+        } else {
+            self.get_active_project(resolved_cwd).await
+        };
         let resolved_sandbox_mode = sandbox_mode_override
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
@@ -614,7 +619,7 @@ impl ConfigToml {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                self.get_active_project(resolved_cwd).and_then(|p| {
+                active_project.as_ref().and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
@@ -676,7 +681,8 @@ impl ConfigToml {
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+    pub async fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+        let repo_root = resolve_root_git_project_for_trust(resolved_cwd).await;
         let projects = self.projects.clone().unwrap_or_default();
 
         let resolved_cwd_key = project_trust_key(resolved_cwd);
@@ -691,8 +697,8 @@ impl ConfigToml {
         // If cwd lives inside a git repo/worktree, check whether the root git project
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd) {
-            let repo_root_key = project_trust_key(repo_root.as_path());
+        if let Some(repo_root) = repo_root.as_deref() {
+            let repo_root_key = project_trust_key(repo_root);
             let repo_root_raw_key = repo_root.to_string_lossy().to_string();
             if let Some(project_config_for_root) = projects
                 .get(&repo_root_key)

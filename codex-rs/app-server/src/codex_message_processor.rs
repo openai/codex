@@ -2442,6 +2442,7 @@ impl CodexMessageProcessor {
                 ))
         {
             let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
+                .await
                 .unwrap_or_else(|| config.cwd.to_path_buf());
             let cli_overrides_with_trust;
             let cli_overrides_for_reload = if let Err(err) =
