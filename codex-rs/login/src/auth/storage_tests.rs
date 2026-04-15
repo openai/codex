@@ -143,8 +143,28 @@ fn seed_windows_keyring_with_auth(
     )?;
     mock_keyring.save(
         KEYRING_SERVICE,
-        &KeyringAuthStorage::field_key(key, TOKENS_FIELD),
-        &serde_json::to_string(&auth.tokens)?,
+        &KeyringAuthStorage::field_key(key, TOKENS_ID_TOKEN_FIELD),
+        &serde_json::to_string(&auth.tokens.as_ref().map(|tokens| &tokens.id_token.raw_jwt))?,
+    )?;
+    mock_keyring.save(
+        KEYRING_SERVICE,
+        &KeyringAuthStorage::field_key(key, TOKENS_ACCESS_TOKEN_FIELD),
+        &serde_json::to_string(&auth.tokens.as_ref().map(|tokens| &tokens.access_token))?,
+    )?;
+    mock_keyring.save(
+        KEYRING_SERVICE,
+        &KeyringAuthStorage::field_key(key, TOKENS_REFRESH_TOKEN_FIELD),
+        &serde_json::to_string(&auth.tokens.as_ref().map(|tokens| &tokens.refresh_token))?,
+    )?;
+    mock_keyring.save(
+        KEYRING_SERVICE,
+        &KeyringAuthStorage::field_key(key, TOKENS_ACCOUNT_ID_FIELD),
+        &serde_json::to_string(
+            &auth
+                .tokens
+                .as_ref()
+                .and_then(|tokens| tokens.account_id.as_ref()),
+        )?,
     )?;
     mock_keyring.save(
         KEYRING_SERVICE,
@@ -180,7 +200,10 @@ fn assert_windows_keyring_saved_auth_and_removed_fallback(
 ) {
     let auth_mode_key = KeyringAuthStorage::field_key(key, AUTH_MODE_FIELD);
     let openai_api_key_key = KeyringAuthStorage::field_key(key, OPENAI_API_KEY_FIELD);
-    let tokens_key = KeyringAuthStorage::field_key(key, TOKENS_FIELD);
+    let tokens_id_token_key = KeyringAuthStorage::field_key(key, TOKENS_ID_TOKEN_FIELD);
+    let tokens_access_token_key = KeyringAuthStorage::field_key(key, TOKENS_ACCESS_TOKEN_FIELD);
+    let tokens_refresh_token_key = KeyringAuthStorage::field_key(key, TOKENS_REFRESH_TOKEN_FIELD);
+    let tokens_account_id_key = KeyringAuthStorage::field_key(key, TOKENS_ACCOUNT_ID_FIELD);
     let last_refresh_key = KeyringAuthStorage::field_key(key, LAST_REFRESH_FIELD);
 
     assert_eq!(
@@ -192,8 +215,42 @@ fn assert_windows_keyring_saved_auth_and_removed_fallback(
         Some(serde_json::to_string(&expected.openai_api_key).expect("serialize openai_api_key")),
     );
     assert_eq!(
-        mock_keyring.saved_value(&tokens_key),
-        Some(serde_json::to_string(&expected.tokens).expect("serialize tokens")),
+        mock_keyring.saved_value(&tokens_id_token_key),
+        Some(
+            serde_json::to_string(
+                &expected
+                    .tokens
+                    .as_ref()
+                    .map(|tokens| &tokens.id_token.raw_jwt)
+            )
+            .expect("serialize tokens.id_token")
+        ),
+    );
+    assert_eq!(
+        mock_keyring.saved_value(&tokens_access_token_key),
+        Some(
+            serde_json::to_string(&expected.tokens.as_ref().map(|tokens| &tokens.access_token))
+                .expect("serialize tokens.access_token")
+        ),
+    );
+    assert_eq!(
+        mock_keyring.saved_value(&tokens_refresh_token_key),
+        Some(
+            serde_json::to_string(&expected.tokens.as_ref().map(|tokens| &tokens.refresh_token))
+                .expect("serialize tokens.refresh_token")
+        ),
+    );
+    assert_eq!(
+        mock_keyring.saved_value(&tokens_account_id_key),
+        Some(
+            serde_json::to_string(
+                &expected
+                    .tokens
+                    .as_ref()
+                    .and_then(|tokens| tokens.account_id.as_ref()),
+            )
+            .expect("serialize tokens.account_id")
+        ),
     );
     assert_eq!(
         mock_keyring.saved_value(&last_refresh_key),
@@ -433,7 +490,22 @@ fn keyring_auth_storage_windows_delete_removes_split_entries_and_file() -> anyho
         key.as_str(),
         OPENAI_API_KEY_FIELD,
     )));
-    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(key.as_str(), TOKENS_FIELD)));
+    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(
+        key.as_str(),
+        TOKENS_ID_TOKEN_FIELD,
+    )));
+    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(
+        key.as_str(),
+        TOKENS_ACCESS_TOKEN_FIELD,
+    )));
+    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(
+        key.as_str(),
+        TOKENS_REFRESH_TOKEN_FIELD,
+    )));
+    assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(
+        key.as_str(),
+        TOKENS_ACCOUNT_ID_FIELD,
+    )));
     assert!(!mock_keyring.contains(&KeyringAuthStorage::field_key(
         key.as_str(),
         LAST_REFRESH_FIELD,

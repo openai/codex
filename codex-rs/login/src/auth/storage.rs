@@ -20,6 +20,7 @@ use std::sync::Mutex;
 use tracing::warn;
 
 use crate::token_data::TokenData;
+use crate::token_data::parse_chatgpt_jwt_claims;
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_keyring_store::DefaultKeyringStore;
@@ -125,7 +126,10 @@ const KEYRING_SERVICE: &str = "Codex Auth";
 //  and windows storage functions.
 const AUTH_MODE_FIELD: &str = "auth_mode";
 const OPENAI_API_KEY_FIELD: &str = "openai_api_key";
-const TOKENS_FIELD: &str = "tokens";
+const TOKENS_ID_TOKEN_FIELD: &str = "tokens.id_token";
+const TOKENS_ACCESS_TOKEN_FIELD: &str = "tokens.access_token";
+const TOKENS_REFRESH_TOKEN_FIELD: &str = "tokens.refresh_token";
+const TOKENS_ACCOUNT_ID_FIELD: &str = "tokens.account_id";
 const LAST_REFRESH_FIELD: &str = "last_refresh";
 
 // turns codex_home path into a stable, short key string
@@ -200,8 +204,29 @@ impl KeyringAuthStorage {
                 serde_json::to_string(&auth.openai_api_key).map_err(std::io::Error::other)?,
             ),
             (
-                TOKENS_FIELD,
-                serde_json::to_string(&auth.tokens).map_err(std::io::Error::other)?,
+                TOKENS_ID_TOKEN_FIELD,
+                serde_json::to_string(&auth.tokens.as_ref().map(|tokens| &tokens.id_token.raw_jwt))
+                    .map_err(std::io::Error::other)?,
+            ),
+            (
+                TOKENS_ACCESS_TOKEN_FIELD,
+                serde_json::to_string(&auth.tokens.as_ref().map(|tokens| &tokens.access_token))
+                    .map_err(std::io::Error::other)?,
+            ),
+            (
+                TOKENS_REFRESH_TOKEN_FIELD,
+                serde_json::to_string(&auth.tokens.as_ref().map(|tokens| &tokens.refresh_token))
+                    .map_err(std::io::Error::other)?,
+            ),
+            (
+                TOKENS_ACCOUNT_ID_FIELD,
+                serde_json::to_string(
+                    &auth
+                        .tokens
+                        .as_ref()
+                        .and_then(|tokens| tokens.account_id.as_ref()),
+                )
+                .map_err(std::io::Error::other)?,
             ),
             (
                 LAST_REFRESH_FIELD,
@@ -251,10 +276,43 @@ impl KeyringAuthStorage {
             self.keyring_store.as_ref(),
             &Self::field_key(key, OPENAI_API_KEY_FIELD),
         )?;
-        let tokens = load_auth_field_from_keyring::<Option<TokenData>>(
-            self.keyring_store.as_ref(),
-            &Self::field_key(key, TOKENS_FIELD),
-        )?;
+        let tokens = match (
+            load_auth_field_from_keyring::<Option<String>>(
+                self.keyring_store.as_ref(),
+                &Self::field_key(key, TOKENS_ID_TOKEN_FIELD),
+            )?,
+            load_auth_field_from_keyring::<Option<String>>(
+                self.keyring_store.as_ref(),
+                &Self::field_key(key, TOKENS_ACCESS_TOKEN_FIELD),
+            )?,
+            load_auth_field_from_keyring::<Option<String>>(
+                self.keyring_store.as_ref(),
+                &Self::field_key(key, TOKENS_REFRESH_TOKEN_FIELD),
+            )?,
+            load_auth_field_from_keyring::<Option<String>>(
+                self.keyring_store.as_ref(),
+                &Self::field_key(key, TOKENS_ACCOUNT_ID_FIELD),
+            )?,
+        ) {
+            (None, None, None, None) => None,
+            (Some(None), Some(None), Some(None), Some(None)) => Some(None),
+            (
+                Some(Some(id_token)),
+                Some(Some(access_token)),
+                Some(Some(refresh_token)),
+                Some(account_id),
+            ) => Some(Some(TokenData {
+                id_token: parse_chatgpt_jwt_claims(&id_token).map_err(std::io::Error::other)?,
+                access_token,
+                refresh_token,
+                account_id,
+            })),
+            _ => {
+                return Err(std::io::Error::other(
+                    "incomplete CLI auth tokens in keyring",
+                ));
+            }
+        };
         let last_refresh = load_auth_field_from_keyring::<Option<DateTime<Utc>>>(
             self.keyring_store.as_ref(),
             &Self::field_key(key, LAST_REFRESH_FIELD),
@@ -280,7 +338,10 @@ impl KeyringAuthStorage {
         let field_keys = [
             Self::field_key(key, AUTH_MODE_FIELD),
             Self::field_key(key, OPENAI_API_KEY_FIELD),
-            Self::field_key(key, TOKENS_FIELD),
+            Self::field_key(key, TOKENS_ID_TOKEN_FIELD),
+            Self::field_key(key, TOKENS_ACCESS_TOKEN_FIELD),
+            Self::field_key(key, TOKENS_REFRESH_TOKEN_FIELD),
+            Self::field_key(key, TOKENS_ACCOUNT_ID_FIELD),
             Self::field_key(key, LAST_REFRESH_FIELD),
             key.to_string(),
         ];
