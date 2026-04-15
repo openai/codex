@@ -2808,7 +2808,7 @@ impl ChatWidget {
     }
 
     fn on_rate_limit_error(&mut self, message: String) {
-        match self.codex_rate_limit_reached_type {
+        match self.codex_rate_limit_reached_type.take() {
             Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => {
                 self.on_error(
                     "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex."
