@@ -42,6 +42,68 @@ pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
     }
 }
 
+fn merge_delimited_env_value(current: &str, existing: Option<&str>, delimiter: char) -> String {
+    let mut merged: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for source in [Some(current), existing] {
+        let Some(source) = source else {
+            continue;
+        };
+        for entry in source.split(delimiter) {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let key = trimmed.to_ascii_lowercase();
+            if seen.iter().any(|value| value == &key) {
+                continue;
+            }
+            seen.push(key);
+            merged.push(trimmed.to_string());
+        }
+    }
+    merged.join(&delimiter.to_string())
+}
+
+fn overlay_profile_env_from_lookup<F>(env_map: &mut HashMap<String, String>, lookup: F)
+where
+    F: Fn(&str) -> Option<String>,
+{
+    for key in [
+        "USERNAME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+    ] {
+        if let Some(value) = lookup(key) {
+            env_map.insert(key.to_string(), value);
+        }
+    }
+    if let Some(current_path) = lookup("PATH") {
+        let merged = merge_delimited_env_value(&current_path, env_map.get("PATH").map(String::as_str), ';');
+        env_map.insert("PATH".to_string(), merged);
+    }
+    if let Some(current_pathext) = lookup("PATHEXT") {
+        let merged = merge_delimited_env_value(
+            &current_pathext,
+            env_map.get("PATHEXT").map(String::as_str),
+            ';',
+        );
+        env_map.insert("PATHEXT".to_string(), merged);
+    }
+    if let Some(home) = lookup("HOME").or_else(|| lookup("USERPROFILE")) {
+        env_map.insert("HOME".to_string(), home);
+    }
+}
+
+pub fn overlay_profile_env_from_current_process(env_map: &mut HashMap<String, String>) {
+    overlay_profile_env_from_lookup(env_map, |key| env::var(key).ok());
+}
+
 fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
     let existing = env_map
         .get("PATH")
@@ -171,4 +233,55 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
     prepend_path(env_map, &base.to_string_lossy());
     reorder_pathext_for_stubs(env_map);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::overlay_profile_env_from_lookup;
+    use std::collections::HashMap;
+
+    #[test]
+    fn overlay_profile_env_prefers_current_user_profile_values() {
+        let mut env_map = HashMap::from([
+            ("USERNAME".to_string(), "Eliot".to_string()),
+            ("USERPROFILE".to_string(), r"C:\Users\Eliot".to_string()),
+            ("APPDATA".to_string(), r"C:\Users\Eliot\AppData\Roaming".to_string()),
+            ("LOCALAPPDATA".to_string(), r"C:\Users\Eliot\AppData\Local".to_string()),
+            ("PATH".to_string(), r"C:\Tools;C:\Users\Eliot\AppData\Roaming\fnm".to_string()),
+            ("PATHEXT".to_string(), ".EXE;.CMD".to_string()),
+        ]);
+
+        let current = HashMap::from([
+            ("USERNAME", "CodexSandboxOnline"),
+            ("USERPROFILE", r"C:\Users\CodexSandboxOnline"),
+            (
+                "APPDATA",
+                r"C:\Users\CodexSandboxOnline\AppData\Roaming",
+            ),
+            (
+                "LOCALAPPDATA",
+                r"C:\Users\CodexSandboxOnline\AppData\Local",
+            ),
+            (
+                "PATH",
+                r"C:\Users\CodexSandboxOnline\AppData\Roaming\fnm;C:\Tools",
+            ),
+            ("PATHEXT", ".COM;.EXE"),
+        ]);
+
+        overlay_profile_env_from_lookup(&mut env_map, |key| current.get(key).map(|value| value.to_string()));
+
+        assert_eq!(env_map.get("USERNAME").unwrap(), "CodexSandboxOnline");
+        assert_eq!(env_map.get("USERPROFILE").unwrap(), r"C:\Users\CodexSandboxOnline");
+        assert_eq!(
+            env_map.get("APPDATA").unwrap(),
+            r"C:\Users\CodexSandboxOnline\AppData\Roaming"
+        );
+        assert_eq!(
+            env_map.get("PATH").unwrap(),
+            r"C:\Users\CodexSandboxOnline\AppData\Roaming\fnm;C:\Tools;C:\Users\Eliot\AppData\Roaming\fnm"
+        );
+        assert_eq!(env_map.get("PATHEXT").unwrap(), ".COM;.EXE;.CMD");
+        assert_eq!(env_map.get("HOME").unwrap(), r"C:\Users\CodexSandboxOnline");
+    }
 }

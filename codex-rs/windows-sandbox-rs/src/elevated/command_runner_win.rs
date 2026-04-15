@@ -432,13 +432,14 @@ pub fn main() -> Result<()> {
         File::from_raw_handle(h_pipe_out as _)
     }));
 
-    let req = match read_spawn_request(&mut pipe_read) {
+    let mut req = match read_spawn_request(&mut pipe_read) {
         Ok(v) => v,
         Err(err) => {
             let _ = send_error(&pipe_write, "spawn_failed", err.to_string());
             return Err(err);
         }
     };
+    codex_windows_sandbox::overlay_profile_env_from_current_process(&mut req.env);
 
     let ipc_spawn = match spawn_ipc_process(&req) {
         Ok(value) => value,
