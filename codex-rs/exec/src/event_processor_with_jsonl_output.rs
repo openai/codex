@@ -185,6 +185,7 @@ impl EventProcessorWithJsonOutput {
                         .into_iter()
                         .map(|change| FileUpdateChange {
                             path: change.path,
+                            diff: change.diff,
                             kind: match change.kind {
                                 PatchChangeKind::Add => ExecPatchChangeKind::Add,
                                 PatchChangeKind::Delete => ExecPatchChangeKind::Delete,
@@ -459,8 +460,17 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::ItemStarted(notification) => {
+                let already_started_file_change =
+                    matches!(notification.item, ThreadItem::FileChange { .. })
+                        && self
+                            .raw_to_exec_item_id
+                            .contains_key(notification.item.id());
                 if let Some(item) = self.map_started_item(notification.item) {
-                    events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
+                    if already_started_file_change {
+                        events.push(ThreadEvent::ItemUpdated(ItemUpdatedEvent { item }));
+                    } else {
+                        events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
+                    }
                 }
                 CodexStatus::Running
             }
@@ -472,6 +482,19 @@ impl EventProcessorWithJsonOutput {
                         self.final_message = Some(text.clone());
                     }
                     events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent { item }));
+                }
+                CodexStatus::Running
+            }
+            ServerNotification::FileChangePatchDelta(notification) => {
+                let item_id = notification.item_id;
+                let item = ThreadItem::FileChange {
+                    id: item_id.clone(),
+                    changes: notification.changes,
+                    status: PatchApplyStatus::InProgress,
+                };
+                if let Some(item) = Self::map_item_with_id(item, || self.started_item_id(&item_id))
+                {
+                    events.push(ThreadEvent::ItemUpdated(ItemUpdatedEvent { item }));
                 }
                 CodexStatus::Running
             }

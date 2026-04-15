@@ -28,6 +28,12 @@ pub enum ThreadEvent {
     /// Emitted when an item is updated.
     #[serde(rename = "item.updated")]
     ItemUpdated(ItemUpdatedEvent),
+    /// Emitted when the model starts streaming input for an item.
+    #[serde(rename = "item.input_started")]
+    ItemInputStarted(ItemInputStartedEvent),
+    /// Emitted when another chunk of model-generated item input is available.
+    #[serde(rename = "item.input_delta")]
+    ItemInputDelta(ItemInputDeltaEvent),
     /// Signals that an item has reached a terminal state—either success or failure.
     #[serde(rename = "item.completed")]
     ItemCompleted(ItemCompletedEvent),
@@ -80,6 +86,17 @@ pub struct ItemCompletedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct ItemUpdatedEvent {
     pub item: ThreadItem,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct ItemInputStartedEvent {
+    pub item_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct ItemInputDeltaEvent {
+    pub item_id: String,
+    pub delta: String,
 }
 
 /// Fatal error emitted by the stream.
@@ -165,6 +182,7 @@ pub struct CommandExecutionItem {
 pub struct FileUpdateChange {
     pub path: String,
     pub kind: PatchChangeKind,
+    pub diff: String,
 }
 
 /// The status of a file change.

@@ -104,6 +104,8 @@ pub use exec_events::ErrorItem;
 pub use exec_events::FileChangeItem;
 pub use exec_events::FileUpdateChange;
 pub use exec_events::ItemCompletedEvent;
+pub use exec_events::ItemInputDeltaEvent;
+pub use exec_events::ItemInputStartedEvent;
 pub use exec_events::ItemStartedEvent;
 pub use exec_events::ItemUpdatedEvent;
 pub use exec_events::McpToolCallItem;
@@ -1079,6 +1081,9 @@ fn should_process_notification(
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }
         ServerNotification::ItemStarted(notification) => {
+            notification.thread_id == thread_id && notification.turn_id == turn_id
+        }
+        ServerNotification::FileChangePatchDelta(notification) => {
             notification.thread_id == thread_id && notification.turn_id == turn_id
         }
         ServerNotification::ModelRerouted(notification) => {
