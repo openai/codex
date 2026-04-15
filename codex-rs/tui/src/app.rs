@@ -2756,6 +2756,7 @@ impl App {
         session.history_log_id = 0;
         session.history_entry_count = 0;
         session.rollout_path = rollout_path;
+        session.token_usage = notification.thread.token_usage.clone();
         self.upsert_agent_picker_thread(
             thread_id,
             notification.thread.agent_nickname.clone(),
@@ -9246,6 +9247,65 @@ guardian_approval = true
         Ok(())
     }
 
+    #[tokio::test]
+    async fn inactive_thread_started_notification_overwrites_primary_token_usage() -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000401").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000402").expect("valid thread");
+        let primary_token_usage = thread_token_usage(/*total_tokens*/ 90_000, Some(120_000));
+        let agent_token_usage = thread_token_usage(/*total_tokens*/ 30_000, Some(120_000));
+        let primary_session = ThreadSessionState {
+            token_usage: Some(primary_token_usage),
+            ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
+        };
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.primary_session_configured = Some(primary_session.clone());
+
+        app.enqueue_thread_notification(
+            agent_thread_id,
+            ServerNotification::ThreadStarted(ThreadStartedNotification {
+                thread: Thread {
+                    id: agent_thread_id.to_string(),
+                    forked_from_id: None,
+                    preview: "agent thread".to_string(),
+                    ephemeral: false,
+                    model_provider: "agent-provider".to_string(),
+                    created_at: 1,
+                    updated_at: 2,
+                    status: codex_app_server_protocol::ThreadStatus::Idle,
+                    path: None,
+                    cwd: test_path_buf("/tmp/agent").abs(),
+                    cli_version: "0.0.0".to_string(),
+                    source: codex_app_server_protocol::SessionSource::Unknown,
+                    agent_nickname: Some("Robie".to_string()),
+                    agent_role: Some("explorer".to_string()),
+                    git_info: None,
+                    name: Some("agent thread".to_string()),
+                    token_usage: Some(agent_token_usage.clone()),
+                    turns: Vec::new(),
+                },
+            }),
+        )
+        .await?;
+
+        let store = app
+            .thread_event_channels
+            .get(&agent_thread_id)
+            .expect("agent thread channel")
+            .store
+            .lock()
+            .await;
+        let session = store.session.clone().expect("inferred session");
+
+        assert_eq!(session.token_usage, Some(agent_token_usage));
+
+        Ok(())
+    }
+
     #[test]
     fn agent_picker_item_name_snapshot() {
         let thread_id =
@@ -9746,6 +9806,29 @@ guardian_approval = true
                 model_context_window,
             },
         })
+    }
+
+    fn thread_token_usage(
+        total_tokens: i64,
+        model_context_window: Option<i64>,
+    ) -> ThreadTokenUsage {
+        ThreadTokenUsage {
+            total: TokenUsageBreakdown {
+                total_tokens,
+                input_tokens: total_tokens,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+            },
+            last: TokenUsageBreakdown {
+                total_tokens,
+                input_tokens: total_tokens,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+            },
+            model_context_window,
+        }
     }
 
     fn hook_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
