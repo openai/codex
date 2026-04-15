@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::path::PathBuf;
 
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianCommandSource;
@@ -17,7 +16,7 @@ pub(crate) enum GuardianApprovalRequest {
     Shell {
         id: String,
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         sandbox_permissions: crate::sandboxing::SandboxPermissions,
         additional_permissions: Option<PermissionProfile>,
         justification: Option<String>,
@@ -25,7 +24,7 @@ pub(crate) enum GuardianApprovalRequest {
     ExecCommand {
         id: String,
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         sandbox_permissions: crate::sandboxing::SandboxPermissions,
         additional_permissions: Option<PermissionProfile>,
         justification: Option<String>,
@@ -37,12 +36,12 @@ pub(crate) enum GuardianApprovalRequest {
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         additional_permissions: Option<PermissionProfile>,
     },
     ApplyPatch {
         id: String,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         files: Vec<AbsolutePathBuf>,
         patch: String,
     },
@@ -151,12 +150,12 @@ fn serialize_command_guardian_action(
 fn command_assessment_action(
     source: GuardianCommandSource,
     command: &[String],
-    cwd: &Path,
+    cwd: &AbsolutePathBuf,
 ) -> GuardianAssessmentAction {
     GuardianAssessmentAction::Command {
         source,
         command: codex_shell_command::parse_command::shlex_join(command),
-        cwd: cwd.to_path_buf(),
+        cwd: cwd.clone(),
     }
 }
 
@@ -323,10 +322,7 @@ pub(crate) fn guardian_assessment_action(
         GuardianApprovalRequest::ApplyPatch { cwd, files, .. } => {
             GuardianAssessmentAction::ApplyPatch {
                 cwd: cwd.clone(),
-                files: files
-                    .iter()
-                    .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
-                    .collect(),
+                files: files.clone(),
             }
         }
         GuardianApprovalRequest::NetworkAccess {

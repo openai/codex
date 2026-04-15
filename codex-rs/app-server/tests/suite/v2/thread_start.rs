@@ -40,7 +40,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::enable_analytics_capture;
+use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
@@ -211,14 +211,15 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
 }
 
 #[cfg(windows)]
-fn normalize_path_for_comparison(path: PathBuf) -> PathBuf {
+fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
     let path = path.display().to_string();
     PathBuf::from(path.strip_prefix(r"\\?\").unwrap_or(&path))
 }
 
 #[cfg(not(windows))]
-fn normalize_path_for_comparison(path: PathBuf) -> PathBuf {
-    path
+fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
+    path.as_ref().to_path_buf()
 }
 
 #[tokio::test]
@@ -232,9 +233,9 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
         &server.uri(),
         /*general_analytics_enabled*/ true,
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -265,9 +266,9 @@ async fn thread_start_does_not_track_thread_initialized_analytics_without_featur
         &server.uri(),
         /*general_analytics_enabled*/ false,
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -280,11 +281,25 @@ async fn thread_start_does_not_track_thread_initialized_analytics_without_featur
     .await??;
     let _ = to_response::<ThreadStartResponse>(resp)?;
 
-    let payload = wait_for_analytics_payload(&server, Duration::from_millis(250)).await;
-    assert!(
-        payload.is_err(),
-        "thread analytics should be gated off when general_analytics is disabled"
-    );
+    assert_no_thread_initialized_analytics(&server, Duration::from_millis(250)).await?;
+    Ok(())
+}
+
+async fn assert_no_thread_initialized_analytics(
+    server: &MockServer,
+    wait_duration: Duration,
+) -> Result<()> {
+    tokio::time::sleep(wait_duration).await;
+    let requests = server.received_requests().await.unwrap_or_default();
+    for request in requests.iter().filter(|request| {
+        request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
+    }) {
+        let payload: Value = serde_json::from_slice(&request.body)?;
+        assert!(
+            thread_initialized_event(&payload).is_err(),
+            "thread analytics should be gated off when general_analytics is disabled; payload={payload}"
+        );
+    }
     Ok(())
 }
 
@@ -888,7 +903,7 @@ fn create_config_toml_with_chatgpt_base_url(
     let general_analytics_toml = if general_analytics_enabled {
         "\ngeneral_analytics = true".to_string()
     } else {
-        String::new()
+        "\ngeneral_analytics = false".to_string()
     };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(

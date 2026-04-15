@@ -237,8 +237,6 @@ pub struct NetworkRequirementsToml {
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
-    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
-    pub danger_full_access_denylist_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
 }
@@ -257,8 +255,6 @@ struct RawNetworkRequirementsToml {
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     managed_allowed_domains_only: Option<bool>,
-    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
-    danger_full_access_denylist_only: Option<bool>,
     #[serde(default)]
     denied_domains: Option<Vec<String>>,
     unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
@@ -283,7 +279,6 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             domains,
             allowed_domains,
             managed_allowed_domains_only,
-            danger_full_access_denylist_only,
             denied_domains,
             unix_sockets,
             allow_unix_sockets,
@@ -312,7 +307,6 @@ impl<'de> Deserialize<'de> for NetworkRequirementsToml {
             domains: domains
                 .or_else(|| legacy_domain_permissions_from_lists(allowed_domains, denied_domains)),
             managed_allowed_domains_only,
-            danger_full_access_denylist_only,
             unix_sockets: unix_sockets
                 .or_else(|| legacy_unix_socket_permissions_from_list(allow_unix_sockets)),
             allow_local_binding,
@@ -365,8 +359,6 @@ pub struct NetworkConstraints {
     /// When true, only managed `allowed_domains` are respected while managed
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
-    /// In danger-full-access mode, allow all network access and enforce managed deny entries.
-    pub danger_full_access_denylist_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
 }
@@ -392,7 +384,6 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             dangerously_allow_all_unix_sockets,
             domains,
             managed_allowed_domains_only,
-            danger_full_access_denylist_only,
             unix_sockets,
             allow_local_binding,
         } = value;
@@ -405,7 +396,6 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             dangerously_allow_all_unix_sockets,
             domains,
             managed_allowed_domains_only,
-            danger_full_access_denylist_only,
             unix_sockets,
             allow_local_binding,
         }
@@ -1811,7 +1801,6 @@ allowed_approvals_reviewers = ["user"]
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
             managed_allowed_domains_only = true
-            danger_full_access_denylist_only = true
             allow_local_binding = false
 
             [experimental_network.domains]
@@ -1863,10 +1852,6 @@ allowed_approvals_reviewers = ["user"]
             Some(true)
         );
         assert_eq!(
-            sourced_network.value.danger_full_access_denylist_only,
-            Some(true)
-        );
-        assert_eq!(
             sourced_network.value.unix_sockets.as_ref(),
             Some(&NetworkUnixSocketPermissionsToml {
                 entries: BTreeMap::from([(
@@ -1889,7 +1874,6 @@ allowed_approvals_reviewers = ["user"]
             dangerously_allow_all_unix_sockets = true
             allowed_domains = ["api.example.com", "*.openai.com"]
             managed_allowed_domains_only = true
-            danger_full_access_denylist_only = true
             denied_domains = ["blocked.example.com"]
             allow_unix_sockets = ["/tmp/example.sock"]
             allow_local_binding = false
@@ -1932,10 +1916,6 @@ allowed_approvals_reviewers = ["user"]
         );
         assert_eq!(
             sourced_network.value.managed_allowed_domains_only,
-            Some(true)
-        );
-        assert_eq!(
-            sourced_network.value.danger_full_access_denylist_only,
             Some(true)
         );
         assert_eq!(

@@ -33,10 +33,11 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
     let sandbox_type = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
         .expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
+    let cwd = tmp.path().abs();
 
     let params = ExecParams {
         command: cmd.iter().map(ToString::to_string).collect(),
-        cwd: tmp.path().abs(),
+        cwd: cwd.clone(),
         expiration: 1000.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
@@ -55,7 +56,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         &policy,
         &FileSystemSandboxPolicy::from(&policy),
         NetworkSandboxPolicy::from(&policy),
-        tmp.path(),
+        &cwd,
         &None,
         /*use_legacy_landlock*/ false,
         /*stdout_stream*/ None,

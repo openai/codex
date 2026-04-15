@@ -45,6 +45,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
 use unicode_width::UnicodeWidthChar;
 
 /// Display width of a tab character in columns.
@@ -294,11 +295,11 @@ fn quantize_rgb_to_ansi256(target: (u8, u8, u8)) -> Color {
 
 pub struct DiffSummary {
     changes: HashMap<PathBuf, FileChange>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
 }
 
 impl DiffSummary {
-    pub fn new(changes: HashMap<PathBuf, FileChange>, cwd: PathBuf) -> Self {
+    pub fn new(changes: HashMap<PathBuf, FileChange>, cwd: AbsolutePathBuf) -> Self {
         Self { changes, cwd }
     }
 }
@@ -325,7 +326,7 @@ impl From<DiffSummary> for Box<dyn Renderable> {
             if i > 0 {
                 rows.push(Box::new(RtLine::from("")));
             }
-            let mut path = RtLine::from(display_path_for(&row.path, &val.cwd));
+            let mut path = RtLine::from(display_path_for(&row.path, val.cwd.as_path()));
             path.push_span(" ");
             path.extend(render_line_count_summary(row.added, row.removed));
             rows.push(Box::new(path));

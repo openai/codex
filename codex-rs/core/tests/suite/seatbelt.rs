@@ -11,6 +11,7 @@ use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::StdioPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tempfile::TempDir;
 
 struct TestScenario {
@@ -174,7 +175,7 @@ async fn openpty_works_under_seatbelt() {
     }
 
     let policy = SandboxPolicy::new_read_only_policy();
-    let command_cwd = std::env::current_dir().expect("getcwd");
+    let command_cwd = AbsolutePathBuf::current_dir().expect("getcwd");
     let sandbox_cwd = command_cwd.clone();
 
     let mut child = spawn_command_under_seatbelt(
@@ -190,7 +191,7 @@ assert os.read(master, 4) == b"ping""#
         ],
         command_cwd,
         &policy,
-        sandbox_cwd.as_path(),
+        &sandbox_cwd,
         StdioPolicy::RedirectForShellTool,
         /*network*/ None,
         HashMap::new(),
@@ -232,7 +233,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
     }
 
     let policy = SandboxPolicy::new_read_only_policy();
-    let command_cwd = std::env::current_dir().expect("getcwd");
+    let command_cwd = AbsolutePathBuf::current_dir().expect("getcwd");
     let sandbox_cwd = command_cwd.clone();
 
     let mut env: HashMap<String, String> = std::env::vars().collect();
@@ -243,7 +244,7 @@ async fn java_home_finds_runtime_under_seatbelt() {
         vec![java_home_path.to_string_lossy().to_string()],
         command_cwd,
         &policy,
-        sandbox_cwd.as_path(),
+        &sandbox_cwd,
         StdioPolicy::RedirectForShellTool,
         /*network*/ None,
         env,
@@ -291,7 +292,7 @@ fn create_test_scenario(tmp: &TempDir) -> TestScenario {
 /// Note that `path` must be absolute.
 async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
     assert!(path.is_absolute(), "Path must be absolute: {path:?}");
-    let command_cwd = std::env::current_dir().expect("getcwd");
+    let command_cwd = AbsolutePathBuf::current_dir().expect("getcwd");
     let sandbox_cwd = command_cwd.clone();
     let mut child = spawn_command_under_seatbelt(
         vec![
@@ -300,7 +301,7 @@ async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
         ],
         command_cwd,
         policy,
-        sandbox_cwd.as_path(),
+        &sandbox_cwd,
         StdioPolicy::RedirectForShellTool,
         /*network*/ None,
         HashMap::new(),

@@ -485,6 +485,9 @@
             "steer": {
               "type": "boolean"
             },
+            "telepathy": {
+              "type": "boolean"
+            },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
@@ -826,7 +829,8 @@
     },
     "MarketplaceSourceType": {
       "enum": [
-        "git"
+        "git",
+        "local"
       ],
       "type": "string"
     },
@@ -2367,6 +2371,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "telepathy": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {

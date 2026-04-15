@@ -646,6 +646,7 @@ pub struct MarketplaceConfig {
 #[serde(rename_all = "snake_case")]
 pub enum MarketplaceSourceType {
     Git,
+    Local,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]

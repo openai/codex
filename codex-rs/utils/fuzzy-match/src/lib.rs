@@ -68,15 +68,6 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<(Vec<usize>, i32)> {
     Some((result_orig_indices, score))
 }
 
-/// Convenience wrapper to get only the indices for a fuzzy match.
-pub fn fuzzy_indices(haystack: &str, needle: &str) -> Option<Vec<usize>> {
-    fuzzy_match(haystack, needle).map(|(mut idx, _)| {
-        idx.sort_unstable();
-        idx.dedup();
-        idx
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
