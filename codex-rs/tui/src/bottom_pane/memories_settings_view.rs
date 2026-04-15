@@ -69,13 +69,13 @@ impl MemoriesSettingsView {
                 MemoriesSettingItem {
                     setting: MemoriesSetting::Use,
                     name: "Use memories",
-                    description: "Include saved memories in prompts.",
+                    description: "Use memories in the following threads. Applied at next thread.",
                     enabled: use_memories,
                 },
                 MemoriesSettingItem {
                     setting: MemoriesSetting::Generate,
                     name: "Generate memories",
-                    description: "Allow future threads to become memory input.",
+                    description: "Generate memories from the following threads. Current thread included.",
                     enabled: generate_memories,
                 },
             ],

@@ -1,13 +1,14 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 1545
 expression: popup
 ---
   Memories
   Choose how Codex uses and creates memories. Changes are saved to config.toml
 
-› [x] Use memories       Include saved memories in prompts.
-  [ ] Generate memories  Allow future threads to become memory input.
+› [x] Use memories       Use memories in the following threads. Applied at
+                         next thread.
+  [ ] Generate memories  Generate memories from the following threads. Current
+                         thread included.
 
   Learn more: https://developers.openai.com/codex/memories
 
