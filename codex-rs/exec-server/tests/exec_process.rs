@@ -9,6 +9,7 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecStdinMode;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
@@ -54,6 +55,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
+            stdin: ExecStdinMode::Closed,
             arg0: None,
         })
         .await?;
@@ -131,6 +133,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
+            stdin: ExecStdinMode::Closed,
             arg0: None,
         })
         .await?;
@@ -160,7 +163,8 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             cwd: std::env::current_dir()?,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
-            tty: true,
+            tty: false,
+            stdin: ExecStdinMode::Piped,
             arg0: None,
         })
         .await?;
@@ -172,10 +176,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
-    assert!(
-        output.contains("from-stdin:hello"),
-        "unexpected output: {output:?}"
-    );
+    assert_eq!(output, "from-stdin:hello\n");
     assert_eq!(exit_code, Some(0));
     assert!(closed);
     Ok(())
@@ -198,6 +199,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
+            stdin: ExecStdinMode::Closed,
             arg0: None,
         })
         .await?;
@@ -231,6 +233,7 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
             env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
+            stdin: ExecStdinMode::Closed,
             arg0: None,
         })
         .await?;

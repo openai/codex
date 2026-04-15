@@ -152,6 +152,7 @@ fn exec_server_params_for_request(
         env_policy,
         env,
         tty,
+        stdin: codex_exec_server::ExecStdinMode::Closed,
         arg0: request.arg0.clone(),
     }
 }

@@ -393,6 +393,7 @@ mod tests {
             env_policy: None,
             env,
             tty: false,
+            stdin: crate::protocol::ExecStdinMode::Closed,
             arg0: None,
         }
     }

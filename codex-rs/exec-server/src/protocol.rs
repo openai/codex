@@ -69,7 +69,26 @@ pub struct ExecParams {
     pub env_policy: Option<ExecEnvPolicy>,
     pub env: HashMap<String, String>,
     pub tty: bool,
+
+    /// Controls whether the executor keeps a writable stdin pipe for this
+    /// process.
+    ///
+    /// Normal non-interactive exec commands use `Closed` so programs that read
+    /// stdin see EOF immediately. Remote MCP stdio uses `Piped` because rmcp
+    /// must write JSON-RPC request bytes to the child process stdin after the
+    /// process has started.
+    pub stdin: ExecStdinMode,
     pub arg0: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecStdinMode {
+    /// Start the process with stdin connected to null/EOF.
+    Closed,
+
+    /// Start the process with stdin open and writable through `process/write`.
+    Piped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

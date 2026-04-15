@@ -346,6 +346,7 @@ mod tests {
                 env_policy: None,
                 env: Default::default(),
                 tty: false,
+                stdin: crate::ExecStdinMode::Closed,
                 arg0: None,
             })
             .await

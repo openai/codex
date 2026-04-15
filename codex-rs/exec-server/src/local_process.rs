@@ -28,6 +28,7 @@ use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecStdinMode;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -59,6 +60,7 @@ struct RetainedOutputChunk {
 struct RunningProcess {
     session: ExecCommandSession,
     tty: bool,
+    stdin: ExecStdinMode,
     output: VecDeque<RetainedOutputChunk>,
     retained_bytes: usize,
     next_seq: u64,
@@ -165,6 +167,15 @@ impl LocalProcess {
                 TerminalSize::default(),
             )
             .await
+        } else if matches!(params.stdin, ExecStdinMode::Piped) {
+            codex_utils_pty::spawn_pipe_process(
+                program,
+                args,
+                params.cwd.as_path(),
+                &env,
+                &params.arg0,
+            )
+            .await
         } else {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
@@ -195,6 +206,7 @@ impl LocalProcess {
                 ProcessEntry::Running(Box::new(RunningProcess {
                     session: spawned.session,
                     tty: params.tty,
+                    stdin: params.stdin,
                     output: VecDeque::new(),
                     retained_bytes: 0,
                     next_seq: 1,
@@ -339,7 +351,7 @@ impl LocalProcess {
                     status: WriteStatus::Starting,
                 });
             };
-            if !process.tty {
+            if !process.tty && matches!(process.stdin, ExecStdinMode::Closed) {
                 return Ok(WriteResponse {
                     status: WriteStatus::StdinClosed,
                 });
@@ -667,6 +679,7 @@ mod tests {
             env_policy: None,
             env,
             tty: false,
+            stdin: ExecStdinMode::Closed,
             arg0: None,
         }
     }

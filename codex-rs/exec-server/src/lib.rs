@@ -48,6 +48,7 @@ pub use protocol::ExecOutputDeltaNotification;
 pub use protocol::ExecOutputStream;
 pub use protocol::ExecParams;
 pub use protocol::ExecResponse;
+pub use protocol::ExecStdinMode;
 pub use protocol::FsCopyParams;
 pub use protocol::FsCopyResponse;
 pub use protocol::FsCreateDirectoryParams;

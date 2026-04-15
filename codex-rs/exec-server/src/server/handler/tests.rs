@@ -10,6 +10,7 @@ use super::ExecServerHandler;
 use crate::ExecServerRuntimePaths;
 use crate::ProcessId;
 use crate::protocol::ExecParams;
+use crate::protocol::ExecStdinMode;
 use crate::protocol::InitializeParams;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -30,6 +31,7 @@ fn exec_params_with_argv(process_id: &str, argv: Vec<String>) -> ExecParams {
         env_policy: None,
         env: inherited_path_env(),
         tty: false,
+        stdin: ExecStdinMode::Closed,
         arg0: None,
     }
 }
