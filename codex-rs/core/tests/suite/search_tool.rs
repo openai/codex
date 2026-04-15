@@ -679,6 +679,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                         env_vars: Vec::new(),
                         cwd: None,
                     },
+                    experimental_environment: None,
                     enabled: true,
                     required: false,
                     disabled_reason: None,

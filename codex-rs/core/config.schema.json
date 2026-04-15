@@ -1495,6 +1495,10 @@
           },
           "type": "array"
         },
+        "experimental_environment": {
+          "default": null,
+          "type": "string"
+        },
         "http_headers": {
           "additionalProperties": {
             "type": "string"
