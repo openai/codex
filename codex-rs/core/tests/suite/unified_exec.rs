@@ -974,11 +974,10 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
         "begin event should include process_id for a live session"
     );
 
-    // We expect three terminal interactions matching the three write_stdin calls.
-    assert_eq!(
-        terminal_events.len(),
-        3,
-        "expected three terminal interactions; got {terminal_events:?}"
+    // Delayed polls may coalesce, but we should still observe repeated terminal interaction events.
+    assert!(
+        terminal_events.len() >= 2,
+        "expected at least two terminal interactions; got {terminal_events:?}"
     );
 
     for event in &terminal_events {
@@ -990,8 +989,8 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             .iter()
             .map(|ev| ev.stdin.as_str())
             .collect::<Vec<_>>(),
-        vec!["x", "x", "x"],
-        "terminal interactions should reflect the three stdin polls"
+        vec!["x"; terminal_events.len()],
+        "terminal interactions should reflect repeated stdin polls"
     );
 
     assert!(

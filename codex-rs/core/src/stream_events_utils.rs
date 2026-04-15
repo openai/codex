@@ -24,6 +24,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_rollout::read_session_meta_line;
 use codex_rollout::state_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_stream_parser::strip_proposed_plan_blocks;
@@ -153,8 +154,34 @@ async fn maybe_mark_thread_memory_mode_polluted_from_web_search(
     {
         return;
     }
+    let Some(state_db_ctx) = sess.services.state_db.as_deref() else {
+        return;
+    };
+    if state_db_ctx
+        .get_thread_memory_mode(sess.conversation_id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+        && let Some(rollout_path) = sess.current_rollout_path().await
+        && let Ok(session_meta_line) = read_session_meta_line(rollout_path.as_path()).await
+    {
+        state_db::apply_rollout_items(
+            Some(state_db_ctx),
+            rollout_path.as_path(),
+            turn_context.config.model_provider_id.as_str(),
+            /*builder*/ None,
+            &[codex_protocol::protocol::RolloutItem::SessionMeta(
+                session_meta_line,
+            )],
+            "record_completed_response_item.ensure_web_search_thread",
+            /*new_thread_memory_mode*/ None,
+            /*updated_at_override*/ None,
+        )
+        .await;
+    }
     state_db::mark_thread_memory_mode_polluted(
-        sess.services.state_db.as_deref(),
+        Some(state_db_ctx),
         sess.conversation_id,
         "record_completed_response_item",
     )

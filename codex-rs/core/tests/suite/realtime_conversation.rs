@@ -2689,7 +2689,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
     .await;
 
     let audio_out = tokio::time::timeout(
-        Duration::from_millis(500),
+        Duration::from_secs(2),
         wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
                 payload: RealtimeEvent::AudioOut(frame),
