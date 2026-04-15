@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -86,6 +87,13 @@ impl InterruptManager {
         self.queue.push_back(QueuedInterrupt::PatchEnd(ev));
     }
 
+    pub(crate) fn remove_resolved_prompt(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        let original_len = self.queue.len();
+        self.queue
+            .retain(|queued| !queued.matches_resolved_prompt(request));
+        self.queue.len() != original_len
+    }
+
     pub(crate) fn flush_all(&mut self, chat: &mut ChatWidget) {
         while let Some(q) = self.queue.pop_front() {
             match q {
@@ -101,5 +109,146 @@ impl InterruptManager {
                 QueuedInterrupt::PatchEnd(ev) => chat.handle_patch_apply_end_now(ev),
             }
         }
+    }
+}
+
+impl QueuedInterrupt {
+    fn matches_resolved_prompt(&self, request: &ResolvedAppServerRequest) -> bool {
+        match self {
+            QueuedInterrupt::ExecApproval(ev) => {
+                matches!(request, ResolvedAppServerRequest::ExecApproval { id }
+                    if ev.effective_approval_id() == id.as_str())
+            }
+            QueuedInterrupt::ApplyPatchApproval(ev) => {
+                matches!(request, ResolvedAppServerRequest::FileChangeApproval { id }
+                    if ev.call_id == id.as_str())
+            }
+            QueuedInterrupt::Elicitation(ev) => {
+                matches!(request, ResolvedAppServerRequest::McpElicitation {
+                    server_name,
+                    request_id,
+                } if ev.server_name == server_name.as_str() && &ev.id == request_id)
+            }
+            QueuedInterrupt::RequestPermissions(ev) => {
+                matches!(request, ResolvedAppServerRequest::PermissionsApproval { id }
+                    if ev.call_id == id.as_str())
+            }
+            QueuedInterrupt::RequestUserInput(ev) => {
+                matches!(request, ResolvedAppServerRequest::UserInput { call_id }
+                    if ev.call_id == call_id.as_str())
+            }
+            QueuedInterrupt::ExecBegin(_)
+            | QueuedInterrupt::ExecEnd(_)
+            | QueuedInterrupt::McpBegin(_)
+            | QueuedInterrupt::McpEnd(_)
+            | QueuedInterrupt::PatchEnd(_) => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_protocol::approvals::ExecApprovalRequestEvent;
+    use codex_protocol::protocol::ExecCommandBeginEvent;
+    use codex_protocol::protocol::ExecCommandSource;
+    use codex_protocol::request_user_input::RequestUserInputEvent;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    fn user_input(call_id: &str, turn_id: &str) -> RequestUserInputEvent {
+        RequestUserInputEvent {
+            call_id: call_id.to_string(),
+            turn_id: turn_id.to_string(),
+            questions: Vec::new(),
+        }
+    }
+
+    fn exec_approval(call_id: &str, approval_id: Option<&str>) -> ExecApprovalRequestEvent {
+        ExecApprovalRequestEvent {
+            call_id: call_id.to_string(),
+            approval_id: approval_id.map(str::to_string),
+            turn_id: "turn".to_string(),
+            command: vec!["true".to_string()],
+            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
+            reason: None,
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            available_decisions: None,
+            parsed_cmd: Vec::new(),
+        }
+    }
+
+    fn exec_begin(call_id: &str) -> ExecCommandBeginEvent {
+        ExecCommandBeginEvent {
+            call_id: call_id.to_string(),
+            process_id: None,
+            turn_id: "turn".to_string(),
+            command: vec!["true".to_string()],
+            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
+            parsed_cmd: Vec::new(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+        }
+    }
+
+    #[test]
+    fn remove_resolved_prompt_removes_matching_user_input_only() {
+        let mut manager = InterruptManager::new();
+        manager.push_user_input(user_input("call-a", "turn"));
+        manager.push_user_input(user_input("call-b", "turn"));
+
+        assert!(
+            manager.remove_resolved_prompt(&ResolvedAppServerRequest::UserInput {
+                call_id: "call-b".to_string(),
+            })
+        );
+
+        assert_eq!(manager.queue.len(), 1);
+        let Some(QueuedInterrupt::RequestUserInput(remaining)) = manager.queue.front() else {
+            panic!("expected remaining queued user input");
+        };
+        assert_eq!(remaining.call_id, "call-a");
+    }
+
+    #[test]
+    fn remove_resolved_prompt_matches_exec_approval_id() {
+        let mut manager = InterruptManager::new();
+        manager.push_exec_approval(exec_approval("call", Some("approval")));
+
+        assert!(
+            !manager.remove_resolved_prompt(&ResolvedAppServerRequest::ExecApproval {
+                id: "call".to_string(),
+            })
+        );
+        assert_eq!(manager.queue.len(), 1);
+
+        assert!(
+            manager.remove_resolved_prompt(&ResolvedAppServerRequest::ExecApproval {
+                id: "approval".to_string(),
+            })
+        );
+        assert!(manager.queue.is_empty());
+    }
+
+    #[test]
+    fn remove_resolved_prompt_keeps_lifecycle_events() {
+        let mut manager = InterruptManager::new();
+        manager.push_exec_begin(exec_begin("call"));
+
+        assert!(
+            !manager.remove_resolved_prompt(&ResolvedAppServerRequest::ExecApproval {
+                id: "call".to_string(),
+            })
+        );
+
+        assert_eq!(manager.queue.len(), 1);
+        assert!(matches!(
+            manager.queue.front(),
+            Some(QueuedInterrupt::ExecBegin(_))
+        ));
     }
 }

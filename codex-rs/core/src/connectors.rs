@@ -1,8 +1,6 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::env;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
@@ -42,7 +40,6 @@ use codex_login::default_client::is_first_party_chat_originator;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
-use codex_mcp::SandboxState;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
@@ -228,13 +225,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-        sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        use_legacy_landlock: config.features.use_legacy_landlock(),
-    };
-
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -242,7 +232,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         &config.permissions.approval_policy,
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
-        sandbox_state,
+        SandboxPolicy::new_read_only_policy(),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         ToolPluginProvenance::default(),

@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
 
+use super::marketplace::find_marketplace_manifest_path;
 use super::validate_plugin_segment;
 
 pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
@@ -50,9 +51,7 @@ pub(crate) fn installed_marketplace_roots_from_config(
                 marketplace,
                 &default_install_root,
             )?;
-            path.join(".agents/plugins/marketplace.json")
-                .is_file()
-                .then_some(path)
+            find_marketplace_manifest_path(&path).map(|_| path)
         })
         .filter_map(|path| AbsolutePathBuf::try_from(path).ok())
         .collect::<Vec<_>>();

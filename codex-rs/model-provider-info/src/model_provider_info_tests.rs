@@ -130,6 +130,61 @@ supports_websockets = true
 }
 
 #[test]
+fn test_supports_remote_compaction_for_openai() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+
+    assert!(provider.supports_remote_compaction());
+}
+
+#[test]
+fn test_supports_remote_compaction_for_azure_name() {
+    let provider = ModelProviderInfo {
+        name: "Azure".into(),
+        base_url: Some("https://example.com/openai".into()),
+        env_key: Some("AZURE_OPENAI_API_KEY".into()),
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    assert!(provider.supports_remote_compaction());
+}
+
+#[test]
+fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
+    let provider = ModelProviderInfo {
+        name: "Example".into(),
+        base_url: Some("https://example.com/v1".into()),
+        env_key: Some("API_KEY".into()),
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    assert!(!provider.supports_remote_compaction());
+}
+
+#[test]
 fn test_deserialize_provider_auth_config_defaults() {
     let base_dir = tempdir().unwrap();
     let provider_toml = r#"
