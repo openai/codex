@@ -177,6 +177,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadTokenUsage;
+use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnarchivedNotification;
@@ -4143,7 +4145,7 @@ impl CodexMessageProcessor {
         {
             Ok(NewThread {
                 thread_id,
-                thread,
+                thread: codex_thread,
                 session_configured,
             }) => {
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
@@ -4172,7 +4174,7 @@ impl CodexMessageProcessor {
                 let mut thread = match self
                     .load_thread_from_resume_source_or_send_internal(
                         thread_id,
-                        thread.as_ref(),
+                        codex_thread.as_ref(),
                         &response_history,
                         rollout_path.as_path(),
                         fallback_model_provider.as_str(),
@@ -4224,7 +4226,17 @@ impl CodexMessageProcessor {
                     );
                 }
 
+                let connection_id = request_id.connection_id;
+                let token_usage_thread = response.thread.clone();
                 self.outgoing.send_response(request_id, response).await;
+                send_thread_token_usage_update_to_connection(
+                    &self.outgoing,
+                    connection_id,
+                    thread_id,
+                    &token_usage_thread,
+                    codex_thread.as_ref(),
+                )
+                .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4860,7 +4872,17 @@ impl CodexMessageProcessor {
             );
         }
 
+        let connection_id = request_id.connection_id;
+        let token_usage_thread = response.thread.clone();
         self.outgoing.send_response(request_id, response).await;
+        send_thread_token_usage_update_to_connection(
+            &self.outgoing,
+            connection_id,
+            thread_id,
+            &token_usage_thread,
+            forked_thread.as_ref(),
+        )
+        .await;
 
         let notif = ThreadStartedNotification { thread };
         self.outgoing
@@ -8535,10 +8557,53 @@ async fn handle_pending_thread_resume_request(
         sandbox: sandbox_policy.into(),
         reasoning_effort,
     };
+    let token_usage_thread = response.thread.clone();
     outgoing.send_response(request_id, response).await;
+    send_thread_token_usage_update_to_connection(
+        outgoing,
+        connection_id,
+        conversation_id,
+        &token_usage_thread,
+        conversation.as_ref(),
+    )
+    .await;
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
+}
+
+async fn send_thread_token_usage_update_to_connection(
+    outgoing: &Arc<OutgoingMessageSender>,
+    connection_id: ConnectionId,
+    thread_id: ThreadId,
+    thread: &Thread,
+    conversation: &CodexThread,
+) {
+    let Some(info) = conversation.token_usage_info().await else {
+        return;
+    };
+    let notification = ThreadTokenUsageUpdatedNotification {
+        thread_id: thread_id.to_string(),
+        turn_id: latest_token_usage_turn_id(thread),
+        token_usage: ThreadTokenUsage::from(info),
+    };
+    outgoing
+        .send_server_notification_to_connections(
+            &[connection_id],
+            ServerNotification::ThreadTokenUsageUpdated(notification),
+        )
+        .await;
+}
+
+fn latest_token_usage_turn_id(thread: &Thread) -> String {
+    thread
+        .turns
+        .iter()
+        .rev()
+        .find(|turn| !matches!(turn.status, TurnStatus::InProgress))
+        .or_else(|| thread.turns.last())
+        .map(|turn| turn.id.clone())
+        .unwrap_or_default()
 }
 
 enum ThreadTurnSource<'a> {

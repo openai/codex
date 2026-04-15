@@ -2383,6 +2383,11 @@ impl Session {
         state.token_info().map(|info| info.total_token_usage)
     }
 
+    pub(crate) async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
+        let state = self.state.lock().await;
+        state.token_info()
+    }
+
     pub(crate) async fn get_estimated_token_count(
         &self,
         turn_context: &TurnContext,
