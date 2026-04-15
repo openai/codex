@@ -537,7 +537,7 @@ impl OutgoingMessageSender {
             targeted_connections = connection_ids.len(),
             "app-server event: {notification}"
         );
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
         if connection_ids.is_empty() {
             if let Err(err) = self
                 .sender
@@ -561,6 +561,9 @@ impl OutgoingMessageSender {
                 .await
             {
                 warn!("failed to send server notification to client: {err:?}");
+            } else {
+                self.analytics_events_client
+                    .track_connection_notification(connection_id.0, notification.clone());
             }
         }
     }
@@ -571,7 +574,7 @@ impl OutgoingMessageSender {
         notification: ServerNotification,
     ) {
         tracing::trace!("app-server event: {notification}");
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification.clone());
         let (write_complete_tx, write_complete_rx) = oneshot::channel();
         if let Err(err) = self
             .sender
@@ -583,6 +586,9 @@ impl OutgoingMessageSender {
             .await
         {
             warn!("failed to send server notification to client: {err:?}");
+        } else {
+            self.analytics_events_client
+                .track_connection_notification(connection_id.0, notification);
         }
         let _ = write_complete_rx.await;
     }

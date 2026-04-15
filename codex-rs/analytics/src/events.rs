@@ -304,7 +304,6 @@ pub(crate) enum ToolItemFinalApprovalOutcome {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(crate) enum ToolItemTerminalStatus {
     Completed,
     Failed,
@@ -315,7 +314,6 @@ pub(crate) enum ToolItemTerminalStatus {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(crate) enum ToolItemFailureKind {
     ToolError,
     ApprovalDenied,
