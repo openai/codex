@@ -1,0 +1,19 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-thread-store"
+version.workspace = true
+
+[lib]
+name = "codex_thread_store"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+codex-protocol = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }

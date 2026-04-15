@@ -1,14 +1,23 @@
+use super::CreateSeatbeltCommandArgsParams;
 use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::ProxyPolicyInputs;
 use super::UnixDomainSocketPolicy;
 use super::create_seatbelt_command_args;
-use super::create_seatbelt_command_args_for_policies;
+use super::create_seatbelt_command_args_for_legacy_policy;
 use super::dynamic_network_policy;
 use super::macos_dir_params;
 use super::normalize_path_for_sandbox;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
+use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigState;
+use codex_network_proxy::NetworkMode;
+use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::NetworkProxyConstraints;
+use codex_network_proxy::NetworkProxyState;
+use codex_network_proxy::build_config_state;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -23,6 +32,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 fn assert_seatbelt_denied(stderr: &[u8], path: &Path) {
@@ -46,6 +56,23 @@ fn seatbelt_policy_arg(args: &[String]) -> &str {
         .expect("seatbelt args should include -p");
     args.get(policy_index + 1)
         .expect("seatbelt args should include policy text")
+}
+
+struct TestConfigReloader;
+
+#[async_trait::async_trait]
+impl ConfigReloader for TestConfigReloader {
+    fn source_label(&self) -> String {
+        "seatbelt test config".to_string()
+    }
+
+    async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
+        Ok(None)
+    }
+
+    async fn reload_now(&self) -> anyhow::Result<ConfigState> {
+        Err(anyhow::anyhow!("seatbelt test config cannot reload"))
+    }
 }
 
 #[test]
@@ -128,14 +155,15 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         },
     ]);
 
-    let args = create_seatbelt_command_args_for_policies(
-        vec!["/bin/true".to_string()],
-        &file_system_policy,
-        NetworkSandboxPolicy::Restricted,
-        Path::new("/"),
-        /*enforce_managed_network*/ false,
-        /*network*/ None,
-    );
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: Path::new("/"),
+        enforce_managed_network: false,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    });
 
     let policy = seatbelt_policy_arg(&args);
     let unreadable_roots = file_system_policy.get_unreadable_roots_with_cwd(Path::new("/"));
@@ -193,14 +221,15 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         },
     ]);
 
-    let args = create_seatbelt_command_args_for_policies(
-        vec!["/bin/true".to_string()],
-        &file_system_policy,
-        NetworkSandboxPolicy::Restricted,
-        Path::new("/"),
-        /*enforce_managed_network*/ false,
-        /*network*/ None,
-    );
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: Path::new("/"),
+        enforce_managed_network: false,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    });
 
     let policy = seatbelt_policy_arg(&args);
     let readable_roots = file_system_policy.get_readable_roots_with_cwd(Path::new("/"));
@@ -231,7 +260,7 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
 #[test]
 fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access() {
     let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args(
+    let args = create_seatbelt_command_args_for_legacy_policy(
         vec!["echo".to_string(), "ok".to_string()],
         &SandboxPolicy::new_read_only_policy(),
         cwd.as_path(),
@@ -249,7 +278,7 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(cwd.join("docs")).expect("create docs");
     let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs");
-    let args = create_seatbelt_command_args(
+    let args = create_seatbelt_command_args_for_legacy_policy(
         vec!["/bin/true".to_string()],
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
@@ -452,6 +481,140 @@ fn create_seatbelt_args_allowlists_unix_socket_paths() {
 }
 
 #[test]
+fn create_seatbelt_args_allowlists_explicit_unix_socket_paths_without_proxy() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.path(),
+    );
+    let extra_allow_unix_sockets = vec![absolute_path("/tmp/codex-browser-use")];
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/usr/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: cwd.path(),
+        enforce_managed_network: false,
+        network: None,
+        extra_allow_unix_sockets: &extra_allow_unix_sockets,
+    });
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy.contains("(allow system-socket (socket-domain AF_UNIX))"),
+        "policy should allow AF_UNIX when explicit socket paths are requested:\n{policy}"
+    );
+    assert!(
+        policy.contains(
+            "(allow network-outbound (remote unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))"
+        ),
+        "policy should allow outbound AF_UNIX traffic for explicit socket paths:\n{policy}"
+    );
+    let expected_socket_root = normalize_path_for_sandbox(Path::new("/tmp/codex-browser-use"))
+        .expect("socket root should normalize")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        args.iter()
+            .any(|arg| arg == &format!("-DUNIX_SOCKET_PATH_0={expected_socket_root}")),
+        "seatbelt args should pass the configured socket root as a sandbox param: {args:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> anyhow::Result<()> {
+    let cwd = TempDir::new().expect("temp cwd");
+    let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.path(),
+    );
+    let network_socket = "/tmp/codex-proxy-use";
+    let explicit_socket = "/tmp/codex-browser-use";
+    let mut network_config = NetworkProxyConfig::default();
+    network_config.network.enabled = true;
+    network_config.network.mode = NetworkMode::Full;
+    network_config
+        .network
+        .set_allow_unix_sockets(vec![network_socket.to_string()]);
+    let state = build_config_state(network_config, NetworkProxyConstraints::default())?;
+    let network_proxy = NetworkProxy::builder()
+        .state(Arc::new(NetworkProxyState::with_reloader(
+            state,
+            Arc::new(TestConfigReloader),
+        )))
+        .managed_by_codex(/*managed_by_codex*/ false)
+        .build()
+        .await?;
+    let extra_allow_unix_sockets = vec![absolute_path(explicit_socket)];
+
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/usr/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: cwd.path(),
+        enforce_managed_network: false,
+        network: Some(&network_proxy),
+        extra_allow_unix_sockets: &extra_allow_unix_sockets,
+    });
+
+    let expected_explicit_socket = normalize_path_for_sandbox(Path::new(explicit_socket))
+        .expect("explicit socket root should normalize");
+    let expected_network_socket = normalize_path_for_sandbox(Path::new(network_socket))
+        .expect("network socket root should normalize");
+    let unix_socket_definitions = args
+        .iter()
+        .filter(|arg| arg.starts_with("-DUNIX_SOCKET_PATH_"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unix_socket_definitions,
+        vec![
+            format!(
+                "-DUNIX_SOCKET_PATH_0={}",
+                expected_explicit_socket.display()
+            ),
+            format!("-DUNIX_SOCKET_PATH_1={}", expected_network_socket.display()),
+        ],
+        "seatbelt args should include both explicit and network proxy socket roots: {args:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn create_seatbelt_args_preserves_full_network_with_explicit_unix_socket_paths() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.path(),
+    );
+    let extra_allow_unix_sockets = vec![absolute_path("/tmp/codex-browser-use")];
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/usr/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Enabled,
+        sandbox_policy_cwd: cwd.path(),
+        enforce_managed_network: false,
+        network: None,
+        extra_allow_unix_sockets: &extra_allow_unix_sockets,
+    });
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy.contains("(allow network-outbound)\n"),
+        "policy should preserve full outbound network access:\n{policy}"
+    );
+    assert!(
+        policy.contains("(allow network-inbound)\n"),
+        "policy should preserve full inbound network access:\n{policy}"
+    );
+    assert!(
+        policy.contains(
+            "(allow network-outbound (remote unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))"
+        ),
+        "policy should still allow outbound AF_UNIX traffic for explicit socket paths:\n{policy}"
+    );
+}
+
+#[test]
 fn unix_socket_policy_non_empty_output_is_newline_terminated() {
     let allowlist_policy = unix_socket_policy(&ProxyPolicyInputs {
         unix_domain_socket_policy: UnixDomainSocketPolicy::Restricted {
@@ -615,7 +778,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args(
+    let args = create_seatbelt_command_args_for_legacy_policy(
         shell_command.clone(),
         &policy,
         &cwd,
@@ -729,7 +892,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let write_hooks_file_args = create_seatbelt_command_args(
+    let write_hooks_file_args = create_seatbelt_command_args_for_legacy_policy(
         shell_command_git,
         &policy,
         &cwd,
@@ -765,7 +928,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let write_allowed_file_args = create_seatbelt_command_args(
+    let write_allowed_file_args = create_seatbelt_command_args_for_legacy_policy(
         shell_command_allowed,
         &policy,
         &cwd,
@@ -830,7 +993,7 @@ fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_desce
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args(
+    let args = create_seatbelt_command_args_for_legacy_policy(
         shell_command,
         &policy,
         repo_root.as_path(),
@@ -885,7 +1048,7 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args(
+    let args = create_seatbelt_command_args_for_legacy_policy(
         shell_command,
         &policy,
         &cwd,
@@ -921,7 +1084,7 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let gitdir_args = create_seatbelt_command_args(
+    let gitdir_args = create_seatbelt_command_args_for_legacy_policy(
         shell_command_gitdir,
         &policy,
         &cwd,
@@ -984,7 +1147,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args(
+    let args = create_seatbelt_command_args_for_legacy_policy(
         shell_command.clone(),
         &policy,
         vulnerable_root.as_path(),

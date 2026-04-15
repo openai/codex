@@ -737,6 +737,8 @@ impl MessageProcessor {
         session: Arc<ConnectionSessionState>,
         request_context: RequestContext,
     ) {
+        let connection_id = connection_request_id.connection_id;
+
         if !session.initialized() {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,

@@ -163,14 +163,14 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let outcome = run_guardian_review_session(
+    let outcome = Box::pin(run_guardian_review_session(
         session.clone(),
         turn.clone(),
         request,
         retry_reason,
         schema,
         external_cancel,
-    )
+    ))
     .await;
 
     let assessment = match outcome {
@@ -303,14 +303,16 @@ pub(crate) async fn review_approval_request(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    run_guardian_review(
+    // Box the delegated review future so callers do not inline the entire
+    // guardian session state machine into their own async stack.
+    Box::pin(run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
         review_id,
         request,
         retry_reason,
         /*external_cancel*/ None,
-    )
+    ))
     .await
 }
 
@@ -322,14 +324,14 @@ pub(crate) async fn review_approval_request_with_cancel(
     retry_reason: Option<String>,
     cancel_token: CancellationToken,
 ) -> ReviewDecision {
-    run_guardian_review(
+    Box::pin(run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
         review_id,
         request,
         retry_reason,
         Some(cancel_token),
-    )
+    ))
     .await
 }
 
@@ -411,22 +413,24 @@ pub(super) async fn run_guardian_review_session(
         Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
     };
 
-    match session
-        .guardian_review_session
-        .run_review(GuardianReviewSessionParams {
-            parent_session: Arc::clone(&session),
-            parent_turn: turn.clone(),
-            spawn_config: guardian_config,
-            request,
-            retry_reason,
-            schema,
-            model: guardian_model,
-            reasoning_effort: guardian_reasoning_effort,
-            reasoning_summary: turn.reasoning_summary,
-            personality: turn.personality,
-            external_cancel,
-        })
-        .await
+    match Box::pin(
+        session
+            .guardian_review_session
+            .run_review(GuardianReviewSessionParams {
+                parent_session: Arc::clone(&session),
+                parent_turn: turn.clone(),
+                spawn_config: guardian_config,
+                request,
+                retry_reason,
+                schema,
+                model: guardian_model,
+                reasoning_effort: guardian_reasoning_effort,
+                reasoning_summary: turn.reasoning_summary,
+                personality: turn.personality,
+                external_cancel,
+            }),
+    )
+    .await
     {
         GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) => {
             GuardianReviewOutcome::Completed(parse_guardian_assessment(

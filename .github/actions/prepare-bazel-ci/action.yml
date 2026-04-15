@@ -1,0 +1,44 @@
+name: prepare-bazel-ci
+description: Prepare a Bazel CI job with shared setup, repository cache restore, and execution logs.
+inputs:
+  target:
+    description: Target triple used for setup and cache namespacing.
+    required: true
+  install-test-prereqs:
+    description: Install Node.js and DotSlash for Bazel-backed test jobs.
+    required: false
+    default: "false"
+outputs:
+  repository-cache-path:
+    description: Filesystem path used for the Bazel repository cache.
+    value: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Bazel CI
+      id: setup_bazel
+      uses: ./.github/actions/setup-bazel-ci
+      with:
+        target: ${{ inputs.target }}
+        install-test-prereqs: ${{ inputs.install-test-prereqs }}
+
+    # Restore the Bazel repository cache explicitly so external dependencies
+    # do not need to be re-downloaded on every CI run. Keep restore failures
+    # non-fatal so transient cache-service errors degrade to a cold build
+    # instead of failing the job.
+    - name: Restore bazel repository cache
+      id: cache_bazel_repository_restore
+      continue-on-error: true
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+      with:
+        path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+        key: bazel-cache-${{ inputs.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+        restore-keys: |
+          bazel-cache-${{ inputs.target }}
+
+    - name: Set up Bazel execution logs
+      shell: bash
+      run: |
+        mkdir -p "${RUNNER_TEMP}/bazel-execution-logs"
+        echo "CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR=${RUNNER_TEMP}/bazel-execution-logs" >> "${GITHUB_ENV}"

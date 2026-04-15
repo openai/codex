@@ -41,9 +41,13 @@ pub(crate) fn build_mcp_tool_exposure(
 
     let direct_tools =
         filter_codex_apps_mcp_tools(all_mcp_tools, explicitly_enabled_connectors, config);
+    for direct_tool_name in direct_tools.keys() {
+        deferred_tools.remove(direct_tool_name);
+    }
+
     McpToolExposure {
         direct_tools,
-        deferred_tools: Some(deferred_tools),
+        deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
     }
 }
 

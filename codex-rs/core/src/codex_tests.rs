@@ -904,7 +904,7 @@ fn mcp_tool_exposure_searches_large_effective_tool_sets() {
 }
 
 #[test]
-fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
+fn mcp_tool_exposure_directly_exposes_explicit_apps_without_deferred_overlap() {
     let config = test_config();
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
     let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
@@ -935,13 +935,19 @@ fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
     );
     assert_eq!(
         exposure.deferred_tools.as_ref().map(HashMap::len),
-        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD)
+        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1)
     );
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
         .expect("large tool sets should be discoverable through tool_search");
-    assert!(deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
+    assert!(
+        tool_names
+            .iter()
+            .all(|direct_tool_name| !deferred_tools.contains_key(direct_tool_name)),
+        "direct tools should not also be deferred: {tool_names:?}"
+    );
+    assert!(!deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
     assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
 }
 
@@ -1919,7 +1925,7 @@ async fn set_rate_limits_retains_previous_credits() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2021,7 +2027,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2373,7 +2379,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2450,12 +2456,19 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
     )
     .expect("write skill");
 
+    let skill_fs = session
+        .services
+        .environment
+        .as_ref()
+        .map(|environment| environment.get_filesystem())
+        .unwrap_or_else(|| std::sync::Arc::clone(&codex_exec_server::LOCAL_FS));
     let parent_outcome = session
         .services
         .skills_manager
         .skills_for_cwd(
             &crate::skills_load_input_from_config(&parent_config, Vec::new()),
             /*force_reload*/ true,
+            Some(Arc::clone(&skill_fs)),
         )
         .await;
     let parent_skill = parent_outcome
@@ -2636,7 +2649,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2740,7 +2753,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -2845,7 +2858,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&skills_input));
+    let skill_fs = environment.get_filesystem();
+    let skills_outcome = Arc::new(
+        services
+            .skills_manager
+            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .await,
+    );
     let turn_context = Session::make_turn_context(
         conversation_id,
         Some(Arc::clone(&auth_manager)),
@@ -3586,7 +3605,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
-        codex_home: config.codex_home.to_path_buf(),
+        codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
         metrics_service_name: None,
@@ -3691,7 +3710,13 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&skills_input));
+    let skill_fs = environment.get_filesystem();
+    let skills_outcome = Arc::new(
+        services
+            .skills_manager
+            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .await,
+    );
     let turn_context = Arc::new(Session::make_turn_context(
         conversation_id,
         Some(Arc::clone(&auth_manager)),
@@ -4121,7 +4146,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
     let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        turn_context.config.codex_home.as_path(),
+        &turn_context.config.codex_home,
         &session.conversation_id.to_string(),
         call_id,
     );
@@ -4145,7 +4170,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
 
     let history = session.clone_history().await;
     let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
-        turn_context.config.codex_home.as_path(),
+        &turn_context.config.codex_home,
         &session.conversation_id.to_string(),
         "<image_id>",
     );
@@ -4173,7 +4198,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
     let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
-        turn_context.config.codex_home.as_path(),
+        &turn_context.config.codex_home,
         &session.conversation_id.to_string(),
         call_id,
     );

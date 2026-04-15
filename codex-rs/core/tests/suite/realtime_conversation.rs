@@ -96,6 +96,11 @@ impl Match for RealtimeCallRequestCapture {
     }
 }
 
+fn normalized_json_string(raw: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(raw).context("expected JSON fixture to parse")?;
+    serde_json::to_string(&value).context("expected JSON fixture to serialize")
+}
+
 fn websocket_request_text(
     request: &core_test_support::responses::WebSocketRequest,
 ) -> Option<String> {
@@ -518,6 +523,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
     let session = r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"cove"}},"type":"quicksilver","model":"realtime-test-model","instructions":"backend prompt\n\nstartup context"}"#;
+    let session = normalized_json_string(session)?;
     assert_eq!(
         body,
         format!(
@@ -2411,11 +2417,8 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
-    assert!(
-        user_texts
-            .iter()
-            .any(|text| text == "user: text from realtime")
-    );
+    assert!(user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: text from realtime</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2497,7 +2500,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
-        == "assistant: assistant context\nuser: delegated query\nassistant: assist confirm"));
+        == "<realtime_delegation>\n  <input>assistant: assistant context\nuser: delegated query\nassistant: assist confirm</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2611,23 +2614,14 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
     assert_eq!(requests.len(), 2);
 
     let first_user_texts = requests[0].message_input_texts("user");
-    assert!(
-        first_user_texts
-            .iter()
-            .any(|text| text == "user: first question")
-    );
+    assert!(first_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: first question</input>\n</realtime_delegation>"));
 
     let second_user_texts = requests[1].message_input_texts("user");
-    assert!(
-        second_user_texts
-            .iter()
-            .any(|text| text == "user: second question")
-    );
-    assert!(
-        !second_user_texts
-            .iter()
-            .any(|text| text == "user: first question\nuser: second question")
-    );
+    assert!(second_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: second question</input>\n</realtime_delegation>"));
+    assert!(!second_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: first question\nuser: second question</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -3150,14 +3144,12 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     assert!(
         !first_texts
             .iter()
-            .any(|text| text == "user: steer via realtime")
+            .any(|text| text
+                == "<realtime_delegation>\n  <input>user: steer via realtime</input>\n</realtime_delegation>")
     );
     assert!(second_texts.iter().any(|text| text == "first prompt"));
-    assert!(
-        second_texts
-            .iter()
-            .any(|text| text == "user: steer via realtime")
-    );
+    assert!(second_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: steer via realtime</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
@@ -3272,7 +3264,9 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     assert_eq!(requests.len(), 1);
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let first_texts = message_input_texts(&first_body, "user");
-    let expected_text = format!("user: {delegated_text}");
+    let expected_text = format!(
+        "<realtime_delegation>\n  <input>user: {delegated_text}</input>\n</realtime_delegation>"
+    );
     assert!(first_texts.iter().any(|text| text == &expected_text));
 
     realtime_server.shutdown().await;

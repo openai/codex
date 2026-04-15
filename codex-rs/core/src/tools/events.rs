@@ -18,8 +18,8 @@ use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_shell_command::parse_command::parse_command;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -64,7 +64,7 @@ pub(crate) enum ToolEventFailure {
 pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
-    cwd: &Path,
+    cwd: &AbsolutePathBuf,
     parsed_cmd: &[ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<String>,
@@ -78,7 +78,7 @@ pub(crate) async fn emit_exec_command_begin(
                 process_id: process_id.map(str::to_owned),
                 turn_id: ctx.turn.sub_id.clone(),
                 command: command.to_vec(),
-                cwd: cwd.to_path_buf(),
+                cwd: cwd.clone(),
                 parsed_cmd: parsed_cmd.to_vec(),
                 source,
                 interaction_input,
@@ -90,7 +90,7 @@ pub(crate) async fn emit_exec_command_begin(
 pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         freeform: bool,
@@ -101,7 +101,7 @@ pub(crate) enum ToolEmitter {
     },
     UnifiedExec {
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
@@ -111,7 +111,7 @@ pub(crate) enum ToolEmitter {
 impl ToolEmitter {
     pub fn shell(
         command: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         freeform: bool,
     ) -> Self {
@@ -134,7 +134,7 @@ impl ToolEmitter {
 
     pub fn unified_exec(
         command: &[String],
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         process_id: Option<String>,
     ) -> Self {
@@ -163,11 +163,7 @@ impl ToolEmitter {
                 emit_exec_stage(
                     ctx,
                     ExecCommandInput::new(
-                        command,
-                        cwd.as_path(),
-                        parsed_cmd,
-                        *source,
-                        /*interaction_input*/ None,
+                        command, cwd, parsed_cmd, *source, /*interaction_input*/ None,
                         /*process_id*/ None,
                     ),
                     stage,
@@ -273,7 +269,7 @@ impl ToolEmitter {
                     ctx,
                     ExecCommandInput::new(
                         command,
-                        cwd.as_path(),
+                        cwd,
                         parsed_cmd,
                         *source,
                         /*interaction_input*/ None,
@@ -365,7 +361,7 @@ impl ToolEmitter {
 
 struct ExecCommandInput<'a> {
     command: &'a [String],
-    cwd: &'a Path,
+    cwd: &'a AbsolutePathBuf,
     parsed_cmd: &'a [ParsedCommand],
     source: ExecCommandSource,
     interaction_input: Option<&'a str>,
@@ -375,7 +371,7 @@ struct ExecCommandInput<'a> {
 impl<'a> ExecCommandInput<'a> {
     fn new(
         command: &'a [String],
-        cwd: &'a Path,
+        cwd: &'a AbsolutePathBuf,
         parsed_cmd: &'a [ParsedCommand],
         source: ExecCommandSource,
         interaction_input: Option<&'a str>,
@@ -479,7 +475,7 @@ async fn emit_exec_end(
                 process_id: exec_input.process_id.map(str::to_owned),
                 turn_id: ctx.turn.sub_id.clone(),
                 command: exec_input.command.to_vec(),
-                cwd: exec_input.cwd.to_path_buf(),
+                cwd: exec_input.cwd.clone(),
                 parsed_cmd: exec_input.parsed_cmd.to_vec(),
                 source: exec_input.source,
                 interaction_input: exec_input.interaction_input.map(str::to_owned),

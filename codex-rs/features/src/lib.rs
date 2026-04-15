@@ -660,8 +660,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GeneralAnalytics,
         key: "general_analytics",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Sqlite,
@@ -672,7 +672,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MemoryTool,
         key: "memories",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Memories",
+            menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
+            announcement: "NEW: Codex can now generate and uses memories. Try is now with `/memories`",
+        },
         default_enabled: false,
     },
     FeatureSpec {

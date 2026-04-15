@@ -379,6 +379,11 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMemoryModeSetResponse,
     },
+    #[experimental("memory/reset")]
+    MemoryReset => "memory/reset" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::MemoryResetResponse,
+    },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
         serialization: thread_id(params.thread_id),
@@ -1228,21 +1233,20 @@ mod tests {
     use codex_protocol::protocol::RealtimeOutputModality;
     use codex_protocol::protocol::RealtimeVoice;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
 
     fn absolute_path_string(path: &str) -> String {
-        let trimmed = path.trim_start_matches('/');
-        if cfg!(windows) {
-            format!(r"C:\{}", trimmed.replace('/', "\\"))
-        } else {
-            format!("/{trimmed}")
-        }
+        let path = format!("/{}", path.trim_start_matches('/'));
+        test_path_buf(&path).display().to_string()
     }
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::from_absolute_path(absolute_path_string(path)).expect("absolute path")
+        let path = format!("/{}", path.trim_start_matches('/'));
+        test_path_buf(&path).abs()
     }
 
     fn request_id() -> RequestId {
@@ -1789,7 +1793,7 @@ mod tests {
                     updated_at: 2,
                     status: v2::ThreadStatus::Idle,
                     path: None,
-                    cwd: PathBuf::from("/tmp"),
+                    cwd: absolute_path("/tmp"),
                     cli_version: "0.0.0".to_string(),
                     source: v2::SessionSource::Exec,
                     agent_nickname: None,
@@ -1801,8 +1805,8 @@ mod tests {
                 model: "gpt-5".to_string(),
                 model_provider: "openai".to_string(),
                 service_tier: None,
-                cwd: PathBuf::from("/tmp"),
-                instruction_sources: vec![PathBuf::from("/tmp/AGENTS.md")],
+                cwd: absolute_path("/tmp"),
+                instruction_sources: vec![absolute_path("/tmp/AGENTS.md")],
                 approval_policy: v2::AskForApproval::OnFailure,
                 approvals_reviewer: v2::ApprovalsReviewer::User,
                 sandbox: v2::SandboxPolicy::DangerFullAccess,
@@ -1829,7 +1833,7 @@ mod tests {
                             "type": "idle"
                         },
                         "path": null,
-                        "cwd": "/tmp",
+                        "cwd": absolute_path_string("tmp"),
                         "cliVersion": "0.0.0",
                         "source": "exec",
                         "agentNickname": null,
@@ -1841,8 +1845,8 @@ mod tests {
                     "model": "gpt-5",
                     "modelProvider": "openai",
                     "serviceTier": null,
-                    "cwd": "/tmp",
-                    "instructionSources": ["/tmp/AGENTS.md"],
+                    "cwd": absolute_path_string("tmp"),
+                    "instructionSources": [absolute_path_string("tmp/AGENTS.md")],
                     "approvalPolicy": "on-failure",
                     "approvalsReviewer": "user",
                     "sandbox": {
