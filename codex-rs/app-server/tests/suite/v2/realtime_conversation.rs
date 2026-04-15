@@ -1357,15 +1357,13 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
         "sideband requests should include audio append: {requests:?}"
     );
     assert!(
-        requests
-            .iter()
-            .any(|request| {
-                request["type"] == "conversation.item.create"
-                    && request["item"]["type"] == "message"
-                    && request["item"]["role"] == "user"
-                    && request["item"]["content"][0]["type"] == "input_text"
-                    && request["item"]["content"][0]["text"] == "[USER] hello"
-            }),
+        requests.iter().any(|request| {
+            request["type"] == "conversation.item.create"
+                && request["item"]["type"] == "message"
+                && request["item"]["role"] == "user"
+                && request["item"]["content"][0]["type"] == "input_text"
+                && request["item"]["content"][0]["text"] == "[USER] hello"
+        }),
         "sideband requests should include user text item: {requests:?}"
     );
 
