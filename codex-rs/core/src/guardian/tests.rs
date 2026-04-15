@@ -985,7 +985,7 @@ async fn guardian_review_prefers_codex_auto_review_when_available() -> anyhow::R
 
     let models_manager = Arc::new(
         codex_models_manager::manager::ModelsManager::new_with_provider(
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             Arc::clone(&session.services.auth_manager),
             Some(model_catalog),
             Default::default(),
@@ -1006,7 +1006,7 @@ async fn guardian_review_prefers_codex_auto_review_when_available() -> anyhow::R
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["true".to_string()],
-            cwd: PathBuf::from("/repo/codex-rs/core"),
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to verify the command.".to_string()),
