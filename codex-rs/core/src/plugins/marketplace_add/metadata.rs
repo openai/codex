@@ -296,6 +296,7 @@ mod tests {
             r#"{"name":"debug","plugins":[]}"#,
         )
         .unwrap();
+        // Let TOML serialization escape platform-specific path separators.
         let mut marketplace = toml::map::Map::new();
         marketplace.insert(
             "source_type".to_string(),
