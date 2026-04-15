@@ -270,11 +270,20 @@ fn set_panic_hook() {
     }));
 }
 
+/// Event consumed by the top-level TUI event loop.
+///
+/// Resize is intentionally modeled separately from [`TuiEvent::Draw`] because resize handling has to reconcile terminal geometry and cached viewport state before rendering the next frame.
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
+    /// Keyboard input delivered by crossterm.
     Key(KeyEvent),
+    /// Bracketed paste payload delivered by crossterm.
     Paste(String),
+    /// Terminal geometry changed or was inferred to have changed.
+    ///
+    /// Resize events should be rendered immediately and should not be downgraded to a scheduled draw. Some terminal hosts can report stale cursor positions during resize, so handlers use this variant to request a conservative repaint path.
     Resize,
+    /// Scheduled repaint request from application state changes.
     Draw,
 }
 
@@ -355,6 +364,9 @@ impl Tui {
         self.frame_requester.clone()
     }
 
+    /// Requests that the next draw clear and invalidate the terminal viewport.
+    ///
+    /// This is used for resize handling when the cursor-position viewport heuristic is less trustworthy than the size event itself. It is a one-shot flag consumed by [`Tui::draw`]; callers should set it immediately before the draw that needs the conservative repaint.
     pub(crate) fn force_full_repaint(&mut self) {
         self.force_full_repaint = true;
     }
@@ -602,9 +614,9 @@ impl Tui {
         self.force_full_repaint = false;
 
         // Precompute any viewport updates that need a cursor-position query before entering
-        // the synchronized update, to avoid racing with the event reader. Explicit resize
-        // events skip this heuristic because xterm.js can report stale cursor positions while
-        // a blurred split pane is being resized rapidly.
+        // the synchronized update, to avoid racing with the event reader. Forced repaint
+        // callers skip this heuristic because some terminal hosts can report stale cursor
+        // positions while a blurred split pane is being resized rapidly.
         let mut pending_viewport_area = if force_full_repaint {
             None
         } else {

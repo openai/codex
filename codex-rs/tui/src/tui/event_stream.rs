@@ -16,6 +16,10 @@
 //! from stdin, so the safer approach is to drop and recreate the event stream when we need to hand off the terminal.
 //!
 //! See https://ratatui.rs/recipes/apps/spawn-vim/ and https://www.reddit.com/r/rust/comments/1f3o33u/myterious_crossterm_input_after_running_vim for more details.
+//!
+//! Resize events are kept distinct from scheduled draw events because resize handling carries an additional repaint contract. A draw event means some application state may need another frame, while a resize event means the terminal geometry may have changed underneath ratatui's cached viewport state and the renderer may need to invalidate more aggressively.
+//!
+//! Superset's xterm.js host can miss the normal crossterm resize event when a split pane is resized while the terminal is blurred. The resize watchdog below is intentionally scoped to Superset detection and Superset environment markers; it only synthesizes a [`TuiEvent::Resize`] when the reported terminal size changes. It does not attempt to reflow transcript content, repair scrollback, or make xterm.js generally repaint. Those responsibilities stay in the TUI draw path.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -46,14 +50,21 @@ const SUPERSET_RESIZE_WATCHDOG_INTERVAL: Duration = Duration::from_millis(100);
 /// Result type produced by an event source.
 pub type EventResult = std::io::Result<Event>;
 
-/// Abstraction over a source of terminal events. Allows swapping in a fake for tests.
-/// Value in production is [`CrosstermEventSource`].
+/// Abstraction over a source of terminal events.
+///
+/// The production implementation is [`CrosstermEventSource`]. Tests use this trait to inject a deterministic event source while still exercising the same broker, mapping, pause/resume, and resize watchdog behavior as the real stream.
 pub trait EventSource: Send + 'static {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EventResult>>;
 }
 
+/// Shared terminal size reader used by resize watchdogs.
+///
+/// The indirection keeps production reads wired to `crossterm::terminal::size` while allowing tests to model missed resize notifications without relying on the process terminal.
 type TerminalSizeReader = Arc<dyn Fn() -> std::io::Result<(u16, u16)> + Send + Sync>;
 
+/// Polling fallback for terminals that can miss resize events.
+///
+/// The watchdog is deliberately small: it remembers the last observed `(cols, rows)` and reports a change only after it has a seeded size. Callers must update it from real resize events with [`ResizeWatchdog::set_observed_size`] so the fallback does not emit duplicate synthetic resize events for sizes crossterm already delivered.
 struct ResizeWatchdog {
     interval: Interval,
     last_size: Option<(u16, u16)>,
@@ -61,6 +72,9 @@ struct ResizeWatchdog {
 }
 
 impl ResizeWatchdog {
+    /// Creates a watchdog with an injectable interval and size reader.
+    ///
+    /// Tests use this constructor to control time and terminal size. Production callers should use a terminal-specific constructor such as [`ResizeWatchdog::superset`] so the polling cadence stays tied to the terminal behavior that required the fallback.
     fn new(interval_duration: Duration, read_size: TerminalSizeReader) -> Self {
         let mut interval = tokio::time::interval(interval_duration);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -71,14 +85,23 @@ impl ResizeWatchdog {
         }
     }
 
+    /// Creates the Superset resize watchdog.
+    ///
+    /// This is only appropriate after Superset detection has already passed. Enabling it for every terminal would turn every event stream poll into periodic terminal size I/O and could add unnecessary resize churn to terminals that already deliver reliable resize events.
     fn superset() -> Self {
         Self::new(SUPERSET_RESIZE_WATCHDOG_INTERVAL, Arc::new(terminal::size))
     }
 
+    /// Updates the watchdog with a resize event the terminal delivered normally.
+    ///
+    /// This keeps a later watchdog tick from rediscovering the same size and emitting a redundant synthetic resize event.
     fn set_observed_size(&mut self, size: (u16, u16)) {
         self.last_size = Some(size);
     }
 
+    /// Samples the current terminal size and returns whether it changed from the previous sample.
+    ///
+    /// The first successful sample only seeds state. Read errors are treated as no change because callers cannot distinguish an unavailable size query from a real stable size, and emitting a resize on error would produce repaint noise without geometry evidence.
     fn observe_current_size(&mut self) -> bool {
         let Ok(size) = (self.read_size)() else {
             return false;
@@ -90,6 +113,9 @@ impl ResizeWatchdog {
     }
 }
 
+/// Returns whether the Superset resize watchdog should be enabled.
+///
+/// The gate accepts either explicit `TERM_PROGRAM=Superset` detection or the pair of Superset workspace environment markers. A caller that widens this gate should also update the tests and document the terminal-specific failure mode, otherwise reliable terminals may inherit a workaround they do not need.
 fn should_enable_superset_resize_watchdog(
     terminal_info: &TerminalInfo,
     has_superset_env_markers: bool,
@@ -97,6 +123,9 @@ fn should_enable_superset_resize_watchdog(
     terminal_info.name == TerminalName::Superset || has_superset_env_markers
 }
 
+/// Returns whether the process environment contains Superset terminal markers.
+///
+/// Superset can embed an xterm.js terminal without exposing a unique `TERM_PROGRAM`, so the marker pair provides a fallback signal for the same resize behavior. Requiring both values keeps unrelated processes from opting into the watchdog after exporting only one similarly named variable.
 fn has_superset_env_markers() -> bool {
     std::env::var_os("SUPERSET_TERMINAL_ID").is_some()
         && std::env::var_os("SUPERSET_WORKSPACE_ID").is_some()
