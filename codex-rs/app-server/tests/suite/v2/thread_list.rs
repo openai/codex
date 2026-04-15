@@ -589,6 +589,7 @@ sqlite = true
         /*page_size*/ 10,
         /*cursor*/ None,
         codex_core::ThreadSortKey::CreatedAt,
+        codex_core::SortDirection::Desc,
         &[],
         /*model_providers*/ None,
         "mock_provider",
