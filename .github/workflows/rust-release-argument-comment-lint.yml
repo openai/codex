@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      - uses: dtolnay/rust-toolchain@b1b44fef029483cc79808c5eb89461241fd8f32f # 1.93.0
         with:
           toolchain: nightly-2025-09-18
           targets: ${{ matrix.target }}
@@ -100,7 +100,7 @@ jobs:
             (cd "${RUNNER_TEMP}" && tar -czf "$GITHUB_WORKSPACE/$archive_path" argument-comment-lint)
           fi
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: argument-comment-lint-${{ matrix.target }}
           path: dist/argument-comment-lint/${{ matrix.target }}/*

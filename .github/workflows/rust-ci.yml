@@ -61,7 +61,7 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      - uses: dtolnay/rust-toolchain@b1b44fef029483cc79808c5eb89461241fd8f32f # 1.93.0
         with:
           components: rustfmt
       - name: cargo fmt
@@ -77,8 +77,8 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+      - uses: dtolnay/rust-toolchain@b1b44fef029483cc79808c5eb89461241fd8f32f # 1.93.0
+      - uses: taiki-e/install-action@0c7a94999971db56e9df89df226240aab222e776 # v2
         with:
           tool: cargo-shear
           version: 1.5.1
@@ -95,7 +95,7 @@ jobs:
       DYLINT_LINK_VERSION: 5.0.0
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      - uses: dtolnay/rust-toolchain@b1b44fef029483cc79808c5eb89461241fd8f32f # 1.93.0
       - name: Install nightly argument-comment-lint toolchain
         shell: bash
         run: |
@@ -108,7 +108,7 @@ jobs:
           rustup default nightly-2025-09-18
       - name: Cache cargo-dylint tooling
         id: cargo_dylint_cache
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             ~/.cargo/bin/cargo-dylint

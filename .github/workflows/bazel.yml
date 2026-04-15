@@ -103,7 +103,7 @@ jobs:
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bazel-execution-logs-test-${{ matrix.target }}
           path: ${{ runner.temp }}/bazel-execution-logs
@@ -114,7 +114,7 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
@@ -179,7 +179,7 @@ jobs:
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bazel-execution-logs-clippy-${{ matrix.target }}
           path: ${{ runner.temp }}/bazel-execution-logs
@@ -190,7 +190,7 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
@@ -261,7 +261,7 @@ jobs:
       - name: Upload Bazel execution logs
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bazel-execution-logs-verify-release-build-${{ matrix.target }}
           path: ${{ runner.temp }}/bazel-execution-logs
@@ -272,7 +272,7 @@ jobs:
       - name: Save bazel repository cache
         if: always() && !cancelled()
         continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}

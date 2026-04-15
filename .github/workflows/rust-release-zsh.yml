@@ -53,7 +53,7 @@ jobs:
           "${GITHUB_WORKSPACE}/.github/scripts/build-zsh-release-artifact.sh" \
             "dist/zsh/${{ matrix.target }}/${{ matrix.archive_name }}"
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codex-zsh-${{ matrix.target }}
           path: dist/zsh/${{ matrix.target }}/*
@@ -89,7 +89,7 @@ jobs:
           "${GITHUB_WORKSPACE}/.github/scripts/build-zsh-release-artifact.sh" \
             "dist/zsh/${{ matrix.target }}/${{ matrix.archive_name }}"
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codex-zsh-${{ matrix.target }}
           path: dist/zsh/${{ matrix.target }}/*

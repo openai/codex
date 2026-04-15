@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: dtolnay/rust-toolchain@c2b55edffaf41a251c410bb32bed22afefa800f1 # 1.92
+      - uses: dtolnay/rust-toolchain@b5826f8eb73f40ac7c19ef631dce17a9680f8129 # 1.92
       - name: Validate tag matches Cargo.toml version
         shell: bash
         run: |
@@ -125,7 +125,7 @@ jobs:
             sudo apt-get update -y
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
           fi
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      - uses: dtolnay/rust-toolchain@b1b44fef029483cc79808c5eb89461241fd8f32f # 1.93.0
         with:
           targets: ${{ matrix.target }}
 
@@ -223,7 +223,7 @@ jobs:
           cargo build --target ${{ matrix.target }} --release --timings --bin codex --bin codex-responses-api-proxy
 
       - name: Upload Cargo timings
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cargo-timings-rust-release-${{ matrix.target }}
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
@@ -362,7 +362,7 @@ jobs:
             zstd -T0 -19 --rm "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.target }}
           # Upload the per-binary .zst files as well as the new .tar.gz
@@ -511,7 +511,7 @@ jobs:
           cp scripts/install/install.ps1 dist/install.ps1
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: ${{ steps.release_name.outputs.name }}
           tag_name: ${{ github.ref_name }}

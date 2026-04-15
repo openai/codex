@@ -30,7 +30,7 @@ runs:
     - name: Restore bazel repository cache
       id: cache_bazel_repository_restore
       continue-on-error: true
-      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
         key: bazel-cache-${{ inputs.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
