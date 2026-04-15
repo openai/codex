@@ -1447,10 +1447,7 @@ impl AuthManager {
         }
     }
 
-    pub fn set_forced_chatgpt_workspace_id(
-        &self,
-        workspace_id: Option<ForcedChatgptWorkspaceIds>,
-    ) {
+    pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<ForcedChatgptWorkspaceIds>) {
         if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write()
             && *guard != workspace_id
         {
