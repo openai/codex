@@ -78,7 +78,7 @@ impl TraceReducer {
                     InteractionEdgeKind::AssignAgentTask,
                     payload.receiver_thread_id.to_string(),
                     payload.prompt,
-                    None,
+                    /*ended_at_unix_ms*/ None,
                 )
             }
             ToolCallKind::SendMessage => {
@@ -89,7 +89,7 @@ impl TraceReducer {
                     InteractionEdgeKind::SendMessage,
                     payload.receiver_thread_id.to_string(),
                     payload.prompt,
-                    None,
+                    /*ended_at_unix_ms*/ None,
                 )
             }
             ToolCallKind::CloseAgent => {
@@ -98,7 +98,7 @@ impl TraceReducer {
                 self.upsert_close_agent_interaction(
                     tool_call_id,
                     payload.receiver_thread_id.to_string(),
-                    None,
+                    /*ended_at_unix_ms*/ None,
                 )
             }
             ToolCallKind::ExecCommand

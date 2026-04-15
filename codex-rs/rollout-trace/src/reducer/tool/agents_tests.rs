@@ -170,7 +170,12 @@ fn spawn_runtime_payload_targets_delivered_child_message() -> anyhow::Result<()>
         "019d0000-0000-7000-8000-000000000002",
         "turn-child-1",
     )?;
-    let delivered = inter_agent_message("/root", "/root/repo_file_counter", "count", true);
+    let delivered = inter_agent_message(
+        "/root",
+        "/root/repo_file_counter",
+        "count",
+        /*trigger_turn*/ true,
+    );
     append_inference_request(
         &writer,
         "019d0000-0000-7000-8000-000000000002",
@@ -283,7 +288,8 @@ fn send_message_runtime_payload_targets_delivered_child_message() -> anyhow::Res
         "019d0000-0000-7000-8000-000000000002",
         "turn-child-1",
     )?;
-    let delivered = inter_agent_message("/root", "/root/child", "hello", false);
+    let delivered =
+        inter_agent_message("/root", "/root/child", "hello", /*trigger_turn*/ false);
     append_inference_request(
         &writer,
         "019d0000-0000-7000-8000-000000000002",
@@ -480,7 +486,12 @@ fn agent_result_edge_links_child_result_to_parent_notification() -> anyhow::Resu
     )?;
 
     start_agent_turn(&writer, "turn-root-1")?;
-    let delivered = inter_agent_message("/root/child", "/root", notification, false);
+    let delivered = inter_agent_message(
+        "/root/child",
+        "/root",
+        notification,
+        /*trigger_turn*/ false,
+    );
     append_inference_request(
         &writer,
         "019d0000-0000-7000-8000-000000000001",

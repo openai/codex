@@ -246,7 +246,7 @@ impl TraceReducer {
                     event.wall_time_unix_ms,
                     inference_call_id,
                     ExecutionStatus::Failed,
-                    None,
+                    /*response_id*/ None,
                     partial_response_payload,
                 )?;
             }
@@ -443,7 +443,7 @@ impl TraceReducer {
                     compaction_id,
                     compaction_request_id,
                     ExecutionStatus::Failed,
-                    None,
+                    /*response_payload*/ None,
                 )?;
             }
             RawTraceEventPayload::CompactionInstalled {
