@@ -20,6 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::McpAuthStatusEntry;
+use crate::codex_apps_library_tools::append_builtin_codex_apps_library_tools;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpConfig;
 use crate::mcp::ToolPluginProvenance;
@@ -564,7 +565,8 @@ impl AsyncManagedClient {
 
     async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
         let annotate_tools = |tools: Vec<ToolInfo>| {
-            let mut tools = tools;
+            let mut tools =
+                append_builtin_codex_apps_library_tools(tools, /*server_instructions*/ None);
             for tool in &mut tools {
                 if tool.server_name == CODEX_APPS_MCP_SERVER_NAME {
                     tool.tool = tool_with_model_visible_input_schema(&tool.tool);
@@ -1685,6 +1687,11 @@ async fn list_tools_for_client_uncached(
             }
         })
         .collect();
+    let tools = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        append_builtin_codex_apps_library_tools(tools, server_instructions)
+    } else {
+        tools
+    };
     if server_name == CODEX_APPS_MCP_SERVER_NAME {
         return Ok(filter_disallowed_codex_apps_tools(tools));
     }

@@ -727,7 +727,10 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
     let timeout_result =
         tokio::time::timeout(Duration::from_millis(10), manager.list_all_tools()).await;
     let tools = timeout_result.expect("cache-hit startup snapshot should not block");
-    assert!(tools.is_empty());
+    assert!(
+        tools.contains_key("mcp__codex_apps__search_library_files"),
+        "builtin codex apps library tools should still be available from an empty startup snapshot"
+    );
 }
 
 #[tokio::test]

@@ -1,7 +1,14 @@
+pub(crate) mod codex_apps_library_tools;
 pub(crate) mod mcp;
 pub(crate) mod mcp_connection_manager;
 pub(crate) mod mcp_tool_names;
 
+pub use codex_apps_library_tools::CREATE_LIBRARY_FILE_TOOL_NAME;
+pub use codex_apps_library_tools::DOWNLOAD_LIBRARY_FILE_TOOL_NAME;
+pub use codex_apps_library_tools::LIST_LIBRARY_DIRECTORY_NODES_TOOL_NAME;
+pub use codex_apps_library_tools::SEARCH_LIBRARY_FILES_TOOL_NAME;
+pub use codex_apps_library_tools::WRITEBACK_LIBRARY_FILE_TOOL_NAME;
+pub use codex_apps_library_tools::is_codex_apps_library_tool;
 pub use mcp::CODEX_APPS_MCP_SERVER_NAME;
 pub use mcp::McpAuthStatusEntry;
 pub use mcp::McpConfig;

@@ -1131,6 +1131,70 @@ async fn mcp_tool_exposure_directly_exposes_explicit_apps_without_deferred_overl
     assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
 }
 
+#[test]
+fn mcp_tool_exposure_directly_exposes_builtin_codex_apps_library_tools_without_connectors() {
+    let config = test_config();
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
+    let mcp_tools = HashMap::from([(
+        "mcp__codex_apps__search_library_files".to_string(),
+        make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "search_library_files",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+        ),
+    )]);
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        /*connectors*/ None,
+        &[],
+        &config,
+        &tools_config,
+    );
+
+    assert_eq!(
+        exposure.direct_tools.into_keys().collect::<Vec<_>>(),
+        vec!["mcp__codex_apps__search_library_files".to_string()]
+    );
+    assert!(exposure.deferred_tools.is_none());
+}
+
+#[test]
+fn mcp_tool_exposure_keeps_builtin_codex_apps_library_tools_direct_in_large_search_sets() {
+    let config = test_config();
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
+    let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
+    mcp_tools.insert(
+        "mcp__codex_apps__search_library_files".to_string(),
+        make_mcp_tool(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "search_library_files",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+        ),
+    );
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        /*connectors*/ None,
+        &[],
+        &config,
+        &tools_config,
+    );
+
+    assert_eq!(
+        exposure.direct_tools.into_keys().collect::<Vec<_>>(),
+        vec!["mcp__codex_apps__search_library_files".to_string()]
+    );
+    let deferred_tools = exposure
+        .deferred_tools
+        .as_ref()
+        .expect("large tool sets should be discoverable through tool_search");
+    assert!(deferred_tools.contains_key("mcp__codex_apps__search_library_files"));
+    assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
+}
+
 #[tokio::test]
 async fn reconstruct_history_matches_live_compactions() {
     let (session, turn_context) = make_session_and_context().await;

@@ -27,6 +27,7 @@ use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::library_mcp::handle_library_mcp_tool_call;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
@@ -38,6 +39,7 @@ use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
+use codex_mcp::is_codex_apps_library_tool;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
@@ -460,6 +462,16 @@ async fn execute_mcp_tool_call(
     metadata: Option<&McpToolApprovalMetadata>,
     request_meta: Option<serde_json::Value>,
 ) -> Result<CallToolResult, String> {
+    if server == CODEX_APPS_MCP_SERVER_NAME && is_codex_apps_library_tool(tool_name) {
+        return sanitize_mcp_tool_result_for_model(
+            turn_context
+                .model_info
+                .input_modalities
+                .contains(&InputModality::Image),
+            handle_library_mcp_tool_call(sess, turn_context, tool_name, arguments_value).await,
+        );
+    }
+
     let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
         sess,
         turn_context,
