@@ -31,6 +31,7 @@ use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_provider_auth::create_model_provider;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
 use core_test_support::context_snapshot;
@@ -83,7 +84,7 @@ async fn guardian_test_session_and_turn_with_base_url(
     ));
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
-    turn.provider = config.model_provider.clone();
+    turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
     turn.user_instructions = None;
 
     (Arc::new(session), Arc::new(turn))
@@ -889,7 +890,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     ));
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
-    turn.provider = config.model_provider.clone();
+    turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;
@@ -1261,7 +1262,8 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         .models_manager = models_manager;
     let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
     turn_mut.config = Arc::clone(&config);
-    turn_mut.provider = config.model_provider.clone();
+    turn_mut.provider =
+        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
     turn_mut.user_instructions = None;
 
     seed_guardian_parent_history(&session, &turn).await;

@@ -14,6 +14,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_provider_auth::create_model_provider;
 use core_test_support::PathExt;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -1390,7 +1391,10 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1466,7 +1470,10 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1920,7 +1927,10 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);

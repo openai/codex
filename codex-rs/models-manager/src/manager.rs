@@ -16,7 +16,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
-use codex_login::required_auth_manager_for_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -25,7 +24,8 @@ use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_provider_auth::resolve_provider_auth;
+use codex_provider_auth::SharedModelProvider;
+use codex_provider_auth::create_model_provider;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
@@ -178,10 +178,9 @@ pub struct ModelsManager {
     remote_models: RwLock<Vec<ModelInfo>>,
     catalog_mode: CatalogMode,
     collaboration_modes_config: CollaborationModesConfig,
-    auth_manager: Arc<AuthManager>,
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
-    provider: ModelProviderInfo,
+    provider: SharedModelProvider,
 }
 
 impl ModelsManager {
@@ -213,7 +212,7 @@ impl ModelsManager {
         collaboration_modes_config: CollaborationModesConfig,
         provider: ModelProviderInfo,
     ) -> Self {
-        let auth_manager = required_auth_manager_for_provider(auth_manager, &provider);
+        let provider = create_model_provider(provider, Some(auth_manager));
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let catalog_mode = if model_catalog.is_some() {
@@ -228,7 +227,6 @@ impl ModelsManager {
             remote_models: RwLock::new(remote_models),
             catalog_mode,
             collaboration_modes_config,
-            auth_manager,
             etag: RwLock::new(None),
             cache_manager,
             provider,
@@ -395,9 +393,11 @@ impl ModelsManager {
             return Ok(());
         }
 
-        if self.auth_manager.auth_mode() != Some(AuthMode::Chatgpt)
-            && !self.provider.has_command_auth()
-        {
+        let auth_mode = self
+            .provider
+            .auth_manager()
+            .and_then(|auth_manager| auth_manager.auth_mode());
+        if auth_mode != Some(AuthMode::Chatgpt) && !self.provider.info().has_command_auth() {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
@@ -432,23 +432,28 @@ impl ModelsManager {
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
-        let auth = self.auth_manager.auth().await;
-        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let api_provider = self.provider.to_api_provider(auth_mode)?;
-        let api_auth = resolve_provider_auth(auth, &self.provider)?;
+        let Some(auth_manager) = self.provider.auth_manager() else {
+            return Ok(());
+        };
+        let provider_auth = self.provider.resolve_auth().await?;
+        let auth_mode = provider_auth.auth.as_ref().map(CodexAuth::auth_mode);
         let auth_env = collect_auth_env_telemetry(
-            &self.provider,
-            self.auth_manager.codex_api_key_env_enabled(),
+            self.provider.info(),
+            auth_manager.codex_api_key_env_enabled(),
         );
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
-            auth_header_attached: api_auth.auth_header_attached(),
-            auth_header_name: api_auth.auth_header_name(),
+            auth_header_attached: provider_auth.api_auth.auth_header_attached(),
+            auth_header_name: provider_auth.api_auth.auth_header_name(),
             auth_env,
         });
-        let client = ModelsClient::new(transport, api_provider, api_auth)
-            .with_telemetry(Some(request_telemetry));
+        let client = ModelsClient::new(
+            transport,
+            provider_auth.api_provider,
+            provider_auth.api_auth,
+        )
+        .with_telemetry(Some(request_telemetry));
 
         let client_version = crate::client_version_to_whole();
         let (models, etag) = timeout(
@@ -520,7 +525,11 @@ impl ModelsManager {
         remote_models.sort_by(|a, b| a.priority.cmp(&b.priority));
 
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
-        let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
+        let auth_mode = self
+            .provider
+            .auth_manager()
+            .and_then(|auth_manager| auth_manager.auth_mode());
+        let chatgpt_mode = matches!(auth_mode, Some(AuthMode::Chatgpt));
         presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
 
         ModelPreset::mark_default_by_picker_visibility(&mut presets);

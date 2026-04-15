@@ -1,5 +1,6 @@
 use clap::Parser;
 use codex_core::config::Config;
+use codex_provider_auth::create_model_provider;
 use codex_utils_cli::CliConfigOverrides;
 use serde_json::json;
 use tokio::io::AsyncReadExt;
@@ -29,20 +30,12 @@ pub(crate) async fn run_responses_command(
     let base_auth_manager = codex_login::AuthManager::shared_from_config(
         &config, /*enable_codex_api_key_env*/ true,
     );
-    let auth_manager =
-        codex_login::auth_manager_for_provider(Some(base_auth_manager), &config.model_provider);
-    let auth = match auth_manager {
-        Some(auth_manager) => auth_manager.auth().await,
-        None => None,
-    };
-    let api_provider = config
-        .model_provider
-        .to_api_provider(auth.as_ref().map(codex_login::CodexAuth::auth_mode))?;
-    let api_auth = codex_provider_auth::resolve_provider_auth(auth, &config.model_provider)?;
+    let provider = create_model_provider(config.model_provider, Some(base_auth_manager));
+    let provider_auth = provider.resolve_auth().await?;
     let client = codex_api::ResponsesClient::new(
         codex_api::ReqwestTransport::new(codex_login::default_client::build_reqwest_client()),
-        api_provider,
-        api_auth,
+        provider_auth.api_provider,
+        provider_auth.api_auth,
     );
 
     let mut stream = client
