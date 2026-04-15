@@ -275,7 +275,7 @@ async fn send_add_credits_nudge_email_posts_expected_body() -> Result<()> {
     .await??;
     let received: SendAddCreditsNudgeEmailResponse = to_response(response)?;
 
-    assert_eq!(received.status, AddCreditsNudgeEmailStatus::Sent,);
+    assert_eq!(received.status, AddCreditsNudgeEmailStatus::Sent);
 
     Ok(())
 }

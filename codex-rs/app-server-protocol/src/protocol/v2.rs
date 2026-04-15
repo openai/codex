@@ -1789,6 +1789,15 @@ impl From<AddCreditsNudgeCreditType> for CoreAddCreditsNudgeCreditType {
     }
 }
 
+impl From<CoreAddCreditsNudgeCreditType> for AddCreditsNudgeCreditType {
+    fn from(value: CoreAddCreditsNudgeCreditType) -> Self {
+        match value {
+            CoreAddCreditsNudgeCreditType::Credits => Self::Credits,
+            CoreAddCreditsNudgeCreditType::UsageLimit => Self::UsageLimit,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1809,6 +1818,15 @@ impl From<CoreAddCreditsNudgeEmailStatus> for AddCreditsNudgeEmailStatus {
         match value {
             CoreAddCreditsNudgeEmailStatus::Sent => Self::Sent,
             CoreAddCreditsNudgeEmailStatus::CooldownActive => Self::CooldownActive,
+        }
+    }
+}
+
+impl From<AddCreditsNudgeEmailStatus> for CoreAddCreditsNudgeEmailStatus {
+    fn from(value: AddCreditsNudgeEmailStatus) -> Self {
+        match value {
+            AddCreditsNudgeEmailStatus::Sent => Self::Sent,
+            AddCreditsNudgeEmailStatus::CooldownActive => Self::CooldownActive,
         }
     }
 }
@@ -6543,6 +6561,26 @@ impl From<CoreRateLimitReachedType> for RateLimitReachedType {
                 Self::WorkspaceOwnerUsageLimitReached
             }
             CoreRateLimitReachedType::WorkspaceMemberUsageLimitReached => {
+                Self::WorkspaceMemberUsageLimitReached
+            }
+        }
+    }
+}
+
+impl From<RateLimitReachedType> for CoreRateLimitReachedType {
+    fn from(value: RateLimitReachedType) -> Self {
+        match value {
+            RateLimitReachedType::RateLimitReached => Self::RateLimitReached,
+            RateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
+                Self::WorkspaceOwnerCreditsDepleted
+            }
+            RateLimitReachedType::WorkspaceMemberCreditsDepleted => {
+                Self::WorkspaceMemberCreditsDepleted
+            }
+            RateLimitReachedType::WorkspaceOwnerUsageLimitReached => {
+                Self::WorkspaceOwnerUsageLimitReached
+            }
+            RateLimitReachedType::WorkspaceMemberUsageLimitReached => {
                 Self::WorkspaceMemberUsageLimitReached
             }
         }

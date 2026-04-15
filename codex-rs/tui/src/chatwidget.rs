@@ -2807,8 +2807,19 @@ impl ChatWidget {
 
     fn on_rate_limit_error(&mut self, message: String) {
         self.on_error(message);
-        if let Some(credit_type) = self.workspace_owner_nudge_credit_type() {
-            self.open_workspace_owner_nudge_prompt(credit_type);
+        match self.codex_rate_limit_reached_type {
+            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted) => {
+                self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::Credits);
+            }
+            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) => {
+                self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::UsageLimit);
+            }
+            Some(
+                RateLimitReachedType::RateLimitReached
+                | RateLimitReachedType::WorkspaceOwnerCreditsDepleted
+                | RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+            )
+            | None => {}
         }
     }
 
@@ -7477,23 +7488,6 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
-    }
-
-    fn workspace_owner_nudge_credit_type(&self) -> Option<AddCreditsNudgeCreditType> {
-        match self.codex_rate_limit_reached_type {
-            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted) => {
-                Some(AddCreditsNudgeCreditType::Credits)
-            }
-            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) => {
-                Some(AddCreditsNudgeCreditType::UsageLimit)
-            }
-            Some(
-                RateLimitReachedType::RateLimitReached
-                | RateLimitReachedType::WorkspaceOwnerCreditsDepleted
-                | RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
-            )
-            | None => None,
-        }
     }
 
     fn open_workspace_owner_nudge_prompt(&mut self, credit_type: AddCreditsNudgeCreditType) {

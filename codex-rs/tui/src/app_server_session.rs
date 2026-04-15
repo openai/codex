@@ -1133,31 +1133,7 @@ pub(crate) fn app_server_rate_limit_snapshot_to_core(
         secondary: snapshot.secondary.map(app_server_rate_limit_window_to_core),
         credits: snapshot.credits.map(app_server_credits_snapshot_to_core),
         plan_type: snapshot.plan_type,
-        rate_limit_reached_type: snapshot
-            .rate_limit_reached_type
-            .map(app_server_rate_limit_reached_type_to_core),
-    }
-}
-
-fn app_server_rate_limit_reached_type_to_core(
-    rate_limit_reached_type: codex_app_server_protocol::RateLimitReachedType,
-) -> codex_protocol::protocol::RateLimitReachedType {
-    match rate_limit_reached_type {
-        codex_app_server_protocol::RateLimitReachedType::RateLimitReached => {
-            codex_protocol::protocol::RateLimitReachedType::RateLimitReached
-        }
-        codex_app_server_protocol::RateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
-            codex_protocol::protocol::RateLimitReachedType::WorkspaceOwnerCreditsDepleted
-        }
-        codex_app_server_protocol::RateLimitReachedType::WorkspaceMemberCreditsDepleted => {
-            codex_protocol::protocol::RateLimitReachedType::WorkspaceMemberCreditsDepleted
-        }
-        codex_app_server_protocol::RateLimitReachedType::WorkspaceOwnerUsageLimitReached => {
-            codex_protocol::protocol::RateLimitReachedType::WorkspaceOwnerUsageLimitReached
-        }
-        codex_app_server_protocol::RateLimitReachedType::WorkspaceMemberUsageLimitReached => {
-            codex_protocol::protocol::RateLimitReachedType::WorkspaceMemberUsageLimitReached
-        }
+        rate_limit_reached_type: snapshot.rate_limit_reached_type.map(Into::into),
     }
 }
 

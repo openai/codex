@@ -1,6 +1,7 @@
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigFileResponse;
 use crate::types::PaginatedListTaskListItem;
+use crate::types::RateLimitReachedKind as BackendRateLimitReachedKind;
 use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
@@ -474,25 +475,25 @@ impl Client {
     }
 
     fn map_rate_limit_reached_type(
-        kind: crate::types::RateLimitReachedKind,
+        kind: BackendRateLimitReachedKind,
     ) -> Option<RateLimitReachedType> {
         match kind {
-            crate::types::RateLimitReachedKind::RateLimitReached => {
+            BackendRateLimitReachedKind::RateLimitReached => {
                 Some(RateLimitReachedType::RateLimitReached)
             }
-            crate::types::RateLimitReachedKind::WorkspaceOwnerCreditsDepleted => {
+            BackendRateLimitReachedKind::WorkspaceOwnerCreditsDepleted => {
                 Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted)
             }
-            crate::types::RateLimitReachedKind::WorkspaceMemberCreditsDepleted => {
+            BackendRateLimitReachedKind::WorkspaceMemberCreditsDepleted => {
                 Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted)
             }
-            crate::types::RateLimitReachedKind::WorkspaceOwnerUsageLimitReached => {
+            BackendRateLimitReachedKind::WorkspaceOwnerUsageLimitReached => {
                 Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached)
             }
-            crate::types::RateLimitReachedKind::WorkspaceMemberUsageLimitReached => {
+            BackendRateLimitReachedKind::WorkspaceMemberUsageLimitReached => {
                 Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
             }
-            crate::types::RateLimitReachedKind::Unknown => None,
+            BackendRateLimitReachedKind::Unknown => None,
         }
     }
 

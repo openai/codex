@@ -1956,6 +1956,7 @@ impl App {
         tokio::spawn(async move {
             let result = send_add_credits_nudge_email(request_handle, credit_type)
                 .await
+                .map(AddCreditsNudgeEmailStatus::from)
                 .map(AddCreditsNudgeEmailResult::from)
                 .unwrap_or_else(|err| AddCreditsNudgeEmailResult::Failed {
                     message: err.to_string(),
@@ -6262,33 +6263,19 @@ async fn fetch_account_rate_limits(
 async fn send_add_credits_nudge_email(
     request_handle: AppServerRequestHandle,
     credit_type: AddCreditsNudgeCreditType,
-) -> Result<AddCreditsNudgeEmailStatus> {
+) -> Result<codex_app_server_protocol::AddCreditsNudgeEmailStatus> {
     let request_id = RequestId::String(format!("add-credits-nudge-{}", Uuid::new_v4()));
     let response: codex_app_server_protocol::SendAddCreditsNudgeEmailResponse = request_handle
         .request_typed(ClientRequest::SendAddCreditsNudgeEmail {
             request_id,
             params: SendAddCreditsNudgeEmailParams {
-                credit_type: match credit_type {
-                    AddCreditsNudgeCreditType::Credits => {
-                        codex_app_server_protocol::AddCreditsNudgeCreditType::Credits
-                    }
-                    AddCreditsNudgeCreditType::UsageLimit => {
-                        codex_app_server_protocol::AddCreditsNudgeCreditType::UsageLimit
-                    }
-                },
+                credit_type: credit_type.into(),
             },
         })
         .await
         .wrap_err("account/sendAddCreditsNudgeEmail failed in TUI")?;
 
-    Ok(match response.status {
-        codex_app_server_protocol::AddCreditsNudgeEmailStatus::Sent => {
-            AddCreditsNudgeEmailStatus::Sent
-        }
-        codex_app_server_protocol::AddCreditsNudgeEmailStatus::CooldownActive => {
-            AddCreditsNudgeEmailStatus::CooldownActive
-        }
-    })
+    Ok(response.status)
 }
 
 async fn fetch_plugins_list(

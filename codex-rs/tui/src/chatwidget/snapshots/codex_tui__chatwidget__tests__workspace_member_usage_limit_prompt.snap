@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: popup
+---
+  Workspace limit reached
+  Your workspace usage limit has been reached. Request an increase from your workspace owner?
+
+  1. Yes (y)
+› 2. No (default) (n)
+
+  Press enter to confirm or esc to go back

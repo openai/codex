@@ -510,14 +510,11 @@ async fn workspace_member_credits_depleted_prompts_and_sends_credits() {
 
     chat.on_rate_limit_error("Usage limit reached.".to_string());
     let popup = render_bottom_popup(&chat, /*width*/ 90);
-    assert!(popup.contains("Your workspace is out of credits. Notify your workspace owner?"));
+    assert_chatwidget_snapshot!("workspace_member_credits_depleted_prompt", popup);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     let event = next_send_add_credits_nudge_email_event(&mut rx);
-    assert_eq!(
-        event,
-        codex_protocol::protocol::AddCreditsNudgeCreditType::Credits
-    );
+    assert_eq!(event, AddCreditsNudgeCreditType::Credits);
 }
 
 #[tokio::test]
@@ -529,16 +526,11 @@ async fn workspace_member_usage_limit_prompts_and_sends_usage_limit() {
 
     chat.on_rate_limit_error("Usage limit reached.".to_string());
     let popup = render_bottom_popup(&chat, /*width*/ 100);
-    assert!(popup.contains(
-        "Your workspace usage limit has been reached. Request an increase from your workspace owner?"
-    ));
+    assert_chatwidget_snapshot!("workspace_member_usage_limit_prompt", popup);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
     let event = next_send_add_credits_nudge_email_event(&mut rx);
-    assert_eq!(
-        event,
-        codex_protocol::protocol::AddCreditsNudgeCreditType::UsageLimit
-    );
+    assert_eq!(event, AddCreditsNudgeCreditType::UsageLimit);
 }
 
 #[tokio::test]
@@ -602,6 +594,7 @@ async fn workspace_owner_nudge_completion_renders_feedback() {
         ),
     ];
 
+    let mut rendered_cases = Vec::new();
     for (result, expected) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.finish_add_credits_nudge_email_request(result);
@@ -610,12 +603,18 @@ async fn workspace_owner_nudge_completion_renders_feedback() {
             .map(|lines| lines_to_single_string(&lines))
             .collect::<String>();
         assert!(rendered.contains(expected), "rendered: {rendered}");
+        rendered_cases.push(rendered);
     }
+
+    assert_chatwidget_snapshot!(
+        "workspace_owner_nudge_completion_feedback",
+        rendered_cases.join("\n---\n")
+    );
 }
 
 fn next_send_add_credits_nudge_email_event(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-) -> codex_protocol::protocol::AddCreditsNudgeCreditType {
+) -> AddCreditsNudgeCreditType {
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::SendAddCreditsNudgeEmail { credit_type } = event {
             return credit_type;
