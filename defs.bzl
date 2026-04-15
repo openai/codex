@@ -140,6 +140,7 @@ def codex_rust_crate(
         integration_test_args = [],
         integration_test_timeout = None,
         test_data_extra = [],
+        test_shard_counts = {},
         test_tags = [],
         unit_test_timeout = None,
         extra_binaries = []):
@@ -174,6 +175,13 @@ def codex_rust_crate(
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
         test_data_extra: Extra runtime data for tests.
+        test_shard_counts: Mapping from generated test target name to explicit
+            shard target count. Matching tests are exposed as `test_suite`
+            aggregate targets over generated `*-shard-N-of-M` test targets.
+            The shard targets opt into the rules_rust libtest sharding wrapper
+            and set RULES_RUST_TEST_TOTAL_SHARDS/RULES_RUST_TEST_SHARD_INDEX
+            themselves. For unit tests, use the outer target name, such as
+            `core-unit-tests`.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
         unit_test_timeout: Optional Bazel timeout for the unit-test target
@@ -246,7 +254,13 @@ def codex_rust_crate(
             visibility = ["//visibility:public"],
         )
 
+        unit_test_name = name + "-unit-tests"
         unit_test_binary = name + "-unit-tests-bin"
+        unit_test_shard_count = _test_shard_count(test_shard_counts, unit_test_name)
+        unit_test_binary_kwargs = {}
+        if unit_test_shard_count:
+            unit_test_binary_kwargs["experimental_enable_sharding"] = True
+
         rust_test(
             name = unit_test_binary,
             crate = name,
@@ -265,20 +279,41 @@ def codex_rust_crate(
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags + ["manual"],
+            **unit_test_binary_kwargs
         )
 
         unit_test_kwargs = {}
         if unit_test_timeout:
             unit_test_kwargs["timeout"] = unit_test_timeout
 
-        workspace_root_test(
-            name = name + "-unit-tests",
-            env = test_env,
-            test_bin = ":" + unit_test_binary,
-            workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
-            tags = test_tags,
-            **unit_test_kwargs
-        )
+        if unit_test_shard_count:
+            unit_shard_targets = []
+            for shard_index in range(unit_test_shard_count):
+                shard_name = _test_shard_name(unit_test_name, shard_index, unit_test_shard_count)
+                workspace_root_test(
+                    name = shard_name,
+                    env = test_env | _test_shard_env(shard_index, unit_test_shard_count),
+                    test_bin = ":" + unit_test_binary,
+                    workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
+                    tags = test_tags,
+                    **unit_test_kwargs
+                )
+                unit_shard_targets.append(":" + shard_name)
+
+            native.test_suite(
+                name = unit_test_name,
+                tests = unit_shard_targets,
+                tags = test_tags,
+            )
+        else:
+            workspace_root_test(
+                name = unit_test_name,
+                env = test_env,
+                test_bin = ":" + unit_test_binary,
+                workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
+                tags = test_tags,
+                **unit_test_kwargs
+            )
 
         maybe_deps += [name]
 
@@ -318,26 +353,85 @@ def codex_rust_crate(
         if not test_name.endswith("-test"):
             test_name += "-test"
 
-        rust_test(
-            name = test_name,
-            crate_name = test_crate_name,
-            crate_root = test,
-            srcs = [test],
-            data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
-            compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
-            deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
-            # Bazel has emitted both `codex-rs/<crate>/...` and
-            # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
-            # prefix so Insta records Cargo-like metadata such as `core/tests/...`.
-            rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
-                "--remap-path-prefix=../codex-rs=",
-                "--remap-path-prefix=codex-rs=",
-            ],
-            rustc_env = rustc_env,
-            # Important: do not merge `test_env` here. Its unit-test-only
-            # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
-            # execute from the repo root and can misplace integration snapshots.
-            env = cargo_env,
-            tags = test_tags,
-            **integration_test_kwargs
-        )
+        test_kwargs = {}
+        test_kwargs.update(integration_test_kwargs)
+        test_shard_count = _test_shard_count(test_shard_counts, test_name)
+
+        if test_shard_count:
+            integration_shard_targets = []
+            for shard_index in range(test_shard_count):
+                shard_name = _test_shard_name(test_name, shard_index, test_shard_count)
+                rust_test(
+                    name = shard_name,
+                    crate_name = test_crate_name,
+                    crate_root = test,
+                    srcs = [test],
+                    data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
+                    compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
+                    deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+                    # Bazel has emitted both `codex-rs/<crate>/...` and
+                    # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+                    # prefix so Insta records Cargo-like metadata such as `core/tests/...`.
+                    rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
+                        "--remap-path-prefix=../codex-rs=",
+                        "--remap-path-prefix=codex-rs=",
+                    ],
+                    rustc_env = rustc_env,
+                    # Important: do not merge `test_env` here. Its unit-test-only
+                    # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
+                    # execute from the repo root and can misplace integration snapshots.
+                    env = cargo_env | _test_shard_env(shard_index, test_shard_count),
+                    tags = test_tags,
+                    experimental_enable_sharding = True,
+                    **test_kwargs
+                )
+                integration_shard_targets.append(":" + shard_name)
+
+            native.test_suite(
+                name = test_name,
+                tests = integration_shard_targets,
+                tags = test_tags,
+            )
+        else:
+            rust_test(
+                name = test_name,
+                crate_name = test_crate_name,
+                crate_root = test,
+                srcs = [test],
+                data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
+                compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
+                deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+                # Bazel has emitted both `codex-rs/<crate>/...` and
+                # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+                # prefix so Insta records Cargo-like metadata such as `core/tests/...`.
+                rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
+                    "--remap-path-prefix=../codex-rs=",
+                    "--remap-path-prefix=codex-rs=",
+                ],
+                rustc_env = rustc_env,
+                # Important: do not merge `test_env` here. Its unit-test-only
+                # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
+                # execute from the repo root and can misplace integration snapshots.
+                env = cargo_env,
+                tags = test_tags,
+                **test_kwargs
+            )
+
+def _test_shard_count(test_shard_counts, test_name):
+    shard_count = test_shard_counts.get(test_name)
+    if shard_count == None:
+        return None
+
+    if shard_count < 1:
+        fail("test_shard_counts[{}] must be a positive integer".format(test_name))
+
+    return shard_count
+
+def _test_shard_env(shard_index, shard_count):
+    return {
+        "RULES_RUST_TEST_SHARD_INDEX": str(shard_index),
+        "RULES_RUST_TEST_TOTAL_SHARDS": str(shard_count),
+    }
+
+def _test_shard_name(test_name, shard_index, shard_count):
+    return "{}-shard-{}-of-{}".format(test_name, shard_index + 1, shard_count)
