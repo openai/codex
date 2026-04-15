@@ -1,15 +1,9 @@
-use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
-use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
-use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -26,61 +20,14 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-// Windows CI can spend most of the default read timeout launching PowerShell
-// before the command finishes and the follow-up model request is sent.
-const TURN_COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-async fn wait_for_responses_request_count_to_stabilize(
-    server: &wiremock::MockServer,
-    expected_count: usize,
-    settle_duration: std::time::Duration,
-    timeout_duration: std::time::Duration,
-) -> Result<()> {
-    timeout(timeout_duration, async {
-        let mut stable_since: Option<tokio::time::Instant> = None;
-        loop {
-            let requests = server
-                .received_requests()
-                .await
-                .context("failed to fetch received requests")?;
-            let responses_request_count = requests
-                .iter()
-                .filter(|request| {
-                    request.method == "POST" && request.url.path().ends_with("/responses")
-                })
-                .count();
-
-            if responses_request_count > expected_count {
-                anyhow::bail!(
-                    "expected exactly {expected_count} /responses requests, got {responses_request_count}"
-                );
-            }
-
-            if responses_request_count == expected_count {
-                match stable_since {
-                    Some(stable_since) if stable_since.elapsed() >= settle_duration => {
-                        return Ok::<(), anyhow::Error>(());
-                    }
-                    None => stable_since = Some(tokio::time::Instant::now()),
-                    Some(_) => {}
-                }
-            } else {
-                stable_since = None;
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await??;
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
@@ -132,32 +79,24 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
 
 #[tokio::test]
 async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
-    #[cfg(target_os = "windows")]
-    let shell_command = vec![
-        "Start-Sleep".to_string(),
-        "-Seconds".to_string(),
-        "1".to_string(),
-    ];
-    #[cfg(not(target_os = "windows"))]
-    let shell_command = vec!["sleep".to_string(), "1".to_string()];
-
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
-    let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_shell_command_sse_response(
-            shell_command.clone(),
-            Some(&working_directory),
-            Some(10_000),
-            "call_sleep",
-        )?,
-        create_final_assistant_message_sse_response("Done")?,
-    ])
+    let (release_response_tx, release_response_rx) = oneshot::channel();
+    let (server, mut completions) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        gate: Some(release_response_rx),
+        body: responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    }]])
     .await;
-    create_config_toml(&codex_home, &server.uri())?;
+    let response_completed = completions.remove(0);
+    create_config_toml(&codex_home, server.uri())?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -184,9 +123,9 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
 
     timeout(
         DEFAULT_READ_TIMEOUT,
-        wait_for_command_execution_item_started(&mut mcp),
+        server.wait_for_request_count(/*count*/ 1),
     )
-    .await??;
+    .await?;
 
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
@@ -201,22 +140,15 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     let unsubscribe = to_response::<ThreadUnsubscribeResponse>(unsubscribe_resp)?;
     assert_eq!(unsubscribe.status, ThreadUnsubscribeStatus::Unsubscribed);
 
-    assert!(
-        timeout(
-            std::time::Duration::from_millis(250),
-            mcp.read_stream_until_notification_message("thread/closed"),
-        )
-        .await
-        .is_err()
+    let closed_while_command_running = timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("thread/closed"),
     );
-
-    wait_for_responses_request_count_to_stabilize(
-        &server,
-        /*expected_count*/ 2,
-        std::time::Duration::from_millis(200),
-        TURN_COMPLETION_TIMEOUT,
-    )
-    .await?;
+    let closed_while_command_running = closed_while_command_running.await;
+    let _ = release_response_tx.send(());
+    assert!(closed_while_command_running.is_err());
+    timeout(DEFAULT_READ_TIMEOUT, response_completed).await??;
+    server.shutdown().await;
 
     Ok(())
 }
@@ -353,19 +285,6 @@ async fn thread_unsubscribe_reports_not_subscribed_before_idle_unload() -> Resul
     );
 
     Ok(())
-}
-
-async fn wait_for_command_execution_item_started(mcp: &mut McpProcess) -> Result<()> {
-    loop {
-        let started_notif = mcp
-            .read_stream_until_notification_message("item/started")
-            .await?;
-        let started_params = started_notif.params.context("item/started params")?;
-        let started: ItemStartedNotification = serde_json::from_value(started_params)?;
-        if let ThreadItem::CommandExecution { .. } = started.item {
-            return Ok(());
-        }
-    }
 }
 
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
