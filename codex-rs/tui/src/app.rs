@@ -8154,6 +8154,16 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
         app.config.sqlite_home = codex_home.path().to_path_buf();
+        let state_db = codex_state::StateRuntime::init(
+            codex_home.path().to_path_buf(),
+            app.config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        state_db
+            .mark_backfill_complete(/*last_watermark*/ None)
+            .await
+            .expect("state db backfill should be marked complete");
 
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
         let started = app_server.start_thread(&app.config).await?;
@@ -8167,12 +8177,6 @@ mod tests {
         )
         .await;
 
-        let state_db = codex_state::StateRuntime::init(
-            codex_home.path().to_path_buf(),
-            app.config.model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
         let memory_mode = time::timeout(Duration::from_secs(10), async {
             loop {
                 let memory_mode = state_db
