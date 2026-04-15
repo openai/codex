@@ -379,7 +379,7 @@ fn hook_source_for_path(source_path: &Path, codex_home: &Path, cwd: &Path) -> Co
         return CodexHookSource::System;
     }
 
-    if source_path.starts_with(codex_home) {
+    if source_path == codex_home.join("hooks.json") {
         return CodexHookSource::User;
     }
 
