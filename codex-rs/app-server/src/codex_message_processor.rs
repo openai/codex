@@ -1892,12 +1892,7 @@ impl CodexMessageProcessor {
         match self.send_add_credits_nudge_email_inner(params).await {
             Ok(status) => {
                 self.outgoing
-                    .send_response(
-                        request_id,
-                        SendAddCreditsNudgeEmailResponse {
-                            status: status.into(),
-                        },
-                    )
+                    .send_response(request_id, SendAddCreditsNudgeEmailResponse { status })
                     .await;
             }
             Err(error) => {
