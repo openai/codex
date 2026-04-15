@@ -4001,7 +4001,7 @@ mod tests {
             "gpt-5".to_string(),
             /*reasoning_effort*/ None,
             /*show_fast_status*/ false,
-            test_path_buf("/tmp/project").abs(),
+            test_path_buf("/tmp/project").abs().to_path_buf(),
             "test",
         )
         .with_yolo_mode(true);
