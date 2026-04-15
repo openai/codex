@@ -2,12 +2,16 @@ use super::MarketplaceAddError;
 use crate::plugins::validate_marketplace_root;
 use crate::plugins::validate_plugin_segment;
 use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum MarketplaceSource {
     Git {
         url: String,
         ref_name: Option<String>,
+    },
+    Local {
+        path: PathBuf,
     },
 }
 
@@ -26,9 +30,18 @@ pub(super) fn parse_marketplace_source(
     let ref_name = explicit_ref.or(parsed_ref);
 
     if looks_like_local_path(&base_source) {
-        return Err(MarketplaceAddError::InvalidRequest(
-            "local marketplace sources are not supported yet; use an HTTP(S) Git URL, SSH Git URL, or GitHub owner/repo".to_string(),
-        ));
+        if ref_name.is_some() {
+            return Err(MarketplaceAddError::InvalidRequest(
+                "--ref is only supported for git marketplace sources".to_string(),
+            ));
+        }
+        let path = resolve_local_source_path(&base_source)?;
+        if path.is_file() {
+            return Err(MarketplaceAddError::InvalidRequest(
+                "local marketplace source must be a directory, not a file".to_string(),
+            ));
+        }
+        return Ok(MarketplaceSource::Local { path });
     }
 
     if is_ssh_git_url(&base_source) || is_git_url(&base_source) {
@@ -48,6 +61,31 @@ pub(super) fn parse_marketplace_source(
     Err(MarketplaceAddError::InvalidRequest(format!(
         "invalid marketplace source format: {source}"
     )))
+}
+
+pub(super) fn stage_marketplace_source<F>(
+    source: &MarketplaceSource,
+    sparse_paths: &[String],
+    staged_root: &Path,
+    clone_source: F,
+) -> Result<(), MarketplaceAddError>
+where
+    F: Fn(&str, Option<&str>, &[String], &Path) -> Result<(), MarketplaceAddError>,
+{
+    if !sparse_paths.is_empty() && !matches!(source, MarketplaceSource::Git { .. }) {
+        return Err(MarketplaceAddError::InvalidRequest(
+            "--sparse is only supported for git marketplace sources".to_string(),
+        ));
+    }
+
+    match source {
+        MarketplaceSource::Git { url, ref_name } => {
+            clone_source(url, ref_name.as_deref(), sparse_paths, staged_root)
+        }
+        MarketplaceSource::Local { .. } => unreachable!(
+            "local marketplace sources are added without staging a copied install root"
+        ),
+    }
 }
 
 pub(super) fn validate_marketplace_source_root(root: &Path) -> Result<String, MarketplaceAddError> {
@@ -86,12 +124,44 @@ fn normalize_git_url(url: &str) -> String {
 }
 
 fn looks_like_local_path(source: &str) -> bool {
-    source.starts_with("./")
+    Path::new(source).is_absolute()
+        || source.starts_with("./")
         || source.starts_with("../")
-        || source.starts_with('/')
         || source.starts_with("~/")
         || source == "."
         || source == ".."
+}
+
+fn resolve_local_source_path(source: &str) -> Result<PathBuf, MarketplaceAddError> {
+    let path = expand_tilde_path(source);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map_err(|err| {
+                MarketplaceAddError::Internal(format!(
+                    "failed to read current working directory for local marketplace source: {err}"
+                ))
+            })?
+            .join(path)
+    };
+
+    path.canonicalize().map_err(|err| {
+        MarketplaceAddError::InvalidRequest(format!(
+            "failed to resolve local marketplace source {}: {err}",
+            path.display()
+        ))
+    })
+}
+
+fn expand_tilde_path(source: &str) -> PathBuf {
+    let Some(rest) = source.strip_prefix("~/") else {
+        return PathBuf::from(source);
+    };
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else {
+        return PathBuf::from(source);
+    };
+    PathBuf::from(home).join(rest)
 }
 
 fn is_ssh_git_url(source: &str) -> bool {
@@ -126,6 +196,7 @@ impl MarketplaceSource {
                 Some(ref_name) => format!("{url}#{ref_name}"),
                 None => url.clone(),
             },
+            Self::Local { path } => path.display().to_string(),
         }
     }
 }
@@ -134,6 +205,7 @@ impl MarketplaceSource {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn github_shorthand_parses_ref_suffix() {
@@ -229,12 +301,57 @@ mod tests {
     }
 
     #[test]
-    fn parse_marketplace_source_rejects_local_directory_source() {
-        let err = parse_marketplace_source("./marketplace", /*explicit_ref*/ None).unwrap_err();
+    fn local_path_source_parses() {
+        let source = parse_marketplace_source(".", /*explicit_ref*/ None).unwrap();
 
-        assert_eq!(
-            err.to_string(),
-            "local marketplace sources are not supported yet; use an HTTP(S) Git URL, SSH Git URL, or GitHub owner/repo"
+        let MarketplaceSource::Local { path } = source else {
+            panic!("expected local path source");
+        };
+        assert!(path.is_absolute());
+    }
+
+    #[test]
+    fn local_file_source_is_rejected() {
+        let tempdir = TempDir::new().unwrap();
+        let file = tempdir.path().join("marketplace.json");
+        std::fs::write(&file, "{}").unwrap();
+
+        let err =
+            parse_marketplace_source(file.to_str().unwrap(), /*explicit_ref*/ None).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("local marketplace source must be a directory, not a file"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn non_git_sources_reject_ref_override() {
+        let err = parse_marketplace_source("./marketplace", Some("main".to_string())).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--ref is only supported for git marketplace sources"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn non_git_sources_reject_sparse_checkout() {
+        let path = std::env::current_dir().unwrap();
+        let err = stage_marketplace_source(
+            &MarketplaceSource::Local { path },
+            &["plugins/foo".to_string()],
+            Path::new("/tmp"),
+            |_url, _ref_name, _sparse_paths, _staged_root| Ok(()),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--sparse is only supported for git marketplace sources"),
+            "unexpected error: {err}"
         );
     }
 

@@ -944,9 +944,31 @@ pub enum ExternalAgentConfigMigrationItemType {
     #[serde(rename = "SKILLS")]
     #[ts(rename = "SKILLS")]
     Skills,
+    #[serde(rename = "PLUGINS")]
+    #[ts(rename = "PLUGINS")]
+    Plugins,
     #[serde(rename = "MCP_SERVER_CONFIG")]
     #[ts(rename = "MCP_SERVER_CONFIG")]
     McpServerConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginsMigration {
+    #[serde(rename = "marketplaceName")]
+    #[ts(rename = "marketplaceName")]
+    pub marketplace_name: String,
+    #[serde(rename = "pluginNames")]
+    #[ts(rename = "pluginNames")]
+    pub plugin_names: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MigrationDetails {
+    pub plugins: Vec<PluginsMigration>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -957,6 +979,7 @@ pub struct ExternalAgentConfigMigrationItem {
     pub description: String,
     /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
     pub cwd: Option<PathBuf>,
+    pub details: Option<MigrationDetails>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -3090,6 +3113,11 @@ pub struct ThreadMemoryModeSetParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadMemoryModeSetResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryResetResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -6588,6 +6616,39 @@ mod tests {
             CollabAgentState {
                 status: CollabAgentStatus::Interrupted,
                 message: None,
+            }
+        );
+    }
+
+    #[test]
+    fn external_agent_config_plugins_details_round_trip() {
+        let item: ExternalAgentConfigMigrationItem = serde_json::from_value(json!({
+            "itemType": "PLUGINS",
+            "description": "Install supported plugins from Claude settings",
+            "cwd": absolute_path_string("repo"),
+            "details": {
+                "plugins": [
+                    {
+                        "marketplaceName": "team-marketplace",
+                        "pluginNames": ["asana"]
+                    }
+                ]
+            }
+        }))
+        .expect("plugins migration item should deserialize");
+
+        assert_eq!(
+            item,
+            ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Plugins,
+                description: "Install supported plugins from Claude settings".to_string(),
+                cwd: Some(PathBuf::from(absolute_path_string("repo"))),
+                details: Some(MigrationDetails {
+                    plugins: vec![PluginsMigration {
+                        marketplace_name: "team-marketplace".to_string(),
+                        plugin_names: vec!["asana".to_string()],
+                    }],
+                }),
             }
         );
     }

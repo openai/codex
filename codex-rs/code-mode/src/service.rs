@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use codex_protocol::ToolName;
 use serde_json::Value as JsonValue;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -26,7 +27,7 @@ use crate::runtime::spawn_runtime;
 pub trait CodeModeTurnHost: Send + Sync {
     async fn invoke_tool(
         &self,
-        tool_name: String,
+        tool_name: ToolName,
         input: Option<JsonValue>,
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String>;
