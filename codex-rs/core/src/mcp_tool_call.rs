@@ -1080,20 +1080,21 @@ pub(crate) async fn lookup_mcp_tool_metadata(
 fn get_mcp_app_resource_uri(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Option<String> {
-    let meta = meta?;
-    meta.get("ui")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|ui| ui.get("resourceUri"))
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            meta.get(MCP_TOOL_UI_RESOURCE_URI_META_KEY)
-                .and_then(serde_json::Value::as_str)
-        })
-        .or_else(|| {
-            meta.get(MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY)
-                .and_then(serde_json::Value::as_str)
-        })
-        .map(str::to_string)
+    meta.and_then(|meta| {
+        meta.get("ui")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|ui| ui.get("resourceUri"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                meta.get(MCP_TOOL_UI_RESOURCE_URI_META_KEY)
+                    .and_then(serde_json::Value::as_str)
+            })
+            .or_else(|| {
+                meta.get(MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY)
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(str::to_string)
+    })
 }
 
 async fn lookup_mcp_app_usage_metadata(
