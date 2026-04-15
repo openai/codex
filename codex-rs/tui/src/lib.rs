@@ -410,7 +410,7 @@ pub(crate) async fn start_app_server_for_picker(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
-        None,
+        /*log_db*/ None,
         environment_manager,
     )
     .await?;
@@ -1787,7 +1787,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
-            None,
+            /*log_db*/ None,
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         )
         .await
@@ -2179,7 +2179,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
-            None,
+            /*log_db*/ None,
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
