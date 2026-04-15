@@ -955,32 +955,20 @@ pub enum ExternalAgentConfigMigrationItemType {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum PluginMarketplaceSource {
-    #[serde(rename = "github")]
-    #[ts(rename = "github")]
-    Github,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct PluginMarketplaceMigration {
-    pub name: String,
-    pub source: PluginMarketplaceSource,
-    pub repo: String,
-    #[serde(rename = "ref")]
-    #[ts(rename = "ref")]
-    pub ref_name: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct PluginsMigrationDetails {
-    pub marketplaces: Vec<PluginMarketplaceMigration>,
+pub struct PluginsMigration {
+    #[serde(rename = "marketplaceName")]
+    #[ts(rename = "marketplaceName")]
+    pub marketplace_name: String,
     #[serde(rename = "pluginIds")]
     #[ts(rename = "pluginIds")]
     pub plugin_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MigrationDetails {
+    pub plugins: Vec<PluginsMigration>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -991,7 +979,7 @@ pub struct ExternalAgentConfigMigrationItem {
     pub description: String,
     /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
     pub cwd: Option<PathBuf>,
-    pub details: Option<PluginsMigrationDetails>,
+    pub details: Option<MigrationDetails>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -6634,15 +6622,12 @@ mod tests {
             "description": "Install supported plugins from Claude settings",
             "cwd": absolute_path_string("repo"),
             "details": {
-                "marketplaces": [
+                "plugins": [
                     {
-                        "name": "team-marketplace",
-                        "source": "github",
-                        "repo": "acme-corp/team-marketplace",
-                        "ref": "main"
+                        "marketplaceName": "team-marketplace",
+                        "pluginIds": ["asana@team-marketplace"]
                     }
-                ],
-                "pluginIds": ["asana@team-marketplace"]
+                ]
             }
         }))
         .expect("plugins migration item should deserialize");
@@ -6653,14 +6638,11 @@ mod tests {
                 item_type: ExternalAgentConfigMigrationItemType::Plugins,
                 description: "Install supported plugins from Claude settings".to_string(),
                 cwd: Some(PathBuf::from(absolute_path_string("repo"))),
-                details: Some(PluginsMigrationDetails {
-                    marketplaces: vec![PluginMarketplaceMigration {
-                        name: "team-marketplace".to_string(),
-                        source: PluginMarketplaceSource::Github,
-                        repo: "acme-corp/team-marketplace".to_string(),
-                        ref_name: Some("main".to_string()),
+                details: Some(MigrationDetails {
+                    plugins: vec![PluginsMigration {
+                        marketplace_name: "team-marketplace".to_string(),
+                        plugin_ids: vec!["asana@team-marketplace".to_string()],
                     }],
-                    plugin_ids: vec!["asana@team-marketplace".to_string()],
                 }),
             }
         );

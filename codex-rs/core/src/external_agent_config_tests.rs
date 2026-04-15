@@ -14,15 +14,12 @@ fn service_for_paths(claude_home: PathBuf, codex_home: PathBuf) -> ExternalAgent
     ExternalAgentConfigService::new_for_test(codex_home, claude_home)
 }
 
-fn github_plugin_details() -> PluginsMigrationDetails {
-    PluginsMigrationDetails {
-        marketplaces: vec![PluginMarketplaceMigration {
-            name: "acme-tools".to_string(),
-            source: PluginMarketplaceSource::Github,
-            repo: "acme-corp/claude-plugins".to_string(),
-            ref_name: Some("main".to_string()),
+fn github_plugin_details() -> MigrationDetails {
+    MigrationDetails {
+        plugins: vec![PluginsMigration {
+            marketplace_name: "acme-tools".to_string(),
+            plugin_ids: vec!["formatter@acme-tools".to_string()],
         }],
-        plugin_ids: vec!["formatter@acme-tools".to_string()],
     }
 }
 
@@ -411,7 +408,7 @@ fn migration_metric_tags_for_skills_include_skills_count() {
 }
 
 #[test]
-fn detect_home_lists_enabled_github_plugins_from_extra_known_marketplaces() {
+fn detect_home_lists_enabled_plugins_from_settings() {
     let (_root, claude_home, codex_home) = fixture_paths();
     fs::create_dir_all(&claude_home).expect("create claude home");
     fs::write(
@@ -421,13 +418,6 @@ fn detect_home_lists_enabled_github_plugins_from_extra_known_marketplaces() {
             "formatter@acme-tools": true,
             "deployer@acme-tools": true,
             "analyzer@security-plugins": false
-          },
-          "extraKnownMarketplaces": {
-            "acme-tools": {
-              "source": "github",
-              "repo": "acme-corp/claude-plugins",
-              "ref": "main"
-            }
           }
         }"#,
     )
@@ -449,17 +439,14 @@ fn detect_home_lists_enabled_github_plugins_from_extra_known_marketplaces() {
                 claude_home.join("settings.json").display()
             ),
             cwd: None,
-            details: Some(PluginsMigrationDetails {
-                marketplaces: vec![PluginMarketplaceMigration {
-                    name: "acme-tools".to_string(),
-                    source: PluginMarketplaceSource::Github,
-                    repo: "acme-corp/claude-plugins".to_string(),
-                    ref_name: Some("main".to_string()),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_ids: vec![
+                        "deployer@acme-tools".to_string(),
+                        "formatter@acme-tools".to_string(),
+                    ],
                 }],
-                plugin_ids: vec![
-                    "deployer@acme-tools".to_string(),
-                    "formatter@acme-tools".to_string(),
-                ],
             }),
         }]
     );
@@ -484,17 +471,35 @@ async fn import_plugins_requires_details() {
 }
 
 #[tokio::test]
-async fn import_plugins_requires_matching_marketplace_details() {
+async fn import_plugins_requires_source_marketplace_details() {
     let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "github",
+              "repo": "acme-corp/claude-plugins"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
 
     let err = service_for_paths(claude_home, codex_home)
         .import(vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: String::new(),
             cwd: None,
-            details: Some(PluginsMigrationDetails {
-                marketplaces: Vec::new(),
-                plugin_ids: github_plugin_details().plugin_ids,
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "other-tools".to_string(),
+                    plugin_ids: github_plugin_details().plugins[0].plugin_ids.clone(),
+                }],
             }),
         }])
         .await
@@ -503,7 +508,44 @@ async fn import_plugins_requires_matching_marketplace_details() {
     assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     assert_eq!(
         err.to_string(),
-        "missing marketplace details for plugin `formatter@acme-tools`"
+        "missing marketplace details for `other-tools` in source settings"
+    );
+}
+
+#[tokio::test]
+async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "local",
+              "path": "./external_plugins/acme-tools"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let err = service_for_paths(claude_home, codex_home)
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: String::new(),
+            cwd: None,
+            details: Some(github_plugin_details()),
+        }])
+        .await
+        .expect_err("expected unsupported source error");
+
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        err.to_string(),
+        "failed to add plugin marketplace `acme-tools`: local marketplace sources are not supported yet; use an HTTP(S) Git URL, SSH Git URL, or GitHub owner/repo"
     );
 }
 
