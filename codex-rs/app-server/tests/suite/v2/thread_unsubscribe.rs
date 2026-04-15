@@ -1,8 +1,6 @@
-use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -30,51 +28,6 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-async fn wait_for_responses_request_count_to_stabilize(
-    server: &wiremock::MockServer,
-    expected_count: usize,
-    settle_duration: std::time::Duration,
-) -> Result<()> {
-    timeout(DEFAULT_READ_TIMEOUT, async {
-        let mut stable_since: Option<tokio::time::Instant> = None;
-        loop {
-            let requests = server
-                .received_requests()
-                .await
-                .context("failed to fetch received requests")?;
-            let responses_request_count = requests
-                .iter()
-                .filter(|request| {
-                    request.method == "POST" && request.url.path().ends_with("/responses")
-                })
-                .count();
-
-            if responses_request_count > expected_count {
-                anyhow::bail!(
-                    "expected exactly {expected_count} /responses requests, got {responses_request_count}"
-                );
-            }
-
-            if responses_request_count == expected_count {
-                match stable_since {
-                    Some(stable_since) if stable_since.elapsed() >= settle_duration => {
-                        return Ok::<(), anyhow::Error>(());
-                    }
-                    None => stable_since = Some(tokio::time::Instant::now()),
-                    Some(_) => {}
-                }
-            } else {
-                stable_since = None;
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await??;
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<()> {
@@ -169,7 +122,11 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     .await??;
     let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
 
-    timeout(DEFAULT_READ_TIMEOUT, server.wait_for_request_count(1)).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        server.wait_for_request_count(/*count*/ 1),
+    )
+    .await?;
 
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
