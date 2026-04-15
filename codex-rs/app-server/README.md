@@ -144,6 +144,7 @@ Example with notification opt-out:
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
+- `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite, disabling memory mode for existing enabled threads so old rollouts are not immediately regenerated; returns `{}` on success.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
@@ -414,6 +415,13 @@ Experimental: use `thread/memoryMode/set` to change whether a thread remains eli
     "mode": "disabled"
 } }
 { "id": 26, "result": {} }
+```
+
+Experimental: use `memory/reset` to clear local memory artifacts and sqlite-backed memory stage data for the current Codex home. This also disables memory mode for existing enabled threads to keep old rollouts from repopulating memories immediately.
+
+```json
+{ "method": "memory/reset", "id": 27 }
+{ "id": 27, "result": {} }
 ```
 
 ### Example: Archive a thread
