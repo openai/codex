@@ -32,6 +32,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use codex_api::ApiError;
+use codex_api::AuthProvider;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Compression;
@@ -83,7 +84,6 @@ use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
-use http::header::AUTHORIZATION;
 use reqwest::StatusCode;
 use std::time::Duration;
 use std::time::Instant;
@@ -278,16 +278,7 @@ pub(crate) struct RealtimeWebrtcCallStart {
 /// `api.openai.com` sideband path.
 fn sideband_websocket_auth_headers(api_auth: &CoreAuthProvider) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
-    if let Some(token) = api_auth.token.as_ref()
-        && let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}"))
-    {
-        headers.insert(AUTHORIZATION, value);
-    }
-    if let Some(account_id) = api_auth.account_id.as_ref()
-        && let Ok(value) = HeaderValue::from_str(account_id)
-    {
-        headers.insert("ChatGPT-Account-ID", value);
-    }
+    api_auth.add_auth_headers(&mut headers);
     headers
 }
 
