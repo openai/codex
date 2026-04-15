@@ -470,6 +470,9 @@ pub(crate) enum AppEvent {
         generate_memories: bool,
     },
 
+    /// Clear all persisted local memory artifacts via the app-server.
+    ResetMemories,
+
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),
 
