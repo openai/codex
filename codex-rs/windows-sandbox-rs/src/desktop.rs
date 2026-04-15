@@ -7,6 +7,7 @@ use anyhow::Result;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
+use std::env;
 use std::path::Path;
 use std::ffi::c_void;
 use std::ptr;
@@ -56,29 +57,49 @@ const DESKTOP_ALL_ACCESS: u32 = DESKTOP_READOBJECTS
 
 pub struct LaunchDesktop {
     _private_desktop: Option<PrivateDesktop>,
-    startup_name: Vec<u16>,
+    startup_name: Option<Vec<u16>>,
 }
 
 impl LaunchDesktop {
     pub fn prepare(use_private_desktop: bool, logs_base_dir: Option<&Path>) -> Result<Self> {
+        if should_skip_desktop_binding() {
+            logging::debug_log(
+                "Skipping Windows sandbox desktop binding in headless/SSH session",
+                logs_base_dir,
+            );
+            return Ok(Self {
+                _private_desktop: None,
+                startup_name: None,
+            });
+        }
+
         if use_private_desktop {
             let private_desktop = PrivateDesktop::create(logs_base_dir)?;
             let startup_name = to_wide(format!("Winsta0\\{}", private_desktop.name));
             Ok(Self {
                 _private_desktop: Some(private_desktop),
-                startup_name,
+                startup_name: Some(startup_name),
             })
         } else {
             Ok(Self {
                 _private_desktop: None,
-                startup_name: to_wide("Winsta0\\Default"),
+                startup_name: Some(to_wide("Winsta0\\Default")),
             })
         }
     }
 
     pub fn startup_info_desktop(&self) -> *mut u16 {
-        self.startup_name.as_ptr() as *mut u16
+        self.startup_name
+            .as_ref()
+            .map(|name| name.as_ptr() as *mut u16)
+            .unwrap_or(ptr::null_mut())
     }
+}
+
+fn should_skip_desktop_binding() -> bool {
+    ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+        .into_iter()
+        .any(|key| env::var_os(key).is_some_and(|value| !value.is_empty()))
 }
 
 struct PrivateDesktop {
