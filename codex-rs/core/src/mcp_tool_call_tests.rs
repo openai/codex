@@ -2,6 +2,7 @@ use super::*;
 use crate::codex::make_session_and_context;
 use crate::codex::make_session_and_context_with_rx;
 use crate::config::ConfigBuilder;
+use crate::model_provider::ModelProvider;
 use crate::state::ActiveTurn;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
@@ -1320,7 +1321,10 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = <dyn ModelProvider>::new(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1395,7 +1399,10 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = <dyn ModelProvider>::new(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1843,7 +1850,10 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = <dyn ModelProvider>::new(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);

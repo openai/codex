@@ -27,7 +27,7 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();
-        let _ = if crate::compact::should_use_remote_compact_task(&ctx.provider) {
+        let _ = if crate::compact::should_use_remote_compact_task(ctx.provider.as_ref()) {
             session.services.session_telemetry.counter(
                 "codex.task.compact",
                 /*inc*/ 1,

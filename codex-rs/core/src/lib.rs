@@ -62,6 +62,7 @@ mod mcp_tool_call;
 mod memories;
 pub(crate) mod mention_syntax;
 pub(crate) mod message_history;
+mod model_provider;
 pub(crate) mod utils;
 pub use mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 pub use mention_syntax::TOOL_MENTION_SIGIL;

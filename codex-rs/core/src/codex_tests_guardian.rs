@@ -7,6 +7,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
+use crate::model_provider::ModelProvider;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
@@ -101,7 +102,10 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     ));
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
-    turn_context_raw.provider = config.model_provider.clone();
+    turn_context_raw.provider = <dyn ModelProvider>::new(
+        config.model_provider.clone(),
+        turn_context_raw.auth_manager.clone(),
+    );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
     let expiration_ms: u64 = if cfg!(windows) { 2_500 } else { 1_000 };

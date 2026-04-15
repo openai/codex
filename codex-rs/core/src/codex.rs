@@ -76,6 +76,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
+use codex_login::provider_auth::auth_manager_for_provider;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
 use codex_mcp::ToolInfo;
@@ -190,6 +191,7 @@ use crate::config::resolve_web_search_mode_for_turn;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::environment_context::EnvironmentContext;
+use crate::model_provider::ModelProvider;
 use crate::thread_rollout_truncation::initial_history_has_prior_user_turns;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::types::McpServerConfig;
@@ -886,7 +888,7 @@ pub(crate) struct TurnContext {
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
-    pub(crate) provider: ModelProviderInfo,
+    pub(crate) provider: Arc<dyn ModelProvider>,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
@@ -1539,8 +1541,9 @@ impl Session {
         let session_source = session_configuration.session_source.clone();
         let image_generation_tool_auth_allowed =
             image_generation_tool_auth_allowed(auth_manager.as_deref());
-        let auth_manager_for_context = auth_manager;
-        let provider_for_context = provider;
+        let auth_manager_for_context = auth_manager.clone();
+        let provider_auth_manager = auth_manager_for_provider(auth_manager, &provider);
+        let provider_for_context = <dyn ModelProvider>::new(provider, provider_auth_manager);
         let session_telemetry_for_context = session_telemetry;
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -5955,7 +5958,7 @@ async fn spawn_review_thread(
     ));
 
     let review_prompt = resolved.prompt.clone();
-    let provider = parent_turn_context.provider.clone();
+    let provider = Arc::clone(&parent_turn_context.provider);
     let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
 
@@ -6780,7 +6783,7 @@ async fn run_auto_compact(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
-    if should_use_remote_compact_task(&turn_context.provider) {
+    if should_use_remote_compact_task(turn_context.provider.as_ref()) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
@@ -7061,7 +7064,7 @@ async fn run_sampling_request(
         }
 
         // Use the configured provider-specific stream retry budget.
-        let max_retries = turn_context.provider.stream_max_retries();
+        let max_retries = turn_context.provider.info().stream_max_retries();
         if retries >= max_retries
             && client_session.try_switch_fallback_transport(
                 &turn_context.session_telemetry,
