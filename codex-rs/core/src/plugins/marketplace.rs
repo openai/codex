@@ -153,8 +153,8 @@ impl MarketplaceError {
     }
 }
 
-// Always read the specified marketplace file from disk so installs see the
-// latest marketplace.json contents without any in-memory cache invalidation.
+// Always read the requested marketplace file from disk so installs pick up the
+// latest marketplace.json contents without waiting for in-memory cache invalidation.
 pub fn resolve_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
