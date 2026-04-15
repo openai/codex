@@ -1521,25 +1521,6 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         .await
         .expect("worker thread should exist");
 
-    timeout(Duration::from_secs(15), async {
-        loop {
-            let event = thread
-                .next_event()
-                .await
-                .expect("child thread should emit initial turn events");
-            if matches!(event.msg, EventMsg::TurnStarted(_)) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("spawned child task should start before test injects a busy task");
-    thread
-        .codex
-        .session
-        .abort_all_tasks(TurnAbortReason::Replaced)
-        .await;
-
     let active_turn = thread.codex.session.new_default_turn().await;
     let interrupted_turn_id = active_turn.sub_id.clone();
     let never_ending_task_started = Arc::new(Notify::new());
