@@ -959,9 +959,9 @@ pub struct PluginsMigration {
     #[serde(rename = "marketplaceName")]
     #[ts(rename = "marketplaceName")]
     pub marketplace_name: String,
-    #[serde(rename = "pluginIds")]
-    #[ts(rename = "pluginIds")]
-    pub plugin_ids: Vec<String>,
+    #[serde(rename = "pluginNames")]
+    #[ts(rename = "pluginNames")]
+    pub plugin_names: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -6625,7 +6625,7 @@ mod tests {
                 "plugins": [
                     {
                         "marketplaceName": "team-marketplace",
-                        "pluginIds": ["asana@team-marketplace"]
+                        "pluginNames": ["asana"]
                     }
                 ]
             }
@@ -6641,7 +6641,7 @@ mod tests {
                 details: Some(MigrationDetails {
                     plugins: vec![PluginsMigration {
                         marketplace_name: "team-marketplace".to_string(),
-                        plugin_ids: vec!["asana@team-marketplace".to_string()],
+                        plugin_names: vec!["asana".to_string()],
                     }],
                 }),
             }

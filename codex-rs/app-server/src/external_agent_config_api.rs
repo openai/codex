@@ -68,7 +68,7 @@ impl ExternalAgentConfigApi {
                             .into_iter()
                             .map(|plugin| PluginsMigration {
                                 marketplace_name: plugin.marketplace_name,
-                                plugin_ids: plugin.plugin_ids,
+                                plugin_names: plugin.plugin_names,
                             })
                             .collect(),
                     }),
@@ -114,7 +114,7 @@ impl ExternalAgentConfigApi {
                                     .map(|plugin| {
                                         codex_core::external_agent_config::PluginsMigration {
                                             marketplace_name: plugin.marketplace_name,
-                                            plugin_ids: plugin.plugin_ids,
+                                            plugin_names: plugin.plugin_names,
                                         }
                                     })
                                     .collect(),

@@ -37,7 +37,7 @@ pub enum ExternalAgentConfigMigrationItemType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginsMigration {
     pub marketplace_name: String,
-    pub plugin_ids: Vec<String>,
+    pub plugin_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,7 +332,11 @@ impl ExternalAgentConfigService {
         let plugins_manager = PluginsManager::new(self.codex_home.clone());
         for plugin_group in plugins {
             let marketplace_name = plugin_group.marketplace_name.clone();
-            let plugin_ids = plugin_group.plugin_ids;
+            let plugin_names = plugin_group.plugin_names;
+            let plugin_ids = plugin_names
+                .iter()
+                .map(|plugin_name| format!("{plugin_name}@{marketplace_name}"))
+                .collect::<Vec<_>>();
             let import_source =
                 read_marketplace_import_source(cwd, &self.external_agent_home, &marketplace_name)?;
             let Some(import_source) = import_source else {
@@ -372,24 +376,20 @@ impl ExternalAgentConfigService {
                     continue;
                 }
             };
-            for raw_plugin_id in plugin_ids {
-                let Ok(plugin_id) = PluginId::parse(&raw_plugin_id) else {
-                    outcome.failed_plugin_ids.push(raw_plugin_id);
-                    continue;
-                };
-                if plugin_id.marketplace_name != marketplace_name {
-                    outcome.failed_plugin_ids.push(plugin_id.as_key());
-                    continue;
-                }
+            for plugin_name in plugin_names {
                 match plugins_manager
                     .install_plugin(PluginInstallRequest {
-                        plugin_name: plugin_id.plugin_name.clone(),
+                        plugin_name: plugin_name.clone(),
                         marketplace_path: marketplace_path.clone(),
                     })
                     .await
                 {
-                    Ok(_) => outcome.succeeded_plugin_ids.push(plugin_id.as_key()),
-                    Err(_) => outcome.failed_plugin_ids.push(plugin_id.as_key()),
+                    Ok(_) => outcome
+                        .succeeded_plugin_ids
+                        .push(format!("{plugin_name}@{marketplace_name}")),
+                    Err(_) => outcome
+                        .failed_plugin_ids
+                        .push(format!("{plugin_name}@{marketplace_name}")),
                 }
             }
         }
@@ -539,7 +539,7 @@ fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
 
 fn extract_plugin_migration_details(settings: &JsonValue) -> Option<MigrationDetails> {
     let mut plugins = BTreeMap::new();
-    for plugin_id in collect_enabled_plugin_ids(settings) {
+    for plugin_id in collect_enabled_plugins(settings) {
         let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
             continue;
         };
@@ -547,18 +547,18 @@ fn extract_plugin_migration_details(settings: &JsonValue) -> Option<MigrationDet
             .entry(plugin_id.marketplace_name.clone())
             .or_insert_with(|| PluginsMigration {
                 marketplace_name: plugin_id.marketplace_name.clone(),
-                plugin_ids: Vec::new(),
+                plugin_names: Vec::new(),
             });
-        plugin_group.plugin_ids.push(plugin_id.as_key());
+        plugin_group.plugin_names.push(plugin_id.plugin_name);
     }
 
     let plugins = plugins
         .into_values()
         .filter_map(|mut plugin_group| {
-            if plugin_group.plugin_ids.is_empty() {
+            if plugin_group.plugin_names.is_empty() {
                 return None;
             }
-            plugin_group.plugin_ids.sort();
+            plugin_group.plugin_names.sort();
             Some(plugin_group)
         })
         .collect::<Vec<_>>();
@@ -569,7 +569,7 @@ fn extract_plugin_migration_details(settings: &JsonValue) -> Option<MigrationDet
     Some(MigrationDetails { plugins })
 }
 
-fn collect_enabled_plugin_ids(settings: &JsonValue) -> Vec<String> {
+fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
     let Some(enabled_plugins) = settings
         .as_object()
         .and_then(|settings| settings.get("enabledPlugins"))

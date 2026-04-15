@@ -7275,7 +7275,7 @@
         "marketplaceName": {
           "type": "string"
         },
-        "pluginIds": {
+        "pluginNames": {
           "items": {
             "type": "string"
           },
@@ -7284,7 +7284,7 @@
       },
       "required": [
         "marketplaceName",
-        "pluginIds"
+        "pluginNames"
       ],
       "type": "object"
     },

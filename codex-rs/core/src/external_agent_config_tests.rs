@@ -18,7 +18,7 @@ fn github_plugin_details() -> MigrationDetails {
     MigrationDetails {
         plugins: vec![PluginsMigration {
             marketplace_name: "acme-tools".to_string(),
-            plugin_ids: vec!["formatter@acme-tools".to_string()],
+            plugin_names: vec!["formatter".to_string()],
         }],
     }
 }
@@ -442,10 +442,7 @@ fn detect_home_lists_enabled_plugins_from_settings() {
             details: Some(MigrationDetails {
                 plugins: vec![PluginsMigration {
                     marketplace_name: "acme-tools".to_string(),
-                    plugin_ids: vec![
-                        "deployer@acme-tools".to_string(),
-                        "formatter@acme-tools".to_string(),
-                    ],
+                    plugin_names: vec!["deployer".to_string(), "formatter".to_string()],
                 }],
             }),
         }]
@@ -457,12 +454,7 @@ async fn import_plugins_requires_details() {
     let (_root, claude_home, codex_home) = fixture_paths();
 
     let err = service_for_paths(claude_home, codex_home)
-        .import(vec![ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: String::new(),
-            cwd: None,
-            details: None,
-        }])
+        .import_plugins(/*cwd*/ None, /*details*/ None)
         .await
         .expect_err("expected missing details error");
 
@@ -490,25 +482,27 @@ async fn import_plugins_requires_source_marketplace_details() {
     )
     .expect("write settings");
 
-    let err = service_for_paths(claude_home, codex_home)
-        .import(vec![ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: String::new(),
-            cwd: None,
-            details: Some(MigrationDetails {
+    let outcome = service_for_paths(claude_home, codex_home)
+        .import_plugins(
+            /*cwd*/ None,
+            Some(MigrationDetails {
                 plugins: vec![PluginsMigration {
                     marketplace_name: "other-tools".to_string(),
-                    plugin_ids: github_plugin_details().plugins[0].plugin_ids.clone(),
+                    plugin_names: github_plugin_details().plugins[0].plugin_names.clone(),
                 }],
             }),
-        }])
+        )
         .await
-        .expect_err("expected missing marketplace details error");
+        .expect("import plugins");
 
-    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     assert_eq!(
-        err.to_string(),
-        "missing marketplace details for `other-tools` in source settings"
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: Vec::new(),
+            succeeded_plugin_ids: Vec::new(),
+            failed_marketplaces: vec!["other-tools".to_string()],
+            failed_plugin_ids: vec!["formatter@other-tools".to_string()],
+        }
     );
 }
 
@@ -532,20 +526,19 @@ async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace(
     )
     .expect("write settings");
 
-    let err = service_for_paths(claude_home, codex_home)
-        .import(vec![ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: String::new(),
-            cwd: None,
-            details: Some(github_plugin_details()),
-        }])
+    let outcome = service_for_paths(claude_home, codex_home)
+        .import_plugins(/*cwd*/ None, Some(github_plugin_details()))
         .await
-        .expect_err("expected unsupported source error");
+        .expect("import plugins");
 
-    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     assert_eq!(
-        err.to_string(),
-        "failed to add plugin marketplace `acme-tools`: local marketplace sources are not supported yet; use an HTTP(S) Git URL, SSH Git URL, or GitHub owner/repo"
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: Vec::new(),
+            succeeded_plugin_ids: Vec::new(),
+            failed_marketplaces: vec!["acme-tools".to_string()],
+            failed_plugin_ids: vec!["formatter@acme-tools".to_string()],
+        }
     );
 }
 
