@@ -252,6 +252,7 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
         "powershell.exe".to_string(),
         "-NonInteractive".to_string(),
         "-NoLogo".to_string(),
+        "-NoProfile".to_string(),
         "-Command".to_string(),
         "Start-Sleep -Milliseconds 50; [Console]::Out.Write('hello')".to_string(),
     ];
@@ -334,6 +335,7 @@ async fn process_exec_tool_call_preserves_full_buffer_capture_policy() -> Result
         "powershell.exe".to_string(),
         "-NonInteractive".to_string(),
         "-NoLogo".to_string(),
+        "-NoProfile".to_string(),
         "-Command".to_string(),
         format!("Start-Sleep -Milliseconds 50; [Console]::Out.Write('a' * {byte_count})"),
     ];
@@ -1014,6 +1016,7 @@ fn long_running_command() -> Vec<String> {
         "powershell.exe".to_string(),
         "-NonInteractive".to_string(),
         "-NoLogo".to_string(),
+        "-NoProfile".to_string(),
         "-Command".to_string(),
         "Start-Sleep -Seconds 30".to_string(),
     ]
