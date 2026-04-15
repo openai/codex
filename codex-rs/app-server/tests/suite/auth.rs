@@ -391,7 +391,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
     )
     .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    wait_for_received_requests(&server, 1).await?;
+    wait_for_received_requests(&server, /*expected*/ 1).await?;
 
     let request_id = mcp
         .send_get_auth_status_request(GetAuthStatusParams {
@@ -459,7 +459,7 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
     )
     .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    wait_for_received_requests(&server, 1).await?;
+    wait_for_received_requests(&server, /*expected*/ 1).await?;
 
     let failed_request_id = mcp
         .send_get_auth_status_request(GetAuthStatusParams {
