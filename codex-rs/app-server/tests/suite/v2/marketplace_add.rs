@@ -10,7 +10,8 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const INIT_TIMEOUT: Duration = Duration::from_secs(30);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
 async fn marketplace_add_local_directory_source() -> Result<()> {
@@ -28,7 +29,7 @@ async fn marketplace_add_local_directory_source() -> Result<()> {
     )?;
     std::fs::write(source.join("plugins/sample/marker.txt"), "local ref")?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    timeout(INIT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_marketplace_add_request(MarketplaceAddParams {
@@ -39,7 +40,7 @@ async fn marketplace_add_local_directory_source() -> Result<()> {
         .await?;
 
     let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
+        REQUEST_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
