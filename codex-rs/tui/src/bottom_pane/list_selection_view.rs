@@ -23,6 +23,7 @@ use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
+use super::selection_popup_common::ColumnWidthConfig;
 pub(crate) use super::selection_popup_common::ColumnWidthMode;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height_with_col_width_mode;
@@ -91,10 +92,11 @@ pub(crate) fn side_by_side_layout_widths(
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+pub(crate) type SelectionToggleAction = Box<dyn Fn(bool, &AppEventSender) + Send + Sync>;
 
 pub(crate) struct SelectionToggle {
     pub is_on: bool,
-    pub action: Box<dyn Fn(bool, &AppEventSender) + Send + Sync>,
+    pub action: SelectionToggleAction,
 }
 
 /// Callback invoked whenever the highlighted item changes (arrow keys, search
@@ -878,13 +880,13 @@ impl Renderable for ListSelectionView {
 
         // Measure wrapped height for up to MAX_POPUP_ROWS items.
         let rows = self.build_rows();
+        let column_width = ColumnWidthConfig::new(self.col_width_mode, self.name_column_width);
         let rows_height = measure_rows_height_with_col_width_mode(
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
             effective_rows_width.saturating_add(1),
-            self.col_width_mode,
-            self.name_column_width,
+            column_width,
         );
 
         let header = self.active_header();
@@ -953,13 +955,13 @@ impl Renderable for ListSelectionView {
         let header_height = header.desired_height(inner_width);
         let tab_height = tab_bar_height(&self.tabs, self.active_tab_idx.unwrap_or(0), inner_width);
         let rows = self.build_rows();
+        let column_width = ColumnWidthConfig::new(self.col_width_mode, self.name_column_width);
         let rows_height = measure_rows_height_with_col_width_mode(
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
             effective_rows_width.saturating_add(1),
-            self.col_width_mode,
-            self.name_column_width,
+            column_width,
         );
 
         // Stacked (fallback) side content height — only used when not side-by-side.
@@ -1038,8 +1040,7 @@ impl Renderable for ListSelectionView {
                 &self.state,
                 render_area.height as usize,
                 "no matches",
-                self.col_width_mode,
-                self.name_column_width,
+                column_width,
             );
         }
 
