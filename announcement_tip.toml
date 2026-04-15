@@ -11,6 +11,7 @@ version_regex = "^0\\.0\\.0$"
 to_date = "2027-05-10"
 
 [[announcements]]
-content = "**Time to Update** - Please install the latest version of the CLI, this version won't be supported starting next month"
+content = "Update Required - This version will no longer be supported starting May 8th. Please upgrade to the latest version (https://github.com/openai/codex/releases/latest) using your preferred package manager."
+# Matches 0.x.y versions from 0.0.y through 0.119.y; excludes 0.120.0 and newer.
 version_regex = "^0\\.(?:[0-9]|[1-9][0-9]|1[01][0-9])\\."
 to_date = "2026-05-08"
