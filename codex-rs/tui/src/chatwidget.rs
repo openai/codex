@@ -7114,7 +7114,7 @@ impl ChatWidget {
         }
         if let Some(request_id) = metadata_request_id {
             self.loading_status_metadata_outputs
-                .push((request_id, handle.clone()));
+                .push((request_id, handle));
         }
         if loading_account_metadata {
             self.flush_answer_stream_with_separator();
