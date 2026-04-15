@@ -5,6 +5,7 @@ mod oauth;
 mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;
+mod stdio_transport_runtime;
 mod utils;
 
 pub use auth_status::StreamableHttpOAuthDiscovery;
@@ -29,3 +30,5 @@ pub use rmcp_client::ListToolsWithConnectorIdResult;
 pub use rmcp_client::RmcpClient;
 pub use rmcp_client::SendElicitation;
 pub use rmcp_client::ToolWithConnectorId;
+pub use stdio_transport_runtime::LocalStdioTransportRuntime;
+pub use stdio_transport_runtime::StdioTransportRuntime;
