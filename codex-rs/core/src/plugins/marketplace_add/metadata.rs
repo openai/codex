@@ -296,6 +296,25 @@ mod tests {
             r#"{"name":"debug","plugins":[]}"#,
         )
         .unwrap();
+        let mut marketplace = toml::map::Map::new();
+        marketplace.insert(
+            "source_type".to_string(),
+            toml::Value::String("local".to_string()),
+        );
+        marketplace.insert(
+            "source".to_string(),
+            toml::Value::String(source_root.display().to_string()),
+        );
+        let mut marketplaces = toml::map::Map::new();
+        marketplaces.insert("debug".to_string(), toml::Value::Table(marketplace));
+        let mut config = toml::map::Map::new();
+        config.insert("marketplaces".to_string(), toml::Value::Table(marketplaces));
+        fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            toml::to_string(&toml::Value::Table(config)).unwrap(),
+        )
+        .unwrap();
+
         let source = MarketplaceSource::Local {
             path: source_root.clone(),
         };
