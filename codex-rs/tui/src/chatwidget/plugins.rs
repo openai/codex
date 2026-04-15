@@ -7,6 +7,7 @@ use crate::app_event::AppEvent;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionTab;
+use crate::bottom_pane::SelectionToggle;
 use crate::bottom_pane::SelectionViewParams;
 use crate::history_cell;
 use crate::legacy_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
@@ -39,7 +40,7 @@ const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
 const ALL_PLUGINS_TAB_ID: &str = "all-plugins";
 const INSTALLED_PLUGINS_TAB_ID: &str = "installed-plugins";
 const OPENAI_CURATED_TAB_ID: &str = "marketplace:openai-curated";
-const PLUGIN_MENU_ROW_PREFIX_WIDTH: usize = 2;
+const PLUGIN_MENU_ROW_PREFIX_WIDTH: usize = 6;
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -232,9 +233,12 @@ impl ChatWidget {
 
     fn open_plugins_popup(&mut self, response: &PluginListResponse) {
         self.plugins_active_tab_id = Some(ALL_PLUGINS_TAB_ID.to_string());
-        self.bottom_pane.show_selection_view(
-            self.plugins_popup_params(response, self.plugins_active_tab_id.clone()),
-        );
+        self.bottom_pane
+            .show_selection_view(self.plugins_popup_params(
+                response,
+                self.plugins_active_tab_id.clone(),
+                /*initial_selected_idx*/ None,
+            ));
     }
 
     pub(crate) fn open_plugin_detail_loading_popup(&mut self, plugin_display_name: &str) {
@@ -384,6 +388,49 @@ impl ChatWidget {
                     self.plugin_detail_error_popup_params(&err, plugins_response.as_ref()),
                 );
             }
+        }
+    }
+
+    pub(crate) fn on_plugin_enabled_set(
+        &mut self,
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+        result: Result<(), String>,
+    ) {
+        if self.config.cwd.as_path() != cwd.as_path() {
+            return;
+        }
+
+        if let Err(err) = result {
+            self.add_error_message(format!(
+                "Failed to update plugin config for {plugin_id}: {err}"
+            ));
+            if let PluginsCacheState::Ready(response) = self.plugins_cache_for_current_cwd() {
+                self.refresh_plugins_popup_if_open(&response);
+            }
+            return;
+        }
+
+        let refreshed_response = match &mut self.plugins_cache {
+            PluginsCacheState::Ready(response)
+                if self.plugins_fetch_state.cache_cwd.as_deref() == Some(cwd.as_path()) =>
+            {
+                for plugin in response
+                    .marketplaces
+                    .iter_mut()
+                    .flat_map(|marketplace| marketplace.plugins.iter_mut())
+                    .filter(|plugin| plugin.id == plugin_id)
+                {
+                    plugin.enabled = enabled;
+                }
+                Some(response.clone())
+            }
+            _ => None,
+        };
+
+        if let Some(response) = refreshed_response {
+            self.refresh_plugins_popup_if_open(&response);
         }
     }
 
@@ -562,7 +609,11 @@ impl ChatWidget {
             let tab_id = self.plugins_active_tab_id.clone();
             let _ = self.bottom_pane.replace_selection_view_if_active(
                 PLUGINS_SELECTION_VIEW_ID,
-                self.plugins_popup_params(&plugins_response, tab_id),
+                self.plugins_popup_params(
+                    &plugins_response,
+                    tab_id,
+                    /*initial_selected_idx*/ None,
+                ),
             );
         }
     }
@@ -573,10 +624,13 @@ impl ChatWidget {
             .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
             .map(str::to_string)
             .or_else(|| self.plugins_active_tab_id.clone());
+        let selected_idx = self
+            .bottom_pane
+            .selected_index_for_active_view(PLUGINS_SELECTION_VIEW_ID);
         self.plugins_active_tab_id = active_tab_id.clone();
         let _ = self.bottom_pane.replace_selection_view_if_active(
             PLUGINS_SELECTION_VIEW_ID,
-            self.plugins_popup_params(response, active_tab_id),
+            self.plugins_popup_params(response, active_tab_id, selected_idx),
         );
     }
 
@@ -726,6 +780,7 @@ impl ChatWidget {
         &self,
         response: &PluginListResponse,
         active_tab_id: Option<String>,
+        initial_selected_idx: Option<usize>,
     ) -> SelectionViewParams {
         let marketplaces: Vec<&PluginMarketplaceEntry> = response.marketplaces.iter().collect();
 
@@ -868,6 +923,7 @@ impl ChatWidget {
             search_placeholder: Some("Type to search plugins".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
             name_column_width,
+            initial_selected_idx,
             ..Default::default()
         }
     }
@@ -883,7 +939,7 @@ impl ChatWidget {
             if plugin.summary.enabled {
                 "Installed"
             } else {
-                "Installed · Disabled"
+                "Disabled"
             }
         } else {
             match plugin.summary.install_policy {
@@ -1035,8 +1091,12 @@ impl ChatWidget {
                 plugin_brief_description_without_marketplace(plugin, status_label_width)
             };
             let selected_status_label = format!("{status_label:<status_label_width$}");
-            let selected_description =
-                format!("{selected_status_label}   Press Enter to view plugin details.");
+            let selected_description = if plugin.installed {
+                let toggle_action = if plugin.enabled { "disable" } else { "enable" };
+                format!("{selected_status_label}   Space to {toggle_action}; Enter view details.")
+            } else {
+                format!("{selected_status_label}   Press Enter to view plugin details.")
+            };
             let search_value = format!(
                 "{display_name} {} {} {}",
                 plugin.id, plugin.name, marketplace_label
@@ -1045,9 +1105,23 @@ impl ChatWidget {
             let plugin_display_name = display_name.clone();
             let marketplace_path = marketplace.path.clone();
             let plugin_name = plugin.name.clone();
+            let toggle_cwd = cwd.clone();
+            let toggle_plugin_id = plugin.id.clone();
+            let toggle = plugin.installed.then(|| SelectionToggle {
+                is_on: plugin.enabled,
+                action: Box::new(move |enabled, tx| {
+                    tx.send(AppEvent::SetPluginEnabled {
+                        cwd: toggle_cwd.clone(),
+                        plugin_id: toggle_plugin_id.clone(),
+                        enabled,
+                    });
+                }),
+            });
 
             items.push(SelectionItem {
                 name: display_name,
+                toggle,
+                toggle_placeholder: (!plugin.installed).then_some("[-] "),
                 description: Some(description),
                 selected_description: Some(selected_description),
                 search_value: Some(search_value),
@@ -1080,7 +1154,7 @@ impl ChatWidget {
 }
 
 fn plugins_popup_hint_line() -> Line<'static> {
-    Line::from("←/→ select marketplace · enter view details · esc close")
+    Line::from("space enable/disable · ←/→ select marketplace · enter view details · esc close")
 }
 
 fn plugin_detail_hint_line() -> Line<'static> {
@@ -1228,13 +1302,13 @@ fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
         if plugin.enabled {
             "Installed"
         } else {
-            "Installed · Disabled"
+            "Disabled"
         }
     } else {
         match plugin.install_policy {
             PluginInstallPolicy::NotAvailable => "Not installable",
             PluginInstallPolicy::Available => "Available",
-            PluginInstallPolicy::InstalledByDefault => "Available by default",
+            PluginInstallPolicy::InstalledByDefault => "Available",
         }
     }
 }

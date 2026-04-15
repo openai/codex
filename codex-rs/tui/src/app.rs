@@ -75,6 +75,8 @@ use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -82,6 +84,7 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListParams;
@@ -2145,6 +2148,31 @@ impl App {
                 cwd: cwd_for_event,
                 plugin_id: plugin_id_for_event,
                 plugin_display_name,
+                result,
+            });
+        });
+    }
+
+    fn set_plugin_enabled(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let plugin_id_for_event = plugin_id.clone();
+            let result = write_plugin_enabled(request_handle, plugin_id, enabled)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("Failed to update plugin config: {err}"));
+            app_event_tx.send(AppEvent::PluginEnabledSet {
+                cwd: cwd_for_event,
+                plugin_id: plugin_id_for_event,
+                enabled,
                 result,
             });
         });
@@ -4664,6 +4692,13 @@ impl App {
             } => {
                 self.fetch_plugin_uninstall(app_server, cwd, plugin_id, plugin_display_name);
             }
+            AppEvent::SetPluginEnabled {
+                cwd,
+                plugin_id,
+                enabled,
+            } => {
+                self.set_plugin_enabled(app_server, cwd, plugin_id, enabled);
+            }
             AppEvent::PluginInstallLoaded {
                 cwd,
                 marketplace_path,
@@ -5216,6 +5251,26 @@ impl App {
                 {
                     self.fetch_plugins_list(app_server, cwd);
                 }
+            }
+            AppEvent::PluginEnabledSet {
+                cwd,
+                plugin_id,
+                enabled,
+                result,
+            } => {
+                let update_succeeded = result.is_ok();
+                if update_succeeded {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to refresh config after plugin toggle"
+                        );
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                }
+                self.chat_widget
+                    .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
             }
             AppEvent::RefreshPluginMentions => {
                 self.refresh_plugin_mentions();
@@ -6460,6 +6515,27 @@ async fn fetch_plugin_uninstall(
         })
         .await
         .wrap_err("plugin/uninstall failed in TUI")
+}
+
+async fn write_plugin_enabled(
+    request_handle: AppServerRequestHandle,
+    plugin_id: String,
+    enabled: bool,
+) -> Result<ConfigWriteResponse> {
+    let request_id = RequestId::String(format!("plugin-enable-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::ConfigValueWrite {
+            request_id,
+            params: ConfigValueWriteParams {
+                key_path: format!("plugins.{plugin_id}"),
+                value: serde_json::json!({ "enabled": enabled }),
+                merge_strategy: MergeStrategy::Upsert,
+                file_path: None,
+                expected_version: None,
+            },
+        })
+        .await
+        .wrap_err("config/value/write failed while updating plugin enablement in TUI")
 }
 
 fn build_feedback_upload_params(

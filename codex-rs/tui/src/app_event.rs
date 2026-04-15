@@ -271,6 +271,21 @@ pub(crate) enum AppEvent {
         result: Result<PluginUninstallResponse, String>,
     },
 
+    /// Enable or disable an installed plugin.
+    SetPluginEnabled {
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    },
+
+    /// Result of enabling or disabling a plugin.
+    PluginEnabledSet {
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+        result: Result<(), String>,
+    },
+
     /// Refresh plugin mention bindings from the current config.
     RefreshPluginMentions,
 

@@ -92,6 +92,11 @@ pub(crate) fn side_by_side_layout_widths(
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
+pub(crate) struct SelectionToggle {
+    pub is_on: bool,
+    pub action: Box<dyn Fn(bool, &AppEventSender) + Send + Sync>,
+}
+
 /// Callback invoked whenever the highlighted item changes (arrow keys, search
 /// filter, number-key jump).  Receives the *actual* index into the unfiltered
 /// `items` list and the event sender.  Used by the theme picker for live preview.
@@ -112,6 +117,8 @@ pub(crate) type OnCancelCallback = Option<Box<dyn Fn(&AppEventSender) + Send + S
 pub(crate) struct SelectionItem {
     pub name: String,
     pub name_prefix_spans: Vec<Span<'static>>,
+    pub toggle: Option<SelectionToggle>,
+    pub toggle_placeholder: Option<&'static str>,
     pub display_shortcut: Option<KeyBinding>,
     pub description: Option<String>,
     pub selected_description: Option<String>,
@@ -273,6 +280,7 @@ impl ListSelectionView {
         } else {
             Some(active_tab_idx.unwrap_or(0))
         };
+        let has_initial_selected_idx = params.initial_selected_idx.is_some();
         let mut s = Self {
             view_id: params.view_id,
             footer_note: params.footer_note,
@@ -305,7 +313,7 @@ impl ListSelectionView {
             on_cancel: params.on_cancel,
         };
         s.apply_filter();
-        if s.tabs_enabled() {
+        if s.tabs_enabled() && !has_initial_selected_idx {
             s.select_first_enabled_row();
         }
         s
@@ -324,6 +332,15 @@ impl ListSelectionView {
             .and_then(|idx| self.tabs.get(idx))
             .map(|tab| tab.items.as_slice())
             .unwrap_or(self.items.as_slice())
+    }
+
+    fn active_items_mut(&mut self) -> &mut [SelectionItem] {
+        if let Some(idx) = self.active_tab_idx
+            && let Some(tab) = self.tabs.get_mut(idx)
+        {
+            return tab.items.as_mut_slice();
+        }
+        self.items.as_mut_slice()
     }
 
     fn active_header(&self) -> &dyn Renderable {
@@ -435,6 +452,11 @@ impl ListSelectionView {
                     let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
                     let mut name_prefix_spans = Vec::new();
                     name_prefix_spans.push(wrap_prefix.into());
+                    if let Some(toggle) = &item.toggle {
+                        name_prefix_spans.push(if toggle.is_on { "[*] " } else { "[ ] " }.into());
+                    } else if let Some(placeholder) = item.toggle_placeholder {
+                        name_prefix_spans.push(placeholder.into());
+                    }
                     name_prefix_spans.extend(item.name_prefix_spans.clone());
                     let description = is_selected
                         .then(|| item.selected_description.clone())
@@ -553,6 +575,44 @@ impl ListSelectionView {
             }
             self.complete = true;
         }
+    }
+
+    fn selected_item_has_toggle(&self) -> bool {
+        self.selected_actual_idx()
+            .and_then(|actual_idx| self.active_items().get(actual_idx))
+            .is_some_and(|item| {
+                item.toggle.is_some() && item.disabled_reason.is_none() && !item.is_disabled
+            })
+    }
+
+    fn selected_item_has_toggle_placeholder(&self) -> bool {
+        self.selected_actual_idx()
+            .and_then(|actual_idx| self.active_items().get(actual_idx))
+            .is_some_and(|item| {
+                item.toggle.is_none()
+                    && item.toggle_placeholder.is_some()
+                    && item.disabled_reason.is_none()
+                    && !item.is_disabled
+            })
+    }
+
+    fn toggle_selected(&mut self) {
+        let Some(actual_idx) = self.selected_actual_idx() else {
+            return;
+        };
+        let app_event_tx = self.app_event_tx.clone();
+        let Some(item) = self.active_items_mut().get_mut(actual_idx) else {
+            return;
+        };
+        if item.is_disabled || item.disabled_reason.is_some() {
+            return;
+        }
+        let Some(toggle) = item.toggle.as_mut() else {
+            return;
+        };
+
+        toggle.is_on = !toggle.is_on;
+        (toggle.action)(toggle.is_on, &app_event_tx);
     }
 
     #[cfg(test)]
@@ -719,6 +779,18 @@ impl BottomPaneView for ListSelectionView {
                 self.search_query.pop();
                 self.apply_filter();
             }
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.selected_item_has_toggle() => self.toggle_selected(),
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.is_searchable
+                && self.search_query.is_empty()
+                && self.selected_item_has_toggle_placeholder() => {}
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {

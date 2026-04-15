@@ -9,6 +9,6 @@ expression: popup
   [All Plugins]  Installed (0)  OpenAI Curated
 
   sla
-› Slack  Available   Press Enter to view plugin details.
+› [-] Slack     Available   Press Enter to view plugin details.
 
-  ←/→ select marketplace · enter view details · esc close
+  space enable/disable · ←/→ select marketplace · enter view details · esc close
