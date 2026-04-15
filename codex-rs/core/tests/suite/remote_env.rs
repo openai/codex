@@ -2,6 +2,8 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::EnvironmentConfig;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::RemoveOptions;
 use codex_protocol::protocol::ReadOnlyAccess;
@@ -9,13 +11,136 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::get_remote_test_env;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::test_env;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+
+const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_can_start_and_complete_turn_with_disabled_default_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-disabled"),
+            ev_assistant_message("msg-disabled", "done"),
+            ev_completed("resp-disabled"),
+        ]),
+    )
+    .await;
+
+    let environment_manager = Arc::new(EnvironmentManager::new(Some("none".to_string())));
+    let mut builder = test_codex().with_environment_manager(environment_manager);
+    let test = builder.build(&server).await?;
+    assert!(test.selected_environment().is_none());
+
+    test.submit_turn("hello from disabled env").await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_can_start_and_complete_turn_with_named_local_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-local"),
+            ev_assistant_message("msg-local", "done"),
+            ev_completed("resp-local"),
+        ]),
+    )
+    .await;
+
+    let environment_manager = Arc::new(EnvironmentManager::new(/*exec_server_url*/ None));
+    environment_manager
+        .register_environment(
+            "local".to_string(),
+            EnvironmentConfig {
+                exec_server_url: None,
+            },
+        )
+        .await?;
+
+    let mut builder = test_codex()
+        .with_environment_manager(environment_manager)
+        .with_thread_environment_id("local");
+    let test = builder.build(&server).await?;
+    let selected_environment = test
+        .selected_environment()
+        .context("named local environment should resolve")?;
+    assert!(!selected_environment.is_remote());
+
+    test.submit_turn("hello from named local env").await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_can_start_and_complete_turn_with_named_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let remote_exec_server_url =
+        std::env::var(REMOTE_EXEC_SERVER_URL_ENV_VAR).with_context(|| {
+            format!(
+                "{REMOTE_EXEC_SERVER_URL_ENV_VAR} must be set for named remote environment tests"
+            )
+        })?;
+
+    let server = start_mock_server().await;
+    let _mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-remote"),
+            ev_assistant_message("msg-remote", "done"),
+            ev_completed("resp-remote"),
+        ]),
+    )
+    .await;
+
+    let environment_manager = Arc::new(EnvironmentManager::new(/*exec_server_url*/ None));
+    environment_manager
+        .register_environment(
+            "remote".to_string(),
+            EnvironmentConfig {
+                exec_server_url: Some(remote_exec_server_url),
+            },
+        )
+        .await?;
+
+    let mut builder = test_codex()
+        .with_environment_manager(environment_manager)
+        .with_thread_environment_id("remote");
+    let test = builder.build_remote_aware(&server).await?;
+    let selected_environment = test
+        .selected_environment()
+        .context("named remote environment should resolve")?;
+    assert!(selected_environment.is_remote());
+
+    test.submit_turn("hello from named remote env").await?;
+
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
