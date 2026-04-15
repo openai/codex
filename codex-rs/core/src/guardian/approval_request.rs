@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::GUARDIAN_MAX_ACTION_STRING_TOKENS;
-use super::prompt::guardian_truncate_text;
+use super::prompt::guardian_truncate_text_with_metadata;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GuardianApprovalRequest {
@@ -167,30 +167,47 @@ fn guardian_command_source_tool_name(source: GuardianCommandSource) -> &'static 
     }
 }
 
-fn truncate_guardian_action_value(value: Value) -> Value {
+fn truncate_guardian_action_value(value: Value) -> (Value, bool) {
     match value {
-        Value::String(text) => Value::String(guardian_truncate_text(
-            &text,
-            GUARDIAN_MAX_ACTION_STRING_TOKENS,
-        )),
-        Value::Array(values) => Value::Array(
-            values
+        Value::String(text) => {
+            let (text, truncated) =
+                guardian_truncate_text_with_metadata(&text, GUARDIAN_MAX_ACTION_STRING_TOKENS);
+            (Value::String(text), truncated)
+        }
+        Value::Array(values) => {
+            let mut truncated = false;
+            let values = values
                 .into_iter()
-                .map(truncate_guardian_action_value)
-                .collect::<Vec<_>>(),
-        ),
+                .map(|value| {
+                    let (value, value_truncated) = truncate_guardian_action_value(value);
+                    truncated |= value_truncated;
+                    value
+                })
+                .collect::<Vec<_>>();
+            (Value::Array(values), truncated)
+        }
         Value::Object(values) => {
             let mut entries = values.into_iter().collect::<Vec<_>>();
             entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key, truncate_guardian_action_value(value)))
-                    .collect(),
-            )
+            let mut truncated = false;
+            let values = entries
+                .into_iter()
+                .map(|(key, value)| {
+                    let (value, value_truncated) = truncate_guardian_action_value(value);
+                    truncated |= value_truncated;
+                    (key, value)
+                })
+                .collect();
+            (Value::Object(values), truncated)
         }
-        other => other,
+        other => (other, false),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FormattedGuardianAction {
+    pub(crate) text: String,
+    pub(crate) truncated: bool,
 }
 
 pub(crate) fn guardian_approval_request_to_json(
@@ -382,10 +399,13 @@ pub(crate) fn guardian_request_turn_id<'a>(
     }
 }
 
-pub(crate) fn format_guardian_action_pretty(
+pub(crate) fn format_guardian_action_pretty_with_truncation(
     action: &GuardianApprovalRequest,
-) -> serde_json::Result<String> {
-    let mut value = guardian_approval_request_to_json(action)?;
-    value = truncate_guardian_action_value(value);
-    serde_json::to_string_pretty(&value)
+) -> serde_json::Result<FormattedGuardianAction> {
+    let value = guardian_approval_request_to_json(action)?;
+    let (value, truncated) = truncate_guardian_action_value(value);
+    Ok(FormattedGuardianAction {
+        text: serde_json::to_string_pretty(&value)?,
+        truncated,
+    })
 }
