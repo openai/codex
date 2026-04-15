@@ -222,7 +222,8 @@ pub struct ExecApprovalRequestEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub network_approval_context: Option<NetworkApprovalContext>,
-    /// Proposed execpolicy amendment that can be applied to allow future runs.
+    /// Proposed execpolicy amendment that clients may present as an explicit
+    /// persistent approval option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
@@ -290,14 +291,15 @@ impl ExecApprovalRequestEvent {
             return vec![ReviewDecision::Approved, ReviewDecision::Abort];
         }
 
-        let mut decisions = vec![ReviewDecision::Approved];
-        if let Some(prefix) = proposed_execpolicy_amendment {
-            decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
-                proposed_execpolicy_amendment: prefix.clone(),
-            });
+        if proposed_execpolicy_amendment.is_some() {
+            return vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::Abort,
+            ];
         }
-        decisions.push(ReviewDecision::Abort);
-        decisions
+
+        vec![ReviewDecision::Approved, ReviewDecision::Abort]
     }
 }
 
@@ -391,6 +393,26 @@ mod tests {
                 command: "rm -rf /tmp/guardian".to_string(),
                 cwd: test_path_buf("/tmp").abs(),
             }
+        );
+    }
+
+    #[test]
+    fn default_command_decisions_scope_prefix_suggestions_to_session() {
+        let prefix = ExecPolicyAmendment::new(vec!["cargo".to_string(), "test".to_string()]);
+        let decisions = ExecApprovalRequestEvent::default_available_decisions(
+            /*network_approval_context*/ None,
+            Some(&prefix),
+            /*proposed_network_policy_amendments*/ None,
+            /*additional_permissions*/ None,
+        );
+
+        assert_eq!(
+            decisions,
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::Abort,
+            ]
         );
     }
 
