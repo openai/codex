@@ -17,6 +17,7 @@ anyhow = { workspace = true }
 codex-analytics = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-config = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-instructions = { workspace = true }
 codex-login = { workspace = true }
 codex-otel = { workspace = true }
