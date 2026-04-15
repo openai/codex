@@ -994,6 +994,11 @@ impl RmcpClient {
                     None,
                     process_group_guard,
                 ),
+                LaunchedStdioServerTransport::Executor { transport } => (
+                    service::serve_client(client_service, transport).boxed(),
+                    None,
+                    None,
+                ),
             },
             PendingTransport::StreamableHttp { transport } => (
                 service::serve_client(client_service, transport).boxed(),
