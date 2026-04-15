@@ -100,6 +100,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
+use crate::model_provider::ModelProvider;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::CoreAuthProvider;
 use codex_api::map_api_error;
@@ -147,7 +148,7 @@ struct ModelClientState {
     conversation_id: ThreadId,
     window_generation: AtomicU64,
     installation_id: String,
-    provider: ModelProviderInfo,
+    provider: Arc<dyn ModelProvider>,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
@@ -303,6 +304,7 @@ impl ModelClient {
             .as_ref()
             .is_some_and(|manager| manager.codex_api_key_env_enabled());
         let auth_env_telemetry = collect_auth_env_telemetry(&provider, codex_api_key_env_enabled);
+        let provider = <dyn ModelProvider>::new(provider, auth_manager.clone());
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
@@ -636,7 +638,7 @@ impl ModelClient {
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
     pub fn responses_websocket_enabled(&self) -> bool {
-        if !self.state.provider.supports_websockets
+        if !self.state.provider.info().supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
             || (*CODEX_RS_SSE_FIXTURE).is_some()
         {
@@ -651,15 +653,16 @@ impl ModelClient {
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        let auth = match self.state.auth_manager.as_ref() {
+        let auth = match self.state.provider.auth_manager() {
             Some(manager) => manager.auth().await,
             None => None,
         };
         let api_provider = self
             .state
             .provider
+            .info()
             .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        let api_auth = auth_provider_from_auth(auth.clone(), self.state.provider.info())?;
         Ok(CurrentClientSetup {
             auth,
             api_provider,
@@ -689,7 +692,7 @@ impl ModelClient {
             request_route_telemetry,
             self.state.auth_env_telemetry.clone(),
         );
-        let websocket_connect_timeout = self.state.provider.websocket_connect_timeout();
+        let websocket_connect_timeout = self.state.provider.info().websocket_connect_timeout();
         let start = Instant::now();
         let result = match tokio::time::timeout(
             websocket_connect_timeout,
@@ -1033,8 +1036,8 @@ impl ModelClientSession {
         level = "info",
         skip_all,
         fields(
-            provider = %self.client.state.provider.name,
-            wire_api = %self.client.state.provider.wire_api,
+            provider = %self.client.state.provider.info().name,
+            wire_api = %self.client.state.provider.info().wire_api,
             transport = "responses_websocket",
             api.path = "responses",
             turn.has_metadata_header = params.turn_metadata_header.is_some()
@@ -1105,7 +1108,7 @@ impl ModelClientSession {
     fn responses_request_compression(&self, auth: Option<&CodexAuth>) -> Compression {
         if self.client.state.enable_request_compression
             && auth.is_some_and(CodexAuth::is_chatgpt_auth)
-            && self.client.state.provider.is_openai()
+            && self.client.state.provider.info().is_openai()
         {
             Compression::Zstd
         } else {
@@ -1124,7 +1127,7 @@ impl ModelClientSession {
         skip_all,
         fields(
             model = %model_info.slug,
-            wire_api = %self.client.state.provider.wire_api,
+            wire_api = %self.client.state.provider.info().wire_api,
             transport = "responses_http",
             http.method = "POST",
             api.path = "responses",
@@ -1145,7 +1148,7 @@ impl ModelClientSession {
             warn!(path, "Streaming from fixture");
             let stream = codex_api::stream_from_fixture(
                 path,
-                self.client.state.provider.stream_idle_timeout(),
+                self.client.state.provider.info().stream_idle_timeout(),
             )
             .map_err(map_api_error)?;
             let (stream, _last_request_rx) = map_response_stream(stream, session_telemetry.clone());
@@ -1221,7 +1224,7 @@ impl ModelClientSession {
         skip_all,
         fields(
             model = %model_info.slug,
-            wire_api = %self.client.state.provider.wire_api,
+            wire_api = %self.client.state.provider.info().wire_api,
             transport = "responses_websocket",
             api.path = "responses",
             turn.has_metadata_header = turn_metadata_header.is_some(),
@@ -1432,7 +1435,7 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
-        let wire_api = self.client.state.provider.wire_api;
+        let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {
                 if self.client.responses_websocket_enabled() {
