@@ -55,6 +55,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -153,26 +154,28 @@ async fn wait_for_turn_aborted(
     expected_turn_id: &str,
     expected_reason: TurnAbortReason,
 ) {
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let event = thread
-                .next_event()
-                .await
-                .expect("child thread should emit events");
-            if matches!(
-                event.msg,
-                EventMsg::TurnAborted(TurnAbortedEvent {
-                    turn_id: Some(ref turn_id),
-                    ref reason,
-                    ..
-                }) if turn_id == expected_turn_id && *reason == expected_reason
-            ) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut seen_aborts = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let event = timeout(remaining, thread.next_event())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "expected child turn {expected_turn_id} to be aborted with {expected_reason:?}; saw aborts: {seen_aborts:?}"
+                )
+            })
+            .expect("child thread should emit events");
+        if let EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id, reason, ..
+        }) = event.msg
+        {
+            if turn_id.as_deref() == Some(expected_turn_id) && reason == expected_reason {
                 break;
             }
+            seen_aborts.push((turn_id, reason));
         }
-    })
-    .await
-    .expect("expected child turn to be interrupted");
+    }
 }
 
 async fn wait_for_redirected_envelope_in_history(
@@ -216,8 +219,9 @@ async fn wait_for_redirected_envelope_in_history(
     .expect("redirected followup envelope should appear in history");
 }
 
-#[derive(Clone, Copy)]
-struct NeverEndingTask;
+struct NeverEndingTask {
+    started: Arc<Notify>,
+}
 
 impl SessionTask for NeverEndingTask {
     fn kind(&self) -> TaskKind {
@@ -235,6 +239,7 @@ impl SessionTask for NeverEndingTask {
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
+        self.started.notify_one();
         cancellation_token.cancelled().await;
         None
     }
@@ -1516,8 +1521,28 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         .await
         .expect("worker thread should exist");
 
+    timeout(Duration::from_secs(15), async {
+        loop {
+            let event = thread
+                .next_event()
+                .await
+                .expect("child thread should emit initial turn events");
+            if matches!(event.msg, EventMsg::TurnStarted(_)) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("spawned child task should start before test injects a busy task");
+    thread
+        .codex
+        .session
+        .abort_all_tasks(TurnAbortReason::Replaced)
+        .await;
+
     let active_turn = thread.codex.session.new_default_turn().await;
     let interrupted_turn_id = active_turn.sub_id.clone();
+    let never_ending_task_started = Arc::new(Notify::new());
     thread
         .codex
         .session
@@ -1527,9 +1552,17 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
                 text: "working".to_string(),
                 text_elements: Vec::new(),
             }],
-            NeverEndingTask,
+            NeverEndingTask {
+                started: Arc::clone(&never_ending_task_started),
+            },
         )
         .await;
+    timeout(
+        Duration::from_secs(15),
+        never_ending_task_started.notified(),
+    )
+    .await
+    .expect("child task should start before the interrupting followup");
 
     FollowupTaskHandlerV2
         .handle(invocation(
