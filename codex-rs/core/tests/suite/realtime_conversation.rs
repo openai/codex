@@ -2417,11 +2417,8 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
-    assert!(
-        user_texts
-            .iter()
-            .any(|text| text == "user: text from realtime")
-    );
+    assert!(user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: text from realtime</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2503,7 +2500,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
-        == "assistant: assistant context\nuser: delegated query\nassistant: assist confirm"));
+        == "<realtime_delegation>\n  <input>assistant: assistant context\nuser: delegated query\nassistant: assist confirm</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2617,23 +2614,14 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
     assert_eq!(requests.len(), 2);
 
     let first_user_texts = requests[0].message_input_texts("user");
-    assert!(
-        first_user_texts
-            .iter()
-            .any(|text| text == "user: first question")
-    );
+    assert!(first_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: first question</input>\n</realtime_delegation>"));
 
     let second_user_texts = requests[1].message_input_texts("user");
-    assert!(
-        second_user_texts
-            .iter()
-            .any(|text| text == "user: second question")
-    );
-    assert!(
-        !second_user_texts
-            .iter()
-            .any(|text| text == "user: first question\nuser: second question")
-    );
+    assert!(second_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: second question</input>\n</realtime_delegation>"));
+    assert!(!second_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: first question\nuser: second question</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
