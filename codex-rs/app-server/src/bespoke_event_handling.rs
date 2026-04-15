@@ -2300,6 +2300,9 @@ async fn handle_token_count_event(
     }
 }
 
+/// Returns the newest persisted token usage in rollout order.
+///
+/// Rollback responses rebuild their thread snapshot from the same rollout file used by resume/read paths, so they need the same interpretation of token-count events. A missing value means the rollback target predates persisted token counts or never received one.
 fn last_token_usage_from_rollout_items(items: &[RolloutItem]) -> Option<ThreadTokenUsage> {
     items.iter().rev().find_map(|item| match item {
         RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => {

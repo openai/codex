@@ -126,6 +126,9 @@ pub(crate) struct AppServerSession {
     remote_cwd_override: Option<PathBuf>,
 }
 
+/// Session state normalized from app-server thread lifecycle responses.
+///
+/// This is the handoff object between the app-server protocol layer and `ChatWidget`. Values here should be ready to apply to the active UI without issuing another app-server read. In particular, `token_usage` mirrors the thread snapshot so a resumed session can paint context-window status immediately instead of waiting for a later live token update.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadSessionState {
     pub(crate) thread_id: ThreadId,
@@ -144,6 +147,9 @@ pub(crate) struct ThreadSessionState {
     pub(crate) history_entry_count: u64,
     pub(crate) network_proxy: Option<SessionNetworkProxyRuntime>,
     pub(crate) rollout_path: Option<PathBuf>,
+    /// Latest token usage restored from the app-server thread snapshot.
+    ///
+    /// `None` means app-server could not derive usage from runtime or rollout state; the TUI should keep existing unknown/empty context usage rather than inventing zero usage.
     pub(crate) token_usage: Option<ThreadTokenUsage>,
 }
 

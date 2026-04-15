@@ -2068,6 +2068,9 @@ impl ChatWidget {
         }
     }
 
+    /// Applies a normalized app-server thread session to the chat UI.
+    ///
+    /// Session configuration still flows through the legacy `SessionConfigured` path so existing metadata, history, and footer setup stay centralized. Restored token usage is applied immediately afterward because it is not part of the legacy core event; skipping this step leaves the status line at its default value until a new turn emits a live token-count update.
     pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
         let token_usage = session.token_usage.clone();
         self.instruction_source_paths = session.instruction_source_paths.clone();
@@ -2653,6 +2656,9 @@ impl ChatWidget {
         self.config.memories.generate_memories = generate_memories;
     }
 
+    /// Replaces the token-usage cache and refreshes all UI surfaces that derive from it.
+    ///
+    /// Runtime token-count events and resumed app-server sessions both use this entry point. Callers should pass `None` only when token usage is genuinely unknown; doing so clears the context-window display rather than showing zero usage.
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         match info {
             Some(info) => self.apply_token_info(info),

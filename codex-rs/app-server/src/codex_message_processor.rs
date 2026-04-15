@@ -8777,6 +8777,9 @@ enum ThreadTurnSource<'a> {
     HistoryItems(&'a [RolloutItem]),
 }
 
+/// Rehydrates the transcript-facing state that is derived from rollout history.
+///
+/// Thread snapshots store turns and token usage together because both are projections over the same ordered rollout stream. Keeping them in one helper prevents resume/read paths from restoring visible history while leaving the context-usage cache stale until a new turn emits `TokenCount`. When an active turn is supplied, it is merged only into the returned turn list; token usage still comes from persisted rollout items because in-flight usage is delivered through live token-usage notifications.
 async fn populate_thread_turns(
     thread: &mut Thread,
     turn_source: ThreadTurnSource<'_>,
@@ -8815,6 +8818,9 @@ fn apply_rollout_items_to_thread(
     thread.token_usage = last_token_usage_from_rollout_items(items);
 }
 
+/// Returns the newest persisted token usage in rollout order.
+///
+/// Rollouts may contain many token-count events across multiple turns, and only the latest one describes the status-line state the user saw before resume. Reading from the end also preserves compatibility with older rollouts that contain no token counts: callers receive `None` and can leave context usage unknown.
 fn last_token_usage_from_rollout_items(items: &[RolloutItem]) -> Option<ThreadTokenUsage> {
     items.iter().rev().find_map(|item| match item {
         RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => {

@@ -70,7 +70,9 @@ gitInfo: GitInfo | null,
  */
 name: string | null,
 /**
- * Latest known token usage for the thread, when available from runtime or rollout history.
+ * Latest token usage known when this thread snapshot was produced.
+ *
+ * App-server emits live token usage updates separately, but resume and read responses must also carry the most recent persisted usage so clients can render context-window state before the next model turn produces a fresh update. A null value means no token-count event was available in runtime state or rollout history; clients should treat it as unknown rather than zero usage.
  */
 tokenUsage: ThreadTokenUsage | null,
 /**
