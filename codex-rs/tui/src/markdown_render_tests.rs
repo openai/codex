@@ -4,7 +4,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 use std::path::Path;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 use crate::markdown_render::COLON_LOCATION_SUFFIX_RE;
 use crate::markdown_render::HASH_LOCATION_SUFFIX_RE;
@@ -14,6 +14,12 @@ use insta::assert_snapshot;
 
 fn render_markdown_text_for_cwd(input: &str, cwd: &Path) -> Text<'static> {
     render_markdown_text_with_width_and_cwd(input, /*width*/ None, Some(cwd))
+}
+
+fn terminal_cell_width(text: &str) -> usize {
+    text.chars()
+        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
 }
 
 #[test]
@@ -1480,13 +1486,15 @@ fn table_with_emoji_sequence_cells_has_consistent_display_width() {
         })
         .map(String::as_str)
         .collect();
-    let expected_width = table_lines
+    let first_table_line = table_lines
         .first()
-        .expect("expected unicode table to render as a box")
-        .width();
+        .expect("expected unicode table to render as a box");
+    let expected_width = terminal_cell_width(first_table_line);
 
     assert!(
-        table_lines.iter().all(|line| line.width() == expected_width),
+        table_lines
+            .iter()
+            .all(|line| terminal_cell_width(line) == expected_width),
         "expected every rendered table row to have width {expected_width}: {table_lines:?}"
     );
     assert!(

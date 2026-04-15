@@ -63,7 +63,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 use url::Url;
 
 struct MarkdownStyles {
@@ -1172,7 +1172,7 @@ where
                 if word_count > 0 {
                     total_words += word_count;
                     total_cells += 1;
-                    total_cell_width += plain.width();
+                    total_cell_width += Self::terminal_cell_width(&plain);
                 }
             }
 
@@ -1182,7 +1182,7 @@ where
                 total_words as f64 / total_cells as f64
             };
             let avg_cell_width = if total_cells == 0 {
-                header_plain.width() as f64
+                Self::terminal_cell_width(&header_plain) as f64
             } else {
                 total_cell_width as f64 / total_cells as f64
             };
@@ -1504,7 +1504,10 @@ where
 
     #[inline]
     fn spans_display_width(spans: &[Span<'_>]) -> usize {
-        spans.iter().map(|span| span.content.width()).sum()
+        spans
+            .iter()
+            .map(|span| Self::terminal_cell_width(&span.content))
+            .sum()
     }
 
     #[inline]
@@ -1523,7 +1526,17 @@ where
 
     #[inline]
     fn longest_token_width(text: &str) -> usize {
-        text.split_whitespace().map(str::width).max().unwrap_or(0)
+        text.split_whitespace()
+            .map(Self::terminal_cell_width)
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[inline]
+    fn terminal_cell_width(text: &str) -> usize {
+        text.chars()
+            .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+            .sum()
     }
 
     fn push_inline_style(&mut self, style: Style) {
@@ -2174,6 +2187,15 @@ mod tests {
             cells,
             has_table_pipe_syntax,
         }
+    }
+
+    #[test]
+    fn terminal_cell_width_matches_xterm_table_cases() {
+        assert_eq!(W::terminal_cell_width("🅰️"), 1);
+        assert_eq!(W::terminal_cell_width("↔️"), 1);
+        assert_eq!(W::terminal_cell_width("1️⃣"), 1);
+        assert_eq!(W::terminal_cell_width("👩‍💻"), 4);
+        assert_eq!(W::terminal_cell_width("🔤"), 2);
     }
 
     // ===== Column-metrics unit tests =====
