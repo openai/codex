@@ -5461,7 +5461,7 @@
         "type": "object"
       },
       "ApprovalsReviewer": {
-        "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+        "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses the auto-reviewer subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
         "enum": [
           "user",
           "guardian_subagent"
@@ -5637,7 +5637,7 @@
         ]
       },
       "AutoReviewDecisionSource": {
-        "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+        "description": "[UNSTABLE] Source that produced a terminal approval auto-review decision.",
         "enum": [
           "agent"
         ],
@@ -8198,7 +8198,7 @@
         "type": "object"
       },
       "GuardianApprovalReview": {
-        "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary approval auto-review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
         "properties": {
           "rationale": {
             "type": [
@@ -8406,7 +8406,7 @@
         ]
       },
       "GuardianApprovalReviewStatus": {
-        "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+        "description": "[UNSTABLE] Lifecycle state for an approval auto-review.",
         "enum": [
           "inProgress",
           "approved",
@@ -8424,7 +8424,7 @@
         "type": "string"
       },
       "GuardianRiskLevel": {
-        "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+        "description": "[UNSTABLE] Risk level assigned by approval auto-review.",
         "enum": [
           "low",
           "medium",
@@ -8434,7 +8434,7 @@
         "type": "string"
       },
       "GuardianUserAuthorization": {
-        "description": "[UNSTABLE] Authorization level assigned by guardian approval review.",
+        "description": "[UNSTABLE] Authorization level assigned by approval auto-review.",
         "enum": [
           "unknown",
           "low",
@@ -8694,7 +8694,7 @@
       },
       "ItemGuardianApprovalReviewCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for approval auto-review. This shape is expected to change soon.",
         "properties": {
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
@@ -8736,7 +8736,7 @@
       },
       "ItemGuardianApprovalReviewStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for approval auto-review. This shape is expected to change soon.",
         "properties": {
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"

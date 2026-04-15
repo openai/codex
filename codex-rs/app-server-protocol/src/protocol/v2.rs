@@ -303,8 +303,8 @@ impl From<CoreAskForApproval> for AskForApproval {
 #[ts(rename_all = "snake_case", export_to = "v2/")]
 /// Configures who approval requests are routed to for review. Examples
 /// include sandbox escapes, blocked network access, MCP approval prompts, and
-/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
-/// prompted subagent to gather relevant context and apply a risk-based
+/// ARC escalations. Defaults to `user`. `guardian_subagent` uses the
+/// auto-reviewer subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     User,
@@ -4671,7 +4671,7 @@ impl ThreadItem {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Lifecycle state for a guardian approval review.
+/// [UNSTABLE] Lifecycle state for an approval auto-review.
 pub enum GuardianApprovalReviewStatus {
     InProgress,
     Approved,
@@ -4683,7 +4683,7 @@ pub enum GuardianApprovalReviewStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Source that produced a terminal guardian approval review decision.
+/// [UNSTABLE] Source that produced a terminal approval auto-review decision.
 pub enum AutoReviewDecisionSource {
     Agent,
 }
@@ -4699,7 +4699,7 @@ impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Risk level assigned by guardian approval review.
+/// [UNSTABLE] Risk level assigned by approval auto-review.
 pub enum GuardianRiskLevel {
     Low,
     Medium,
@@ -4721,7 +4721,7 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Authorization level assigned by guardian approval review.
+/// [UNSTABLE] Authorization level assigned by approval auto-review.
 pub enum GuardianUserAuthorization {
     Unknown,
     Low,
@@ -4740,7 +4740,7 @@ impl From<CoreGuardianUserAuthorization> for GuardianUserAuthorization {
     }
 }
 
-/// [UNSTABLE] Temporary guardian approval review payload used by
+/// [UNSTABLE] Temporary approval auto-review payload used by
 /// `item/autoApprovalReview/*` notifications. This shape is expected to change
 /// soon.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -5450,8 +5450,8 @@ pub struct ItemStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// [UNSTABLE] Temporary notification payload for approval auto-review. This
+/// shape is expected to change soon.
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -5476,8 +5476,8 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// [UNSTABLE] Temporary notification payload for approval auto-review. This
+/// shape is expected to change soon.
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,

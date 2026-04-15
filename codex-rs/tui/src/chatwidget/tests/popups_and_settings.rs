@@ -1464,11 +1464,11 @@ async fn experimental_popup_includes_guardian_approval() {
     let normalized_popup = popup.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
         popup.contains(guardian_name),
-        "expected guardian approvals entry in experimental popup, got:\n{popup}"
+        "expected auto-review entry in experimental popup, got:\n{popup}"
     );
     assert!(
         normalized_popup.contains(guardian_description),
-        "expected guardian approvals description in experimental popup, got:\n{popup}"
+        "expected auto-review description in experimental popup, got:\n{popup}"
     );
 }
 

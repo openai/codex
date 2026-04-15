@@ -489,7 +489,7 @@ You can optionally specify config overrides on the new turn. If specified, these
 `approvalsReviewer` accepts:
 
 - `"user"` — default. Review approval requests directly in the client.
-- `"guardian_subagent"` — route approval requests to a carefully prompted subagent that gathers relevant context and applies a risk-based decision framework before approving or denying the request.
+- `"guardian_subagent"` — route approval requests to the auto-reviewer subagent, which gathers relevant context and applies a risk-based decision framework before approving or denying the request.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {
@@ -1004,10 +1004,10 @@ All items emit shared lifecycle events:
 
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
 - `item/completed` — sends the final `item` once that work itself finishes (for example, after a tool call or message completes); treat this as the authoritative execution/result state.
-- `item/autoApprovalReview/started` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action}` when guardian approval review begins. This shape is expected to change soon.
-- `item/autoApprovalReview/completed` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action}` when guardian approval review resolves. This shape is expected to change soon.
+- `item/autoApprovalReview/started` — [UNSTABLE] temporary auto-review notification carrying `{threadId, turnId, targetItemId, review, action}` when approval auto-review begins. This shape is expected to change soon.
+- `item/autoApprovalReview/completed` — [UNSTABLE] temporary auto-review notification carrying `{threadId, turnId, targetItemId, review, action}` when approval auto-review resolves. This shape is expected to change soon.
 
-`review` is [UNSTABLE] and currently has `{status, riskLevel?, userAuthorization?, rationale?}`, where `status` is one of `inProgress`, `approved`, `denied`, or `aborted`. `riskLevel` is one of `"low"`, `"medium"`, `"high"`, or `"critical"` when present. `userAuthorization` is one of `"unknown"`, `"low"`, `"medium"`, or `"high"` when present. `action` is a tagged union with `type: "command" | "execve" | "applyPatch" | "networkAccess" | "mcpToolCall"`. Command-like actions include a `source` discriminator (`"shell"` or `"unifiedExec"`). These notifications are separate from the target item's own `item/completed` lifecycle and are intentionally temporary while the guardian app protocol is still being designed.
+`review` is [UNSTABLE] and currently has `{status, riskLevel?, userAuthorization?, rationale?}`, where `status` is one of `inProgress`, `approved`, `denied`, or `aborted`. `riskLevel` is one of `"low"`, `"medium"`, `"high"`, or `"critical"` when present. `userAuthorization` is one of `"unknown"`, `"low"`, `"medium"`, or `"high"` when present. `action` is a tagged union with `type: "command" | "execve" | "applyPatch" | "networkAccess" | "mcpToolCall"`. Command-like actions include a `source` discriminator (`"shell"` or `"unifiedExec"`). These notifications are separate from the target item's own `item/completed` lifecycle and are intentionally temporary while the auto-review app protocol is still being designed.
 
 There are additional item-specific events:
 
