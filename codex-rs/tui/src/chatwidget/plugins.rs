@@ -31,10 +31,12 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use unicode_width::UnicodeWidthChar;
 
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
+const PLUGIN_DETAIL_DESCRIPTION_MAX_LINES: usize = 5;
 
 struct DelayedLoadingHeader {
     started_at: Instant,
@@ -117,6 +119,82 @@ impl Renderable for PluginDisclosureLine {
             .try_into()
             .unwrap_or(u16::MAX)
     }
+}
+
+struct PluginDetailDescription {
+    description: String,
+}
+
+impl Renderable for PluginDetailDescription {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        for (idx, line) in plugin_detail_description_lines(&self.description, area.width)
+            .into_iter()
+            .enumerate()
+        {
+            if idx as u16 >= area.height {
+                break;
+            }
+            line.render(
+                Rect {
+                    x: area.x,
+                    y: area.y + idx as u16,
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        plugin_detail_description_lines(&self.description, width)
+            .len()
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
+}
+
+fn plugin_detail_description_lines(description: &str, width: u16) -> Vec<Line<'static>> {
+    let width = width.max(1) as usize;
+    let mut lines = textwrap::wrap(description, width)
+        .into_iter()
+        .map(|line| line.into_owned())
+        .collect::<Vec<_>>();
+
+    if lines.len() > PLUGIN_DETAIL_DESCRIPTION_MAX_LINES {
+        lines.truncate(PLUGIN_DETAIL_DESCRIPTION_MAX_LINES);
+        if let Some(last_line) = lines.last_mut() {
+            *last_line = line_with_ascii_ellipsis(last_line, width);
+        }
+    }
+
+    lines
+        .into_iter()
+        .map(|line| Line::from(line.dim()))
+        .collect()
+}
+
+fn line_with_ascii_ellipsis(line: &str, width: usize) -> String {
+    let suffix_width = 3.min(width);
+    let suffix = ".".repeat(suffix_width);
+    let limit = width.saturating_sub(suffix_width);
+    let mut truncated = String::new();
+    let mut used_width = 0;
+
+    for ch in line.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used_width + ch_width > limit {
+            break;
+        }
+        truncated.push(ch);
+        used_width += ch_width;
+    }
+
+    while truncated.ends_with(' ') {
+        truncated.pop();
+    }
+    truncated.push_str(&suffix);
+    truncated
 }
 
 #[derive(Debug, Clone, Default)]
@@ -858,7 +936,7 @@ impl ChatWidget {
             });
         }
         if let Some(description) = plugin_detail_description(plugin) {
-            header.push(Line::from(description.dim()));
+            header.push(PluginDetailDescription { description });
         }
 
         let cwd = self.config.cwd.to_path_buf();

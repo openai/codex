@@ -6,7 +6,11 @@ expression: popup
   Figma · Can be installed · ChatGPT Marketplace
   Data shared with this app is subject to the app's terms of service and privacy policy. Learn
   more.
-  Turn Figma files into implementation context.
+  Turn Figma files into implementation context for dense product surfaces, including component
+  inventory, token extraction, interaction notes, responsive layout observations, accessibility
+  reminders, copy review, handoff risks, migration notes, and follow-up prompts for engineers who
+  need enough detail to move quickly without rereading every frame in the file. It also summarizes
+  component variants, naming drift, spacing anomalies, unanswered design questions, suggested...
 
 › 1. Back to plugins  Return to the plugin list.
   2. Install plugin   Install this plugin now.

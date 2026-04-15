@@ -188,7 +188,9 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
         Ok(PluginReadResponse {
             plugin: plugins_test_detail(
                 summary,
-                Some("Turn Figma files into implementation context."),
+                Some(
+                    "Turn Figma files into implementation context for dense product surfaces, including component inventory, token extraction, interaction notes, responsive layout observations, accessibility reminders, copy review, handoff risks, migration notes, and follow-up prompts for engineers who need enough detail to move quickly without rereading every frame in the file. It also summarizes component variants, naming drift, spacing anomalies, unanswered design questions, suggested acceptance checks, and the practical constraints that matter when translating a polished mockup into production UI.",
+                ),
                 &["design-review", "extract-copy"],
                 &[("Figma", true), ("Slack", false)],
                 &["figma-mcp", "docs-mcp"],
