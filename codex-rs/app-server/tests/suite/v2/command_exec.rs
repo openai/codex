@@ -411,29 +411,14 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
         })
         .await?;
 
-    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
-    let mut stdout = String::new();
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let delta = timeout(remaining, read_command_exec_delta(&mut mcp))
-            .await
-            .with_context(|| {
-                format!(
-                    "timed out waiting for capped stdout in command/exec output for {process_id}; collected {stdout:?}"
-                )
-            })??;
-        assert_eq!(delta.process_id, process_id.as_str());
-        if delta.stream != CommandExecOutputStream::Stdout {
-            continue;
-        }
-
-        let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
-        stdout.push_str(&delta_text);
-        if delta.cap_reached {
-            break;
-        }
-    }
-    assert_eq!(stdout, "abcde");
+    let output = collect_command_exec_output_until(
+        CommandExecDeltaReader::Mcp(&mut mcp),
+        process_id.as_str(),
+        "capped stdout",
+        |_output, delta| delta.stream == CommandExecOutputStream::Stdout && delta.cap_reached,
+    )
+    .await?;
+    assert_eq!(output.stdout, "abcde");
     let terminate_request_id = mcp
         .send_command_exec_terminate_request(CommandExecTerminateParams {
             process_id: process_id.clone(),
@@ -489,21 +474,13 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
         })
         .await?;
 
-    let (stdout, stderr) = read_command_exec_outputs_until_contains(
+    wait_for_command_exec_outputs_contains(
         &mut mcp,
         process_id.as_str(),
         "out-start\n",
         "err-start\n",
     )
     .await?;
-    assert!(
-        stdout.contains("out-start\n"),
-        "expected stdout startup output, got {stdout:?}"
-    );
-    assert!(
-        stderr.contains("err-start\n"),
-        "expected stderr startup output, got {stderr:?}"
-    );
 
     let write_request_id = mcp
         .send_command_exec_write_request(CommandExecWriteParams {
@@ -517,21 +494,13 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
         .await?;
     assert_eq!(write_response.result, serde_json::json!({}));
 
-    let (stdout, stderr) = read_command_exec_outputs_until_contains(
+    wait_for_command_exec_outputs_contains(
         &mut mcp,
         process_id.as_str(),
         "out:hello\n",
         "err:hello\n",
     )
     .await?;
-    assert!(
-        stdout.contains("out:hello\n"),
-        "expected stdout echo output, got {stdout:?}"
-    );
-    assert!(
-        stderr.contains("err:hello\n"),
-        "expected stderr echo output, got {stderr:?}"
-    );
 
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
@@ -580,17 +549,13 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
         })
         .await?;
 
-    let started_text = read_command_exec_output_until_contains(
+    wait_for_command_exec_output_contains(
         &mut mcp,
         process_id.as_str(),
         CommandExecOutputStream::Stdout,
         "tty\n",
     )
     .await?;
-    assert!(
-        started_text.contains("tty\n"),
-        "expected TTY startup output, got {started_text:?}"
-    );
 
     let write_request_id = mcp
         .send_command_exec_write_request(CommandExecWriteParams {
@@ -604,17 +569,13 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
         .await?;
     assert_eq!(write_response.result, serde_json::json!({}));
 
-    let echoed_text = read_command_exec_output_until_contains(
+    wait_for_command_exec_output_contains(
         &mut mcp,
         process_id.as_str(),
         CommandExecOutputStream::Stdout,
         "echo:world\n",
     )
     .await?;
-    assert!(
-        echoed_text.contains("echo:world\n"),
-        "expected TTY echo output, got {echoed_text:?}"
-    );
 
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
@@ -661,17 +622,13 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
         })
         .await?;
 
-    let started_text = read_command_exec_output_until_contains(
+    wait_for_command_exec_output_contains(
         &mut mcp,
         process_id.as_str(),
         CommandExecOutputStream::Stdout,
         "start:31 101\n",
     )
     .await?;
-    assert!(
-        started_text.contains("start:31 101\n"),
-        "unexpected initial size output: {started_text:?}"
-    );
 
     let resize_request_id = mcp
         .send_command_exec_resize_request(CommandExecResizeParams {
@@ -699,17 +656,13 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
         .await?;
     assert_eq!(write_response.result, serde_json::json!({}));
 
-    let resized_text = read_command_exec_output_until_contains(
+    wait_for_command_exec_output_contains(
         &mut mcp,
         process_id.as_str(),
         CommandExecOutputStream::Stdout,
         "after:45 132\n",
     )
     .await?;
-    assert!(
-        resized_text.contains("after:45 132\n"),
-        "unexpected resized output: {resized_text:?}"
-    );
 
     let response = mcp
         .read_stream_until_response_message(RequestId::Integer(command_request_id))
@@ -762,28 +715,13 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     )
     .await?;
 
-    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
-    let mut stdout = String::new();
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let delta = timeout(remaining, read_command_exec_delta_ws(&mut ws1))
-            .await
-            .with_context(|| {
-                format!(
-                    "timed out waiting for websocket command/exec ready output; collected {stdout:?}"
-                )
-            })??;
-        assert_eq!(delta.process_id, "shared-process");
-        if delta.stream != CommandExecOutputStream::Stdout {
-            continue;
-        }
-
-        let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
-        stdout.push_str(&delta_text.replace('\r', ""));
-        if stdout.contains("ready\n") {
-            break;
-        }
-    }
+    collect_command_exec_output_until(
+        CommandExecDeltaReader::Websocket(&mut ws1),
+        "shared-process",
+        "websocket ready output",
+        |output, _delta| output.stdout.contains("ready\n"),
+    )
+    .await?;
     wait_for_process_marker(&marker, /*should_exist*/ true).await?;
 
     send_request(
@@ -831,65 +769,98 @@ async fn read_command_exec_delta(
     decode_delta_notification(notification)
 }
 
-async fn read_command_exec_output_until_contains(
+async fn wait_for_command_exec_output_contains(
     mcp: &mut McpProcess,
     process_id: &str,
     stream: CommandExecOutputStream,
     expected: &str,
-) -> Result<String> {
-    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
-    let mut collected = String::new();
-
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let delta = timeout(remaining, read_command_exec_delta(mcp))
-            .await
-            .with_context(|| {
-                format!(
-                    "timed out waiting for {expected:?} in command/exec output for {process_id}; collected {collected:?}"
-                )
-            })??;
-        assert_eq!(delta.process_id, process_id);
-        if delta.stream != stream {
-            continue;
-        }
-
-        let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
-        collected.push_str(&delta_text.replace('\r', ""));
-        if collected.contains(expected) {
-            return Ok(collected);
-        }
-    }
+) -> Result<()> {
+    let stream_name = match stream {
+        CommandExecOutputStream::Stdout => "stdout",
+        CommandExecOutputStream::Stderr => "stderr",
+    };
+    collect_command_exec_output_until(
+        CommandExecDeltaReader::Mcp(mcp),
+        process_id,
+        format!("{stream_name} containing {expected:?}"),
+        |output, _delta| match stream {
+            CommandExecOutputStream::Stdout => output.stdout.contains(expected),
+            CommandExecOutputStream::Stderr => output.stderr.contains(expected),
+        },
+    )
+    .await?;
+    Ok(())
 }
 
-async fn read_command_exec_outputs_until_contains(
+async fn wait_for_command_exec_outputs_contains(
     mcp: &mut McpProcess,
     process_id: &str,
     stdout_expected: &str,
     stderr_expected: &str,
-) -> Result<(String, String)> {
+) -> Result<()> {
+    collect_command_exec_output_until(
+        CommandExecDeltaReader::Mcp(mcp),
+        process_id,
+        format!("stdout containing {stdout_expected:?} and stderr containing {stderr_expected:?}"),
+        |output, _delta| {
+            output.stdout.contains(stdout_expected) && output.stderr.contains(stderr_expected)
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+enum CommandExecDeltaReader<'a> {
+    Mcp(&'a mut McpProcess),
+    Websocket(&'a mut super::connection_handling_websocket::WsClient),
+}
+
+#[derive(Default)]
+struct CollectedCommandExecOutput {
+    stdout: String,
+    stderr: String,
+}
+
+async fn collect_command_exec_output_until(
+    mut reader: CommandExecDeltaReader<'_>,
+    process_id: &str,
+    waiting_for: impl Into<String>,
+    mut should_stop: impl FnMut(
+        &CollectedCommandExecOutput,
+        &CommandExecOutputDeltaNotification,
+    ) -> bool,
+) -> Result<CollectedCommandExecOutput> {
+    let waiting_for = waiting_for.into();
     let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
-    let mut stdout = String::new();
-    let mut stderr = String::new();
+    let mut output = CollectedCommandExecOutput::default();
 
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let delta = timeout(remaining, read_command_exec_delta(mcp))
-            .await
-            .with_context(|| {
-                format!(
-                    "timed out waiting for stdout {stdout_expected:?} and stderr {stderr_expected:?} in command/exec output for {process_id}; collected stdout={stdout:?}, stderr={stderr:?}"
-                )
-            })??;
+        let delta = timeout(remaining, async {
+            match &mut reader {
+                CommandExecDeltaReader::Mcp(mcp) => read_command_exec_delta(mcp).await,
+                CommandExecDeltaReader::Websocket(stream) => {
+                    read_command_exec_delta_ws(stream).await
+                }
+            }
+        })
+        .await
+        .with_context(|| {
+            format!(
+                "timed out waiting for {waiting_for} in command/exec output for {process_id}; collected stdout={:?}, stderr={:?}",
+                output.stdout, output.stderr
+            )
+        })??;
         assert_eq!(delta.process_id, process_id);
 
         let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
+        let delta_text = delta_text.replace('\r', "");
         match delta.stream {
-            CommandExecOutputStream::Stdout => stdout.push_str(&delta_text.replace('\r', "")),
-            CommandExecOutputStream::Stderr => stderr.push_str(&delta_text.replace('\r', "")),
+            CommandExecOutputStream::Stdout => output.stdout.push_str(&delta_text),
+            CommandExecOutputStream::Stderr => output.stderr.push_str(&delta_text),
         }
-        if stdout.contains(stdout_expected) && stderr.contains(stderr_expected) {
-            return Ok((stdout, stderr));
+        if should_stop(&output, &delta) {
+            return Ok(output);
         }
     }
 }
