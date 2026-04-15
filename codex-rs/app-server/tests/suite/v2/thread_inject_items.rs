@@ -42,6 +42,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history() -> Resu
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -158,6 +159,7 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

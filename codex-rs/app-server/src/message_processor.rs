@@ -36,6 +36,10 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::EnvironmentListParams;
+use codex_app_server_protocol::EnvironmentListResponse;
+use codex_app_server_protocol::EnvironmentRegisterParams;
+use codex_app_server_protocol::EnvironmentRegisterResponse;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
@@ -64,7 +68,9 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_exec_server::EnvironmentConfig;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::RegisteredEnvironment;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
@@ -166,6 +172,7 @@ pub(crate) struct MessageProcessor {
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
+    environment_manager: Arc<EnvironmentManager>,
     auth_manager: Arc<AuthManager>,
     analytics_events_client: AnalyticsEventsClient,
     fs_watch_manager: FsWatchManager,
@@ -277,7 +284,7 @@ impl MessageProcessor {
                     .features
                     .enabled(Feature::DefaultModeRequestUserInput),
             },
-            environment_manager,
+            environment_manager.clone(),
             Some(analytics_events_client.clone()),
         ));
         thread_manager
@@ -325,6 +332,7 @@ impl MessageProcessor {
             config_api,
             external_agent_config_api,
             fs_api,
+            environment_manager,
             auth_manager,
             analytics_events_client,
             fs_watch_manager,
@@ -833,6 +841,26 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::EnvironmentRegister { request_id, params } => {
+                self.handle_environment_register(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::EnvironmentList { request_id, params } => {
+                self.handle_environment_list(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
             ClientRequest::ExperimentalFeatureEnablementSet { request_id, params } => {
                 self.handle_experimental_feature_enablement_set(
                     ConnectionRequestId {
@@ -1136,6 +1164,70 @@ impl MessageProcessor {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
+    }
+
+    async fn handle_environment_register(
+        &self,
+        request_id: ConnectionRequestId,
+        params: EnvironmentRegisterParams,
+    ) {
+        match self
+            .environment_manager
+            .register_environment(
+                params.environment_id,
+                EnvironmentConfig {
+                    exec_server_url: params.exec_server_url,
+                },
+            )
+            .await
+        {
+            Ok(()) => {
+                self.outgoing
+                    .send_response(request_id, EnvironmentRegisterResponse {})
+                    .await
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: err.to_string(),
+                            data: None,
+                        },
+                    )
+                    .await
+            }
+        }
+    }
+
+    async fn handle_environment_list(
+        &self,
+        request_id: ConnectionRequestId,
+        params: EnvironmentListParams,
+    ) {
+        let (data, next_cursor) = self
+            .environment_manager
+            .list_environments(params.cursor.as_deref(), params.limit)
+            .await;
+        let response = EnvironmentListResponse {
+            data: data
+                .into_iter()
+                .map(
+                    |RegisteredEnvironment {
+                         environment_id,
+                         config,
+                     }| {
+                        codex_app_server_protocol::EnvironmentListEntry {
+                            environment_id,
+                            exec_server_url: config.exec_server_url,
+                        }
+                    },
+                )
+                .collect(),
+            next_cursor,
+        };
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn handle_fs_read_file(&self, request_id: ConnectionRequestId, params: FsReadFileParams) {

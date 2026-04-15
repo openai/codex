@@ -2279,6 +2279,53 @@ pub struct FeedbackUploadResponse {
     pub thread_id: String,
 }
 
+/// Register or replace a named execution environment.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentRegisterParams {
+    /// Logical environment identifier used by thread and fs APIs.
+    pub environment_id: String,
+    /// Optional exec-server websocket URL; omit for local execution.
+    #[ts(optional = nullable)]
+    pub exec_server_url: Option<String>,
+}
+
+/// Successful response for `environment/register`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentRegisterResponse {}
+
+/// List named execution environments registered with the app-server.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentListParams {
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentListEntry {
+    pub environment_id: String,
+    #[ts(optional = nullable)]
+    pub exec_server_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentListResponse {
+    pub data: Vec<EnvironmentListEntry>,
+    #[ts(optional = nullable)]
+    pub next_cursor: Option<String>,
+}
+
 /// Read a file from the host filesystem.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2701,6 +2748,8 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -7717,6 +7766,7 @@ mod tests {
                         request_permissions: true,
                         mcp_elicitations: false,
                     }),
+                    environment_id: None,
                     ..Default::default()
                 },
             },
@@ -8688,6 +8738,16 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn thread_start_params_round_trip_environment_id() {
+        let params: ThreadStartParams =
+            serde_json::from_value(json!({ "environmentId": "dev" })).expect("deserialize params");
+        assert_eq!(params.environment_id.as_deref(), Some("dev"));
+
+        let serialized = serde_json::to_value(&params).expect("serialize params");
+        assert_eq!(serialized.get("environmentId"), Some(&json!("dev")));
     }
 
     #[test]

@@ -720,7 +720,8 @@ async fn trigger_zsh_fork_multi_cmd_approval(
 
             let thread_response = client.thread_start(ThreadStartParams {
                 dynamic_tools: dynamic_tools.clone(),
-                ..Default::default()
+                environment_id: None,
+            ..Default::default()
             })?;
             println!("< thread/start response: {thread_response:?}");
 
@@ -958,6 +959,7 @@ async fn send_message_v2_with_policies(
 
             let thread_response = client.thread_start(ThreadStartParams {
                 dynamic_tools: policies.dynamic_tools.clone(),
+                environment_id: None,
                 ..Default::default()
             })?;
             println!("< thread/start response: {thread_response:?}");
@@ -997,6 +999,7 @@ async fn send_follow_up_v2(
 
         let thread_response = client.thread_start(ThreadStartParams {
             dynamic_tools: dynamic_tools.clone(),
+            environment_id: None,
             ..Default::default()
         })?;
         println!("< thread/start response: {thread_response:?}");
@@ -1238,6 +1241,7 @@ fn live_elicitation_timeout_pause(
 
     let thread_response = client.thread_start(ThreadStartParams {
         model: Some(model),
+        environment_id: None,
         ..Default::default()
     })?;
     println!("< thread/start response: {thread_response:?}");

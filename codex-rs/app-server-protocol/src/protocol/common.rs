@@ -352,6 +352,14 @@ client_request_definitions! {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
     },
+    EnvironmentRegister => "environment/register" {
+        params: v2::EnvironmentRegisterParams,
+        response: v2::EnvironmentRegisterResponse,
+    },
+    EnvironmentList => "environment/list" {
+        params: v2::EnvironmentListParams,
+        response: v2::EnvironmentListResponse,
+    },
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
         response: v2::FsReadFileResponse,

@@ -110,6 +110,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -177,6 +178,7 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -275,6 +277,7 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
             )])),
             base_instructions: Some(String::new()),
             developer_instructions: Some(String::new()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -353,6 +356,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -445,6 +449,7 @@ async fn turn_start_does_not_track_turn_event_analytics_without_feature() -> Res
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -510,6 +515,7 @@ async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -569,6 +575,7 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -654,6 +661,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -788,6 +796,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -875,6 +884,7 @@ async fn turn_start_uses_thread_feature_overrides_for_collaboration_mode_instruc
                 "features.default_mode_request_user_input".to_string(),
                 json!(true),
             )])),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -955,6 +965,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("exp-codex-personality".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1036,6 +1047,7 @@ async fn turn_start_change_personality_mid_thread_v2() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("exp-codex-personality".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1162,6 +1174,7 @@ async fn turn_start_uses_migrated_pragmatic_personality_without_override_v2() ->
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1231,6 +1244,7 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1317,6 +1331,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1459,6 +1474,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1612,6 +1628,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1764,6 +1781,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1982,6 +2000,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -2196,6 +2215,7 @@ config_file = "./custom-role.toml"
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -2340,6 +2360,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -2521,6 +2542,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -2666,6 +2688,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -2799,6 +2822,7 @@ async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> R
     let thread_request = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

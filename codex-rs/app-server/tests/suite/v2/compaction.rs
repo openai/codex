@@ -322,6 +322,7 @@ async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
     let thread_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
