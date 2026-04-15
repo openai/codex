@@ -140,6 +140,10 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
         .with_model("gpt-5.1")
         .with_home(Arc::clone(&codex_home))
         .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::UnavailableDummyTools)
+                .expect("unavailable dummy tools should be enabled for this test");
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -220,7 +224,12 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
     )
     .await;
 
-    let mut resume_builder = test_codex().with_model("gpt-5.1");
+    let mut resume_builder = test_codex().with_model("gpt-5.1").with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnavailableDummyTools)
+            .expect("unavailable dummy tools should be enabled for this test");
+    });
     let test = resume_builder
         .resume(&server, codex_home, rollout_path)
         .await?;
