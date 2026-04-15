@@ -64,7 +64,7 @@ fn maybe_run_exec_server_from_test_binary() {
             std::process::exit(1);
         }
     };
-    let runtime_paths = match ExecServerRuntimePaths::new(current_exe.clone()) {
+    let runtime_paths = match ExecServerRuntimePaths::new(current_exe) {
         Ok(runtime_paths) => runtime_paths,
         Err(error) => {
             eprintln!("failed to configure exec-server runtime paths: {error}");
