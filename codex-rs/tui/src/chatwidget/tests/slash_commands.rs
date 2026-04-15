@@ -534,6 +534,18 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 }
 
 #[tokio::test]
+async fn slash_memories_opens_memory_menu() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+
+    chat.dispatch_command(SlashCommand::Memories);
+
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Use memories"));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_memory_update_reports_stubbed_feature() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

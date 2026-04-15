@@ -228,6 +228,9 @@ impl ChatWidget {
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
             }
+            SlashCommand::Memories => {
+                self.open_memories_popup();
+            }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
             }
