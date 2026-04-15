@@ -2683,6 +2683,7 @@ dependencies = [
  "axum",
  "codex-client",
  "codex-config",
+ "codex-exec-server",
  "codex-keyring-store",
  "codex-protocol",
  "codex-utils-cargo-bin",
