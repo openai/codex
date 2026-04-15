@@ -8079,7 +8079,7 @@ async fn try_run_sampling_request(
                     Some(call_id) => call_id,
                     None => active_call_id.clone(),
                 };
-                if let Some(event) = consumer.consume_diff(call_id, &delta) {
+                if let Some(event) = consumer.consume_diff(turn_context.as_ref(), call_id, &delta) {
                     sess.send_event(&turn_context, event).await;
                 }
             }
