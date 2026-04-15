@@ -14,6 +14,7 @@ pub fn create_shell_command_sse_response(
         "command": command_str,
         "workdir": workdir.map(|w| w.to_string_lossy()),
         "timeout_ms": timeout_ms,
+        "login": false,
     }))?;
     let response_id = format!("resp-{call_id}");
     Ok(responses::sse(vec![

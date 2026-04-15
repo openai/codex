@@ -17,6 +17,7 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
+use tokio::time::sleep;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -25,6 +26,23 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+async fn wait_for_received_requests(server: &MockServer, expected: usize) -> Result<()> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let received = server
+                .received_requests()
+                .await
+                .map_or(0, |requests| requests.len());
+            if received >= expected {
+                break;
+            }
+            sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await?;
+    Ok(())
+}
 
 fn create_config_toml_custom_provider(
     codex_home: &Path,
@@ -373,6 +391,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
     )
     .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    wait_for_received_requests(&server, 1).await?;
 
     let request_id = mcp
         .send_get_auth_status_request(GetAuthStatusParams {
@@ -440,6 +459,7 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
     )
     .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    wait_for_received_requests(&server, 1).await?;
 
     let failed_request_id = mcp
         .send_get_auth_status_request(GetAuthStatusParams {
