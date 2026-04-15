@@ -61,6 +61,13 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+[features]
+connectors = false
+"#,
+    )?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -876,8 +883,13 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
         plugin_display_names: Vec::new(),
     }];
     let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle) =
-        start_apps_server_with_delays(connectors, tools, Duration::ZERO, Duration::ZERO).await?;
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        connectors,
+        tools,
+        Duration::ZERO,
+        Duration::from_millis(150),
+    )
+    .await?;
 
     let codex_home = TempDir::new()?;
     write_connectors_config(codex_home.path(), &server_url)?;
@@ -922,6 +934,7 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,
     )?;
+    server_control.set_tools(Vec::new());
 
     let refetch_request = mcp
         .send_apps_list_request(AppsListParams {
@@ -937,6 +950,8 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     )
     .await??;
     assert!(refetch_error.error.message.contains("failed to"));
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
 
     let cached_request = mcp
         .send_apps_list_request(AppsListParams {
