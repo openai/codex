@@ -46,6 +46,9 @@ use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailability
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
@@ -1129,22 +1132,46 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 pub struct AdditionalFileSystemPermissions {
     pub read: Option<Vec<AbsolutePathBuf>>,
     pub write: Option<Vec<AbsolutePathBuf>>,
+    pub entries: Option<Vec<CoreFileSystemSandboxEntry>>,
 }
 
 impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
     fn from(value: CoreFileSystemPermissions) -> Self {
+        let entries = value
+            .entries
+            .iter()
+            .any(|entry| {
+                entry.access == CoreFileSystemAccessMode::None
+                    || !matches!(entry.path, CoreFileSystemPath::Path { .. })
+            })
+            .then_some(value.entries.clone());
+        let read = value
+            .explicit_path_entries()
+            .filter_map(|(path, access)| {
+                (access == CoreFileSystemAccessMode::Read).then_some(path.clone())
+            })
+            .collect::<Vec<_>>();
+        let write = value
+            .explicit_path_entries()
+            .filter_map(|(path, access)| {
+                (access == CoreFileSystemAccessMode::Write).then_some(path.clone())
+            })
+            .collect::<Vec<_>>();
         Self {
-            read: value.read,
-            write: value.write,
+            read: (!read.is_empty()).then_some(read),
+            write: (!write.is_empty()).then_some(write),
+            entries,
         }
     }
 }
 
 impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
     fn from(value: AdditionalFileSystemPermissions) -> Self {
-        Self {
-            read: value.read,
-            write: value.write,
+        match value.entries {
+            Some(entries) if !entries.is_empty() => CoreFileSystemPermissions { entries },
+            Some(_) | None => {
+                CoreFileSystemPermissions::from_read_write_roots(value.read, value.write)
+            }
         }
     }
 }
@@ -6727,6 +6754,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    entries: None,
                 }),
             }
         );
@@ -6737,16 +6765,16 @@ mod tests {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(CoreFileSystemPermissions {
-                    read: Some(vec![
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
-                    write: Some(vec![
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
-                }),
+                )),
             }
         );
     }
@@ -6820,6 +6848,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    entries: None,
                 }),
             }
         );
@@ -6830,17 +6859,99 @@ mod tests {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(CoreFileSystemPermissions {
-                    read: Some(vec![
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
-                    write: Some(vec![
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
-                }),
+                )),
             }
+        );
+    }
+
+    #[test]
+    fn additional_file_system_permissions_empty_entries_fall_back_to_read_write_roots() {
+        let read_only_path = if cfg!(windows) {
+            r"C:\tmp\read-only"
+        } else {
+            "/tmp/read-only"
+        };
+        let read_write_path = if cfg!(windows) {
+            r"C:\tmp\read-write"
+        } else {
+            "/tmp/read-write"
+        };
+
+        assert_eq!(
+            CoreFileSystemPermissions::from(AdditionalFileSystemPermissions {
+                read: Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                        .expect("path must be absolute"),
+                ]),
+                write: Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                        .expect("path must be absolute"),
+                ]),
+                entries: Some(Vec::new()),
+            }),
+            CoreFileSystemPermissions::from_read_write_roots(
+                Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                        .expect("path must be absolute"),
+                ]),
+                Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                        .expect("path must be absolute"),
+                ]),
+            )
+        );
+    }
+
+    #[test]
+    fn additional_permission_profile_preserves_canonical_file_system_entries() {
+        let deny_path = if cfg!(windows) {
+            r"C:\tmp\secret.txt"
+        } else {
+            "/tmp/secret.txt"
+        };
+        let file_system = CoreFileSystemPermissions {
+            entries: vec![
+                CoreFileSystemSandboxEntry {
+                    path: CoreFileSystemPath::Special {
+                        value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                    },
+                    access: CoreFileSystemAccessMode::Write,
+                },
+                CoreFileSystemSandboxEntry {
+                    path: CoreFileSystemPath::Path {
+                        path: AbsolutePathBuf::try_from(PathBuf::from(deny_path))
+                            .expect("path must be absolute"),
+                    },
+                    access: CoreFileSystemAccessMode::None,
+                },
+            ],
+        };
+        let permissions = CorePermissionProfile {
+            file_system: Some(file_system.clone()),
+            ..Default::default()
+        };
+
+        let additional_permissions = AdditionalPermissionProfile::from(permissions.clone());
+        assert_eq!(
+            additional_permissions.file_system,
+            Some(AdditionalFileSystemPermissions {
+                read: None,
+                write: None,
+                entries: Some(file_system.entries),
+            })
+        );
+        assert_eq!(
+            CorePermissionProfile::from(additional_permissions),
+            permissions
         );
     }
 
