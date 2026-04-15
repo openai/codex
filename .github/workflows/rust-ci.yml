@@ -155,6 +155,7 @@ jobs:
           run_remote_test "//codex-rs/core:core-all-test" "suite::remote_env::remote_test_env_can_connect_and_use_filesystem"
           run_remote_test "//codex-rs/core:core-all-test" "suite::apply_patch_cli::apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias"
         env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           RUST_BACKTRACE: 1
       - name: Tear down remote test env
         if: always()
