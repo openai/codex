@@ -81,7 +81,7 @@ pub enum ClientRequestSerializationScope {
 }
 
 macro_rules! serialization_scope_expr {
-    ($actual_params:ident) => {
+    ($actual_params:ident, None) => {
         None
     };
     ($actual_params:ident, global($key:literal)) => {
@@ -145,7 +145,7 @@ macro_rules! client_request_definitions {
             $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
                 $(inspect_params: $inspect_params:tt,)?
-                $(serialization: $serialization:ident ( $($serialization_args:tt)* ),)?
+                serialization: $serialization:ident $( ( $($serialization_args:tt)* ) )?,
                 response: $response:ty,
             }
         ),* $(,)?
@@ -191,7 +191,7 @@ macro_rules! client_request_definitions {
                         Self::$variant { params, .. } => {
                             let _ = params;
                             serialization_scope_expr!(
-                                params $(, $serialization($($serialization_args)*))?
+                                params, $serialization $( ( $($serialization_args)* ) )?
                             )
                         }
                     )*
@@ -309,6 +309,7 @@ macro_rules! client_request_definitions {
 client_request_definitions! {
     Initialize {
         params: v1::InitializeParams,
+        serialization: None,
         response: v1::InitializeResponse,
     },
 
@@ -318,6 +319,7 @@ client_request_definitions! {
     ThreadStart => "thread/start" {
         params: v2::ThreadStartParams,
         inspect_params: true,
+        serialization: None,
         response: v2::ThreadStartResponse,
     },
     ThreadResume => "thread/resume" {
@@ -374,6 +376,7 @@ client_request_definitions! {
     #[experimental("thread/memoryMode/set")]
     ThreadMemoryModeSet => "thread/memoryMode/set" {
         params: v2::ThreadMemoryModeSetParams,
+        serialization: thread_id(params.thread_id),
         response: v2::ThreadMemoryModeSetResponse,
     },
     ThreadUnarchive => "thread/unarchive" {
@@ -404,10 +407,12 @@ client_request_definitions! {
     },
     ThreadList => "thread/list" {
         params: v2::ThreadListParams,
+        serialization: None,
         response: v2::ThreadListResponse,
     },
     ThreadLoadedList => "thread/loaded/list" {
         params: v2::ThreadLoadedListParams,
+        serialization: None,
         response: v2::ThreadLoadedListResponse,
     },
     ThreadRead => "thread/read" {
@@ -418,54 +423,69 @@ client_request_definitions! {
     /// Append raw Responses API items to the thread history without starting a user turn.
     ThreadInjectItems => "thread/inject_items" {
         params: v2::ThreadInjectItemsParams,
+        serialization: thread_id(params.thread_id),
         response: v2::ThreadInjectItemsResponse,
     },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
+        serialization: global("config"),
         response: v2::SkillsListResponse,
     },
     MarketplaceAdd => "marketplace/add" {
         params: v2::MarketplaceAddParams,
+        serialization: global("config"),
         response: v2::MarketplaceAddResponse,
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
+        serialization: global("config"),
         response: v2::PluginListResponse,
     },
     PluginRead => "plugin/read" {
         params: v2::PluginReadParams,
+        serialization: global("config"),
         response: v2::PluginReadResponse,
     },
     AppsList => "app/list" {
         params: v2::AppsListParams,
+        serialization: None,
         response: v2::AppsListResponse,
     },
+    // File system requests are intentionally concurrent. Desktop already treats local
+    // file system operations as concurrent, and app-server remote fs mirrors that model.
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
+        serialization: None,
         response: v2::FsReadFileResponse,
     },
     FsWriteFile => "fs/writeFile" {
         params: v2::FsWriteFileParams,
+        serialization: None,
         response: v2::FsWriteFileResponse,
     },
     FsCreateDirectory => "fs/createDirectory" {
         params: v2::FsCreateDirectoryParams,
+        serialization: None,
         response: v2::FsCreateDirectoryResponse,
     },
     FsGetMetadata => "fs/getMetadata" {
         params: v2::FsGetMetadataParams,
+        serialization: None,
         response: v2::FsGetMetadataResponse,
     },
     FsReadDirectory => "fs/readDirectory" {
         params: v2::FsReadDirectoryParams,
+        serialization: None,
         response: v2::FsReadDirectoryResponse,
     },
     FsRemove => "fs/remove" {
         params: v2::FsRemoveParams,
+        serialization: None,
         response: v2::FsRemoveResponse,
     },
     FsCopy => "fs/copy" {
         params: v2::FsCopyParams,
+        serialization: None,
         response: v2::FsCopyResponse,
     },
     FsWatch => "fs/watch" {
@@ -485,12 +505,12 @@ client_request_definitions! {
     },
     PluginInstall => "plugin/install" {
         params: v2::PluginInstallParams,
-        serialization: global("plugins"),
+        serialization: global("config"),
         response: v2::PluginInstallResponse,
     },
     PluginUninstall => "plugin/uninstall" {
         params: v2::PluginUninstallParams,
-        serialization: global("plugins"),
+        serialization: global("config"),
         response: v2::PluginUninstallResponse,
     },
     TurnStart => "turn/start" {
@@ -537,6 +557,7 @@ client_request_definitions! {
     #[experimental("thread/realtime/listVoices")]
     ThreadRealtimeListVoices => "thread/realtime/listVoices" {
         params: v2::ThreadRealtimeListVoicesParams,
+        serialization: None,
         response: v2::ThreadRealtimeListVoicesResponse,
     },
     ReviewStart => "review/start" {
@@ -547,10 +568,12 @@ client_request_definitions! {
 
     ModelList => "model/list" {
         params: v2::ModelListParams,
+        serialization: None,
         response: v2::ModelListResponse,
     },
     ExperimentalFeatureList => "experimentalFeature/list" {
         params: v2::ExperimentalFeatureListParams,
+        serialization: global("config"),
         response: v2::ExperimentalFeatureListResponse,
     },
     ExperimentalFeatureEnablementSet => "experimentalFeature/enablement/set" {
@@ -562,12 +585,14 @@ client_request_definitions! {
     /// Lists collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {
         params: v2::CollaborationModeListParams,
+        serialization: None,
         response: v2::CollaborationModeListResponse,
     },
     #[experimental("mock/experimentalMethod")]
     /// Test-only method used to validate experimental gating.
     MockExperimentalMethod => "mock/experimentalMethod" {
         params: v2::MockExperimentalMethodParams,
+        serialization: None,
         response: v2::MockExperimentalMethodResponse,
     },
 
@@ -628,11 +653,13 @@ client_request_definitions! {
 
     GetAccountRateLimits => "account/rateLimits/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
         response: v2::GetAccountRateLimitsResponse,
     },
 
     FeedbackUpload => "feedback/upload" {
         params: v2::FeedbackUploadParams,
+        serialization: None,
         response: v2::FeedbackUploadResponse,
     },
 
@@ -668,11 +695,12 @@ client_request_definitions! {
     },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
         params: v2::ExternalAgentConfigDetectParams,
+        serialization: global("config"),
         response: v2::ExternalAgentConfigDetectResponse,
     },
     ExternalAgentConfigImport => "externalAgentConfig/import" {
         params: v2::ExternalAgentConfigImportParams,
-        serialization: global("external-agent-config-import"),
+        serialization: global("config"),
         response: v2::ExternalAgentConfigImportResponse,
     },
     ConfigValueWrite => "config/value/write" {
@@ -701,10 +729,12 @@ client_request_definitions! {
     /// DEPRECATED APIs below
     GetConversationSummary {
         params: v1::GetConversationSummaryParams,
+        serialization: None,
         response: v1::GetConversationSummaryResponse,
     },
     GitDiffToRemote {
         params: v1::GitDiffToRemoteParams,
+        serialization: None,
         response: v1::GitDiffToRemoteResponse,
     },
     /// DEPRECATED in favor of GetAccount
@@ -713,8 +743,11 @@ client_request_definitions! {
         serialization: global("account-auth"),
         response: v1::GetAuthStatusResponse,
     },
+    // Legacy fuzzy search cancellation is intentionally concurrent: clients reuse a
+    // cancellation token so a newer request can cancel an older in-flight search.
     FuzzyFileSearch {
         params: FuzzyFileSearchParams,
+        serialization: None,
         response: FuzzyFileSearchResponse,
     },
     #[experimental("fuzzyFileSearch/sessionStart")]
@@ -1324,7 +1357,7 @@ mod tests {
         };
         assert_eq!(
             plugin_install.serialization_scope(),
-            Some(ClientRequestSerializationScope::Global("plugins"))
+            Some(ClientRequestSerializationScope::Global("config"))
         );
 
         let plugin_uninstall = ClientRequest::PluginUninstall {
@@ -1336,7 +1369,7 @@ mod tests {
         };
         assert_eq!(
             plugin_uninstall.serialization_scope(),
-            Some(ClientRequestSerializationScope::Global("plugins"))
+            Some(ClientRequestSerializationScope::Global("config"))
         );
 
         let mcp_oauth = ClientRequest::McpServerOauthLogin {
