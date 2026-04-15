@@ -805,7 +805,9 @@ async fn handle_start_inner(
             if let Some(text) = maybe_routed_text {
                 debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
-                sess_for_routed_text.route_realtime_text_input(text).await;
+                sess_for_routed_text
+                    .route_realtime_text_input(wrap_realtime_delegation_input(&text))
+                    .await;
             }
             if !fanout_realtime_active.load(Ordering::Relaxed) {
                 break;
@@ -865,6 +867,20 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
     (!active_transcript.is_empty())
         .then_some(active_transcript)
         .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
+}
+
+fn wrap_realtime_delegation_input(input: &str) -> String {
+    format!(
+        "<realtime_delegation>\n  <input>{}</input>\n</realtime_delegation>",
+        escape_xml_text(input)
+    )
+}
+
+fn escape_xml_text(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {

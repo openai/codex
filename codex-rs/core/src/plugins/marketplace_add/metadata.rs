@@ -296,19 +296,11 @@ mod tests {
             r#"{"name":"debug","plugins":[]}"#,
         )
         .unwrap();
-        fs::write(
-            codex_home.path().join(CONFIG_TOML_FILE),
-            format!(
-                "[marketplaces.debug]\nsource_type = \"local\"\nsource = \"{}\"\n",
-                source_root.display()
-            ),
-        )
-        .unwrap();
-
         let source = MarketplaceSource::Local {
             path: source_root.clone(),
         };
         let install_metadata = MarketplaceInstallMetadata::from_source(&source, &[]);
+        record_added_marketplace_entry(codex_home.path(), "debug", &install_metadata).unwrap();
 
         let root = installed_marketplace_root_for_source(
             codex_home.path(),

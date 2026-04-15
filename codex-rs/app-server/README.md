@@ -41,8 +41,11 @@ Security note:
 - Non-loopback websocket listeners currently allow unauthenticated connections by default during rollout. If you expose one remotely, configure websocket auth explicitly now.
 - Supported auth modes are app-server flags:
   - `--ws-auth capability-token --ws-token-file /absolute/path`
+  - `--ws-auth capability-token --ws-token-sha256 HEX`
   - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path` for HMAC-signed JWT/JWS bearer tokens, with optional `--ws-issuer`, `--ws-audience`, `--ws-max-clock-skew-seconds`
 - Clients present the credential as `Authorization: Bearer <token>` during the websocket handshake. Auth is enforced before JSON-RPC `initialize`.
+- When starting `codex app-server` manually, prefer `--ws-token-file` over passing raw bearer tokens on the command line. Store a high-entropy token in a file readable only by your user, then have your client present that token in the websocket `Authorization` header.
+- `--ws-token-sha256` is intended for clients that keep the raw token in a separate local secret store and only need the server to know the SHA-256 verifier. The hash may appear in process listings, but it is not sufficient to authenticate; clients still need the original raw token. Only use this mode with randomly generated high-entropy tokens, not passwords or other guessable values.
 
 Tracing/log output:
 
@@ -141,6 +144,7 @@ Example with notification opt-out:
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
 - `thread/memoryMode/set` — experimental; set a thread’s persisted memory eligibility to `"enabled"` or `"disabled"` for either a loaded thread or a stored rollout; returns `{}` on success.
+- `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
@@ -196,8 +200,8 @@ Example with notification opt-out:
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `config/read` — fetch the effective config on disk after resolving config layering.
-- `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home).
-- `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home).
+- `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home), and plugin migration items may additionally include structured `details` grouping plugin ids under each detected marketplace name.
+- `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home) and any plugin `details` returned by detect.
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), pinned feature values (`featureRequirements`), `enforceResidency`, and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly`.
@@ -411,6 +415,13 @@ Experimental: use `thread/memoryMode/set` to change whether a thread remains eli
     "mode": "disabled"
 } }
 { "id": 26, "result": {} }
+```
+
+Experimental: use `memory/reset` to clear local memory artifacts and sqlite-backed memory stage data for the current Codex home. This preserves existing thread memory modes; use `thread/memoryMode/set` separately when a thread's future memory eligibility should change.
+
+```json
+{ "method": "memory/reset", "id": 27 }
+{ "id": 27, "result": {} }
 ```
 
 ### Example: Archive a thread

@@ -1,3 +1,4 @@
+use codex_protocol::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -129,6 +130,7 @@ pub enum CodeModeToolKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolDefinition {
     pub name: String,
+    pub tool_name: ToolName,
     pub description: String,
     pub kind: CodeModeToolKind,
     pub input_schema: Option<JsonValue>,
@@ -269,11 +271,15 @@ pub fn build_exec_tool_description(
         for tool in enabled_tools {
             let name = tool.name.as_str();
             let nested_description = render_code_mode_sample_for_definition(tool);
-            let next_namespace = namespace_descriptions
-                .get(name)
+            let namespace_description = tool
+                .tool_name
+                .namespace
+                .as_ref()
+                .and_then(|namespace| namespace_descriptions.get(namespace));
+            let next_namespace = namespace_description
                 .map(|namespace_description| namespace_description.name.as_str());
             if next_namespace != current_namespace {
-                if let Some(namespace_description) = namespace_descriptions.get(name) {
+                if let Some(namespace_description) = namespace_description {
                     let namespace_description_text = namespace_description.description.trim();
                     if !namespace_description_text.is_empty() {
                         nested_tool_sections.push(format!(
@@ -346,7 +352,7 @@ pub fn augment_tool_definition(mut definition: ToolDefinition) -> ToolDefinition
 
 pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata {
     EnabledToolMetadata {
-        tool_name: definition.name.clone(),
+        tool_name: definition.tool_name.clone(),
         global_name: normalize_code_mode_identifier(&definition.name),
         description: definition.description.clone(),
         kind: definition.kind,
@@ -355,7 +361,7 @@ pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EnabledToolMetadata {
-    pub tool_name: String,
+    pub tool_name: ToolName,
     pub global_name: String,
     pub description: String,
     pub kind: CodeModeToolKind,
@@ -706,6 +712,7 @@ mod tests {
     use super::build_exec_tool_description;
     use super::normalize_code_mode_identifier;
     use super::parse_exec_source;
+    use codex_protocol::ToolName;
     use pretty_assertions::assert_eq;
     use serde_json::Value as JsonValue;
     use serde_json::json;
@@ -770,6 +777,7 @@ mod tests {
     fn augment_tool_definition_appends_typed_declaration() {
         let definition = ToolDefinition {
             name: "hidden_dynamic_tool".to_string(),
+            tool_name: ToolName::plain("hidden_dynamic_tool"),
             description: "Test tool".to_string(),
             kind: CodeModeToolKind::Function,
             input_schema: Some(json!({
@@ -798,6 +806,7 @@ mod tests {
     fn augment_tool_definition_includes_property_descriptions_as_comments() {
         let definition = ToolDefinition {
             name: "weather_tool".to_string(),
+            tool_name: ToolName::plain("weather_tool"),
             description: "Weather tool".to_string(),
             kind: CodeModeToolKind::Function,
             input_schema: Some(json!({
@@ -846,6 +855,7 @@ mod tests {
         let description = build_exec_tool_description(
             &[ToolDefinition {
                 name: "foo".to_string(),
+                tool_name: ToolName::plain("foo"),
                 description: "bar".to_string(),
                 kind: CodeModeToolKind::Function,
                 input_schema: None,
@@ -870,26 +880,18 @@ bar"
 
     #[test]
     fn code_mode_only_description_groups_namespace_instructions_once() {
-        let namespace_descriptions = BTreeMap::from([
-            (
-                "mcp__sample__alpha".to_string(),
-                ToolNamespaceDescription {
-                    name: "mcp__sample".to_string(),
-                    description: "Shared namespace guidance.".to_string(),
-                },
-            ),
-            (
-                "mcp__sample__beta".to_string(),
-                ToolNamespaceDescription {
-                    name: "mcp__sample".to_string(),
-                    description: "Shared namespace guidance.".to_string(),
-                },
-            ),
-        ]);
+        let namespace_descriptions = BTreeMap::from([(
+            "mcp__sample__".to_string(),
+            ToolNamespaceDescription {
+                name: "mcp__sample".to_string(),
+                description: "Shared namespace guidance.".to_string(),
+            },
+        )]);
         let description = build_exec_tool_description(
             &[
                 ToolDefinition {
                     name: "mcp__sample__alpha".to_string(),
+                    tool_name: ToolName::namespaced("mcp__sample__", "alpha"),
                     description: "First tool".to_string(),
                     kind: CodeModeToolKind::Function,
                     input_schema: Some(json!({
@@ -905,6 +907,7 @@ bar"
                 },
                 ToolDefinition {
                     name: "mcp__sample__beta".to_string(),
+                    tool_name: ToolName::namespaced("mcp__sample__", "beta"),
                     description: "Second tool".to_string(),
                     kind: CodeModeToolKind::Function,
                     input_schema: Some(json!({
@@ -935,7 +938,7 @@ bar"
     #[test]
     fn code_mode_only_description_omits_empty_namespace_sections() {
         let namespace_descriptions = BTreeMap::from([(
-            "mcp__sample__alpha".to_string(),
+            "mcp__sample__".to_string(),
             ToolNamespaceDescription {
                 name: "mcp__sample".to_string(),
                 description: String::new(),
@@ -944,6 +947,7 @@ bar"
         let description = build_exec_tool_description(
             &[ToolDefinition {
                 name: "mcp__sample__alpha".to_string(),
+                tool_name: ToolName::namespaced("mcp__sample__", "alpha"),
                 description: "First tool".to_string(),
                 kind: CodeModeToolKind::Function,
                 input_schema: Some(json!({
@@ -969,6 +973,7 @@ bar"
     fn code_mode_only_description_renders_shared_mcp_types_once() {
         let first_tool = augment_tool_definition(ToolDefinition {
             name: "mcp__sample__alpha".to_string(),
+            tool_name: ToolName::namespaced("mcp__sample__", "alpha"),
             description: "First tool".to_string(),
             kind: CodeModeToolKind::Function,
             input_schema: Some(json!({
@@ -1002,6 +1007,7 @@ bar"
         });
         let second_tool = augment_tool_definition(ToolDefinition {
             name: "mcp__sample__beta".to_string(),
+            tool_name: ToolName::namespaced("mcp__sample__", "beta"),
             description: "Second tool".to_string(),
             kind: CodeModeToolKind::Function,
             input_schema: Some(json!({
@@ -1038,6 +1044,7 @@ bar"
             &[
                 ToolDefinition {
                     name: first_tool.name,
+                    tool_name: first_tool.tool_name,
                     description: "First tool".to_string(),
                     kind: first_tool.kind,
                     input_schema: first_tool.input_schema,
@@ -1045,6 +1052,7 @@ bar"
                 },
                 ToolDefinition {
                     name: second_tool.name,
+                    tool_name: second_tool.tool_name,
                     description: "Second tool".to_string(),
                     kind: second_tool.kind,
                     input_schema: second_tool.input_schema,
