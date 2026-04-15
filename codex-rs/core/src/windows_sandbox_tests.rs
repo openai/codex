@@ -155,9 +155,8 @@ fn resolve_windows_sandbox_private_desktop_prefers_profile_windows() {
 
 #[test]
 fn resolve_windows_sandbox_private_desktop_defaults_to_true() {
-    assert!(resolve_windows_sandbox_private_desktop(
-        &ConfigToml::default(),
-        &ConfigProfile::default()
+    assert!(default_windows_sandbox_private_desktop_for_environment(
+        /*is_windows*/ true, /*is_headless*/ false
     ));
 }
 
@@ -174,5 +173,19 @@ fn resolve_windows_sandbox_private_desktop_respects_explicit_cfg_value() {
     assert!(!resolve_windows_sandbox_private_desktop(
         &cfg,
         &ConfigProfile::default()
+    ));
+}
+
+#[test]
+fn resolve_windows_sandbox_private_desktop_defaults_to_false_for_headless_windows() {
+    assert!(!default_windows_sandbox_private_desktop_for_environment(
+        /*is_windows*/ true, /*is_headless*/ true
+    ));
+}
+
+#[test]
+fn resolve_windows_sandbox_private_desktop_non_windows_default_stays_true() {
+    assert!(default_windows_sandbox_private_desktop_for_environment(
+        /*is_windows*/ false, /*is_headless*/ true
     ));
 }

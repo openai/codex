@@ -10,6 +10,7 @@ use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_utils_path::env::is_headless_environment;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -85,7 +86,21 @@ pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml, profile: &Confi
                 .as_ref()
                 .and_then(|windows| windows.sandbox_private_desktop)
         })
-        .unwrap_or(true)
+        .unwrap_or_else(default_windows_sandbox_private_desktop)
+}
+
+fn default_windows_sandbox_private_desktop() -> bool {
+    default_windows_sandbox_private_desktop_for_environment(
+        cfg!(target_os = "windows"),
+        is_headless_environment(),
+    )
+}
+
+fn default_windows_sandbox_private_desktop_for_environment(
+    is_windows: bool,
+    is_headless: bool,
+) -> bool {
+    !is_windows || !is_headless
 }
 
 fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool {
