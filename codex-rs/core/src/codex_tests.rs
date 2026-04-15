@@ -755,7 +755,7 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
     let session = make_session_with_config(move |config| {
         config.permissions.sandbox_policy =
             codex_config::Constrained::allow_any(SandboxPolicy::DangerFullAccess);
-        config.permissions.network = Some(network_spec.clone());
+        config.permissions.network = Some(network_spec);
     })
     .await?;
 
@@ -777,9 +777,8 @@ async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> any
     )?;
 
     let session = make_session_with_config(move |config| {
-        config.permissions.sandbox_policy =
-            codex_config::Constrained::allow_any(sandbox_policy.clone());
-        config.permissions.network = Some(network_spec.clone());
+        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        config.permissions.network = Some(network_spec);
     })
     .await?;
 
@@ -801,9 +800,8 @@ async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::R
     )?;
 
     let (session, rx) = make_session_with_config_and_rx(move |config| {
-        config.permissions.sandbox_policy =
-            codex_config::Constrained::allow_any(sandbox_policy.clone());
-        config.permissions.network = Some(network_spec.clone());
+        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        config.permissions.network = Some(network_spec);
     })
     .await?;
 
