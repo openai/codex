@@ -35,12 +35,7 @@ pub(crate) fn granted_permission_profile_from_request(
         network: value.network.map(|network| AdditionalNetworkPermissions {
             enabled: network.enabled,
         }),
-        file_system: value
-            .file_system
-            .map(|file_system| AdditionalFileSystemPermissions {
-                read: file_system.read,
-                write: file_system.write,
-            }),
+        file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
     }
 }
 
@@ -82,19 +77,23 @@ mod tests {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/read-only")]),
-                    write: Some(vec![absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![absolute_path("/tmp/read-only")]),
+                    Some(vec![absolute_path("/tmp/write")]),
+                )),
             }),
             codex_app_server_protocol::GrantedPermissionProfile {
                 network: Some(codex_app_server_protocol::AdditionalNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/read-only")]),
-                    write: Some(vec![absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(
+                    codex_app_server_protocol::AdditionalFileSystemPermissions::from(
+                        FileSystemPermissions::from_read_write_roots(
+                            Some(vec![absolute_path("/tmp/read-only")]),
+                            Some(vec![absolute_path("/tmp/write")]),
+                        ),
+                    )
+                ),
             }
         );
     }

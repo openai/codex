@@ -73,6 +73,8 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+#[cfg(test)]
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -210,6 +212,16 @@ pub struct Permissions {
     pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
     /// Whether the final Windows sandboxed child should run on a private desktop.
     pub windows_sandbox_private_desktop: bool,
+}
+
+impl Permissions {
+    #[cfg(test)]
+    pub(crate) fn runtime_permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
 }
 
 /// Application configuration loaded from disk and merged with overrides.
