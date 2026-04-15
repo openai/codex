@@ -341,10 +341,21 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn should_include_current_exe_read_root(dir: &Path) -> bool {
+    let normalized = dir
+        .to_string_lossy()
+        .replace('/', "\\")
+        .trim_start_matches(r"\\?\")
+        .to_ascii_lowercase();
+    normalized != r"c:\program files\windowsapps"
+        && !normalized.starts_with(r"c:\program files\windowsapps\")
+}
+
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && should_include_current_exe_read_root(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -1058,6 +1069,19 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn current_exe_read_root_skips_windowsapps_store_paths() {
+        assert!(!should_include_current_exe_read_root(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3.4_x64__example\app\resources"
+        )));
+        assert!(!should_include_current_exe_read_root(Path::new(
+            r"\\?\C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3.4_x64__example"
+        )));
+        assert!(should_include_current_exe_read_root(Path::new(
+            r"C:\Program Files\OpenAI\Codex"
+        )));
     }
 
     #[test]
