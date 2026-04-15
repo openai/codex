@@ -257,17 +257,14 @@ fn dynamic_network_policy_for_network(
     enforce_managed_network: bool,
     proxy: &ProxyPolicyInputs,
 ) -> String {
-    let has_unix_socket_access = matches!(
-        proxy.unix_domain_socket_policy,
-        UnixDomainSocketPolicy::AllowAll
-    ) || matches!(
-        &proxy.unix_domain_socket_policy,
-        UnixDomainSocketPolicy::Restricted { allowed } if !allowed.is_empty()
-    );
+    let has_some_unix_socket_access = match &proxy.unix_domain_socket_policy {
+        UnixDomainSocketPolicy::AllowAll => true,
+        UnixDomainSocketPolicy::Restricted { allowed } => !allowed.is_empty(),
+    };
     let should_use_restricted_network_policy = !proxy.ports.is_empty()
         || proxy.has_proxy_config
         || enforce_managed_network
-        || (!network_policy.is_enabled() && has_unix_socket_access);
+        || (!network_policy.is_enabled() && has_some_unix_socket_access);
     if should_use_restricted_network_policy {
         let mut policy = String::new();
         if proxy.allow_local_binding {
