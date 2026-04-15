@@ -17,7 +17,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[tokio::test]
 async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result<()> {

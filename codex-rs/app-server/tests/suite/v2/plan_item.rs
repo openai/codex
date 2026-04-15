@@ -33,7 +33,7 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {

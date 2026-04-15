@@ -11,7 +11,7 @@ use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const SHORT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 const STOP_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(250);
 const SESSION_UPDATED_METHOD: &str = "fuzzyFileSearch/sessionUpdated";

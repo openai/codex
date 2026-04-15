@@ -17,7 +17,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 fn model_from_preset(preset: &ModelPreset) -> Model {

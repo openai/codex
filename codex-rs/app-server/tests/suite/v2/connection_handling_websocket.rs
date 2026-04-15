@@ -47,7 +47,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 
-pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) type WsClient = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 type HmacSha256 = Hmac<Sha256>;

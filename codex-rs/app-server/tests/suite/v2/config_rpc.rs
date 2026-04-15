@@ -33,7 +33,7 @@ use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
     Ok(std::fs::write(

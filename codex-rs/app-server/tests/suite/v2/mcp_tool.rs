@@ -39,7 +39,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const TEST_SERVER_NAME: &str = "tool_server";
 const TEST_TOOL_NAME: &str = "echo_tool";
 

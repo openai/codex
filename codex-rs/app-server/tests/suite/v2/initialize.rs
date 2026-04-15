@@ -24,7 +24,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[tokio::test]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {

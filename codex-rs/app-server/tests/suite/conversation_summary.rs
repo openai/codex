@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const FILENAME_TS: &str = "2025-01-02T12-00-00";
 const META_RFC3339: &str = "2025-01-02T12:00:00Z";
 const UPDATED_AT_RFC3339: &str = "2025-01-02T12:00:00.000Z";

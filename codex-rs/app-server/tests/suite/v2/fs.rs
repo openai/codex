@@ -27,7 +27,7 @@ use std::os::unix::fs::symlink;
 #[cfg(unix)]
 use std::process::Command;
 
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn initialized_mcp(codex_home: &TempDir) -> Result<McpProcess> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;

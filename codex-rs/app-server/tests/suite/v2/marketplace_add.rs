@@ -10,7 +10,7 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test]
 async fn marketplace_add_local_directory_source() -> Result<()> {

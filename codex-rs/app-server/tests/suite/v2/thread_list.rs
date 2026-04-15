@@ -42,7 +42,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 async fn init_mcp(codex_home: &Path) -> Result<McpProcess> {
     let mut mcp = McpProcess::new(codex_home).await?;

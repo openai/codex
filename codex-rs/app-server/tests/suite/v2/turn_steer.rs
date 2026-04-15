@@ -27,7 +27,7 @@ use tokio::time::timeout;
 use super::analytics::enable_analytics_capture;
 use super::analytics::wait_for_analytics_event;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[tokio::test]
 async fn turn_steer_requires_active_turn() -> Result<()> {

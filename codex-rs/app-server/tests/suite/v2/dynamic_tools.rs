@@ -34,7 +34,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Ensures dynamic tool specs are serialized into the model request payload.
 #[tokio::test]

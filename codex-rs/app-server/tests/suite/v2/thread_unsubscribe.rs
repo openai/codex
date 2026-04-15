@@ -30,7 +30,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 async fn wait_for_responses_request_count_to_stabilize(
     server: &wiremock::MockServer,

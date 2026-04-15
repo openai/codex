@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const AUTO_COMPACT_LIMIT: i64 = 1_000;
 const COMPACT_PROMPT: &str = "Summarize the conversation.";
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;

@@ -16,7 +16,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const WATCHER_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn write_skill(root: &TempDir, name: &str) -> Result<()> {

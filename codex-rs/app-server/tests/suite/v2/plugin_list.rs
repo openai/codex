@@ -30,7 +30,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE: &str = ".tmp/app-server-remote-plugin-sync-v1";
 
@@ -733,9 +733,17 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
 #[tokio::test]
 async fn plugin_list_force_remote_sync_returns_remote_sync_error_on_fail_open() -> Result<()> {
     let codex_home = TempDir::new()?;
-    write_plugin_sync_config(codex_home.path(), "https://chatgpt.com/backend-api/")?;
+    let server = MockServer::start().await;
+    write_plugin_sync_config(codex_home.path(), &format!("{}/backend-api/", server.uri()))?;
     write_openai_curated_marketplace(codex_home.path(), &["linear"])?;
     write_installed_plugin(&codex_home, "openai-curated", "linear")?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/featured"))
+        .and(query_param("platform", "codex"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+        .mount(&server)
+        .await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;

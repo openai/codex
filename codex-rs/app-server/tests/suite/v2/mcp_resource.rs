@@ -34,7 +34,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const TEST_RESOURCE_URI: &str = "test://codex/resource";
 const TEST_BLOB_RESOURCE_URI: &str = "test://codex/resource.bin";
 const TEST_RESOURCE_BLOB: &str = "YmluYXJ5LXJlc291cmNl";

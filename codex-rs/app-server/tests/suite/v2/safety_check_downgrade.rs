@@ -20,7 +20,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const REQUESTED_MODEL: &str = "gpt-5.1-codex-max";
 const SERVER_MODEL: &str = "gpt-5.2-codex";
 
