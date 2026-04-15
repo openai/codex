@@ -282,9 +282,15 @@ mod tests {
         );
 
         let config = fs::read_to_string(codex_home.path().join(codex_config::CONFIG_TOML_FILE))?;
-        assert!(config.contains("[marketplaces.debug]"));
-        assert!(config.contains("source_type = \"local\""));
-        assert!(config.contains(&format!("source = \"{expected_source}\"")));
+        let config: toml::Value = toml::from_str(&config)?;
+        assert_eq!(
+            config["marketplaces"]["debug"]["source_type"].as_str(),
+            Some("local")
+        );
+        assert_eq!(
+            config["marketplaces"]["debug"]["source"].as_str(),
+            Some(expected_source.as_str())
+        );
         Ok(())
     }
 

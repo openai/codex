@@ -100,6 +100,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadMemoryMode;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
@@ -168,7 +169,7 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
-mod app_server_requests;
+pub(crate) mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
 
@@ -1641,9 +1642,15 @@ impl App {
         }
 
         self.config = next_config;
+        let show_memory_enable_notice = feature_updates_to_apply
+            .iter()
+            .any(|(feature, enabled)| *feature == Feature::MemoryTool && *enabled);
         for (feature, effective_enabled) in feature_updates_to_apply {
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
+        }
+        if show_memory_enable_notice {
+            self.chat_widget.add_memories_enable_notice();
         }
         if approvals_reviewer_override.is_some() {
             self.set_approvals_reviewer_in_app_and_widget(self.config.approvals_reviewer);
@@ -1726,6 +1733,101 @@ impl App {
                 /*hint*/ None,
             );
         }
+    }
+
+    async fn update_memory_settings(
+        &mut self,
+        use_memories: bool,
+        generate_memories: bool,
+    ) -> bool {
+        let active_profile = self.active_profile.clone();
+        let scoped_memory_segments = |key: &str| {
+            if let Some(profile) = active_profile.as_deref() {
+                vec![
+                    "profiles".to_string(),
+                    profile.to_string(),
+                    "memories".to_string(),
+                    key.to_string(),
+                ]
+            } else {
+                vec!["memories".to_string(), key.to_string()]
+            }
+        };
+        let edits = [
+            ConfigEdit::SetPath {
+                segments: scoped_memory_segments("use_memories"),
+                value: use_memories.into(),
+            },
+            ConfigEdit::SetPath {
+                segments: scoped_memory_segments("generate_memories"),
+                value: generate_memories.into(),
+            },
+        ];
+
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await
+        {
+            tracing::error!(error = %err, "failed to persist memory settings");
+            self.chat_widget
+                .add_error_message(format!("Failed to save memory settings: {err}"));
+            return false;
+        }
+
+        self.config.memories.use_memories = use_memories;
+        self.config.memories.generate_memories = generate_memories;
+        self.chat_widget
+            .set_memory_settings(use_memories, generate_memories);
+        true
+    }
+
+    async fn update_memory_settings_with_app_server(
+        &mut self,
+        app_server: &mut AppServerSession,
+        use_memories: bool,
+        generate_memories: bool,
+    ) {
+        let previous_generate_memories = self.config.memories.generate_memories;
+        if !self
+            .update_memory_settings(use_memories, generate_memories)
+            .await
+        {
+            return;
+        }
+
+        if previous_generate_memories == generate_memories {
+            return;
+        }
+
+        let Some(thread_id) = self.current_displayed_thread_id() else {
+            return;
+        };
+
+        let mode = if generate_memories {
+            ThreadMemoryMode::Enabled
+        } else {
+            ThreadMemoryMode::Disabled
+        };
+
+        if let Err(err) = app_server.thread_memory_mode_set(thread_id, mode).await {
+            tracing::error!(error = %err, %thread_id, "failed to update thread memory mode");
+            self.chat_widget.add_error_message(format!(
+                "Saved memory settings, but failed to update the current thread: {err}"
+            ));
+        }
+    }
+
+    async fn reset_memories_with_app_server(&mut self, app_server: &mut AppServerSession) {
+        if let Err(err) = app_server.memory_reset().await {
+            tracing::error!(error = %err, "failed to reset memories");
+            self.chat_widget
+                .add_error_message(format!("Failed to reset memories: {err}"));
+            return;
+        }
+
+        self.chat_widget
+            .add_info_message("Reset local memories.".to_string(), /*hint*/ None);
     }
 
     fn open_url_in_browser(&mut self, url: String) {
@@ -5594,6 +5696,20 @@ impl App {
             AppEvent::UpdateFeatureFlags { updates } => {
                 self.update_feature_flags(updates).await;
             }
+            AppEvent::UpdateMemorySettings {
+                use_memories,
+                generate_memories,
+            } => {
+                self.update_memory_settings_with_app_server(
+                    app_server,
+                    use_memories,
+                    generate_memories,
+                )
+                .await;
+            }
+            AppEvent::ResetMemories => {
+                self.reset_memories_with_app_server(app_server).await;
+            }
             AppEvent::SkipNextWorldWritableScan => {
                 self.windows_sandbox.skip_world_writable_scan_once = true;
             }
@@ -6061,8 +6177,13 @@ impl App {
                     .handle_server_notification(notification, /*replay_kind*/ None);
             }
             ThreadBufferedEvent::Request(request) => {
-                self.chat_widget
-                    .handle_server_request(request, /*replay_kind*/ None);
+                if self
+                    .pending_app_server_requests
+                    .contains_server_request(&request)
+                {
+                    self.chat_widget
+                        .handle_server_request(request, /*replay_kind*/ None);
+                }
             }
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event);
@@ -6517,7 +6638,7 @@ async fn fetch_plugins_list(
 ) -> Result<PluginListResponse> {
     let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
     let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
-    request_handle
+    let mut response = request_handle
         .request_typed(ClientRequest::PluginList {
             request_id,
             params: PluginListParams {
@@ -6526,7 +6647,17 @@ async fn fetch_plugins_list(
             },
         })
         .await
-        .wrap_err("plugin/list failed in TUI")
+        .wrap_err("plugin/list failed in TUI")?;
+    hide_cli_only_plugin_marketplaces(&mut response);
+    Ok(response)
+}
+
+const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];
+
+fn hide_cli_only_plugin_marketplaces(response: &mut PluginListResponse) {
+    response
+        .marketplaces
+        .retain(|marketplace| !CLI_HIDDEN_PLUGIN_MARKETPLACES.contains(&marketplace.name.as_str()));
 }
 
 async fn fetch_plugin_detail(
@@ -6704,6 +6835,7 @@ mod tests {
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
     use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
     use codex_app_server_protocol::PermissionsRequestApprovalParams;
+    use codex_app_server_protocol::PluginMarketplaceEntry;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -6760,6 +6892,41 @@ mod tests {
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
+
+    #[test]
+    fn hide_cli_only_plugin_marketplaces_removes_openai_bundled() {
+        let mut response = PluginListResponse {
+            marketplaces: vec![
+                PluginMarketplaceEntry {
+                    name: "openai-bundled".to_string(),
+                    path: test_absolute_path("/marketplaces/openai-bundled"),
+                    interface: None,
+                    plugins: Vec::new(),
+                },
+                PluginMarketplaceEntry {
+                    name: "openai-curated".to_string(),
+                    path: test_absolute_path("/marketplaces/openai-curated"),
+                    interface: None,
+                    plugins: Vec::new(),
+                },
+            ],
+            marketplace_load_errors: Vec::new(),
+            remote_sync_error: None,
+            featured_plugin_ids: Vec::new(),
+        };
+
+        hide_cli_only_plugin_marketplaces(&mut response);
+
+        assert_eq!(
+            response.marketplaces,
+            vec![PluginMarketplaceEntry {
+                name: "openai-curated".to_string(),
+                path: test_absolute_path("/marketplaces/openai-curated"),
+                interface: None,
+                plugins: Vec::new(),
+            }]
+        );
     }
 
     #[test]
@@ -7004,6 +7171,11 @@ mod tests {
         let approval_request =
             exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
 
+        assert_eq!(
+            app.pending_app_server_requests
+                .note_server_request(&approval_request),
+            None
+        );
         app.enqueue_primary_thread_request(approval_request).await?;
         app.enqueue_primary_thread_session(
             test_thread_session(thread_id, test_path_buf("/tmp/project")),
@@ -7044,6 +7216,66 @@ mod tests {
         }
 
         panic!("expected approval action to submit a thread-scoped op");
+    }
+
+    #[tokio::test]
+    async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let approval_request =
+            exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, test_path_buf("/tmp/project")),
+            Vec::new(),
+        )
+        .await?;
+        while app_event_rx.try_recv().is_ok() {}
+
+        assert_eq!(
+            app.pending_app_server_requests
+                .note_server_request(&approval_request),
+            None
+        );
+        app.enqueue_thread_request(thread_id, approval_request)
+            .await?;
+
+        let resolved = app
+            .pending_app_server_requests
+            .resolve_notification(&AppServerRequestId::Integer(1))
+            .expect("matching app-server request should resolve");
+        app.chat_widget.dismiss_app_server_request(&resolved);
+        while app_event_rx.try_recv().is_ok() {}
+
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        let event = time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("timed out waiting for buffered approval event")
+            .expect("channel closed unexpectedly");
+
+        assert!(matches!(
+            &event,
+            ThreadBufferedEvent::Request(ServerRequest::CommandExecutionRequestApproval {
+                params,
+                ..
+            }) if params.turn_id == "turn-1"
+        ));
+
+        app.handle_thread_event_now(event);
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        while let Ok(app_event) = app_event_rx.try_recv() {
+            assert!(
+                !matches!(app_event, AppEvent::SubmitThreadOp { .. }),
+                "resolved buffered approval should not become actionable"
+            );
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -8223,6 +8455,111 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("Subagents will be enabled in the next session."));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_memory_settings_persists_and_updates_widget_config() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+        app.update_memory_settings_with_app_server(
+            &mut app_server,
+            /*use_memories*/ false,
+            /*generate_memories*/ false,
+        )
+        .await;
+
+        assert!(!app.config.memories.use_memories);
+        assert!(!app.config.memories.generate_memories);
+        assert!(!app.chat_widget.config_ref().memories.use_memories);
+        assert!(!app.chat_widget.config_ref().memories.generate_memories);
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        let config_value = toml::from_str::<TomlValue>(&config)?;
+        let memories = config_value
+            .as_table()
+            .and_then(|table| table.get("memories"))
+            .and_then(TomlValue::as_table)
+            .expect("memories table should exist");
+        assert_eq!(
+            memories.get("use_memories"),
+            Some(&TomlValue::Boolean(false))
+        );
+        assert_eq!(
+            memories.get("generate_memories"),
+            Some(&TomlValue::Boolean(false))
+        );
+        assert!(
+            !memories.contains_key("no_memories_if_mcp_or_web_search"),
+            "the TUI menu should not write the MCP pollution setting"
+        );
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_memory_settings_updates_current_thread_memory_mode() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+
+        let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+        let started = app_server.start_thread(&app.config).await?;
+        let thread_id = started.session.thread_id;
+        app.active_thread_id = Some(thread_id);
+
+        app.update_memory_settings_with_app_server(
+            &mut app_server,
+            /*use_memories*/ true,
+            /*generate_memories*/ false,
+        )
+        .await;
+
+        let state_db = codex_state::StateRuntime::init(
+            codex_home.path().to_path_buf(),
+            app.config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let memory_mode = state_db
+            .get_thread_memory_mode(thread_id)
+            .await
+            .expect("thread memory mode should be readable");
+        assert_eq!(memory_mode.as_deref(), Some("disabled"));
+
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reset_memories_clears_local_memory_directories() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf().abs();
+        app.config.sqlite_home = codex_home.path().to_path_buf();
+
+        let memory_root = codex_home.path().join("memories");
+        let extensions_root = codex_home.path().join("memories_extensions");
+        std::fs::create_dir_all(memory_root.join("rollout_summaries"))?;
+        std::fs::create_dir_all(&extensions_root)?;
+        std::fs::write(memory_root.join("MEMORY.md"), "stale memory\n")?;
+        std::fs::write(
+            memory_root.join("rollout_summaries").join("stale.md"),
+            "stale summary\n",
+        )?;
+        std::fs::write(extensions_root.join("stale.txt"), "stale extension\n")?;
+
+        let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+
+        app.reset_memories_with_app_server(&mut app_server).await;
+
+        assert_eq!(std::fs::read_dir(&memory_root)?.count(), 0);
+        assert_eq!(std::fs::read_dir(&extensions_root)?.count(), 0);
+
+        app_server.shutdown().await?;
         Ok(())
     }
 

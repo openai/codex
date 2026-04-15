@@ -1,4 +1,4 @@
-load("//:defs.bzl", "MACOS_WEBRTC_RUSTC_LINK_FLAGS", "codex_rust_crate")
+load("//:defs.bzl", "MACOS_WEBRTC_RUSTC_LINK_FLAGS", "codex_rust_crate", "workspace_root_test")
 
 codex_rust_crate(
     name = "tui",
@@ -20,8 +20,27 @@ codex_rust_crate(
         "src/**/snapshots/**",
     ]) + ["//codex-rs/core:model_availability_nux_fixtures"],
     integration_compile_data_extra = ["src/test_backend.rs"],
+    unit_test_args = [
+        "--skip",
+        "app::tests::update_memory_settings_updates_current_thread_memory_mode",
+    ],
     extra_binaries = [
         "//codex-rs/cli:codex",
     ],
     rustc_flags_extra = MACOS_WEBRTC_RUSTC_LINK_FLAGS,
+)
+
+workspace_root_test(
+    name = "tui-update-memory-settings-flaky-test",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+        "INSTA_SNAPSHOT_PATH": "src",
+    },
+    test_bin = ":tui-unit-tests-bin",
+    workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
+    args = [
+        "--exact",
+        "app::tests::update_memory_settings_updates_current_thread_memory_mode",
+    ],
+    tags = ["flaky"],
 )

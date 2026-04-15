@@ -193,6 +193,8 @@ pub enum Feature {
     ResponsesWebsocketsV2,
     /// Use the agent identity registration flow for ChatGPT-authenticated sessions.
     UseAgentIdentity,
+    /// Enable workspace dependency support.
+    WorkspaceDependencies,
 }
 
 impl Feature {
@@ -674,7 +676,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MemoryTool,
         key: "memories",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Memories",
+            menu_description: "Allow Codex to create new memories from conversations and bring relevant memories into new conversations.",
+            announcement: "NEW: Codex can now generate and uses memories. Try is now with `/memories`",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -936,6 +942,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "use_agent_identity",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WorkspaceDependencies,
+        key: "workspace_dependencies",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];
 

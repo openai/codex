@@ -166,6 +166,7 @@ codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
+codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
@@ -227,6 +228,7 @@ diffy = "0.4.2"
 dirs = "6"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
+ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 encoding_rs = "0.8.35"
 env-flags = "0.1.1"
 env_logger = "0.11.9"

@@ -5,6 +5,7 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod agent_identity;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
@@ -54,8 +55,6 @@ pub use network_proxy_loader::MtimeConfigReloader;
 pub use network_proxy_loader::build_network_proxy_state;
 pub use network_proxy_loader::build_network_proxy_state_and_reloader;
 mod original_image_detail;
-pub use codex_mcp::MCP_SANDBOX_STATE_CAPABILITY;
-pub use codex_mcp::MCP_SANDBOX_STATE_METHOD;
 pub use codex_mcp::SandboxState;
 mod mcp_openai_file;
 mod mcp_tool_call;
@@ -139,7 +138,6 @@ pub use project_doc::discover_project_doc_paths;
 pub use project_doc::read_project_docs;
 mod rollout;
 pub(crate) mod safety;
-pub mod seatbelt;
 mod session_rollout_init_error;
 pub mod shell;
 pub(crate) mod shell_snapshot;
