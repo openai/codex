@@ -7209,8 +7209,8 @@ pub(crate) async fn built_tools(
         &turn_context.tools_config,
     );
     let mut mcp_tool_exposure = mcp_tool_exposure;
-    mcp_tool_exposure.unavailable_called_tools =
-        collect_unavailable_called_mcp_tools(input, &all_mcp_tools);
+    let unavailable_called_tools = collect_unavailable_called_mcp_tools(input, &mcp_tool_exposure);
+    mcp_tool_exposure.unavailable_called_tools = unavailable_called_tools;
 
     let parallel_mcp_server_names = turn_context
         .config

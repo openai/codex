@@ -62,8 +62,14 @@ pub(crate) fn build_mcp_tool_exposure(
 
 pub(crate) fn collect_unavailable_called_mcp_tools(
     input: &[ResponseItem],
-    all_mcp_tools: &HashMap<String, McpToolInfo>,
+    mcp_tool_exposure: &McpToolExposure,
 ) -> Vec<UnavailableMcpTool> {
+    let exposed_tool_names = mcp_tool_exposure
+        .direct_tools
+        .iter()
+        .chain(mcp_tool_exposure.deferred_tools.iter())
+        .flat_map(|tools| tools.keys().map(String::as_str))
+        .collect::<HashSet<_>>();
     let mut unavailable_tools = std::collections::BTreeMap::new();
 
     for item in input {
@@ -78,7 +84,7 @@ pub(crate) fn collect_unavailable_called_mcp_tools(
         }
 
         let qualified_name = qualified_tool_name(name, namespace.as_deref());
-        if all_mcp_tools.contains_key(&qualified_name) {
+        if exposed_tool_names.contains(qualified_name.as_str()) {
             continue;
         }
 
@@ -180,7 +186,7 @@ mod tests {
             function_call("_create_event", Some("mcp__codex_apps__calendar")),
         ];
 
-        let tools = collect_unavailable_called_mcp_tools(&input, &HashMap::new());
+        let tools = collect_unavailable_called_mcp_tools(&input, &McpToolExposure::default());
 
         assert_eq!(
             tools,
@@ -201,16 +207,24 @@ mod tests {
 
     #[test]
     fn collect_unavailable_called_mcp_tools_skips_currently_available_tools() {
+        let exposed_mcp_tools = McpToolExposure {
+            direct_tools: Some(HashMap::from([(
+                "mcp__server__lookup".to_string(),
+                mcp_tool_info("server", "lookup"),
+            )])),
+            deferred_tools: Some(HashMap::from([(
+                "mcp__server__search".to_string(),
+                mcp_tool_info("server", "search"),
+            )])),
+            unavailable_called_tools: Vec::new(),
+        };
         let input = vec![
             function_call("mcp__server__lookup", /*namespace*/ None),
+            function_call("mcp__server__search", /*namespace*/ None),
             function_call("mcp__server__missing", /*namespace*/ None),
         ];
-        let all_mcp_tools = HashMap::from([(
-            "mcp__server__lookup".to_string(),
-            mcp_tool_info("server", "lookup"),
-        )]);
 
-        let tools = collect_unavailable_called_mcp_tools(&input, &all_mcp_tools);
+        let tools = collect_unavailable_called_mcp_tools(&input, &exposed_mcp_tools);
 
         assert_eq!(
             tools,
