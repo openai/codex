@@ -66,7 +66,7 @@ impl AgentIdentityManager {
         let client = create_client();
         let url =
             agent_task_registration_url(&self.chatgpt_base_url, &stored_identity.agent_runtime_id);
-        let human_biscuit = self.mint_human_biscuit(&binding, &url).await?;
+        let human_biscuit = self.mint_human_biscuit(&binding, "POST", &url).await?;
         let response = client
             .post(&url)
             .header("X-OpenAI-Authorization", human_biscuit)
@@ -377,7 +377,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path(biscuit_path))
             .and(header("authorization", "Bearer access-token-account-123"))
-            .and(header("x-original-method", "GET"))
+            .and(header("x-original-method", "POST"))
             .and(header("x-original-url", target_url))
             .respond_with(
                 ResponseTemplate::new(200).insert_header("x-openai-authorization", "human-biscuit"),
