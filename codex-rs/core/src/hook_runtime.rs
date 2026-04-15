@@ -321,7 +321,7 @@ async fn emit_hook_started_events(
     }
 }
 
-async fn emit_hook_completed_events(
+pub(crate) async fn emit_hook_completed_events(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     completed_events: Vec<HookCompletedEvent>,

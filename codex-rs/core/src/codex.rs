@@ -24,6 +24,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
+use crate::hook_runtime::emit_hook_completed_events;
 use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::parse_turn_item;
@@ -6549,10 +6550,8 @@ pub(crate) async fn run_turn(
                         .await;
                     }
                     let stop_outcome = sess.hooks().run_stop(stop_request).await;
-                    for completed in stop_outcome.hook_events {
-                        sess.send_event(&turn_context, EventMsg::HookCompleted(completed))
-                            .await;
-                    }
+                    emit_hook_completed_events(&sess, &turn_context, stop_outcome.hook_events)
+                        .await;
                     if stop_outcome.should_block {
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
