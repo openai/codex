@@ -34,6 +34,8 @@ pub use facts::SkillInvocation;
 pub use facts::SubAgentThreadStartedInput;
 pub use facts::ThreadInitializationMode;
 pub use facts::TrackEventsContext;
+pub use facts::TurnGitMetadataFact;
+pub use facts::TurnGitWorkspaceMetadata;
 pub use facts::TurnResolvedConfigFact;
 pub use facts::TurnStatus;
 pub use facts::TurnSteerRejectionReason;

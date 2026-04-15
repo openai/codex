@@ -14,6 +14,7 @@ use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnGitWorkspaceMetadata;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
@@ -35,6 +36,7 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -492,6 +494,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) subagent_tool_call_count: Option<usize>,
     pub(crate) web_search_count: Option<usize>,
     pub(crate) image_generation_count: Option<usize>,
+    pub(crate) git_workspaces: Option<BTreeMap<String, TurnGitWorkspaceMetadata>>,
     pub(crate) input_tokens: Option<i64>,
     pub(crate) cached_input_tokens: Option<i64>,
     pub(crate) output_tokens: Option<i64>,
