@@ -13,6 +13,7 @@ use codex_login::AgentIdentityAuthRecord;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::create_client;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_protocol::protocol::SessionSource;
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::VerifyingKey;
@@ -375,19 +376,26 @@ impl StoredAgentIdentity {
 }
 
 impl AgentIdentityBinding {
-    fn from_auth(auth: &CodexAuth, forced_workspace_id: Option<String>) -> Option<Self> {
+    fn from_auth(
+        auth: &CodexAuth,
+        forced_workspace_ids: Option<ForcedChatgptWorkspaceIds>,
+    ) -> Option<Self> {
         if !auth.is_chatgpt_auth() {
             return None;
         }
 
         let token_data = auth.get_token_data().ok()?;
-        let resolved_account_id =
-            forced_workspace_id
-                .filter(|value| !value.is_empty())
-                .or(token_data
-                    .account_id
-                    .clone()
-                    .filter(|value| !value.is_empty()))?;
+        let token_account_id = token_data
+            .account_id
+            .clone()
+            .filter(|value| !value.is_empty());
+        let resolved_account_id = match forced_workspace_ids {
+            Some(forced_workspace_ids) => token_account_id
+                .clone()
+                .filter(|account_id| forced_workspace_ids.contains(account_id))
+                .or_else(|| forced_workspace_ids.ids().first().cloned()),
+            None => token_account_id,
+        }?;
 
         Some(Self {
             binding_id: format!("chatgpt-account-{resolved_account_id}"),
