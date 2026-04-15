@@ -1,4 +1,3 @@
-use crate::mcp_tool_exposure::McpToolExposure;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
@@ -65,7 +64,8 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tool_exposure: McpToolExposure,
+    mcp_tools: Option<HashMap<String, ToolInfo>>,
+    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
     unavailable_called_tools: Vec<UnavailableTool>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -104,10 +104,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::unavailable_tool_message;
 
     let mut builder = ToolRegistryBuilder::new();
-    let McpToolExposure {
-        mcp_tools,
-        deferred_mcp_tools,
-    } = mcp_tool_exposure;
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools

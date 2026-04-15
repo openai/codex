@@ -1,5 +1,4 @@
 use crate::config::test_config;
-use crate::mcp_tool_exposure::McpToolExposure;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::test_support::construct_model_info_offline;
@@ -247,10 +246,8 @@ fn build_specs_with_unavailable_tools(
 ) -> ToolRegistryBuilder {
     build_specs_with_discoverable_tools(
         config,
-        McpToolExposure {
-            mcp_tools,
-            deferred_mcp_tools,
-        },
+        mcp_tools,
+        deferred_mcp_tools,
         unavailable_called_tools,
         /*discoverable_tools*/ None,
         dynamic_tools,
@@ -334,7 +331,8 @@ fn assert_model_tools(
     let router = ToolRouter::from_config(
         &tools_config,
         ToolRouterParams {
-            mcp_tool_exposure: McpToolExposure::default(),
+            mcp_tools: None,
+            deferred_mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
@@ -748,7 +746,8 @@ fn tool_suggest_requires_apps_and_plugins_features() {
         });
         let (tools, _) = build_specs_with_discoverable_tools(
             &tools_config,
-            McpToolExposure::default(),
+            /*mcp_tools*/ None,
+            /*deferred_mcp_tools*/ None,
             Vec::new(),
             discoverable_tools.clone(),
             &[],
