@@ -17,7 +17,6 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
-use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
@@ -310,7 +309,7 @@ pub(crate) struct CodexHookRunMetadata {
     pub(crate) thread_id: Option<String>,
     pub(crate) turn_id: Option<String>,
     pub(crate) model_slug: Option<String>,
-    pub(crate) hook_name: Option<HookEventName>,
+    pub(crate) hook_name: Option<String>,
     pub(crate) hook_source: Option<CodexHookSource>,
     pub(crate) status: Option<HookRunStatus>,
 }
@@ -558,7 +557,7 @@ pub(crate) fn codex_hook_run_metadata(
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
-        hook_name: Some(hook.event_name),
+        hook_name: Some(hook.event_name.analytics_name().to_owned()),
         hook_source: Some(hook.hook_source),
         status: Some(analytics_hook_status(hook.status)),
     }

@@ -1318,7 +1318,7 @@ fn hook_run_event_serializes_expected_shape() {
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
                 "model_slug": "gpt-5",
-                "hook_name": "pre_tool_use",
+                "hook_name": "PreToolUse",
                 "hook_source": "user",
                 "status": "completed"
             }
@@ -1495,7 +1495,7 @@ async fn reducer_ingests_hook_run_fact() {
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_type"], "codex_hook_run");
-    assert_eq!(payload[0]["event_params"]["hook_name"], "post_tool_use");
+    assert_eq!(payload[0]["event_params"]["hook_name"], "PostToolUse");
     assert_eq!(payload[0]["event_params"]["hook_source"], "unknown");
     assert_eq!(payload[0]["event_params"]["status"], "failed");
 }
