@@ -23,7 +23,8 @@ enum MarketplaceSubcommand {
 
 #[derive(Debug, Parser)]
 struct AddMarketplaceArgs {
-    /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, or SSH URLs.
+    /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, SSH URLs,
+    /// or local marketplace root directories.
     source: String,
 
     /// Git ref to check out. Overrides any @ref or #ref suffix in SOURCE.

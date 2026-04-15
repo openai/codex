@@ -16,10 +16,12 @@ use install::marketplace_staging_root;
 use install::replace_marketplace_root;
 use install::safe_marketplace_dir_name;
 use metadata::MarketplaceInstallMetadata;
+use metadata::find_marketplace_root_by_name;
 use metadata::installed_marketplace_root_for_source;
 use metadata::record_added_marketplace_entry;
 use source::MarketplaceSource;
 use source::parse_marketplace_source;
+use source::stage_marketplace_source;
 use source::validate_marketplace_source_root;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +104,33 @@ where
         });
     }
 
+    if let MarketplaceSource::Local { path } = &source {
+        let marketplace_name = validate_marketplace_source_root(path)?;
+        if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+            return Err(MarketplaceAddError::InvalidRequest(format!(
+                "marketplace '{OPENAI_CURATED_MARKETPLACE_NAME}' is reserved and cannot be added from {}",
+                source.display()
+            )));
+        }
+        if find_marketplace_root_by_name(codex_home, &install_root, &marketplace_name)?.is_some() {
+            return Err(MarketplaceAddError::InvalidRequest(format!(
+                "marketplace '{marketplace_name}' is already added from a different source; remove it before adding {}",
+                source.display()
+            )));
+        }
+        record_added_marketplace_entry(codex_home, &marketplace_name, &install_metadata)?;
+        return Ok(MarketplaceAddOutcome {
+            marketplace_name,
+            source_display: source.display(),
+            installed_root: AbsolutePathBuf::try_from(path.clone()).map_err(|err| {
+                MarketplaceAddError::Internal(format!(
+                    "failed to resolve installed marketplace root: {err}"
+                ))
+            })?,
+            already_added: false,
+        });
+    }
+
     let staging_root = marketplace_staging_root(&install_root);
     fs::create_dir_all(&staging_root).map_err(|err| {
         MarketplaceAddError::Internal(format!(
@@ -120,8 +149,7 @@ where
         })?;
     let staged_root = staged_root.keep();
 
-    let MarketplaceSource::Git { url, ref_name } = &source;
-    clone_source(url, ref_name.as_deref(), &sparse_paths, &staged_root)?;
+    stage_marketplace_source(&source, &sparse_paths, &staged_root, clone_source)?;
 
     let marketplace_name = validate_marketplace_source_root(&staged_root)?;
     if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -211,6 +239,75 @@ mod tests {
         assert!(config.contains("[marketplaces.debug]"));
         assert!(config.contains("source_type = \"git\""));
         assert!(config.contains("source = \"https://github.com/owner/repo.git\""));
+        Ok(())
+    }
+
+    #[test]
+    fn add_marketplace_sync_installs_local_directory_source_and_updates_config() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let source_root = TempDir::new()?;
+        write_marketplace_source(source_root.path(), "local copy")?;
+
+        let result = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            MarketplaceAddRequest {
+                source: source_root.path().display().to_string(),
+                ref_name: None,
+                sparse_paths: Vec::new(),
+            },
+            |_url, _ref_name, _sparse_paths, _destination| {
+                panic!("git cloner should not be called for local marketplace sources")
+            },
+        )?;
+
+        let expected_source = source_root.path().canonicalize()?.display().to_string();
+        assert_eq!(result.marketplace_name, "debug");
+        assert_eq!(result.source_display, expected_source);
+        assert_eq!(
+            result.installed_root.as_path(),
+            source_root.path().canonicalize()?
+        );
+        assert!(!result.already_added);
+        assert!(
+            !marketplace_install_root(codex_home.path())
+                .join("debug")
+                .exists()
+        );
+
+        let config = fs::read_to_string(codex_home.path().join(codex_config::CONFIG_TOML_FILE))?;
+        assert!(config.contains("[marketplaces.debug]"));
+        assert!(config.contains("source_type = \"local\""));
+        assert!(config.contains(&format!("source = \"{expected_source}\"")));
+        Ok(())
+    }
+
+    #[test]
+    fn add_marketplace_sync_treats_existing_local_directory_source_as_already_added() -> Result<()>
+    {
+        let codex_home = TempDir::new()?;
+        let source_root = TempDir::new()?;
+        write_marketplace_source(source_root.path(), "local copy")?;
+
+        let request = MarketplaceAddRequest {
+            source: source_root.path().display().to_string(),
+            ref_name: None,
+            sparse_paths: Vec::new(),
+        };
+        let first_result = add_marketplace_sync_with_cloner(codex_home.path(), request.clone(), {
+            |_url, _ref_name, _sparse_paths, _destination| {
+                panic!("git cloner should not be called for local marketplace sources")
+            }
+        })?;
+        let second_result = add_marketplace_sync_with_cloner(codex_home.path(), request, {
+            |_url, _ref_name, _sparse_paths, _destination| {
+                panic!("git cloner should not be called for local marketplace sources")
+            }
+        })?;
+
+        assert!(!first_result.already_added);
+        assert!(second_result.already_added);
+        assert_eq!(second_result.installed_root, first_result.installed_root);
+
         Ok(())
     }
 

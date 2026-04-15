@@ -2450,12 +2450,19 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
     )
     .expect("write skill");
 
+    let skill_fs = session
+        .services
+        .environment
+        .as_ref()
+        .map(|environment| environment.get_filesystem())
+        .unwrap_or_else(|| std::sync::Arc::clone(&codex_exec_server::LOCAL_FS));
     let parent_outcome = session
         .services
         .skills_manager
         .skills_for_cwd(
             &crate::skills_load_input_from_config(&parent_config, Vec::new()),
             /*force_reload*/ true,
+            Some(Arc::clone(&skill_fs)),
         )
         .await;
     let parent_skill = parent_outcome
@@ -2845,7 +2852,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&skills_input));
+    let skill_fs = environment.get_filesystem();
+    let skills_outcome = Arc::new(
+        services
+            .skills_manager
+            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .await,
+    );
     let turn_context = Session::make_turn_context(
         conversation_id,
         Some(Arc::clone(&auth_manager)),
@@ -3691,7 +3704,13 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let effective_skill_roots = plugin_outcome.effective_skill_roots();
     let skills_input =
         crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&skills_input));
+    let skill_fs = environment.get_filesystem();
+    let skills_outcome = Arc::new(
+        services
+            .skills_manager
+            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .await,
+    );
     let turn_context = Arc::new(Session::make_turn_context(
         conversation_id,
         Some(Arc::clone(&auth_manager)),

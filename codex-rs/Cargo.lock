@@ -2015,6 +2015,7 @@ dependencies = [
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-config",
+ "codex-exec-server",
  "codex-instructions",
  "codex-login",
  "codex-otel",
@@ -3075,10 +3076,13 @@ dependencies = [
 name = "codex-utils-plugins"
 version = "0.0.0"
 dependencies = [
+ "codex-exec-server",
  "codex-login",
+ "codex-utils-absolute-path",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

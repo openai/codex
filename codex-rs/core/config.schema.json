@@ -813,7 +813,8 @@
     },
     "MarketplaceSourceType": {
       "enum": [
-        "git"
+        "git",
+        "local"
       ],
       "type": "string"
     },
