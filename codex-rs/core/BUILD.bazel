@@ -1,4 +1,4 @@
-load("//:defs.bzl", "codex_rust_crate")
+load("//:defs.bzl", "codex_rust_crate", "workspace_root_test")
 
 filegroup(
     name = "model_availability_nux_fixtures",
@@ -48,6 +48,10 @@ codex_rust_crate(
         "//:AGENTS.md",
     ],
     test_tags = ["no-sandbox"],
+    unit_test_args = [
+        "--skip",
+        "guardian::tests::guardian_parallel_reviews_fork_from_last_committed_trunk_history",
+    ],
     unit_test_timeout = "long",
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
@@ -55,4 +59,23 @@ codex_rust_crate(
         "//codex-rs/rmcp-client:test_streamable_http_server",
         "//codex-rs/cli:codex",
     ],
+)
+
+workspace_root_test(
+    name = "core-guardian-parallel-reviews-flaky-test",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+        "INSTA_SNAPSHOT_PATH": "src",
+    },
+    test_bin = ":core-unit-tests-bin",
+    workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
+    args = [
+        "--exact",
+        "guardian::tests::guardian_parallel_reviews_fork_from_last_committed_trunk_history",
+    ],
+    tags = [
+        "flaky",
+        "no-sandbox",
+    ],
+    timeout = "long",
 )

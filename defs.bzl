@@ -137,10 +137,12 @@ def codex_rust_crate(
         rustc_env = {},
         deps_extra = [],
         integration_compile_data_extra = [],
+        integration_test_tags_extra_by_stem = {},
         integration_test_args = [],
         integration_test_timeout = None,
         test_data_extra = [],
         test_tags = [],
+        unit_test_args = [],
         unit_test_timeout = None,
         extra_binaries = []):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
@@ -270,6 +272,8 @@ def codex_rust_crate(
         unit_test_kwargs = {}
         if unit_test_timeout:
             unit_test_kwargs["timeout"] = unit_test_timeout
+        if unit_test_args:
+            unit_test_kwargs["args"] = unit_test_args
 
         workspace_root_test(
             name = name + "-unit-tests",
@@ -317,6 +321,7 @@ def codex_rust_crate(
         test_name = name + "-" + test_file_stem.replace("/", "-")
         if not test_name.endswith("-test"):
             test_name += "-test"
+        extra_test_tags = integration_test_tags_extra_by_stem.get(test_file_stem, [])
 
         rust_test(
             name = test_name,
@@ -338,6 +343,6 @@ def codex_rust_crate(
             # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
             # execute from the repo root and can misplace integration snapshots.
             env = cargo_env,
-            tags = test_tags,
+            tags = test_tags + extra_test_tags,
             **integration_test_kwargs
         )
