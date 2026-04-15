@@ -24,6 +24,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_tool_search_call;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -46,6 +47,7 @@ const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
 const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
 const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
 const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
+const SEARCH_CALENDAR_LIST_TOOL: &str = "_list_events";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -216,8 +218,17 @@ async fn tool_search_disabled_by_default_exposes_apps_tools_directly() -> Result
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(!tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
-    assert!(tools.iter().any(|name| name == CALENDAR_CREATE_TOOL));
-    assert!(tools.iter().any(|name| name == CALENDAR_LIST_TOOL));
+    assert!(
+        namespace_child_tool(
+            &body,
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL
+        )
+        .is_some()
+    );
+    assert!(
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some()
+    );
 
     Ok(())
 }
@@ -333,6 +344,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
     assert!(tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
     assert!(!tools.iter().any(|name| name == CALENDAR_CREATE_TOOL));
     assert!(!tools.iter().any(|name| name == CALENDAR_LIST_TOOL));
+    assert!(!tools.iter().any(|name| name == SEARCH_CALENDAR_NAMESPACE));
 
     Ok(())
 }
@@ -366,11 +378,16 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        tools.iter().any(|name| name == CALENDAR_CREATE_TOOL),
+        namespace_child_tool(
+            &body,
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL
+        )
+        .is_some(),
         "expected explicit app mention to expose create tool, got tools: {tools:?}"
     );
     assert!(
-        tools.iter().any(|name| name == CALENDAR_LIST_TOOL),
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some(),
         "expected explicit app mention to expose list tool, got tools: {tools:?}"
     );
 
@@ -541,6 +558,12 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .any(|name| name == CALENDAR_CREATE_TOOL),
         "app tools should still be hidden before search: {first_request_tools:?}"
     );
+    assert!(
+        !first_request_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "app namespace should still be hidden before search: {first_request_tools:?}"
+    );
 
     let output_item = tool_search_output_item(&requests[1], call_id);
     assert_eq!(
@@ -588,6 +611,12 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .any(|name| name == CALENDAR_CREATE_TOOL),
         "follow-up request should rely on tool_search_output history, not tool injection: {second_request_tools:?}"
     );
+    assert!(
+        !second_request_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "follow-up request should rely on tool_search_output history, not namespace injection: {second_request_tools:?}"
+    );
 
     let output_item = requests[2].function_call_output("calendar-call-1");
     assert_eq!(
@@ -601,6 +630,12 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .iter()
             .any(|name| name == CALENDAR_CREATE_TOOL),
         "post-tool follow-up should still rely on tool_search_output history, not tool injection: {third_request_tools:?}"
+    );
+    assert!(
+        !third_request_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "post-tool follow-up should still rely on tool_search_output history, not namespace injection: {third_request_tools:?}"
     );
 
     Ok(())
@@ -701,16 +736,19 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
             .any(|name| name == "mcp__rmcp__echo"),
         "non-app MCP tools should be hidden before search in large-search mode: {first_request_tools:?}"
     );
+    assert!(
+        !first_request_tools.iter().any(|name| name == "mcp__rmcp__"),
+        "non-app MCP namespace should be hidden before search in large-search mode: {first_request_tools:?}"
+    );
 
     let echo_tools = tool_search_output_tools(&requests[1], echo_call_id);
-    let rmcp_echo_tools = echo_tools
-        .iter()
-        .filter(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp__"))
-        .flat_map(|namespace| namespace.get("tools").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
-        .collect::<Vec<_>>();
-    assert_eq!(rmcp_echo_tools, vec!["echo".to_string()]);
+    let echo_output = json!({ "tools": echo_tools });
+    let rmcp_echo_tool = namespace_child_tool(&echo_output, "mcp__rmcp__", "echo")
+        .expect("tool_search should return rmcp echo as a namespace child tool");
+    assert_eq!(
+        rmcp_echo_tool.get("type").and_then(Value::as_str),
+        Some("function")
+    );
 
     let image_tools = tool_search_output_tools(&requests[1], image_call_id);
     let found_rmcp_image_tool = image_tools

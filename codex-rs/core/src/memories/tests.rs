@@ -424,6 +424,7 @@ mod phase2 {
     use crate::memories::phase2;
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
+    use chrono::Duration as ChronoDuration;
     use chrono::Utc;
     use codex_config::Constrained;
     use codex_login::CodexAuth;
@@ -960,6 +961,28 @@ mod phase2 {
             "stage-1 success should enqueue global consolidation"
         );
 
+        let telepathy_resources = config
+            .codex_home
+            .join("memories_extensions/telepathy/resources");
+        tokio::fs::create_dir_all(&telepathy_resources)
+            .await
+            .expect("create telepathy resources");
+        tokio::fs::write(
+            config
+                .codex_home
+                .join("memories_extensions/telepathy/instructions.md"),
+            "instructions",
+        )
+        .await
+        .expect("write telepathy instructions");
+        let old_file = telepathy_resources.join(format!(
+            "{}-abcd-10min-old.md",
+            (Utc::now() - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
+        ));
+        tokio::fs::write(&old_file, "old resource")
+            .await
+            .expect("write old extension resource");
+
         phase2::run(&session, Arc::clone(&config)).await;
 
         let retry_claim = state_db
@@ -970,6 +993,12 @@ mod phase2 {
             retry_claim,
             Phase2JobClaimOutcome::SkippedNotDirty,
             "spawn failures should leave the job in retry backoff instead of running"
+        );
+        assert!(
+            tokio::fs::try_exists(&old_file)
+                .await
+                .expect("check old extension resource"),
+            "spawn failures should not prune extension resources before retry"
         );
     }
 }

@@ -30,6 +30,8 @@ mod artifacts {
     pub(super) const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
 }
 
+mod extensions;
+
 /// Phase 1 (startup extraction).
 mod phase_one {
     /// Default model used for phase 1.

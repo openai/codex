@@ -13,6 +13,7 @@ use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::agent_identity::AgentIdentityManager;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -43,6 +44,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
+use crate::unavailable_tool::collect_unavailable_called_tools;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -77,7 +79,6 @@ use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
-use codex_mcp::SandboxState;
 use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
 #[cfg(test)]
@@ -91,6 +92,7 @@ use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::ThreadId;
+use codex_protocol::ToolName;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -134,9 +136,11 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
+use codex_thread_store::LocalThreadStore;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
@@ -496,10 +500,17 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
+        let environment = environment_manager
+            .current()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let fs = environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
         let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
-        let loaded_skills = skills_manager.skills_for_config(&skills_input);
+        let loaded_skills = skills_manager.skills_for_config(&skills_input, fs).await;
 
         for err in &loaded_skills.errors {
             error!(
@@ -544,10 +555,6 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let environment = environment_manager
-            .current()
-            .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
         let user_instructions = get_user_instructions(&config, environment.as_deref()).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
@@ -1506,6 +1513,56 @@ impl Session {
         });
     }
 
+    fn start_agent_identity_registration(self: &Arc<Self>) {
+        if !self.services.agent_identity_manager.is_enabled() {
+            return;
+        }
+
+        let weak_sess = Arc::downgrade(self);
+        let mut auth_state_rx = self.services.auth_manager.subscribe_auth_state();
+        tokio::spawn(async move {
+            loop {
+                let Some(sess) = weak_sess.upgrade() else {
+                    return;
+                };
+                match sess
+                    .services
+                    .agent_identity_manager
+                    .ensure_registered_identity()
+                    .await
+                {
+                    Ok(Some(_)) => return,
+                    Ok(None) => {
+                        drop(sess);
+                        if auth_state_rx.changed().await.is_err() {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        sess.fail_agent_identity_registration(error).await;
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    async fn fail_agent_identity_registration(self: &Arc<Self>, error: anyhow::Error) {
+        warn!(error = %error, "agent identity registration failed");
+        let message = format!(
+            "Agent identity registration failed. Codex cannot continue while `features.use_agent_identity` is enabled: {error}"
+        );
+        self.send_event_raw(Event {
+            id: self.next_internal_sub_id(),
+            msg: EventMsg::Error(ErrorEvent {
+                message,
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        })
+        .await;
+        handlers::shutdown(self, self.next_internal_sub_id()).await;
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         conversation_id: ThreadId,
@@ -2051,6 +2108,11 @@ impl Session {
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
+            agent_identity_manager: Arc::new(AgentIdentityManager::new(
+                config.as_ref(),
+                Arc::clone(&auth_manager),
+                session_configuration.session_source.clone(),
+            )),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
@@ -2067,6 +2129,7 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
+            thread_store: LocalThreadStore::new(RolloutConfig::from_view(config.as_ref())),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
@@ -2148,14 +2211,7 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
-        // Construct sandbox_state before MCP startup so it can be sent to each
-        // MCP server immediately after it becomes ready (avoiding blocking).
-        let sandbox_state = SandboxState {
-            sandbox_policy: session_configuration.sandbox_policy.get().clone(),
-            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            sandbox_cwd: session_configuration.cwd.to_path_buf(),
-            use_legacy_landlock: config.features.use_legacy_landlock(),
-        };
+        sess.start_agent_identity_registration();
         let mut required_mcp_servers: Vec<String> = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled && server.required)
@@ -2177,7 +2233,7 @@ impl Session {
             &session_configuration.approval_policy,
             INITIAL_SUBMIT_ID.to_owned(),
             tx_event.clone(),
-            sandbox_state,
+            session_configuration.sandbox_policy.get().clone(),
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
@@ -2609,12 +2665,16 @@ impl Session {
             &session_source,
         );
 
+        if sandbox_policy_changed {
+            self.refresh_managed_network_proxy_for_current_sandbox_policy()
+                .await;
+        }
+
         Ok(self
             .new_turn_from_configuration(
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
-                sandbox_policy_changed,
             )
             .await)
     }
@@ -2624,7 +2684,6 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
         {
@@ -2632,27 +2691,6 @@ impl Session {
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
             mcp_connection_manager
                 .set_sandbox_policy(per_turn_config.permissions.sandbox_policy.get());
-        }
-
-        if sandbox_policy_changed {
-            self.refresh_managed_network_proxy_for_current_sandbox_policy()
-                .await;
-            let sandbox_state = SandboxState {
-                sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
-                codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
-                sandbox_cwd: per_turn_config.cwd.to_path_buf(),
-                use_legacy_landlock: per_turn_config.features.use_legacy_landlock(),
-            };
-            if let Err(e) = self
-                .services
-                .mcp_connection_manager
-                .read()
-                .await
-                .notify_sandbox_state_change(&sandbox_state)
-                .await
-            {
-                warn!("Failed to notify sandbox state change to MCP servers: {e:#}");
-            }
         }
 
         let model_info = self
@@ -2670,10 +2708,16 @@ impl Session {
             .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
+        let fs = self
+            .services
+            .environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config(&skills_input),
+                .skills_for_config(&skills_input, fs)
+                .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.conversation_id,
@@ -2797,7 +2841,6 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
-            /*sandbox_policy_changed*/ false,
         )
         .await
     }
@@ -4444,16 +4487,12 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn resolve_mcp_tool_info(
-        &self,
-        name: &str,
-        namespace: Option<&str>,
-    ) -> Option<ToolInfo> {
+    pub(crate) async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .resolve_tool_info(name, namespace)
+            .resolve_tool_info(tool_name)
             .await
     }
 
@@ -4513,12 +4552,6 @@ impl Session {
             .await;
         let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
-        let sandbox_state = SandboxState {
-            sandbox_policy: turn_context.sandbox_policy.get().clone(),
-            codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
-            sandbox_cwd: turn_context.cwd.to_path_buf(),
-            use_legacy_landlock: turn_context.features.use_legacy_landlock(),
-        };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             guard.cancel();
@@ -4531,7 +4564,7 @@ impl Session {
             &turn_context.config.permissions.approval_policy,
             turn_context.sub_id.clone(),
             self.get_tx_event(),
-            sandbox_state,
+            turn_context.sandbox_policy.get().clone(),
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
@@ -5398,6 +5431,11 @@ mod handlers {
 
         let skills_manager = &sess.services.skills_manager;
         let plugins_manager = &sess.services.plugins_manager;
+        let fs = sess
+            .services
+            .environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
         let config = sess.get_config().await;
         let codex_home = sess.codex_home().await;
         let mut skills = Vec::new();
@@ -5454,7 +5492,7 @@ mod handlers {
                 config.bundled_skills_enabled(),
             );
             let outcome = skills_manager
-                .skills_for_cwd(&skills_input, force_reload)
+                .skills_for_cwd(&skills_input, force_reload, fs.clone())
                 .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
@@ -6232,6 +6270,7 @@ pub(crate) async fn run_turn(
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
+        skills_outcome,
         Some(&session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),
@@ -7191,7 +7230,22 @@ pub(crate) async fn built_tools(
         &turn_context.config,
         &turn_context.tools_config,
     );
-    let direct_mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+    let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+    let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
+    let unavailable_called_tools = if turn_context
+        .config
+        .features
+        .enabled(Feature::UnavailableDummyTools)
+    {
+        let exposed_tool_names = mcp_tools
+            .iter()
+            .chain(deferred_mcp_tools.iter())
+            .flat_map(|tools| tools.keys().map(String::as_str))
+            .collect::<HashSet<_>>();
+        collect_unavailable_called_tools(input, &exposed_tool_names)
+    } else {
+        Vec::new()
+    };
 
     let parallel_mcp_server_names = turn_context
         .config
@@ -7208,8 +7262,9 @@ pub(crate) async fn built_tools(
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: direct_mcp_tools,
-            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
+            mcp_tools,
+            deferred_mcp_tools,
+            unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

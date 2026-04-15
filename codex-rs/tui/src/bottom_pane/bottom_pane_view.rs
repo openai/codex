@@ -1,3 +1,4 @@
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
@@ -86,5 +87,12 @@ pub(crate) trait BottomPaneView: Renderable {
         request: McpServerElicitationFormRequest,
     ) -> Option<McpServerElicitationFormRequest> {
         Some(request)
+    }
+
+    /// Dismiss a request that was resolved by another client.
+    ///
+    /// Returns `true` when the view changed state.
+    fn dismiss_app_server_request(&mut self, _request: &ResolvedAppServerRequest) -> bool {
+        false
     }
 }

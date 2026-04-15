@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
 
+use super::marketplace::find_marketplace_manifest_path;
 use super::validate_plugin_segment;
 
 pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
@@ -45,13 +46,30 @@ pub(crate) fn installed_marketplace_roots_from_config(
                 );
                 return None;
             }
-            let path = default_install_root.join(marketplace_name);
-            path.join(".agents/plugins/marketplace.json")
-                .is_file()
-                .then_some(path)
+            let path = resolve_configured_marketplace_root(
+                marketplace_name,
+                marketplace,
+                &default_install_root,
+            )?;
+            find_marketplace_manifest_path(&path).map(|_| path)
         })
         .filter_map(|path| AbsolutePathBuf::try_from(path).ok())
         .collect::<Vec<_>>();
     roots.sort_unstable_by(|left, right| left.as_path().cmp(right.as_path()));
     roots
+}
+
+pub(crate) fn resolve_configured_marketplace_root(
+    marketplace_name: &str,
+    marketplace: &toml::Value,
+    default_install_root: &Path,
+) -> Option<PathBuf> {
+    match marketplace.get("source_type").and_then(toml::Value::as_str) {
+        Some("local") => marketplace
+            .get("source")
+            .and_then(toml::Value::as_str)
+            .filter(|source| !source.is_empty())
+            .map(PathBuf::from),
+        _ => Some(default_install_root.join(marketplace_name)),
+    }
 }
