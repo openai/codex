@@ -6,6 +6,8 @@ use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::MigrationDetails;
+use codex_app_server_protocol::PluginsMigration;
 use codex_core::external_agent_config::ExternalAgentConfigDetectOptions;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
@@ -51,12 +53,25 @@ impl ExternalAgentConfigApi {
                         CoreMigrationItemType::AgentsMd => {
                             ExternalAgentConfigMigrationItemType::AgentsMd
                         }
+                        CoreMigrationItemType::Plugins => {
+                            ExternalAgentConfigMigrationItemType::Plugins
+                        }
                         CoreMigrationItemType::McpServerConfig => {
                             ExternalAgentConfigMigrationItemType::McpServerConfig
                         }
                     },
                     description: migration_item.description,
                     cwd: migration_item.cwd,
+                    details: migration_item.details.map(|details| MigrationDetails {
+                        plugins: details
+                            .plugins
+                            .into_iter()
+                            .map(|plugin| PluginsMigration {
+                                marketplace_name: plugin.marketplace_name,
+                                plugin_names: plugin.plugin_names,
+                            })
+                            .collect(),
+                    }),
                 })
                 .collect(),
         })
@@ -82,15 +97,33 @@ impl ExternalAgentConfigApi {
                             ExternalAgentConfigMigrationItemType::AgentsMd => {
                                 CoreMigrationItemType::AgentsMd
                             }
+                            ExternalAgentConfigMigrationItemType::Plugins => {
+                                CoreMigrationItemType::Plugins
+                            }
                             ExternalAgentConfigMigrationItemType::McpServerConfig => {
                                 CoreMigrationItemType::McpServerConfig
                             }
                         },
                         description: migration_item.description,
                         cwd: migration_item.cwd,
+                        details: migration_item.details.map(|details| {
+                            codex_core::external_agent_config::MigrationDetails {
+                                plugins: details
+                                    .plugins
+                                    .into_iter()
+                                    .map(|plugin| {
+                                        codex_core::external_agent_config::PluginsMigration {
+                                            marketplace_name: plugin.marketplace_name,
+                                            plugin_names: plugin.plugin_names,
+                                        }
+                                    })
+                                    .collect(),
+                            }
+                        }),
                     })
                     .collect(),
             )
+            .await
             .map_err(map_io_error)?;
 
         Ok(ExternalAgentConfigImportResponse {})

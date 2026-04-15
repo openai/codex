@@ -748,6 +748,7 @@ pub(crate) fn build_guardian_review_session_config(
     for feature in [
         Feature::SpawnCsv,
         Feature::Collab,
+        Feature::CodexHooks,
         Feature::WebSearchRequest,
         Feature::WebSearchCached,
     ] {
@@ -852,6 +853,25 @@ mod tests {
             cached_reuse_key,
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
         );
+    }
+
+    #[test]
+    fn guardian_review_session_config_disables_hooks() {
+        let mut parent_config = crate::config::test_config();
+        parent_config
+            .features
+            .enable(Feature::CodexHooks)
+            .expect("enable hooks on parent config");
+
+        let guardian_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("guardian config");
+
+        assert!(!guardian_config.features.enabled(Feature::CodexHooks));
     }
 
     #[tokio::test(flavor = "current_thread")]
