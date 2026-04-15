@@ -4,7 +4,6 @@ use crate::shell::ShellType;
 use crate::test_support::construct_model_info_offline;
 use crate::tools::ToolRouter;
 use crate::tools::router::ToolRouterParams;
-use crate::unavailable_tool::UnavailableTool;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
@@ -241,7 +240,7 @@ fn build_specs_with_unavailable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, ToolInfo>>,
     deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
-    unavailable_called_tools: Vec<UnavailableTool>,
+    unavailable_called_tools: Vec<ToolName>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     build_specs_with_discoverable_tools(
@@ -953,11 +952,7 @@ fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
-    let unavailable_tool = UnavailableTool {
-        qualified_name: "mcp__codex_apps__calendar_create_event".to_string(),
-        namespace: Some("mcp__codex_apps__calendar".to_string()),
-        name: "_create_event".to_string(),
-    };
+    let unavailable_tool = ToolName::namespaced("mcp__codex_apps__calendar", "_create_event");
     let (tools, registry) = build_specs_with_unavailable_tools(
         &tools_config,
         /*mcp_tools*/ None,
@@ -979,13 +974,13 @@ fn unavailable_mcp_tools_are_exposed_as_dummy_function_tools() {
     assert!(description.contains("not currently available"));
     assert_eq!(
         parameters.additional_properties,
-        Some(AdditionalProperties::Boolean(true))
+        Some(AdditionalProperties::Boolean(false))
     );
-    assert!(registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
     assert!(registry.has_handler(&ToolName::namespaced(
         "mcp__codex_apps__calendar",
         "_create_event"
     )));
+    assert!(!registry.has_handler(&ToolName::plain("mcp__codex_apps__calendar_create_event")));
 }
 
 #[test]

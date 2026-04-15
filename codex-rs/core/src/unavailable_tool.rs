@@ -2,18 +2,12 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use codex_protocol::models::ResponseItem;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UnavailableTool {
-    pub(crate) qualified_name: String,
-    pub(crate) namespace: Option<String>,
-    pub(crate) name: String,
-}
+use codex_tools::ToolName;
 
 pub(crate) fn collect_unavailable_called_tools(
     input: &[ResponseItem],
     exposed_tool_names: &HashSet<&str>,
-) -> Vec<UnavailableTool> {
+) -> Vec<ToolName> {
     let mut unavailable_tools = BTreeMap::new();
 
     for item in input {
@@ -27,18 +21,18 @@ pub(crate) fn collect_unavailable_called_tools(
             continue;
         }
 
-        let qualified_name = qualified_tool_name(name, namespace.as_deref());
-        if exposed_tool_names.contains(qualified_name.as_str()) {
+        let tool_name = match namespace {
+            Some(namespace) => ToolName::namespaced(namespace.clone(), name.clone()),
+            None => ToolName::plain(name.clone()),
+        };
+        let display_name = tool_name.display();
+        if exposed_tool_names.contains(display_name.as_str()) {
             continue;
         }
 
         unavailable_tools
-            .entry(qualified_name.clone())
-            .or_insert_with(|| UnavailableTool {
-                qualified_name,
-                namespace: namespace.clone(),
-                name: name.clone(),
-            });
+            .entry(display_name)
+            .or_insert_with(|| tool_name);
     }
 
     unavailable_tools.into_values().collect()
@@ -46,14 +40,6 @@ pub(crate) fn collect_unavailable_called_tools(
 
 fn should_collect_unavailable_tool(name: &str, namespace: Option<&str>) -> bool {
     namespace.is_some_and(|namespace| namespace.starts_with("mcp__")) || name.starts_with("mcp__")
-}
-
-fn qualified_tool_name(name: &str, namespace: Option<&str>) -> String {
-    match namespace {
-        Some(namespace) if name.starts_with(namespace) => name.to_string(),
-        Some(namespace) => format!("{namespace}{name}"),
-        None => name.to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -84,16 +70,8 @@ mod tests {
         assert_eq!(
             tools,
             vec![
-                UnavailableTool {
-                    qualified_name: "mcp__codex_apps__calendar_create_event".to_string(),
-                    namespace: Some("mcp__codex_apps__calendar".to_string()),
-                    name: "_create_event".to_string(),
-                },
-                UnavailableTool {
-                    qualified_name: "mcp__server__lookup".to_string(),
-                    namespace: None,
-                    name: "mcp__server__lookup".to_string(),
-                },
+                ToolName::namespaced("mcp__codex_apps__calendar", "_create_event"),
+                ToolName::plain("mcp__server__lookup"),
             ]
         );
     }
@@ -109,13 +87,6 @@ mod tests {
 
         let tools = collect_unavailable_called_tools(&input, &exposed_tool_names);
 
-        assert_eq!(
-            tools,
-            vec![UnavailableTool {
-                qualified_name: "mcp__server__missing".to_string(),
-                namespace: None,
-                name: "mcp__server__missing".to_string(),
-            }]
-        );
+        assert_eq!(tools, vec![ToolName::plain("mcp__server__missing")]);
     }
 }

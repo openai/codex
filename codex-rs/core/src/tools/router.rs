@@ -8,7 +8,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
-use crate::unavailable_tool::UnavailableTool;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
@@ -44,7 +43,7 @@ pub struct ToolRouter {
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
-    pub(crate) unavailable_called_tools: Vec<UnavailableTool>,
+    pub(crate) unavailable_called_tools: Vec<ToolName>,
     pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],

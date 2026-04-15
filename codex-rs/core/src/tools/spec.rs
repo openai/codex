@@ -5,7 +5,6 @@ use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
-use crate::unavailable_tool::UnavailableTool;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::AdditionalProperties;
@@ -66,7 +65,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, ToolInfo>>,
     deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
-    unavailable_called_tools: Vec<UnavailableTool>,
+    unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -290,18 +289,19 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     for unavailable_tool in unavailable_called_tools {
-        if existing_spec_names.insert(unavailable_tool.qualified_name.clone()) {
+        let tool_name = unavailable_tool.display();
+        if existing_spec_names.insert(tool_name.clone()) {
             let spec = codex_tools::ToolSpec::Function(ResponsesApiTool {
-                name: unavailable_tool.qualified_name.clone(),
+                name: tool_name.clone(),
                 description: unavailable_tool_message(
-                    &unavailable_tool.qualified_name,
+                    &tool_name,
                     "Calling this placeholder returns an error explaining that the tool is unavailable.",
                 ),
                 strict: false,
                 parameters: JsonSchema::object(
                     Default::default(),
                     /*required*/ None,
-                    Some(AdditionalProperties::Boolean(true)),
+                    Some(AdditionalProperties::Boolean(false)),
                 ),
                 output_schema: None,
                 defer_loading: None,
@@ -313,16 +313,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             };
             builder.push_spec(spec);
         }
-        builder.register_handler(
-            ToolName::plain(unavailable_tool.qualified_name.clone()),
-            unavailable_tool_handler.clone(),
-        );
-        if let Some(namespace) = unavailable_tool.namespace {
-            builder.register_handler(
-                ToolName::namespaced(namespace, unavailable_tool.name),
-                unavailable_tool_handler.clone(),
-            );
-        }
+        builder.register_handler(unavailable_tool, unavailable_tool_handler.clone());
     }
     builder
 }

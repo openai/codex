@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,17 +9,12 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
-use codex_protocol::ThreadId;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionMeta;
-use codex_protocol::protocol::SessionMetaLine;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -30,10 +26,12 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
 use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
+use serial_test::serial;
 use tempfile::TempDir;
 
 fn tool_names(body: &Value) -> Vec<String> {
@@ -51,6 +49,24 @@ fn tool_names(body: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn ev_namespaced_function_call(
+    call_id: &str,
+    namespace: &str,
+    name: &str,
+    arguments: &str,
+) -> Value {
+    json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "call_id": call_id,
+            "namespace": namespace,
+            "name": name,
+            "arguments": arguments,
+        }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -101,84 +117,123 @@ async fn custom_tool_unknown_returns_custom_output_error() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(mcp_test_value)]
 async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let historical_call_id = "historical-mcp-call";
     let retry_call_id = "retry-mcp-call";
-    let unavailable_tool_name = "mcp__missing_server__lookup";
-    let rollout = [
-        RolloutLine {
-            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
-            item: RolloutItem::SessionMeta(SessionMetaLine {
-                meta: SessionMeta {
-                    id: ThreadId::default(),
-                    timestamp: "2024-01-01T00:00:00Z".to_string(),
-                    cwd: ".".into(),
-                    originator: "test_originator".to_string(),
-                    cli_version: "test_version".to_string(),
-                    model_provider: Some("test-provider".to_string()),
-                    ..Default::default()
-                },
-                git: None,
-            }),
-        },
-        RolloutLine {
-            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
-            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
-                id: None,
-                name: unavailable_tool_name.to_string(),
-                namespace: None,
-                arguments: "{}".to_string(),
-                call_id: historical_call_id.to_string(),
-            }),
-        },
-        RolloutLine {
-            timestamp: "2024-01-01T00:00:02.000Z".to_string(),
-            item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
-                call_id: historical_call_id.to_string(),
-                output: FunctionCallOutputPayload::from_text("previously unavailable".to_string()),
-            }),
-        },
-    ];
-
-    let tmpdir = TempDir::new()?;
-    let session_path = tmpdir.path().join("historical-unavailable-mcp.jsonl");
-    let rollout_jsonl = rollout
-        .iter()
-        .map(serde_json::to_string)
-        .collect::<Result<Vec<_>, _>>()?
-        .join("\n");
-    fs::write(&session_path, format!("{rollout_jsonl}\n"))?;
-
+    let server_name = "rmcp";
+    let unavailable_tool_namespace = "mcp__rmcp__";
+    let unavailable_tool_name = "echo";
+    let unavailable_tool_display_name = "mcp__rmcp__echo";
     let server = start_mock_server().await;
-    let responses = vec![
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_function_call(retry_call_id, unavailable_tool_name, "{}"),
-            ev_completed("resp-1"),
-        ]),
-        sse(vec![
-            ev_response_created("resp-2"),
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
-        ]),
-    ];
-    let mock = mount_sse_sequence(&server, responses).await;
-
+    let rmcp_test_server_bin = match stdio_server_bin() {
+        Ok(bin) => bin,
+        Err(err) => {
+            eprintln!("test_stdio_server binary not available, skipping test: {err}");
+            return Ok(());
+        }
+    };
     let codex_home = Arc::new(TempDir::new()?);
-    let mut builder = test_codex().with_model("gpt-5.1");
-    let test = builder.resume(&server, codex_home, session_path).await?;
+    let mut builder = test_codex()
+        .with_model("gpt-5.1")
+        .with_home(Arc::clone(&codex_home))
+        .with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: Some(HashMap::new()),
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        });
+    let test = builder.build(&server).await?;
 
-    test.submit_turn("retry the missing MCP tool").await?;
+    let first_turn_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_namespaced_function_call(
+                    historical_call_id,
+                    unavailable_tool_namespace,
+                    unavailable_tool_name,
+                    r#"{"message":"ping"}"#,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "rmcp echo tool completed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
 
-    let requests = mock.requests();
+    test.submit_turn("call the rmcp echo tool").await?;
+    let rollout_path = test.codex.rollout_path().context("rollout path")?;
+    assert_eq!(first_turn_mock.requests().len(), 2);
+    drop(test);
+
+    let retry_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_namespaced_function_call(
+                    retry_call_id,
+                    unavailable_tool_namespace,
+                    unavailable_tool_name,
+                    r#"{"message":"ping again"}"#,
+                ),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-4"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut resume_builder = test_codex().with_model("gpt-5.1");
+    let test = resume_builder
+        .resume(&server, codex_home, rollout_path)
+        .await?;
+
+    test.submit_turn("retry the rmcp echo tool").await?;
+
+    let requests = retry_mock.requests();
     assert_eq!(requests.len(), 2);
     let first_request_tools = tool_names(&requests[0].body_json());
     assert!(
         first_request_tools
             .iter()
-            .any(|name| name == unavailable_tool_name),
+            .any(|name| name == unavailable_tool_display_name),
         "historical unavailable MCP call should add a placeholder tool; got {first_request_tools:?}"
     );
     let output_text = requests[1]
