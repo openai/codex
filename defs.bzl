@@ -140,6 +140,7 @@ def codex_rust_crate(
         integration_test_args = [],
         integration_test_timeout = None,
         test_data_extra = [],
+        test_shard_counts = {},
         test_tags = [],
         unit_test_timeout = None,
         extra_binaries = []):
@@ -174,6 +175,10 @@ def codex_rust_crate(
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
         test_data_extra: Extra runtime data for tests.
+        test_shard_counts: Mapping from generated test target name to Bazel
+            shard count. Matching `rust_test` targets opt into the rules_rust
+            libtest sharding wrapper. For unit tests, use the outer target
+            name, such as `core-unit-tests`.
         test_tags: Tags applied to unit + integration test targets.
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
         unit_test_timeout: Optional Bazel timeout for the unit-test target
@@ -246,7 +251,9 @@ def codex_rust_crate(
             visibility = ["//visibility:public"],
         )
 
+        unit_test_name = name + "-unit-tests"
         unit_test_binary = name + "-unit-tests-bin"
+        unit_test_sharding_kwargs = _test_sharding_kwargs(test_shard_counts, unit_test_name)
         rust_test(
             name = unit_test_binary,
             crate = name,
@@ -265,14 +272,17 @@ def codex_rust_crate(
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags + ["manual"],
+            **unit_test_sharding_kwargs
         )
 
         unit_test_kwargs = {}
         if unit_test_timeout:
             unit_test_kwargs["timeout"] = unit_test_timeout
+        if "shard_count" in unit_test_sharding_kwargs:
+            unit_test_kwargs["shard_count"] = unit_test_sharding_kwargs["shard_count"]
 
         workspace_root_test(
-            name = name + "-unit-tests",
+            name = unit_test_name,
             env = test_env,
             test_bin = ":" + unit_test_binary,
             workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
@@ -318,6 +328,10 @@ def codex_rust_crate(
         if not test_name.endswith("-test"):
             test_name += "-test"
 
+        test_kwargs = {}
+        test_kwargs.update(integration_test_kwargs)
+        test_kwargs.update(_test_sharding_kwargs(test_shard_counts, test_name))
+
         rust_test(
             name = test_name,
             crate_name = test_crate_name,
@@ -339,5 +353,18 @@ def codex_rust_crate(
             # execute from the repo root and can misplace integration snapshots.
             env = cargo_env,
             tags = test_tags,
-            **integration_test_kwargs
+            **test_kwargs
         )
+
+def _test_sharding_kwargs(test_shard_counts, test_name):
+    shard_count = test_shard_counts.get(test_name)
+    if shard_count == None:
+        return {}
+
+    if shard_count < 1:
+        fail("test_shard_counts[{}] must be a positive integer".format(test_name))
+
+    return {
+        "experimental_enable_sharding": True,
+        "shard_count": shard_count,
+    }

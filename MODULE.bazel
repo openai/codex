@@ -94,10 +94,20 @@ single_version_override(
 )
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
-# Build-script probe binaries inherit CFLAGS/CXXFLAGS from Bazel's C++
-# toolchain. On `windows-gnullvm`, llvm-mingw does not ship
-# `libssp_nonshared`, so strip the forwarded stack-protector flags there.
-rules_rust.patch(
+
+bazel_dep(name = "rules_rust", version = "0.69.0")
+
+# `rules_rs` 0.0.43 pins an older hermeticbuild/rules_rust commit. Override the
+# extension-created repo so Codex can use rust_test sharding from #13 without
+# updating the entire rules_rs module.
+#
+# Build-script probe binaries inherit CFLAGS/CXXFLAGS from Bazel's C++ toolchain.
+# On `windows-gnullvm`, llvm-mingw does not ship `libssp_nonshared`, so strip the
+# forwarded stack-protector flags there.
+archive_override(
+    module_name = "rules_rust",
+    integrity = "sha256-q37yA5WS3++LIgdkThIhxsQkoZ5F/+DD4GhTWkY1rkE=",
+    patch_strip = 1,
     patches = [
         "//patches:rules_rust_windows_gnullvm_build_script.patch",
         "//patches:rules_rust_windows_exec_msvc_build_script_env.patch",
@@ -108,11 +118,15 @@ rules_rust.patch(
         "//patches:rules_rust_windows_exec_bin_target.patch",
         "//patches:rules_rust_windows_exec_std.patch",
         "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
-        "//patches:rules_rust_repository_set_exec_constraints.patch",
     ],
-    strip = 1,
+    strip_prefix = "rules_rust-10825e1a40b8f6d979c51bc795c9d3fa7f78cc6f",
+    urls = ["https://github.com/hermeticbuild/rules_rust/archive/10825e1a40b8f6d979c51bc795c9d3fa7f78cc6f.tar.gz"],
 )
-use_repo(rules_rust, "rules_rust")
+
+override_repo(
+    rules_rust,
+    rules_rust = "rules_rust",
+)
 
 nightly_rust = use_extension(
     "@rules_rs//rs/experimental:rules_rust_reexported_extensions.bzl",
