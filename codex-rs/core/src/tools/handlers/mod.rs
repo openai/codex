@@ -18,9 +18,9 @@ mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
 
-use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_sandboxing::policy_transforms::permission_profile_is_preapproved;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
@@ -183,17 +183,12 @@ pub(super) async fn apply_granted_turn_permissions(
         granted_session_permissions.as_ref(),
         granted_turn_permissions.as_ref(),
     );
-    let effective_permissions = merge_permission_profiles(
+    let session_cwd = session.cwd().await;
+    let (effective_permissions, permissions_preapproved) = effective_permissions_for_granted_turn(
         additional_permissions.as_ref(),
         granted_permissions.as_ref(),
+        session_cwd.as_path(),
     );
-    let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
-        (Some(effective_permissions), Some(granted_permissions)) => {
-            intersect_permission_profiles(effective_permissions.clone(), granted_permissions)
-                == *effective_permissions
-        }
-        _ => false,
-    };
 
     let sandbox_permissions =
         if effective_permissions.is_some() && !sandbox_permissions.uses_additional_permissions() {
@@ -209,9 +204,30 @@ pub(super) async fn apply_granted_turn_permissions(
     }
 }
 
+fn effective_permissions_for_granted_turn(
+    additional_permissions: Option<&PermissionProfile>,
+    granted_permissions: Option<&PermissionProfile>,
+    cwd: &Path,
+) -> (Option<PermissionProfile>, bool) {
+    let effective_permissions =
+        merge_permission_profiles(additional_permissions, granted_permissions);
+    let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
+        (Some(effective_permissions), Some(granted_permissions)) => {
+            permission_profile_is_preapproved(effective_permissions, granted_permissions, cwd)
+        }
+        _ => false,
+    };
+    if permissions_preapproved {
+        (granted_permissions.cloned(), true)
+    } else {
+        (effective_permissions, false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::EffectiveAdditionalPermissions;
+    use super::effective_permissions_for_granted_turn;
     use super::implicit_granted_permissions;
     use super::normalize_and_validate_additional_permissions;
     use crate::sandboxing::SandboxPermissions;
@@ -235,12 +251,24 @@ mod tests {
 
     fn file_system_permissions(path: &std::path::Path) -> PermissionProfile {
         PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: None,
-                write: Some(vec![
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                /*read*/ None,
+                Some(vec![
                     AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
                 ]),
-            }),
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn read_file_system_permissions(path: &std::path::Path) -> PermissionProfile {
+        PermissionProfile {
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![
+                    AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
+                ]),
+                /*write*/ None,
+            )),
             ..Default::default()
         }
     }
@@ -321,5 +349,25 @@ mod tests {
         );
 
         assert_eq!(implicit_permissions, None);
+    }
+
+    #[test]
+    fn preapproved_sticky_grants_do_not_get_narrowed_by_child_request() {
+        let cwd = tempdir().expect("tempdir");
+        let child_path = cwd.path().join("child");
+        let requested_permissions = read_file_system_permissions(&child_path);
+        let granted_permissions = file_system_permissions(cwd.path());
+
+        let (effective_permissions, permissions_preapproved) =
+            effective_permissions_for_granted_turn(
+                Some(&requested_permissions),
+                Some(&granted_permissions),
+                cwd.path(),
+            );
+
+        assert_eq!(
+            (effective_permissions, permissions_preapproved),
+            (Some(granted_permissions), true)
+        );
     }
 }

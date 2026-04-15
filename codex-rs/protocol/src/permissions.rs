@@ -46,6 +46,7 @@ impl NetworkSandboxPolicy {
     Copy,
     PartialEq,
     Eq,
+    Hash,
     PartialOrd,
     Ord,
     Serialize,
@@ -72,7 +73,7 @@ impl FileSystemAccessMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(tag = "kind")]
 pub enum FileSystemSpecialPath {
@@ -115,7 +116,7 @@ impl FileSystemSpecialPath {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 pub struct FileSystemSandboxEntry {
     pub path: FileSystemPath,
     pub access: FileSystemAccessMode,
@@ -156,7 +157,7 @@ struct FileSystemSemanticSignature {
     unreadable_roots: Vec<AbsolutePathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
 pub enum FileSystemPath {
@@ -368,6 +369,50 @@ impl FileSystemSandboxPolicy {
 
     pub fn can_write_path_with_cwd(&self, path: &Path, cwd: &Path) -> bool {
         self.resolve_access_with_cwd(path, cwd).can_write()
+    }
+
+    pub fn covers_entry_with_cwd(&self, entry: &FileSystemSandboxEntry, cwd: &Path) -> bool {
+        match &entry.path {
+            FileSystemPath::Path { path } => match entry.access {
+                FileSystemAccessMode::Read => self.can_read_path_with_cwd(path.as_path(), cwd),
+                FileSystemAccessMode::Write => self.can_write_path_with_cwd(path.as_path(), cwd),
+                FileSystemAccessMode::None => {
+                    self.resolve_access_with_cwd(path.as_path(), cwd) == FileSystemAccessMode::None
+                }
+            },
+            FileSystemPath::Special { value } => match value {
+                FileSystemSpecialPath::Root => match entry.access {
+                    FileSystemAccessMode::Read => self.has_full_disk_read_access(),
+                    FileSystemAccessMode::Write => self.has_full_disk_write_access(),
+                    FileSystemAccessMode::None => {
+                        !self.has_full_disk_read_access() && !self.has_full_disk_write_access()
+                    }
+                },
+                FileSystemSpecialPath::Minimal => match entry.access {
+                    FileSystemAccessMode::Read => {
+                        self.has_full_disk_read_access() || self.include_platform_defaults()
+                    }
+                    FileSystemAccessMode::Write => self.has_full_disk_write_access(),
+                    FileSystemAccessMode::None => {
+                        !self.has_full_disk_read_access() && !self.include_platform_defaults()
+                    }
+                },
+                _ => resolve_file_system_special_path(
+                    value,
+                    AbsolutePathBuf::from_absolute_path(cwd).ok().as_ref(),
+                )
+                .is_some_and(|path| match entry.access {
+                    FileSystemAccessMode::Read => self.can_read_path_with_cwd(path.as_path(), cwd),
+                    FileSystemAccessMode::Write => {
+                        self.can_write_path_with_cwd(path.as_path(), cwd)
+                    }
+                    FileSystemAccessMode::None => {
+                        self.resolve_access_with_cwd(path.as_path(), cwd)
+                            == FileSystemAccessMode::None
+                    }
+                }),
+            },
+        }
     }
 
     pub fn with_additional_readable_roots(
