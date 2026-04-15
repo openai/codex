@@ -10,9 +10,12 @@ use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ConfiguredHookHandler;
+use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
@@ -23,7 +26,11 @@ use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigRequirementsToml;
+use codex_core::config_loader::HookEventsToml;
+use codex_core::config_loader::HookHandlerConfig as CoreHookHandlerConfig;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::config_loader::ManagedHooksRequirementsToml;
+use codex_core::config_loader::MatcherGroup as CoreMatcherGroup;
 use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
 use codex_core::plugins::PluginId;
@@ -391,10 +398,74 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
+        hooks: requirements.hooks.map(map_hooks_requirements_to_api),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+    }
+}
+
+fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> ManagedHooksRequirements {
+    let ManagedHooksRequirementsToml {
+        managed_dir,
+        windows_managed_dir,
+        hooks,
+    } = hooks;
+    let HookEventsToml {
+        pre_tool_use,
+        post_tool_use,
+        session_start,
+        user_prompt_submit,
+        stop,
+    } = hooks;
+
+    ManagedHooksRequirements {
+        managed_dir,
+        windows_managed_dir,
+        pre_tool_use: map_hook_matcher_groups_to_api(pre_tool_use),
+        post_tool_use: map_hook_matcher_groups_to_api(post_tool_use),
+        session_start: map_hook_matcher_groups_to_api(session_start),
+        user_prompt_submit: map_hook_matcher_groups_to_api(user_prompt_submit),
+        stop: map_hook_matcher_groups_to_api(stop),
+    }
+}
+
+fn map_hook_matcher_groups_to_api(
+    groups: Vec<CoreMatcherGroup>,
+) -> Vec<ConfiguredHookMatcherGroup> {
+    groups
+        .into_iter()
+        .map(map_hook_matcher_group_to_api)
+        .collect()
+}
+
+fn map_hook_matcher_group_to_api(group: CoreMatcherGroup) -> ConfiguredHookMatcherGroup {
+    ConfiguredHookMatcherGroup {
+        matcher: group.matcher,
+        hooks: group
+            .hooks
+            .into_iter()
+            .map(map_hook_handler_to_api)
+            .collect(),
+    }
+}
+
+fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHandler {
+    match handler {
+        CoreHookHandlerConfig::Command {
+            command,
+            timeout_sec,
+            r#async,
+            status_message,
+        } => ConfiguredHookHandler::Command {
+            command,
+            timeout_sec,
+            r#async,
+            status_message,
+        },
+        CoreHookHandlerConfig::Prompt {} => ConfiguredHookHandler::Prompt {},
+        CoreHookHandlerConfig::Agent {} => ConfiguredHookHandler::Agent {},
     }
 }
 
@@ -571,6 +642,22 @@ mod tests {
                     ("personality".to_string(), true),
                 ]),
             }),
+            hooks: Some(ManagedHooksRequirementsToml {
+                managed_dir: Some(PathBuf::from("/enterprise/hooks")),
+                windows_managed_dir: Some(PathBuf::from(r"C:\enterprise\hooks")),
+                hooks: HookEventsToml {
+                    pre_tool_use: vec![CoreMatcherGroup {
+                        matcher: Some("^Bash$".to_string()),
+                        hooks: vec![CoreHookHandlerConfig::Command {
+                            command: "python3 /enterprise/hooks/pre.py".to_string(),
+                            timeout_sec: Some(10),
+                            r#async: false,
+                            status_message: Some("checking".to_string()),
+                        }],
+                    }],
+                    ..Default::default()
+                },
+            }),
             mcp_servers: None,
             apps: None,
             rules: None,
@@ -638,6 +725,26 @@ mod tests {
             ])),
         );
         assert_eq!(
+            mapped.hooks,
+            Some(ManagedHooksRequirements {
+                managed_dir: Some(PathBuf::from("/enterprise/hooks")),
+                windows_managed_dir: Some(PathBuf::from(r"C:\enterprise\hooks")),
+                pre_tool_use: vec![ConfiguredHookMatcherGroup {
+                    matcher: Some("^Bash$".to_string()),
+                    hooks: vec![ConfiguredHookHandler::Command {
+                        command: "python3 /enterprise/hooks/pre.py".to_string(),
+                        timeout_sec: Some(10),
+                        r#async: false,
+                        status_message: Some("checking".to_string()),
+                    }],
+                }],
+                post_tool_use: Vec::new(),
+                session_start: Vec::new(),
+                user_prompt_submit: Vec::new(),
+                stop: Vec::new(),
+            }),
+        );
+        assert_eq!(
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
         );
@@ -677,6 +784,7 @@ mod tests {
             allowed_web_search_modes: None,
             guardian_policy_config: None,
             feature_requirements: None,
+            hooks: None,
             mcp_servers: None,
             apps: None,
             rules: None,
@@ -736,6 +844,7 @@ mod tests {
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,
+            hooks: None,
             mcp_servers: None,
             apps: None,
             rules: None,
