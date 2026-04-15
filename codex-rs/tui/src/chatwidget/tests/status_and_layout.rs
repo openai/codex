@@ -534,6 +534,32 @@ async fn workspace_member_usage_limit_prompts_and_sends_usage_limit() {
 }
 
 #[tokio::test]
+async fn header_rate_limit_snapshot_preserves_member_limit_type_for_error_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut usage_limits = snapshot(/*percent*/ 100.0);
+    usage_limits.rate_limit_reached_type =
+        Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(usage_limits));
+
+    // Turn-failure snapshots are derived from response headers and do not carry
+    // the backend-classified reached type. They arrive before the Error event.
+    let mut header_limits = snapshot(/*percent*/ 100.0);
+    header_limits.rate_limit_reached_type = None;
+    chat.on_rate_limit_snapshot(Some(header_limits));
+
+    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Request a limit increase from your owner"),
+        "popup: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let event = next_send_add_credits_nudge_email_event(&mut rx);
+    assert_eq!(event, AddCreditsNudgeCreditType::UsageLimit);
+}
+
+#[tokio::test]
 async fn workspace_owner_limit_states_do_not_prompt_for_owner_nudge() {
     for limit_type in [
         RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
