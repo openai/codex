@@ -168,11 +168,21 @@ mod tests {
         let command = if cfg!(windows) {
             "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_string()
         } else {
-            "/usr/local/bin/powershell.exe".to_string()
+            "/usr/local/bin/pwsh".to_string()
         };
         let cmd = vec![command, "-Command".to_string(), "Write-Host hi".to_string()];
         let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
         assert_eq!(script, "Write-Host hi");
+    }
+
+    #[test]
+    fn rejects_shell_like_attacker_paths() {
+        let cmd = vec![
+            r"C:\tmp\powershell.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Host hi".to_string(),
+        ];
+        assert_eq!(extract_powershell_command(&cmd), None);
     }
 
     #[test]

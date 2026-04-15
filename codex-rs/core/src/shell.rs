@@ -367,6 +367,9 @@ mod detect_shell_type_tests {
             detect_shell_type(&PathBuf::from("/bin/bash")),
             Some(ShellType::Bash)
         );
+        assert_eq!(detect_shell_type(&PathBuf::from(".poc/bash")), None);
+        assert_eq!(detect_shell_type(&PathBuf::from("/tmp/bash")), None);
+        assert_eq!(detect_shell_type(&PathBuf::from("/tmp/bash.evil")), None);
         assert_eq!(
             detect_shell_type(&PathBuf::from("powershell.exe")),
             Some(ShellType::PowerShell)
@@ -400,6 +403,12 @@ mod detect_shell_type_tests {
             detect_shell_type(&PathBuf::from("cmd.exe")),
             Some(ShellType::Cmd)
         );
+    }
+
+    #[test]
+    fn model_provided_shell_does_not_accept_repo_local_shell_names() {
+        let shell = get_shell_by_model_provided_path(&PathBuf::from(".poc/bash"));
+        assert_ne!(shell.shell_path, PathBuf::from(".poc/bash"));
     }
 }
 

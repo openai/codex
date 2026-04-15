@@ -1260,7 +1260,7 @@ mod tests {
         let command = if cfg!(windows) {
             "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
         } else {
-            "/usr/local/bin/powershell.exe"
+            "/usr/local/bin/pwsh"
         };
 
         assert_parsed(
