@@ -4,6 +4,7 @@ use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use globset::GlobBuilder;
 use rama_http::HeaderValue;
 use rama_http::Request;
 use rama_http::header::HeaderName;
@@ -340,12 +341,7 @@ fn hook_matches(hook: &MitmHook, req: &Request) -> bool {
     }
 
     let path = req.uri().path();
-    if !hook
-        .matcher
-        .path_prefixes
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
-    {
+    if !path_matches(&hook.matcher.path_prefixes, path) {
         return false;
     }
 
@@ -376,7 +372,7 @@ fn query_matches(query_constraints: &[QueryConstraint], req: &Request) -> bool {
                 constraint
                     .allowed_values
                     .iter()
-                    .any(|allowed| allowed == candidate)
+                    .any(|allowed| value_matches(allowed, candidate))
             })
         })
     })
@@ -397,10 +393,53 @@ fn headers_match(header_constraints: &[HeaderConstraint], req: &Request) -> bool
                 constraint
                     .allowed_values
                     .iter()
-                    .any(|allowed| allowed == candidate)
+                    .any(|allowed| value_matches(allowed, candidate))
             })
         })
     })
+}
+
+fn path_matches(path_prefixes: &[String], path: &str) -> bool {
+    path_prefixes.iter().any(|prefix| {
+        if has_glob_meta(prefix) {
+            glob_matches(prefix, path)
+        } else {
+            path.starts_with(prefix)
+        }
+    })
+}
+
+fn value_matches(pattern: &str, candidate: &str) -> bool {
+    if has_glob_meta(pattern) {
+        glob_matches(pattern, candidate)
+    } else {
+        pattern == candidate
+    }
+}
+
+fn glob_matches(pattern: &str, candidate: &str) -> bool {
+    compile_glob(pattern)
+        .map(|glob| glob.compile_matcher().is_match(candidate))
+        .unwrap_or(false)
+}
+
+fn has_glob_meta(pattern: &str) -> bool {
+    pattern.contains(['*', '?', '['])
+}
+
+fn validate_glob_pattern_if_needed(pattern: &str, context: &str) -> Result<()> {
+    if !has_glob_meta(pattern) {
+        return Ok(());
+    }
+
+    let _ = compile_glob(pattern).with_context(|| format!("invalid glob pattern in {context}"))?;
+    Ok(())
+}
+
+fn compile_glob(pattern: &str) -> Result<globset::Glob> {
+    GlobBuilder::new(pattern)
+        .build()
+        .map_err(|err| anyhow!("invalid glob pattern {pattern:?}: {err}"))
 }
 
 fn normalize_hook_host(host: &str) -> Result<String> {
@@ -436,6 +475,7 @@ fn normalize_path_prefixes(path_prefixes: &[String]) -> Result<Vec<String>> {
             if prefix.is_empty() {
                 return Err(anyhow!("path_prefixes must not contain empty entries"));
             }
+            validate_glob_pattern_if_needed(prefix, "path_prefixes")?;
             Ok(prefix.clone())
         })
         .collect()
@@ -452,6 +492,9 @@ fn validate_query_constraints(query: &BTreeMap<String, Vec<String>>) -> Result<(
                 "query key {name:?} must list at least one allowed value"
             ));
         }
+        for value in values {
+            validate_glob_pattern_if_needed(value, &format!("query key {name:?}"))?;
+        }
     }
     Ok(())
 }
@@ -464,8 +507,11 @@ fn normalize_query_name(name: &str) -> Result<String> {
 }
 
 fn validate_header_constraints(headers: &BTreeMap<String, Vec<String>>) -> Result<()> {
-    for name in headers.keys() {
+    for (name, values) in headers {
         let _ = parse_header_name(name)?;
+        for value in values {
+            validate_glob_pattern_if_needed(value, &format!("header {name:?}"))?;
+        }
     }
     Ok(())
 }
@@ -727,6 +773,50 @@ mod tests {
                 actions: hooks.get("api.github.com").unwrap()[0].actions.clone(),
             }
         );
+    }
+
+    #[test]
+    fn evaluate_matches_wildcard_path_query_and_header_constraints() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.path_prefixes = vec!["/repos/*/codex/issues*".to_string()];
+        hook.matcher.query = BTreeMap::from([("state".to_string(), vec!["op*".to_string()])]);
+        hook.matcher.headers = BTreeMap::from([(
+            "x-github-api-version".to_string(),
+            vec!["2022*preview".to_string()],
+        )]);
+        config.network.mitm_hooks = vec![hook];
+
+        let hooks = compile_mitm_hooks_with_resolvers(
+            &config,
+            |_| Some("abc".to_string()),
+            |_| Err(anyhow!("unexpected file lookup")),
+        )
+        .unwrap();
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/openai/codex/issues?state=open")
+            .header("x-github-api-version", "2022-11-28-preview")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &req),
+            HookEvaluation::Matched {
+                actions: hooks.get("api.github.com").unwrap()[0].actions.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_wildcard_path_pattern() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.path_prefixes = vec!["/repos/[".to_string()];
+        config.network.mitm_hooks = vec![hook];
+
+        let err = validate_mitm_hook_config(&config).expect_err("invalid glob should fail");
+        assert!(format!("{err:#}").contains("invalid glob pattern"));
     }
 
     #[test]

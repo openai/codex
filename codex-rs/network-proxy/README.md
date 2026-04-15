@@ -83,6 +83,9 @@ prefix = "Bearer "
 
 # `match.body` is reserved for a future release. Current hooks match only on
 # method/path/query/headers and can mutate outbound request headers.
+# `match.path_prefixes` accepts literal prefixes and glob patterns.
+# `match.query` / `match.headers` value lists accept exact values or glob patterns
+# such as `*preview*`.
 ```
 
 ### 2) Run the proxy
