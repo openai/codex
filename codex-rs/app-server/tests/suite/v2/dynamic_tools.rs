@@ -68,6 +68,7 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             dynamic_tools: Some(vec![dynamic_tool.clone()]),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -147,6 +148,7 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             dynamic_tools: Some(vec![dynamic_tool.clone()]),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -233,6 +235,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             dynamic_tools: Some(vec![dynamic_tool]),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -402,6 +405,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             dynamic_tools: Some(vec![dynamic_tool]),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

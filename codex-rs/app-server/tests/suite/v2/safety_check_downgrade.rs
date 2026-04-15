@@ -46,6 +46,7 @@ async fn openai_model_header_mismatch_emits_model_rerouted_notification_v2() -> 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some(REQUESTED_MODEL.to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -119,6 +120,7 @@ async fn response_model_field_mismatch_emits_model_rerouted_notification_v2_when
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some(REQUESTED_MODEL.to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

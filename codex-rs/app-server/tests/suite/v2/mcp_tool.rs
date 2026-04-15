@@ -74,6 +74,7 @@ url = "{mcp_server_url}/mcp"
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

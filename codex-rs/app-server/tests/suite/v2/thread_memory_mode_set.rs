@@ -33,6 +33,7 @@ async fn thread_memory_mode_set_updates_loaded_thread_state() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

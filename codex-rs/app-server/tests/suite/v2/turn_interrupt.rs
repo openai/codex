@@ -61,6 +61,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -154,6 +155,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
