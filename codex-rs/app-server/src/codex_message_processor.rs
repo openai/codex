@@ -92,6 +92,7 @@ use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
+use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
@@ -906,6 +907,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadMemoryModeSet { request_id, params } => {
                 self.thread_memory_mode_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::MemoryReset { request_id, params } => {
+                self.memory_reset(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadUnarchive { request_id, params } => {
@@ -3043,6 +3048,86 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_response(request_id, ThreadMemoryModeSetResponse {})
+            .await;
+    }
+
+    async fn memory_reset(&self, request_id: ConnectionRequestId, _params: Option<()>) {
+        let state_db = match StateRuntime::init(
+            self.config.sqlite_home.clone(),
+            self.config.model_provider_id.clone(),
+        )
+        .await
+        {
+            Ok(state_db) => state_db,
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to open state db for memory reset: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        if let Err(err) = state_db.clear_memory_data().await {
+            self.send_internal_error(
+                request_id,
+                format!("failed to clear memory rows in state db: {err}"),
+            )
+            .await;
+            return;
+        }
+
+        let memory_root = self.config.codex_home.join("memories");
+        let memory_extensions_root = self.config.codex_home.join("memories_extensions");
+        let clear_memory_root_result: std::io::Result<()> = async {
+            for directory in [memory_root.as_path(), memory_extensions_root.as_path()] {
+                match tokio::fs::symlink_metadata(directory).await {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "refusing to clear symlinked memory root {}",
+                                directory.display()
+                            ),
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err),
+                }
+
+                tokio::fs::create_dir_all(directory).await?;
+                let mut entries = tokio::fs::read_dir(directory).await?;
+                while let Some(entry) = entries.next_entry().await? {
+                    let path = entry.path();
+                    let file_type = entry.file_type().await?;
+                    if file_type.is_dir() {
+                        tokio::fs::remove_dir_all(path).await?;
+                    } else {
+                        tokio::fs::remove_file(path).await?;
+                    }
+                }
+            }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(err) = clear_memory_root_result {
+            self.send_internal_error(
+                request_id,
+                format!(
+                    "failed to clear memory directory {}: {err}",
+                    memory_root.display()
+                ),
+            )
+            .await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(request_id, MemoryResetResponse {})
             .await;
     }
 

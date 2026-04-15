@@ -116,7 +116,7 @@ struct CoreTurnHost {
 impl CodeModeTurnHost for CoreTurnHost {
     async fn invoke_tool(
         &self,
-        tool_name: String,
+        tool_name: ToolName,
         input: Option<JsonValue>,
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String> {
@@ -288,38 +288,39 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
 async fn call_nested_tool(
     exec: ExecContext,
     tool_runtime: ToolCallRuntime,
-    tool_name: String,
+    tool_name: ToolName,
     input: Option<JsonValue>,
     cancellation_token: CancellationToken,
 ) -> Result<JsonValue, FunctionCallError> {
-    if tool_name == PUBLIC_TOOL_NAME {
+    if tool_name.namespace.is_none() && tool_name.name == PUBLIC_TOOL_NAME {
         return Err(FunctionCallError::RespondToModel(format!(
             "{PUBLIC_TOOL_NAME} cannot invoke itself"
         )));
     }
 
-    let payload = if let Some(tool_info) = exec
-        .session
-        .resolve_mcp_tool_info(&tool_name, /*namespace*/ None)
-        .await
-    {
-        match serialize_function_tool_arguments(&tool_name, input) {
-            Ok(raw_arguments) => ToolPayload::Mcp {
-                server: tool_info.server_name,
-                tool: tool_info.tool.name.to_string(),
-                raw_arguments,
-            },
-            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-        }
-    } else {
-        match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
-            Ok(payload) => payload,
-            Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-        }
-    };
+    let (tool_call_name, payload) =
+        if let Some(tool_info) = exec.session.resolve_mcp_tool_info(&tool_name).await {
+            let raw_arguments = match serialize_function_tool_arguments(&tool_name, input) {
+                Ok(raw_arguments) => raw_arguments,
+                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+            };
+            (
+                tool_info.canonical_tool_name(),
+                ToolPayload::Mcp {
+                    server: tool_info.server_name,
+                    tool: tool_info.tool.name.to_string(),
+                    raw_arguments,
+                },
+            )
+        } else {
+            match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
+                Ok(payload) => (tool_name, payload),
+                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+            }
+        };
 
     let call = ToolCall {
-        tool_name: ToolName::plain(tool_name.clone()),
+        tool_name: tool_call_name,
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
         payload,
     };
@@ -339,7 +340,7 @@ fn tool_kind_for_spec(spec: &ToolSpec) -> codex_code_mode::CodeModeToolKind {
 
 fn tool_kind_for_name(
     spec: Option<ToolSpec>,
-    tool_name: &str,
+    tool_name: &ToolName,
 ) -> Result<codex_code_mode::CodeModeToolKind, String> {
     spec.as_ref()
         .map(tool_kind_for_spec)
@@ -348,7 +349,7 @@ fn tool_kind_for_name(
 
 fn build_nested_tool_payload(
     spec: Option<ToolSpec>,
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
     let actual_kind = tool_kind_for_name(spec, tool_name)?;
@@ -363,7 +364,7 @@ fn build_nested_tool_payload(
 }
 
 fn build_function_tool_payload(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
     let arguments = serialize_function_tool_arguments(tool_name, input)?;
@@ -371,7 +372,7 @@ fn build_function_tool_payload(
 }
 
 fn serialize_function_tool_arguments(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<String, String> {
     match input {
@@ -385,7 +386,7 @@ fn serialize_function_tool_arguments(
 }
 
 fn build_freeform_tool_payload(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
     match input {
