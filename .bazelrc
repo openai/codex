@@ -125,6 +125,10 @@ build:argument-comment-lint --@rules_rust//rust/toolchain/channel=nightly
 common:ci-windows --config=ci-bazel
 common:ci-windows --build_metadata=TAG_os=windows
 common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
+# Windows tests run locally, and several Rust integration test binaries spawn
+# subprocesses/servers. Keep local test-process fanout lower than the overall
+# Bazel job count so sharded tests do not contend as heavily on the runner.
+common:ci-windows --local_test_jobs=2
 
 # We prefer to run the build actions entirely remotely so we can dial up the concurrency.
 # We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
