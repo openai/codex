@@ -55,15 +55,23 @@
           ]
         },
         "iconLarge": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "iconSmall": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "shortDescription": {

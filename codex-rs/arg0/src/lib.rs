@@ -254,7 +254,7 @@ where
 ///
 /// - UNIX: `apply_patch` symlink to the current executable
 /// - WINDOWS: `apply_patch.bat` batch script to invoke the current executable
-///   with the "secret" --codex-run-as-apply-patch flag.
+///   with the hidden `--codex-run-as-apply-patch` flag.
 ///
 /// This temporary directory is prepended to the PATH environment variable so
 /// that `apply_patch` can be on the PATH without requiring the user to

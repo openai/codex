@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -23,6 +22,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecOutputStream;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
 
@@ -110,7 +110,7 @@ pub(crate) fn spawn_exit_watcher(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: i32,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
@@ -196,7 +196,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     fallback_output: String,
@@ -235,7 +235,7 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     message: String,

@@ -386,7 +386,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
-            let processor = MessageProcessor::new(MessageProcessorArgs {
+            let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
@@ -401,9 +401,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 auth_manager,
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
-            });
+            }));
             let mut thread_created_rx = processor.thread_created_receiver();
-            let mut session = ConnectionSessionState::default();
+            let session = Arc::new(ConnectionSessionState::default());
             let mut listen_for_threads = true;
 
             loop {
@@ -411,28 +411,33 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     command = processor_rx.recv() => {
                         match command {
                             Some(ProcessorCommand::Request(request)) => {
-                                let was_initialized = session.initialized;
+                                let was_initialized = session.initialized();
                                 processor
                                     .process_client_request(
                                         IN_PROCESS_CONNECTION_ID,
                                         *request,
-                                        &mut session,
+                                        Arc::clone(&session),
                                         &outbound_initialized,
                                     )
                                     .await;
+                                let opted_out_notification_methods_snapshot =
+                                    session.opted_out_notification_methods();
+                                let experimental_api_enabled =
+                                    session.experimental_api_enabled();
+                                let is_initialized = session.initialized();
                                 if let Ok(mut opted_out_notification_methods) =
                                     outbound_opted_out_notification_methods.write()
                                 {
                                     *opted_out_notification_methods =
-                                        session.opted_out_notification_methods.clone();
+                                        opted_out_notification_methods_snapshot;
                                 } else {
                                     warn!("failed to update outbound opted-out notifications");
                                 }
                                 outbound_experimental_api_enabled.store(
-                                    session.experimental_api_enabled,
+                                    experimental_api_enabled,
                                     Ordering::Release,
                                 );
-                                if !was_initialized && session.initialized {
+                                if !was_initialized && is_initialized {
                                     processor.send_initialize_notifications().await;
                                 }
                             }
@@ -447,7 +452,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                let connection_ids = if session.initialized {
+                                let connection_ids = if session.initialized() {
                                     vec![IN_PROCESS_CONNECTION_ID]
                                 } else {
                                     Vec::<ConnectionId>::new()

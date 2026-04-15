@@ -47,6 +47,7 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::LoginAccountParams;
+use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
@@ -101,10 +102,15 @@ pub struct McpProcess {
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
+const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env_and_args(codex_home, &[], &[]).await
+    }
+
+    pub async fn new_without_managed_config(codex_home: &Path) -> anyhow::Result<Self> {
+        Self::new_with_env(codex_home, &[(DISABLE_MANAGED_CONFIG_ENV_VAR, Some("1"))]).await
     }
 
     pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
@@ -138,6 +144,11 @@ impl McpProcess {
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "info");
+        // Keep integration tests isolated from host managed configuration.
+        cmd.env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            codex_home.join("managed_config.toml"),
+        );
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
         cmd.args(args);
 
@@ -512,6 +523,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("skills/list", params).await
+    }
+
+    /// Send a `marketplace/add` JSON-RPC request.
+    pub async fn send_marketplace_add_request(
+        &mut self,
+        params: MarketplaceAddParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("marketplace/add", params).await
     }
 
     /// Send a `plugin/install` JSON-RPC request.

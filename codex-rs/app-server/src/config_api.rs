@@ -210,7 +210,7 @@ impl ConfigApi {
             .write_value(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(pending_changes);
+        self.emit_plugin_toggle_events(pending_changes).await;
         Ok(response)
     }
 
@@ -230,7 +230,7 @@ impl ConfigApi {
             .batch_write(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(pending_changes);
+        self.emit_plugin_toggle_events(pending_changes).await;
         if reload_user_config {
             self.user_config_reloader.reload_user_config().await;
         }
@@ -299,13 +299,16 @@ impl ConfigApi {
         Ok(ExperimentalFeatureEnablementSetResponse { enablement })
     }
 
-    fn emit_plugin_toggle_events(&self, pending_changes: std::collections::BTreeMap<String, bool>) {
+    async fn emit_plugin_toggle_events(
+        &self,
+        pending_changes: std::collections::BTreeMap<String, bool>,
+    ) {
         for (plugin_id, enabled) in pending_changes {
             let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
                 continue;
             };
             let metadata =
-                installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id);
+                installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id).await;
             if enabled {
                 self.analytics_events_client.track_plugin_enabled(metadata);
             } else {
@@ -449,7 +452,6 @@ fn map_network_requirements_to_api(
                 .collect()
         }),
         managed_allowed_domains_only: network.managed_allowed_domains_only,
-        danger_full_access_denylist_only: network.danger_full_access_denylist_only,
         allowed_domains,
         denied_domains,
         unix_sockets: network.unix_sockets.map(|unix_sockets| {
@@ -595,7 +597,6 @@ mod tests {
                     ]),
                 }),
                 managed_allowed_domains_only: Some(false),
-                danger_full_access_denylist_only: Some(true),
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/proxy.sock".to_string(),
@@ -655,7 +656,6 @@ mod tests {
                     ("example.com".to_string(), NetworkDomainPermission::Deny),
                 ])),
                 managed_allowed_domains_only: Some(false),
-                danger_full_access_denylist_only: Some(true),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["example.com".to_string()]),
                 unix_sockets: Some(std::collections::BTreeMap::from([(
@@ -690,7 +690,6 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
-                danger_full_access_denylist_only: None,
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
                         "/tmp/ignored.sock".to_string(),
@@ -714,7 +713,6 @@ mod tests {
                 dangerously_allow_all_unix_sockets: None,
                 domains: None,
                 managed_allowed_domains_only: None,
-                danger_full_access_denylist_only: None,
                 allowed_domains: None,
                 denied_domains: None,
                 unix_sockets: Some(std::collections::BTreeMap::from([(

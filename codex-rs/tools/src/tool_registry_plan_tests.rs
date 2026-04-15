@@ -362,9 +362,9 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
 }
 
 #[test]
-fn view_image_tool_omits_detail_without_original_detail_feature() {
+fn view_image_tool_omits_detail_without_original_detail_support() {
     let mut model_info = model_info();
-    model_info.supports_image_detail_original = true;
+    model_info.supports_image_detail_original = false;
     let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -392,11 +392,10 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
 }
 
 #[test]
-fn view_image_tool_includes_detail_with_original_detail_feature() {
+fn view_image_tool_includes_detail_with_original_detail_support() {
     let mut model_info = model_info();
     model_info.supports_image_detail_original = true;
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ImageDetailOriginal);
+    let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
