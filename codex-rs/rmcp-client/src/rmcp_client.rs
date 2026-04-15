@@ -70,11 +70,11 @@ use crate::elicitation_client_service::ElicitationClientService;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
-use crate::stdio_transport_runtime::ProcessGroupGuard;
-use crate::stdio_transport_runtime::StdioTransport;
-use crate::stdio_transport_runtime::StdioTransportInner;
-use crate::stdio_transport_runtime::StdioTransportParams;
-use crate::stdio_transport_runtime::StdioTransportRuntime;
+use crate::stdio_server_launcher::LaunchedStdioServer;
+use crate::stdio_server_launcher::LaunchedStdioServerTransport;
+use crate::stdio_server_launcher::ProcessGroupGuard;
+use crate::stdio_server_launcher::StdioServerCommand;
+use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -305,7 +305,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
 
 enum PendingTransport {
     Stdio {
-        transport: StdioTransport,
+        server: LaunchedStdioServer,
     },
     StreamableHttp {
         transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
@@ -330,8 +330,8 @@ enum ClientState {
 #[derive(Clone)]
 enum TransportRecipe {
     Stdio {
-        params: StdioTransportParams,
-        runtime: Arc<dyn StdioTransportRuntime>,
+        command: StdioServerCommand,
+        launcher: Arc<dyn StdioServerLauncher>,
     },
     StreamableHttp {
         server_name: String,
@@ -508,11 +508,11 @@ impl RmcpClient {
         env: Option<HashMap<OsString, OsString>>,
         env_vars: &[String],
         cwd: Option<PathBuf>,
-        runtime: Arc<dyn StdioTransportRuntime>,
+        launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {
-            params: StdioTransportParams::new(program, args, env, env_vars.to_vec(), cwd),
-            runtime,
+            command: StdioServerCommand::new(program, args, env, env_vars.to_vec(), cwd),
+            launcher,
         };
         let transport = Self::create_pending_transport(&transport_recipe)
             .await
@@ -886,9 +886,9 @@ impl RmcpClient {
         transport_recipe: &TransportRecipe,
     ) -> Result<PendingTransport> {
         match transport_recipe {
-            TransportRecipe::Stdio { params, runtime } => {
-                let transport = runtime.create_transport(params.clone()).await?;
-                Ok(PendingTransport::Stdio { transport })
+            TransportRecipe::Stdio { command, launcher } => {
+                let server = launcher.launch(command.clone()).await?;
+                Ok(PendingTransport::Stdio { server })
             }
             TransportRecipe::StreamableHttp {
                 server_name,
@@ -985,8 +985,8 @@ impl RmcpClient {
         Option<ProcessGroupGuard>,
     )> {
         let (transport, oauth_persistor, process_group_guard) = match pending_transport {
-            PendingTransport::Stdio { transport } => match transport.inner {
-                StdioTransportInner::Local {
+            PendingTransport::Stdio { server } => match server.transport {
+                LaunchedStdioServerTransport::Local {
                     transport,
                     process_group_guard,
                 } => (
