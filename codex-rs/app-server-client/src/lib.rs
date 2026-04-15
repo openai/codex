@@ -28,6 +28,7 @@ use std::time::Duration;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
+use codex_app_server::in_process::LogDbLayer;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -354,6 +355,8 @@ pub struct InProcessClientStartArgs {
     pub cloud_requirements: CloudRequirementsLoader,
     /// Feedback sink used by app-server/core telemetry and logs.
     pub feedback: CodexFeedback,
+    /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
+    pub log_db: Option<LogDbLayer>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
     /// Startup warnings emitted after initialize succeeds.
@@ -405,6 +408,7 @@ impl InProcessClientStartArgs {
             loader_overrides: self.loader_overrides,
             cloud_requirements: self.cloud_requirements,
             feedback: self.feedback,
+            log_db: self.log_db,
             environment_manager: self.environment_manager,
             config_warnings: self.config_warnings,
             session_source: self.session_source,
@@ -982,6 +986,7 @@ mod tests {
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
+            log_db: None,
             environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             config_warnings: Vec::new(),
             session_source,
@@ -1994,6 +1999,7 @@ mod tests {
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
+            log_db: None,
             environment_manager: environment_manager.clone(),
             config_warnings: Vec::new(),
             session_source: SessionSource::Exec,

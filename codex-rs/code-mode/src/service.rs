@@ -685,6 +685,154 @@ text(JSON.stringify(returnsUndefined));
     }
 
     #[tokio::test]
+    async fn image_helper_accepts_raw_mcp_image_block_with_original_detail() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+image({
+  type: "image",
+  data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  mimeType: "image/png",
+  _meta: { "codex/imageDetail": "original" },
+});
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
+                    detail: Some(crate::ImageDetail::Original),
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn image_helper_second_arg_overrides_explicit_object_detail() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+image(
+  {
+    image_url: "https://example.com/image.jpg",
+    detail: "low",
+  },
+  "original",
+);
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputImage {
+                    image_url: "https://example.com/image.jpg".to_string(),
+                    detail: Some(crate::ImageDetail::Original),
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn image_helper_second_arg_overrides_raw_mcp_image_detail() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+image(
+  {
+    type: "image",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+    mimeType: "image/png",
+    _meta: { "codex/imageDetail": "original" },
+  },
+  "low",
+);
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
+                    detail: Some(crate::ImageDetail::Low),
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn image_helper_rejects_raw_mcp_result_container() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+image({
+  content: [
+    {
+      type: "image",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+      mimeType: "image/png",
+      _meta: { "codex/imageDetail": "original" },
+    },
+  ],
+  isError: false,
+});
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some(
+                    "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block".to_string(),
+                ),
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn terminate_waits_for_runtime_shutdown_before_responding() {
         let inner = test_inner();
         let (event_tx, event_rx) = mpsc::unbounded_channel();

@@ -2256,6 +2256,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-install-context"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-home-dir",
+ "pretty_assertions",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-instructions"
 version = "0.0.0"
 dependencies = [
@@ -2896,6 +2905,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-git-utils",
+ "codex-install-context",
  "codex-login",
  "codex-mcp",
  "codex-model-provider-info",

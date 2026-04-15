@@ -1330,6 +1330,13 @@ function normalizeMcpImageData(data, mimeType) {
   return `data:${normalizedMimeType};base64,${data}`;
 }
 
+function parseMcpImageDetail(meta) {
+  if (!isPlainObject(meta) || meta["codex/imageDetail"] !== "original") {
+    return undefined;
+  }
+  return "original";
+}
+
 function parseMcpToolResult(result) {
   if (typeof result === "string") {
     return { images: [], textCount: result.length > 0 ? 1 : 0 };
@@ -1362,6 +1369,7 @@ function parseMcpToolResult(result) {
     if (item.type === "image") {
       images.push({
         image_url: normalizeMcpImageData(item.data, item.mimeType ?? item.mime_type),
+        detail: parseMcpImageDetail(item._meta),
       });
       continue;
     }

@@ -313,6 +313,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -653,6 +654,89 @@ async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::R
         1,
         "unexpected proxy response: {response}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow::Result<()> {
+    let (mut session, _turn_context) = make_session_and_context().await;
+    let initial_policy = SandboxPolicy::new_workspace_write_policy();
+
+    let mut network_config = NetworkProxyConfig::default();
+    network_config
+        .network
+        .set_allowed_domains(vec!["evil.com".to_string()]);
+    let requirements = NetworkConstraints {
+        domains: Some(NetworkDomainPermissionsToml {
+            entries: std::collections::BTreeMap::from([(
+                "*.example.com".to_string(),
+                NetworkDomainPermissionToml::Allow,
+            )]),
+        }),
+        ..Default::default()
+    };
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        network_config,
+        Some(requirements),
+        &initial_policy,
+    )?;
+    let (started_proxy, _) = Session::start_managed_network_proxy(
+        &spec,
+        &Policy::empty(),
+        &initial_policy,
+        /*network_policy_decider*/ None,
+        /*blocked_request_observer*/ None,
+        /*managed_network_requirements_enabled*/ false,
+        crate::config::NetworkProxyAuditMetadata::default(),
+    )
+    .await?;
+    assert_eq!(
+        started_proxy
+            .proxy()
+            .current_cfg()
+            .await?
+            .network
+            .allowed_domains(),
+        Some(vec!["*.example.com".to_string(), "evil.com".to_string()])
+    );
+
+    {
+        let mut state = session.state.lock().await;
+        let mut config = (*state.session_configuration.original_config_do_not_use).clone();
+        config.permissions.network = Some(spec);
+        config.permissions.sandbox_policy =
+            codex_config::Constrained::allow_any(initial_policy.clone());
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+        state.session_configuration.sandbox_policy =
+            codex_config::Constrained::allow_any(initial_policy);
+    }
+    session.services.network_proxy = Some(started_proxy);
+
+    session
+        .new_turn_with_sub_id(
+            "sandbox-policy-change".to_string(),
+            SessionSettingsUpdate {
+                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let started_proxy = session
+        .services
+        .network_proxy
+        .as_ref()
+        .expect("managed network proxy should be present");
+    assert_eq!(
+        started_proxy
+            .proxy()
+            .current_cfg()
+            .await?
+            .network
+            .allowed_domains(),
+        Some(vec!["*.example.com".to_string()])
+    );
+
     Ok(())
 }
 
@@ -5368,6 +5452,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
+            unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

@@ -589,6 +589,16 @@ fn find_setup_exe() -> PathBuf {
         if candidate.exists() {
             return candidate;
         }
+
+        // Standalone installs keep Windows helper binaries under
+        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
+        // that sibling folder before falling back to PATH.
+        let resource_candidate = dir
+            .join("codex-resources")
+            .join("codex-windows-sandbox-setup.exe");
+        if resource_candidate.exists() {
+            return resource_candidate;
+        }
     }
     PathBuf::from("codex-windows-sandbox-setup.exe")
 }
