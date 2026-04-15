@@ -418,6 +418,11 @@ fn detect_home_lists_enabled_plugins_from_settings() {
             "formatter@acme-tools": true,
             "deployer@acme-tools": true,
             "analyzer@security-plugins": false
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/claude-plugins"
+            }
           }
         }"#,
     )
@@ -464,6 +469,11 @@ fn detect_repo_skips_plugins_that_are_already_enabled_in_codex() {
           "enabledPlugins": {
             "formatter@acme-tools": true,
             "deployer@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/claude-plugins"
+            }
           }
         }"#,
     )
@@ -514,6 +524,59 @@ async fn import_plugins_requires_details() {
 
     assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     assert_eq!(err.to_string(), "plugins migration item is missing details");
+}
+
+#[test]
+fn detect_home_skips_plugins_without_marketplace_source() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(claude_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .expect("detect");
+
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+}
+
+#[test]
+fn detect_home_skips_plugins_with_invalid_marketplace_source() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "github"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(claude_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .expect("detect");
+
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
 #[tokio::test]

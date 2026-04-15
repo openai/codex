@@ -3,6 +3,7 @@ use crate::plugins::PluginId;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::PluginsManager;
 use crate::plugins::add_marketplace;
+use crate::plugins::validate_marketplace_add_source;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -536,6 +537,14 @@ fn extract_plugin_migration_details(
     settings: &JsonValue,
     configured_enabled_plugins: &HashSet<String>,
 ) -> Option<MigrationDetails> {
+    let loadable_marketplaces = collect_marketplace_import_sources(settings)
+        .into_iter()
+        .filter_map(|(marketplace_name, source)| {
+            validate_marketplace_add_source(&source.source, source.ref_name)
+                .ok()
+                .map(|()| marketplace_name)
+        })
+        .collect::<HashSet<_>>();
     let mut plugins = BTreeMap::new();
     for plugin_id in collect_enabled_plugins(settings)
         .into_iter()
@@ -544,6 +553,9 @@ fn extract_plugin_migration_details(
         let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
             continue;
         };
+        if !loadable_marketplaces.contains(&plugin_id.marketplace_name) {
+            continue;
+        }
         let plugin_group = plugins
             .entry(plugin_id.marketplace_name.clone())
             .or_insert_with(|| PluginsMigration {

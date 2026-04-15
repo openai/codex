@@ -63,6 +63,7 @@ pub use marketplace_add::MarketplaceAddError;
 pub use marketplace_add::MarketplaceAddOutcome;
 pub use marketplace_add::MarketplaceAddRequest;
 pub use marketplace_add::add_marketplace;
+pub use marketplace_add::validate_marketplace_add_source;
 pub use remote::RemotePluginFetchError;
 pub use remote::fetch_remote_featured_plugin_ids;
 pub(crate) use render::render_explicit_plugin_instructions;

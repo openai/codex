@@ -56,6 +56,13 @@ pub async fn add_marketplace(
         .map_err(|err| MarketplaceAddError::Internal(format!("failed to add marketplace: {err}")))?
 }
 
+pub fn validate_marketplace_add_source(
+    source: &str,
+    ref_name: Option<String>,
+) -> Result<(), MarketplaceAddError> {
+    parse_marketplace_source(source, ref_name).map(|_| ())
+}
+
 fn add_marketplace_sync(
     codex_home: &Path,
     request: MarketplaceAddRequest,
