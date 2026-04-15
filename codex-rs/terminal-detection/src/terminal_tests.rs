@@ -253,6 +253,30 @@ fn detects_vscode() {
 }
 
 #[test]
+fn detects_superset() {
+    let env = FakeEnvironment::new()
+        .with_var("TERM_PROGRAM", "Superset")
+        .with_var("TERM_PROGRAM_VERSION", "2.0.0");
+    let terminal = detect_terminal_info_from_env(&env);
+    assert_eq!(
+        terminal,
+        terminal_info(
+            TerminalName::Superset,
+            Some("Superset"),
+            Some("2.0.0"),
+            /*term*/ None,
+            /*multiplexer*/ None,
+        ),
+        "superset_term_program_info"
+    );
+    assert_eq!(
+        terminal.user_agent_token(),
+        "Superset/2.0.0",
+        "superset_term_program_user_agent"
+    );
+}
+
+#[test]
 fn detects_warp_terminal() {
     let env = FakeEnvironment::new()
         .with_var("TERM_PROGRAM", "WarpTerminal")

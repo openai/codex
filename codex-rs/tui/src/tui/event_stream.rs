@@ -24,16 +24,24 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
+use std::time::Duration;
 
+use codex_terminal_detection::TerminalInfo;
+use codex_terminal_detection::TerminalName;
 use crossterm::event::Event;
+use crossterm::terminal;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
+use tokio::time::Interval;
+use tokio::time::MissedTickBehavior;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::WatchStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::TuiEvent;
+
+const SUPERSET_RESIZE_WATCHDOG_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Result type produced by an event source.
 pub type EventResult = std::io::Result<Event>;
@@ -42,6 +50,99 @@ pub type EventResult = std::io::Result<Event>;
 /// Value in production is [`CrosstermEventSource`].
 pub trait EventSource: Send + 'static {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<EventResult>>;
+}
+
+type TerminalSizeReader = Arc<dyn Fn() -> std::io::Result<(u16, u16)> + Send + Sync>;
+
+struct ResizeWatchdog {
+    interval: Interval,
+    last_size: Option<(u16, u16)>,
+    read_size: TerminalSizeReader,
+    logged_read_error: bool,
+}
+
+impl ResizeWatchdog {
+    fn new(interval_duration: Duration, read_size: TerminalSizeReader) -> Self {
+        let mut interval = tokio::time::interval(interval_duration);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        Self {
+            interval,
+            last_size: None,
+            read_size,
+            logged_read_error: false,
+        }
+    }
+
+    fn superset() -> Self {
+        Self::new(SUPERSET_RESIZE_WATCHDOG_INTERVAL, Arc::new(terminal::size))
+    }
+
+    fn set_observed_size(&mut self, size: (u16, u16)) {
+        self.last_size = Some(size);
+    }
+
+    fn observe_current_size(&mut self) -> bool {
+        let size = match (self.read_size)() {
+            Ok(size) => {
+                if self.logged_read_error {
+                    tracing::debug!(
+                        event = "resize_watchdog_size_read_recovered",
+                        "resize watchdog size reads recovered"
+                    );
+                    self.logged_read_error = false;
+                }
+                size
+            }
+            Err(err) => {
+                if !self.logged_read_error {
+                    tracing::warn!(
+                        event = "resize_watchdog_size_read_failed",
+                        error = %err,
+                        "resize watchdog failed to read terminal size"
+                    );
+                    self.logged_read_error = true;
+                }
+                return false;
+            }
+        };
+        let previous_size = self.last_size;
+        let changed = previous_size.is_some_and(|last_size| last_size != size);
+        self.last_size = Some(size);
+        match previous_size {
+            Some((old_cols, old_rows)) if changed => {
+                tracing::info!(
+                    event = "resize_watchdog_size_changed",
+                    old_cols,
+                    old_rows,
+                    new_cols = size.0,
+                    new_rows = size.1,
+                    "resize watchdog detected terminal size change"
+                );
+            }
+            None => {
+                tracing::info!(
+                    event = "resize_watchdog_size_seeded",
+                    cols = size.0,
+                    rows = size.1,
+                    "resize watchdog seeded terminal size"
+                );
+            }
+            Some(_) => {}
+        }
+        changed
+    }
+}
+
+fn should_enable_superset_resize_watchdog(
+    terminal_info: &TerminalInfo,
+    has_superset_env_markers: bool,
+) -> bool {
+    terminal_info.name == TerminalName::Superset || has_superset_env_markers
+}
+
+fn has_superset_env_markers() -> bool {
+    std::env::var_os("SUPERSET_TERMINAL_ID").is_some()
+        && std::env::var_os("SUPERSET_WORKSPACE_ID").is_some()
 }
 
 /// Shared crossterm input state for all [`TuiEventStream`] instances. A single crossterm EventStream
@@ -140,6 +241,7 @@ pub struct TuiEventStream<S: EventSource + Default + Unpin = CrosstermEventSourc
     broker: Arc<EventBroker<S>>,
     draw_stream: BroadcastStream<()>,
     resume_stream: WatchStream<()>,
+    resize_watchdog: Option<ResizeWatchdog>,
     terminal_focused: Arc<AtomicBool>,
     poll_draw_first: bool,
     #[cfg(unix)]
@@ -157,10 +259,26 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         #[cfg(unix)] alt_screen_active: Arc<AtomicBool>,
     ) -> Self {
         let resume_stream = WatchStream::from_changes(broker.resume_events_rx());
+        let terminal_info = codex_terminal_detection::terminal_info();
+        let has_superset_env_markers = has_superset_env_markers();
+        let enable_resize_watchdog =
+            should_enable_superset_resize_watchdog(&terminal_info, has_superset_env_markers);
+        tracing::info!(
+            event = "superset_resize_watchdog_configured",
+            enabled = enable_resize_watchdog,
+            terminal_name = ?terminal_info.name,
+            term_program = ?terminal_info.term_program,
+            term_program_version = ?terminal_info.version,
+            term = ?terminal_info.term,
+            has_superset_env_markers,
+            "configured Superset resize watchdog"
+        );
+        let resize_watchdog = enable_resize_watchdog.then(ResizeWatchdog::superset);
         Self {
             broker,
             draw_stream: BroadcastStream::new(draw_rx),
             resume_stream,
+            resize_watchdog,
             terminal_focused,
             poll_draw_first: false,
             #[cfg(unix)]
@@ -233,6 +351,27 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
+    fn poll_resize_watchdog(&mut self, cx: &mut Context<'_>) -> Poll<Option<TuiEvent>> {
+        let Some(watchdog) = self.resize_watchdog.as_mut() else {
+            return Poll::Pending;
+        };
+
+        loop {
+            match Pin::new(&mut watchdog.interval).poll_tick(cx) {
+                Poll::Ready(_) => {
+                    if watchdog.observe_current_size() {
+                        tracing::info!(
+                            event = "resize_watchdog_resize_emitted",
+                            "resize watchdog emitted synthetic resize event"
+                        );
+                        return Poll::Ready(Some(TuiEvent::Resize));
+                    }
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+
     /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use (mouse events, etc.).
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
@@ -244,7 +383,19 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 }
                 Some(TuiEvent::Key(key_event))
             }
-            Event::Resize(_, _) => Some(TuiEvent::Resize),
+            Event::Resize(cols, rows) => {
+                tracing::info!(
+                    event = "crossterm_resize_event_received",
+                    cols,
+                    rows,
+                    watchdog_enabled = self.resize_watchdog.is_some(),
+                    "received crossterm terminal resize event"
+                );
+                if let Some(watchdog) = self.resize_watchdog.as_mut() {
+                    watchdog.set_observed_size((cols, rows));
+                }
+                Some(TuiEvent::Resize)
+            }
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
@@ -284,6 +435,10 @@ impl<S: EventSource + Default + Unpin> Stream for TuiEventStream<S> {
             if let Poll::Ready(event) = self.poll_draw_event(cx) {
                 return Poll::Ready(event);
             }
+        }
+
+        if let Poll::Ready(event) = self.poll_resize_watchdog(cx) {
+            return Poll::Ready(event);
         }
 
         Poll::Pending
@@ -369,6 +524,31 @@ mod tests {
         )
     }
 
+    fn terminal_info(name: TerminalName) -> TerminalInfo {
+        TerminalInfo {
+            name,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: None,
+        }
+    }
+
+    fn make_resize_watchdog(
+        size: Arc<std::sync::Mutex<(u16, u16)>>,
+        interval_duration: Duration,
+    ) -> ResizeWatchdog {
+        ResizeWatchdog::new(
+            interval_duration,
+            Arc::new(move || {
+                let size = size
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                Ok(*size)
+            }),
+        )
+    }
+
     type SetupState = (
         Arc<EventBroker<FakeEventSource>>,
         FakeEventSourceHandle,
@@ -436,6 +616,85 @@ mod tests {
         }
 
         assert!(saw_draw && saw_key, "expected both draw and key events");
+    }
+
+    #[test]
+    fn superset_resize_watchdog_gate_is_narrow() {
+        assert!(should_enable_superset_resize_watchdog(
+            &terminal_info(TerminalName::Superset),
+            /*has_superset_env_markers*/ false,
+        ));
+        assert!(should_enable_superset_resize_watchdog(
+            &terminal_info(TerminalName::Unknown),
+            /*has_superset_env_markers*/ true,
+        ));
+        assert!(!should_enable_superset_resize_watchdog(
+            &terminal_info(TerminalName::Unknown),
+            /*has_superset_env_markers*/ false,
+        ));
+        assert!(!should_enable_superset_resize_watchdog(
+            &terminal_info(TerminalName::VsCode),
+            /*has_superset_env_markers*/ false,
+        ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resize_watchdog_reports_changes_after_seed() {
+        let size = Arc::new(std::sync::Mutex::new((80, 24)));
+        let mut watchdog = make_resize_watchdog(size.clone(), Duration::from_millis(10));
+
+        assert!(!watchdog.observe_current_size(), "first sample seeds size");
+        assert!(
+            !watchdog.observe_current_size(),
+            "same size does not request resize"
+        );
+
+        *size
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (100, 30);
+        assert!(
+            watchdog.observe_current_size(),
+            "changed size requests resize"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resize_watchdog_emits_resize_when_size_changes() {
+        let (broker, _handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let size = Arc::new(std::sync::Mutex::new((80, 24)));
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+        stream.resize_watchdog = Some(make_resize_watchdog(size.clone(), Duration::from_millis(5)));
+
+        let no_event = timeout(Duration::from_millis(20), stream.next()).await;
+        assert!(no_event.is_err(), "unchanged terminal size should not emit");
+
+        *size
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = (100, 30);
+        let next = timeout(Duration::from_millis(50), stream.next())
+            .await
+            .expect("timed out waiting for watchdog resize");
+        assert!(matches!(next, Some(TuiEvent::Resize)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resize_event_updates_watchdog_size() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let size = Arc::new(std::sync::Mutex::new((100, 30)));
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+        stream.resize_watchdog = Some(make_resize_watchdog(size, Duration::from_millis(10)));
+
+        handle.send(Ok(Event::Resize(100, 30)));
+
+        let next = stream.next().await;
+        assert!(matches!(next, Some(TuiEvent::Resize)));
+        assert_eq!(
+            stream
+                .resize_watchdog
+                .as_ref()
+                .and_then(|watchdog| watchdog.last_size),
+            Some((100, 30))
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

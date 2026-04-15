@@ -3383,14 +3383,29 @@ impl App {
         size: ratatui::layout::Size,
         last_known_screen_size: ratatui::layout::Size,
         frame_requester: &tui::FrameRequester,
+        resize_reflow_mode: tui::ResizeReflowMode,
     ) -> bool {
         let width = self.transcript_reflow.note_width(size.width);
         if width.changed {
             self.chat_widget.on_terminal_resize(size.width);
-            if self.schedule_resize_reflow() {
-                frame_requester.schedule_frame();
-            } else {
-                frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
+            match resize_reflow_mode {
+                tui::ResizeReflowMode::Debounced => {
+                    if self.schedule_resize_reflow() {
+                        frame_requester.schedule_frame();
+                    } else {
+                        frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
+                    }
+                }
+                tui::ResizeReflowMode::Immediate => {
+                    tracing::info!(
+                        event = "resize_reflow_scheduled_immediate",
+                        cols = size.width,
+                        rows = size.height,
+                        "scheduling immediate resize reflow for terminal"
+                    );
+                    self.transcript_reflow.schedule_immediate();
+                    frame_requester.schedule_frame();
+                }
             }
         } else if width.initialized {
             self.chat_widget.on_terminal_resize(size.width);
@@ -3421,6 +3436,7 @@ impl App {
             size,
             tui.terminal.last_known_screen_size,
             &tui.frame_requester(),
+            tui.resize_reflow_mode(),
         );
         if width_changed {
             // Width-sensitive history inserts queued before this frame may be wrapped for the old
@@ -4221,6 +4237,14 @@ impl App {
     ) -> Result<AppRunControl> {
         let is_resize = matches!(event, TuiEvent::Resize);
         if is_resize {
+            let terminal_size = tui.terminal.size().ok();
+            tracing::info!(
+                event = "tui_resize_event_handled",
+                cols = terminal_size.map(|size| size.width),
+                rows = terminal_size.map(|size| size.height),
+                resize_reflow_mode = ?tui.resize_reflow_mode(),
+                "handling TUI resize event with forced full repaint"
+            );
             tui.force_full_repaint();
         }
         if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
@@ -9522,15 +9546,50 @@ guardian_approval = true
         let size = Size::new(120, 40);
 
         app.transcript_reflow.set_last_render_width_for_test(100);
-        app.handle_draw_size_change(size, size, &frame_requester);
+        app.handle_draw_size_change(
+            size,
+            size,
+            &frame_requester,
+            tui::ResizeReflowMode::Debounced,
+        );
 
         app.transcript_reflow.set_due_for_test();
 
-        app.handle_draw_size_change(size, size, &frame_requester);
+        app.handle_draw_size_change(
+            size,
+            size,
+            &frame_requester,
+            tui::ResizeReflowMode::Debounced,
+        );
 
         assert!(
             !app.transcript_reflow.has_pending_reflow(),
             "resize reflow should drain on draw even when commit animation is idle",
+        );
+    }
+
+    #[tokio::test]
+    async fn immediate_resize_reflow_mode_makes_reflow_due_in_same_draw() {
+        let mut app = make_test_app().await;
+        let frame_requester = crate::tui::FrameRequester::test_dummy();
+        let size = Size::new(120, 40);
+
+        app.transcript_cells.push(Arc::new(AgentMessageCell::new(
+            vec![Line::from("| Key | Value |")],
+            false,
+        )));
+        app.transcript_reflow.set_last_render_width_for_test(100);
+        let width_changed = app.handle_draw_size_change(
+            size,
+            size,
+            &frame_requester,
+            tui::ResizeReflowMode::Immediate,
+        );
+
+        assert!(width_changed);
+        assert!(
+            app.transcript_reflow.pending_is_due(Instant::now()),
+            "immediate mode should let the current pre-render pass reflow without waiting"
         );
     }
 

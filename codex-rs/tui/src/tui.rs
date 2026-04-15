@@ -48,6 +48,7 @@ use crate::tui::event_stream::TuiEventStream;
 use crate::tui::job_control::SuspendContext;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
+use codex_terminal_detection::TerminalName;
 
 mod event_stream;
 mod frame_rate_limiter;
@@ -60,6 +61,12 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResizeReflowMode {
+    Debounced,
+    Immediate,
+}
 
 fn should_emit_notification(condition: NotificationCondition, terminal_focused: bool) -> bool {
     match condition {
@@ -295,6 +302,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
     is_zellij: bool,
+    resize_reflow_mode: ResizeReflowMode,
     force_full_repaint: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
@@ -311,9 +319,22 @@ impl Tui {
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
         let _ = crate::terminal_palette::default_colors();
+        let terminal_info = codex_terminal_detection::terminal_info();
         let is_zellij = matches!(
-            codex_terminal_detection::terminal_info().multiplexer,
+            terminal_info.multiplexer,
             Some(codex_terminal_detection::Multiplexer::Zellij {})
+        );
+        let resize_reflow_mode = if terminal_info.name == TerminalName::Superset {
+            ResizeReflowMode::Immediate
+        } else {
+            ResizeReflowMode::Debounced
+        };
+        tracing::info!(
+            event = "resize_reflow_mode_configured",
+            mode = ?resize_reflow_mode,
+            terminal_name = ?terminal_info.name,
+            term_program = ?terminal_info.term_program,
+            "configured terminal resize reflow mode"
         );
 
         Self {
@@ -331,6 +352,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             is_zellij,
+            resize_reflow_mode,
             force_full_repaint: false,
             alt_screen_enabled: true,
         }
@@ -356,6 +378,10 @@ impl Tui {
 
     pub(crate) fn force_full_repaint(&mut self) {
         self.force_full_repaint = true;
+    }
+
+    pub(crate) fn resize_reflow_mode(&self) -> ResizeReflowMode {
+        self.resize_reflow_mode
     }
 
     pub fn enhanced_keys_supported(&self) -> bool {
