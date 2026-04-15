@@ -389,6 +389,9 @@
             "experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "external_migrate": {
+              "type": "boolean"
+            },
             "fast_mode": {
               "type": "boolean"
             },
@@ -2275,6 +2278,9 @@
           "type": "boolean"
         },
         "experimental_windows_sandbox": {
+          "type": "boolean"
+        },
+        "external_migrate": {
           "type": "boolean"
         },
         "fast_mode": {
