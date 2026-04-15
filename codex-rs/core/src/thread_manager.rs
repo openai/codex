@@ -41,6 +41,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
@@ -925,6 +926,9 @@ impl ThreadManagerState {
             }
             Some(_) | None => crate::file_watcher::WatchRegistration::default(),
         };
+        let inherited_rollout_trace = self
+            .inherited_rollout_trace_for_source(&session_source)
+            .await;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -944,6 +948,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            inherited_rollout_trace,
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),
@@ -987,6 +992,24 @@ impl ThreadManagerState {
 
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
         let _ = self.thread_created_tx.send(thread_id);
+    }
+
+    async fn inherited_rollout_trace_for_source(
+        &self,
+        session_source: &SessionSource,
+    ) -> Option<crate::rollout_trace::RolloutTraceRecorder> {
+        // Only v2 thread-spawn children inherit a recorder. Independent
+        // top-level threads still create their own rollout bundles.
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = session_source
+        else {
+            return None;
+        };
+        self.get_thread(*parent_thread_id)
+            .await
+            .ok()
+            .and_then(|thread| thread.codex.session.services.rollout_trace.clone())
     }
 }
 

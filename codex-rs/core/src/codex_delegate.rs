@@ -95,6 +95,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_shell_snapshot: None,
         user_shell_override: None,
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
+        inherited_rollout_trace: None,
         parent_trace: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
     }))
