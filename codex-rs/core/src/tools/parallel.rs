@@ -16,7 +16,7 @@ use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
-use crate::tools::registry::ToolArgumentDiffConsumerBox;
+use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
@@ -56,7 +56,7 @@ impl ToolCallRuntime {
     pub(crate) fn create_diff_consumer(
         &self,
         tool_name: &codex_tools::ToolName,
-    ) -> Option<ToolArgumentDiffConsumerBox> {
+    ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         self.router.create_diff_consumer(tool_name)
     }
 

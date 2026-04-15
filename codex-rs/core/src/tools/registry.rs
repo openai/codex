@@ -77,7 +77,7 @@ pub trait ToolHandler: Send + Sync {
     }
 
     /// Creates an optional consumer for streamed tool argument diffs.
-    fn create_diff_consumer(&self) -> Option<ToolArgumentDiffConsumerBox> {
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         None
     }
 
@@ -96,8 +96,6 @@ pub(crate) trait ToolArgumentDiffConsumer: Send {
     fn consume_diff(&mut self, turn: &TurnContext, call_id: String, diff: &str)
     -> Option<EventMsg>;
 }
-
-pub(crate) type ToolArgumentDiffConsumerBox = Box<dyn ToolArgumentDiffConsumer>;
 
 pub(crate) struct AnyToolResult {
     pub(crate) call_id: String,
@@ -149,7 +147,7 @@ trait AnyToolHandler: Send + Sync {
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload>;
 
-    fn create_diff_consumer(&self) -> Option<ToolArgumentDiffConsumerBox>;
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>>;
 
     fn handle_any<'a>(
         &'a self,
@@ -182,7 +180,7 @@ where
         ToolHandler::post_tool_use_payload(self, call_id, payload, result)
     }
 
-    fn create_diff_consumer(&self) -> Option<ToolArgumentDiffConsumerBox> {
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         ToolHandler::create_diff_consumer(self)
     }
 
@@ -224,7 +222,7 @@ impl ToolRegistry {
     pub(crate) fn create_diff_consumer(
         &self,
         name: &ToolName,
-    ) -> Option<ToolArgumentDiffConsumerBox> {
+    ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         self.handler(name)?.create_diff_consumer()
     }
 
