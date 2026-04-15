@@ -72,6 +72,8 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -119,9 +121,6 @@ use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::protocol::AddCreditsNudgeCreditType;
-use codex_protocol::protocol::AddCreditsNudgeEmailResult;
-use codex_protocol::protocol::AddCreditsNudgeEmailStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::GetHistoryEntryResponseEvent;
@@ -1956,11 +1955,7 @@ impl App {
         tokio::spawn(async move {
             let result = send_add_credits_nudge_email(request_handle, credit_type)
                 .await
-                .map(AddCreditsNudgeEmailStatus::from)
-                .map(AddCreditsNudgeEmailResult::from)
-                .unwrap_or_else(|err| AddCreditsNudgeEmailResult::Failed {
-                    message: err.to_string(),
-                });
+                .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::AddCreditsNudgeEmailFinished { result });
         });
     }
@@ -6269,9 +6264,7 @@ async fn send_add_credits_nudge_email(
     let response: codex_app_server_protocol::SendAddCreditsNudgeEmailResponse = request_handle
         .request_typed(ClientRequest::SendAddCreditsNudgeEmail {
             request_id,
-            params: SendAddCreditsNudgeEmailParams {
-                credit_type: credit_type.into(),
-            },
+            params: SendAddCreditsNudgeEmailParams { credit_type },
         })
         .await
         .wrap_err("account/sendAddCreditsNudgeEmail failed in TUI")?;

@@ -280,6 +280,48 @@ async fn send_add_credits_nudge_email_posts_expected_body() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn send_add_credits_nudge_email_maps_cooldown() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let server = MockServer::start().await;
+    let server_url = server.uri();
+    write_chatgpt_base_url(codex_home.path(), &server_url)?;
+
+    Mock::given(method("POST"))
+        .and(path("/api/codex/accounts/send_add_credits_nudge_email"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_add_credits_nudge_email_request(SendAddCreditsNudgeEmailParams {
+            credit_type: AddCreditsNudgeCreditType::Credits,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: SendAddCreditsNudgeEmailResponse = to_response(response)?;
+
+    assert_eq!(received.status, AddCreditsNudgeEmailStatus::CooldownActive);
+
+    Ok(())
+}
+
 async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
     let request_id = mcp.send_login_account_api_key_request(api_key).await?;
     let response: JSONRPCResponse = timeout(

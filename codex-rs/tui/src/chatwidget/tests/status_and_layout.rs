@@ -615,17 +615,15 @@ async fn workspace_owner_nudge_default_no_dismisses_without_sending() {
 async fn workspace_owner_credits_nudge_completion_renders_feedback() {
     let cases = [
         (
-            AddCreditsNudgeEmailResult::Sent,
+            Ok(AddCreditsNudgeEmailStatus::Sent),
             "Workspace owner notified.",
         ),
         (
-            AddCreditsNudgeEmailResult::CooldownActive,
+            Ok(AddCreditsNudgeEmailStatus::CooldownActive),
             "Workspace owner was already notified recently.",
         ),
         (
-            AddCreditsNudgeEmailResult::Failed {
-                message: "request failed".to_string(),
-            },
+            Err("request failed".to_string()),
             "Could not notify your workspace owner. Please try again.",
         ),
     ];
@@ -653,17 +651,15 @@ async fn workspace_owner_credits_nudge_completion_renders_feedback() {
 async fn workspace_owner_usage_limit_nudge_completion_renders_feedback() {
     let cases = [
         (
-            AddCreditsNudgeEmailResult::Sent,
+            Ok(AddCreditsNudgeEmailStatus::Sent),
             "Limit increase requested.",
         ),
         (
-            AddCreditsNudgeEmailResult::CooldownActive,
+            Ok(AddCreditsNudgeEmailStatus::CooldownActive),
             "A limit increase was already requested recently.",
         ),
         (
-            AddCreditsNudgeEmailResult::Failed {
-                message: "request failed".to_string(),
-            },
+            Err("request failed".to_string()),
             "Could not request a limit increase. Please try again.",
         ),
     ];

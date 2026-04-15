@@ -28,6 +28,8 @@ use codex_analytics::TurnSteerRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -199,6 +201,7 @@ use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
+use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
@@ -290,7 +293,6 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AddCreditsNudgeEmailStatus as CoreAddCreditsNudgeEmailStatus;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -1907,7 +1909,7 @@ impl CodexMessageProcessor {
     async fn send_add_credits_nudge_email_inner(
         &self,
         params: SendAddCreditsNudgeEmailParams,
-    ) -> Result<CoreAddCreditsNudgeEmailStatus, JSONRPCErrorError> {
+    ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -1933,18 +1935,25 @@ impl CodexMessageProcessor {
             })?;
 
         match client
-            .send_add_credits_nudge_email(params.credit_type.into())
+            .send_add_credits_nudge_email(Self::backend_credit_type(params.credit_type))
             .await
         {
-            Ok(()) => Ok(CoreAddCreditsNudgeEmailStatus::Sent),
+            Ok(()) => Ok(AddCreditsNudgeEmailStatus::Sent),
             Err(err) if err.status().is_some_and(|status| status.as_u16() == 429) => {
-                Ok(CoreAddCreditsNudgeEmailStatus::CooldownActive)
+                Ok(AddCreditsNudgeEmailStatus::CooldownActive)
             }
             Err(err) => Err(JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to notify workspace owner: {err}"),
                 data: None,
             }),
+        }
+    }
+
+    fn backend_credit_type(value: AddCreditsNudgeCreditType) -> BackendAddCreditsNudgeCreditType {
+        match value {
+            AddCreditsNudgeCreditType::Credits => BackendAddCreditsNudgeCreditType::Credits,
+            AddCreditsNudgeCreditType::UsageLimit => BackendAddCreditsNudgeCreditType::UsageLimit,
         }
     }
 

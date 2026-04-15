@@ -78,6 +78,8 @@ use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
@@ -134,8 +136,6 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
-use codex_protocol::protocol::AddCreditsNudgeCreditType;
-use codex_protocol::protocol::AddCreditsNudgeEmailResult;
 #[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 #[cfg(test)]
@@ -6677,9 +6677,6 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
-            EventMsg::AddCreditsNudgeEmailResponse(ev) => {
-                self.finish_add_credits_nudge_email_request(ev.result);
-            }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
@@ -7554,29 +7551,31 @@ impl ChatWidget {
 
     pub(crate) fn finish_add_credits_nudge_email_request(
         &mut self,
-        result: AddCreditsNudgeEmailResult,
+        result: Result<AddCreditsNudgeEmailStatus, String>,
     ) {
         let credit_type = self
             .add_credits_nudge_email_in_flight
             .take()
             .unwrap_or(AddCreditsNudgeCreditType::Credits);
         let message = match (credit_type, result) {
-            (AddCreditsNudgeCreditType::Credits, AddCreditsNudgeEmailResult::Sent) => {
+            (AddCreditsNudgeCreditType::Credits, Ok(AddCreditsNudgeEmailStatus::Sent)) => {
                 "Workspace owner notified."
             }
-            (AddCreditsNudgeCreditType::Credits, AddCreditsNudgeEmailResult::CooldownActive) => {
-                "Workspace owner was already notified recently."
-            }
-            (AddCreditsNudgeCreditType::Credits, AddCreditsNudgeEmailResult::Failed { .. }) => {
+            (
+                AddCreditsNudgeCreditType::Credits,
+                Ok(AddCreditsNudgeEmailStatus::CooldownActive),
+            ) => "Workspace owner was already notified recently.",
+            (AddCreditsNudgeCreditType::Credits, Err(_)) => {
                 "Could not notify your workspace owner. Please try again."
             }
-            (AddCreditsNudgeCreditType::UsageLimit, AddCreditsNudgeEmailResult::Sent) => {
+            (AddCreditsNudgeCreditType::UsageLimit, Ok(AddCreditsNudgeEmailStatus::Sent)) => {
                 "Limit increase requested."
             }
-            (AddCreditsNudgeCreditType::UsageLimit, AddCreditsNudgeEmailResult::CooldownActive) => {
-                "A limit increase was already requested recently."
-            }
-            (AddCreditsNudgeCreditType::UsageLimit, AddCreditsNudgeEmailResult::Failed { .. }) => {
+            (
+                AddCreditsNudgeCreditType::UsageLimit,
+                Ok(AddCreditsNudgeEmailStatus::CooldownActive),
+            ) => "A limit increase was already requested recently.",
+            (AddCreditsNudgeCreditType::UsageLimit, Err(_)) => {
                 "Could not request a limit increase. Please try again."
             }
         };

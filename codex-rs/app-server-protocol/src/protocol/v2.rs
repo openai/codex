@@ -48,8 +48,6 @@ use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
-use codex_protocol::protocol::AddCreditsNudgeCreditType as CoreAddCreditsNudgeCreditType;
-use codex_protocol::protocol::AddCreditsNudgeEmailStatus as CoreAddCreditsNudgeEmailStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -1780,24 +1778,6 @@ pub enum AddCreditsNudgeCreditType {
     UsageLimit,
 }
 
-impl From<AddCreditsNudgeCreditType> for CoreAddCreditsNudgeCreditType {
-    fn from(value: AddCreditsNudgeCreditType) -> Self {
-        match value {
-            AddCreditsNudgeCreditType::Credits => Self::Credits,
-            AddCreditsNudgeCreditType::UsageLimit => Self::UsageLimit,
-        }
-    }
-}
-
-impl From<CoreAddCreditsNudgeCreditType> for AddCreditsNudgeCreditType {
-    fn from(value: CoreAddCreditsNudgeCreditType) -> Self {
-        match value {
-            CoreAddCreditsNudgeCreditType::Credits => Self::Credits,
-            CoreAddCreditsNudgeCreditType::UsageLimit => Self::UsageLimit,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1811,24 +1791,6 @@ pub struct SendAddCreditsNudgeEmailResponse {
 pub enum AddCreditsNudgeEmailStatus {
     Sent,
     CooldownActive,
-}
-
-impl From<CoreAddCreditsNudgeEmailStatus> for AddCreditsNudgeEmailStatus {
-    fn from(value: CoreAddCreditsNudgeEmailStatus) -> Self {
-        match value {
-            CoreAddCreditsNudgeEmailStatus::Sent => Self::Sent,
-            CoreAddCreditsNudgeEmailStatus::CooldownActive => Self::CooldownActive,
-        }
-    }
-}
-
-impl From<AddCreditsNudgeEmailStatus> for CoreAddCreditsNudgeEmailStatus {
-    fn from(value: AddCreditsNudgeEmailStatus) -> Self {
-        match value {
-            AddCreditsNudgeEmailStatus::Sent => Self::Sent,
-            AddCreditsNudgeEmailStatus::CooldownActive => Self::CooldownActive,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

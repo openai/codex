@@ -400,12 +400,6 @@ pub enum Op {
     /// Request the list of voices supported by realtime conversation streams.
     RealtimeConversationListVoices,
 
-    /// Ask the workspace owner to add credits or raise the workspace usage
-    /// limit after the user confirms an actionable workspace member limit.
-    SendAddCreditsNudgeEmail {
-        credit_type: AddCreditsNudgeCreditType,
-    },
-
     /// Legacy user input.
     ///
     /// Prefer [`Op::UserTurn`] so the caller provides full turn context
@@ -770,7 +764,6 @@ impl Op {
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
-            Self::SendAddCreditsNudgeEmail { .. } => "send_add_credits_nudge_email",
             Self::UserInput { .. } => "user_input",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
@@ -1559,8 +1552,6 @@ pub enum EventMsg {
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
 
-    AddCreditsNudgeEmailResponse(AddCreditsNudgeEmailResponseEvent),
-
     PlanUpdate(UpdatePlanArgs),
 
     TurnAborted(TurnAbortedEvent),
@@ -2187,45 +2178,6 @@ pub enum RateLimitReachedType {
     WorkspaceMemberCreditsDepleted,
     WorkspaceOwnerUsageLimitReached,
     WorkspaceMemberUsageLimitReached,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum AddCreditsNudgeCreditType {
-    Credits,
-    UsageLimit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum AddCreditsNudgeEmailStatus {
-    Sent,
-    CooldownActive,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(tag = "status", rename_all = "snake_case")]
-#[ts(tag = "status")]
-pub enum AddCreditsNudgeEmailResult {
-    Sent,
-    CooldownActive,
-    Failed { message: String },
-}
-
-impl From<AddCreditsNudgeEmailStatus> for AddCreditsNudgeEmailResult {
-    fn from(value: AddCreditsNudgeEmailStatus) -> Self {
-        match value {
-            AddCreditsNudgeEmailStatus::Sent => Self::Sent,
-            AddCreditsNudgeEmailStatus::CooldownActive => Self::CooldownActive,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AddCreditsNudgeEmailResponseEvent {
-    pub result: AddCreditsNudgeEmailResult,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]

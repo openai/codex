@@ -9,7 +9,6 @@ use codex_client::build_reqwest_client_with_custom_ca;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
-use codex_protocol::protocol::AddCreditsNudgeCreditType;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -81,6 +80,13 @@ impl From<anyhow::Error> for RequestError {
     fn from(err: anyhow::Error) -> Self {
         Self::Other(err)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AddCreditsNudgeCreditType {
+    Credits,
+    UsageLimit,
 }
 
 #[derive(Serialize)]

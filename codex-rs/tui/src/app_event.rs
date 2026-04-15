@@ -10,6 +10,8 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
@@ -20,8 +22,6 @@ use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::protocol::AddCreditsNudgeCreditType;
-use codex_protocol::protocol::AddCreditsNudgeEmailResult;
 use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -180,7 +180,7 @@ pub(crate) enum AppEvent {
 
     /// Result of notifying the workspace owner.
     AddCreditsNudgeEmailFinished {
-        result: AddCreditsNudgeEmailResult,
+        result: Result<AddCreditsNudgeEmailStatus, String>,
     },
 
     /// Result of prefetching connectors.

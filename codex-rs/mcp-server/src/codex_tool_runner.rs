@@ -393,7 +393,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::RealtimeConversationSdp(_)
                     | EventMsg::RealtimeConversationRealtime(_)
                     | EventMsg::RealtimeConversationClosed(_)
-                    | EventMsg::AddCreditsNudgeEmailResponse(_)
                     | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
