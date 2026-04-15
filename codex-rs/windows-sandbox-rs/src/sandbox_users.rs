@@ -33,6 +33,14 @@ use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
 use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
+use windows_sys::Win32::System::Threading::GetExitCodeProcess;
+use windows_sys::Win32::System::Threading::INFINITE;
+use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
+use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTUPINFOW;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -76,6 +84,8 @@ pub fn provision_sandbox_users(
     let online_password = random_password();
     ensure_sandbox_user(offline_username, &offline_password, log)?;
     ensure_sandbox_user(online_username, &online_password, log)?;
+    initialize_user_profile(offline_username, &offline_password, log)?;
+    initialize_user_profile(online_username, &online_password, log)?;
     write_secrets(
         codex_home,
         offline_username,
@@ -85,6 +95,60 @@ pub fn provision_sandbox_users(
         proxy_ports,
         allow_local_binding,
     )?;
+    Ok(())
+}
+
+fn initialize_user_profile(username: &str, password: &str, log: &mut File) -> Result<()> {
+    super::log_line(log, &format!("initializing sandbox profile for {username}"))?;
+    let user_w = to_wide(OsStr::new(username));
+    let domain_w = to_wide(OsStr::new("."));
+    let password_w = to_wide(OsStr::new(password));
+    let application_w = to_wide(OsStr::new("C:\\Windows\\System32\\cmd.exe"));
+    let mut command_line_w = to_wide(OsStr::new(r#"cmd.exe /c "exit 0""#));
+    let mut startup_info: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup_info.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut process_info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    let created = unsafe {
+        CreateProcessWithLogonW(
+            user_w.as_ptr(),
+            domain_w.as_ptr(),
+            password_w.as_ptr(),
+            LOGON_WITH_PROFILE,
+            application_w.as_ptr(),
+            command_line_w.as_mut_ptr(),
+            CREATE_NO_WINDOW,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup_info,
+            &mut process_info,
+        )
+    };
+    if created == 0 {
+        return Err(anyhow::anyhow!(
+            "CreateProcessWithLogonW failed for {username}: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+
+    unsafe {
+        WaitForSingleObject(process_info.hProcess, INFINITE);
+        let mut exit_code: u32 = 1;
+        GetExitCodeProcess(process_info.hProcess, &mut exit_code);
+        if process_info.hThread != 0 {
+            windows_sys::Win32::Foundation::CloseHandle(process_info.hThread);
+        }
+        if process_info.hProcess != 0 {
+            windows_sys::Win32::Foundation::CloseHandle(process_info.hProcess);
+        }
+        if exit_code != 0 {
+            return Err(anyhow::anyhow!(
+                "profile bootstrap command exited {} for {username}",
+                exit_code
+            ));
+        }
+    }
+
     Ok(())
 }
 
