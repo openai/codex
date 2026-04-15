@@ -1454,7 +1454,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
             let permissions_label = format!("{PERMISSIONS_LABEL:<label_width$}");
             lines.push(make_row(vec![
                 Span::from(format!("{permissions_label} ")).dim(),
-                "YOLO mode".yellow().bold(),
+                "YOLO mode".magenta().bold(),
             ]));
         }
 
