@@ -398,6 +398,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             .enforce_residency
             .map(map_residency_requirement_to_api),
         network: requirements.network.map(map_network_requirements_to_api),
+        forced_chatgpt_workspace_id: requirements.forced_chatgpt_workspace_id,
     }
 }
 
@@ -567,6 +568,12 @@ mod tests {
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
             guardian_policy_config: None,
+            forced_chatgpt_workspace_id: Some(
+                codex_protocol::config_types::ForcedChatgptWorkspaceIds::Multiple(vec![
+                    "workspace-a".to_string(),
+                    "workspace-b".to_string(),
+                ]),
+            ),
             feature_requirements: Some(codex_core::config_loader::FeatureRequirementsToml {
                 entries: std::collections::BTreeMap::from([
                     ("apps".to_string(), false),
@@ -643,6 +650,15 @@ mod tests {
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
         );
         assert_eq!(
+            mapped.forced_chatgpt_workspace_id,
+            Some(
+                codex_protocol::config_types::ForcedChatgptWorkspaceIds::Multiple(vec![
+                    "workspace-a".to_string(),
+                    "workspace-b".to_string(),
+                ])
+            ),
+        );
+        assert_eq!(
             mapped.network,
             Some(NetworkRequirements {
                 enabled: Some(true),
@@ -676,6 +692,7 @@ mod tests {
             allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
             guardian_policy_config: None,
+            forced_chatgpt_workspace_id: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,
@@ -733,6 +750,7 @@ mod tests {
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
+            forced_chatgpt_workspace_id: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,

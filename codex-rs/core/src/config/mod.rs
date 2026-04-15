@@ -1817,9 +1817,12 @@ impl Config {
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
-        let forced_chatgpt_workspace_id = cfg
-            .forced_chatgpt_workspace_id
-            .and_then(ForcedChatgptWorkspaceIds::normalized);
+        let forced_chatgpt_workspace_id =
+            forced_chatgpt_workspace_id_from_requirements(config_layer_stack.requirements_toml())
+                .or_else(|| {
+                    cfg.forced_chatgpt_workspace_id
+                        .and_then(ForcedChatgptWorkspaceIds::normalized)
+                });
 
         let forced_login_method = cfg.forced_login_method;
 
@@ -2310,6 +2313,15 @@ fn guardian_policy_config_from_requirements(
             let trimmed = value.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
+}
+
+fn forced_chatgpt_workspace_id_from_requirements(
+    requirements_toml: &ConfigRequirementsToml,
+) -> Option<ForcedChatgptWorkspaceIds> {
+    requirements_toml
+        .forced_chatgpt_workspace_id
+        .clone()
+        .and_then(ForcedChatgptWorkspaceIds::normalized)
 }
 
 fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {

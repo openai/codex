@@ -1,4 +1,5 @@
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -505,6 +506,7 @@ pub struct ConfigRequirementsToml {
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
     pub guardian_policy_config: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -542,6 +544,7 @@ pub struct ConfigRequirementsWithSources {
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
     pub guardian_policy_config: Option<Sourced<String>>,
+    pub forced_chatgpt_workspace_id: Option<Sourced<ForcedChatgptWorkspaceIds>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -574,6 +577,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency: _,
             network: _,
             guardian_policy_config: _,
+            forced_chatgpt_workspace_id: _,
         } = &other;
 
         let mut other = other;
@@ -599,6 +603,7 @@ impl ConfigRequirementsWithSources {
                 enforce_residency,
                 network,
                 guardian_policy_config,
+                forced_chatgpt_workspace_id,
             }
         );
 
@@ -624,6 +629,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency,
             network,
             guardian_policy_config,
+            forced_chatgpt_workspace_id,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -637,6 +643,7 @@ impl ConfigRequirementsWithSources {
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
             guardian_policy_config: guardian_policy_config.map(|sourced| sourced.value),
+            forced_chatgpt_workspace_id: forced_chatgpt_workspace_id.map(|sourced| sourced.value),
         }
     }
 }
@@ -696,6 +703,11 @@ impl ConfigRequirementsToml {
                 .guardian_policy_config
                 .as_deref()
                 .is_none_or(|value| value.trim().is_empty())
+            && self
+                .forced_chatgpt_workspace_id
+                .clone()
+                .and_then(ForcedChatgptWorkspaceIds::normalized)
+                .is_none()
     }
 }
 
@@ -715,6 +727,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             enforce_residency,
             network,
             guardian_policy_config: _guardian_policy_config,
+            forced_chatgpt_workspace_id: _forced_chatgpt_workspace_id,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -968,6 +981,7 @@ mod tests {
             enforce_residency,
             network,
             guardian_policy_config,
+            forced_chatgpt_workspace_id,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
@@ -987,6 +1001,8 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             guardian_policy_config: guardian_policy_config
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            forced_chatgpt_workspace_id: forced_chatgpt_workspace_id
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
@@ -1013,6 +1029,10 @@ mod tests {
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
         let guardian_policy_config = "Use the company-managed guardian policy.".to_string();
+        let forced_chatgpt_workspace_id = ForcedChatgptWorkspaceIds::Multiple(vec![
+            "workspace-a".to_string(),
+            "workspace-b".to_string(),
+        ]);
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
@@ -1028,6 +1048,7 @@ mod tests {
             enforce_residency: Some(enforce_residency),
             network: None,
             guardian_policy_config: Some(guardian_policy_config.clone()),
+            forced_chatgpt_workspace_id: Some(forced_chatgpt_workspace_id.clone()),
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -1058,6 +1079,10 @@ mod tests {
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
+                forced_chatgpt_workspace_id: Some(Sourced::new(
+                    forced_chatgpt_workspace_id,
+                    RequirementSource::LegacyManagedConfigTomlFromMdm
+                )),
             }
         );
     }
@@ -1094,6 +1119,7 @@ mod tests {
                 enforce_residency: None,
                 network: None,
                 guardian_policy_config: None,
+                forced_chatgpt_workspace_id: None,
             }
         );
         Ok(())
@@ -1138,6 +1164,7 @@ mod tests {
                 enforce_residency: None,
                 network: None,
                 guardian_policy_config: None,
+                forced_chatgpt_workspace_id: None,
             }
         );
         Ok(())
@@ -1190,6 +1217,28 @@ Use the cloud-managed guardian policy.
             requirements.guardian_policy_config.as_deref(),
             Some("Use the cloud-managed guardian policy.\n")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_forced_chatgpt_workspace_id() -> Result<()> {
+        let single: ConfigRequirementsToml =
+            from_str(r#"forced_chatgpt_workspace_id = "workspace-a""#)?;
+        assert_eq!(
+            single.forced_chatgpt_workspace_id,
+            Some(ForcedChatgptWorkspaceIds::Single("workspace-a".to_string()))
+        );
+
+        let multiple: ConfigRequirementsToml =
+            from_str(r#"forced_chatgpt_workspace_id = ["workspace-a", "workspace-b"]"#)?;
+        assert_eq!(
+            multiple.forced_chatgpt_workspace_id,
+            Some(ForcedChatgptWorkspaceIds::Multiple(vec![
+                "workspace-a".to_string(),
+                "workspace-b".to_string(),
+            ]))
+        );
+
         Ok(())
     }
 

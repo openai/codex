@@ -6922,6 +6922,16 @@
               "object",
               "null"
             ]
+          },
+          "forcedChatgptWorkspaceId": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ForcedChatgptWorkspaceIds"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object"

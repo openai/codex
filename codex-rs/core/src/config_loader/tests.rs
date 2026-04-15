@@ -637,6 +637,7 @@ allowed_approval_policies = ["on-request"]
                 enforce_residency: None,
                 network: None,
                 guardian_policy_config: None,
+                forced_chatgpt_workspace_id: None,
             }))
         }),
     )
@@ -689,6 +690,7 @@ allowed_approval_policies = ["on-request"]
             enforce_residency: None,
             network: None,
             guardian_policy_config: None,
+            forced_chatgpt_workspace_id: None,
         },
     );
     load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
@@ -730,6 +732,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         enforce_residency: None,
         network: None,
         guardian_policy_config: None,
+        forced_chatgpt_workspace_id: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });

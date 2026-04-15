@@ -4477,6 +4477,39 @@ fn forced_chatgpt_workspace_id_accepts_string_and_list() -> std::io::Result<()> 
     Ok(())
 }
 
+#[test]
+fn requirements_forced_chatgpt_workspace_id_accepts_string_and_list() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let requirements_toml: crate::config_loader::ConfigRequirementsToml =
+        toml::from_str(r#"forced_chatgpt_workspace_id = [" org_a ", "", "org_b"]"#)
+            .expect("requirements workspace id list should parse");
+    let config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), Default::default(), requirements_toml)
+            .map_err(std::io::Error::other)?;
+
+    let config = Config::load_config_with_layer_stack(
+        ConfigToml {
+            forced_chatgpt_workspace_id: Some(ForcedChatgptWorkspaceIds::Single(
+                "org_config".to_string(),
+            )),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+        config_layer_stack,
+    )?;
+
+    assert_eq!(
+        config.forced_chatgpt_workspace_id,
+        Some(ForcedChatgptWorkspaceIds::Multiple(vec![
+            "org_a".to_string(),
+            "org_b".to_string()
+        ]))
+    );
+
+    Ok(())
+}
+
 fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
     let toml = r#"
 model = "o3"
@@ -5172,6 +5205,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         enforce_residency: None,
         network: None,
         guardian_policy_config: None,
+        forced_chatgpt_workspace_id: None,
     };
     let requirement_source = crate::config_loader::RequirementSource::Unknown;
     let requirement_source_for_error = requirement_source.clone();
@@ -5793,6 +5827,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         enforce_residency: None,
         network: None,
         guardian_policy_config: None,
+        forced_chatgpt_workspace_id: None,
     };
 
     let config = ConfigBuilder::without_managed_config_for_tests()

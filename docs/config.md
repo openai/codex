@@ -57,8 +57,8 @@ The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schem
 ## Managed ChatGPT Workspace Restrictions
 
 Managed deployments can restrict ChatGPT login to one or more workspace IDs with
-`forced_chatgpt_workspace_id`. Existing single-workspace configurations remain
-valid:
+`forced_chatgpt_workspace_id` in either `config.toml` or `requirements.toml`.
+Existing single-workspace configurations remain valid:
 
 ```toml
 forced_chatgpt_workspace_id = "workspace_id"
@@ -73,7 +73,9 @@ forced_chatgpt_workspace_id = ["workspace_id_a", "workspace_id_b"]
 Codex trims whitespace from configured workspace IDs and ignores empty entries.
 An empty list remains an active allowlist and allows no ChatGPT workspace. If
 this setting is present, ChatGPT credentials whose token workspace ID is not in
-the configured allowlist are rejected and logged out.
+the configured allowlist are rejected and logged out. A value from
+`requirements.toml` takes precedence over ordinary config because requirements
+are managed policy.
 
 ## SQLite State DB
 

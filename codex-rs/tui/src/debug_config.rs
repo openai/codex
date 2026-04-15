@@ -612,6 +612,7 @@ mod tests {
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             guardian_policy_config: None,
+            forced_chatgpt_workspace_id: None,
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
@@ -805,6 +806,7 @@ approval_policy = "never"
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
+            forced_chatgpt_workspace_id: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,

@@ -13,6 +13,7 @@ use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
@@ -885,6 +886,7 @@ struct LegacyManagedConfigToml {
     approval_policy: Option<AskForApproval>,
     approvals_reviewer: Option<ApprovalsReviewer>,
     sandbox_mode: Option<SandboxMode>,
+    forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 }
 
 impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
@@ -895,6 +897,7 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
             approval_policy,
             approvals_reviewer,
             sandbox_mode,
+            forced_chatgpt_workspace_id,
         } = legacy;
         if let Some(approval_policy) = approval_policy {
             config_requirements_toml.allowed_approval_policies = Some(vec![approval_policy]);
@@ -916,6 +919,7 @@ impl From<LegacyManagedConfigToml> for ConfigRequirementsToml {
             }
             config_requirements_toml.allowed_sandbox_modes = Some(allowed_modes);
         }
+        config_requirements_toml.forced_chatgpt_workspace_id = forced_chatgpt_workspace_id;
         config_requirements_toml
     }
 }
@@ -971,6 +975,7 @@ foo = "xyzzy"
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+            forced_chatgpt_workspace_id: None,
         };
 
         let requirements = ConfigRequirementsToml::from(legacy);
@@ -990,6 +995,7 @@ foo = "xyzzy"
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             sandbox_mode: None,
+            forced_chatgpt_workspace_id: None,
         };
 
         let requirements = ConfigRequirementsToml::from(legacy);
@@ -1009,6 +1015,7 @@ foo = "xyzzy"
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
             sandbox_mode: None,
+            forced_chatgpt_workspace_id: None,
         };
 
         let requirements = ConfigRequirementsToml::from(legacy);

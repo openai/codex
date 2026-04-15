@@ -873,6 +873,7 @@ pub struct ConfigRequirements {
     pub enforce_residency: Option<ResidencyRequirement>,
     #[experimental("configRequirements/read.network")]
     pub network: Option<NetworkRequirements>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7700,6 +7701,7 @@ mod tests {
                 feature_requirements: None,
                 enforce_residency: None,
                 network: None,
+                forced_chatgpt_workspace_id: None,
             });
 
         assert_eq!(reason, Some("askForApproval.granular"));
