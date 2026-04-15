@@ -405,9 +405,6 @@ struct ExecServerCommand {
 #[derive(Debug, clap::Subcommand)]
 #[allow(clippy::enum_variant_names)]
 enum AppServerSubcommand {
-    /// [experimental] Print machine-readable app-server capabilities.
-    Capabilities,
-
     /// [experimental] Generate TypeScript bindings for the app server protocol.
     GenerateTs(GenerateTsCommand),
 
@@ -777,16 +774,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
                 Some(AppServerSubcommand::GenerateInternalJsonSchema(gen_cli)) => {
                     codex_app_server_protocol::generate_internal_json_schema(&gen_cli.out_dir)?;
-                }
-                Some(AppServerSubcommand::Capabilities) => {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "websocketAuth": {
-                                "capabilityTokenSha256": true,
-                            },
-                        })
-                    );
                 }
             }
         }
@@ -1349,7 +1336,6 @@ fn reject_remote_mode_for_app_server_subcommand(
 ) -> anyhow::Result<()> {
     let subcommand_name = match subcommand {
         None => "app-server",
-        Some(AppServerSubcommand::Capabilities) => "app-server capabilities",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",
         Some(AppServerSubcommand::GenerateJsonSchema(_)) => "app-server generate-json-schema",
         Some(AppServerSubcommand::GenerateInternalJsonSchema(_)) => {
@@ -2097,15 +2083,6 @@ mod tests {
         let parse_result =
             MultitoolCli::try_parse_from(["codex", "app-server", "--listen", "http://foo"]);
         assert!(parse_result.is_err());
-    }
-
-    #[test]
-    fn app_server_capabilities_subcommand_parses() {
-        let app_server = app_server_from_args(["codex", "app-server", "capabilities"].as_ref());
-        assert!(matches!(
-            app_server.subcommand,
-            Some(AppServerSubcommand::Capabilities)
-        ));
     }
 
     #[test]
