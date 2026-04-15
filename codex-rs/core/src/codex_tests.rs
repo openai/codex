@@ -110,6 +110,7 @@ use opentelemetry::trace::TraceId;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
+use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
@@ -904,7 +905,7 @@ fn mcp_tool_exposure_searches_large_effective_tool_sets() {
 }
 
 #[test]
-fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
+fn mcp_tool_exposure_directly_exposes_explicit_apps_without_deferred_overlap() {
     let config = test_config();
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
     let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
@@ -935,13 +936,19 @@ fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
     );
     assert_eq!(
         exposure.deferred_tools.as_ref().map(HashMap::len),
-        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD)
+        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1)
     );
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
         .expect("large tool sets should be discoverable through tool_search");
-    assert!(deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
+    assert!(
+        tool_names
+            .iter()
+            .all(|direct_tool_name| !deferred_tools.contains_key(direct_tool_name)),
+        "direct tools should not also be deferred: {tool_names:?}"
+    );
+    assert!(!deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
     assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
 }
 
@@ -2808,6 +2815,11 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
+        agent_identity_manager: Arc::new(crate::agent_identity::AgentIdentityManager::new(
+            config.as_ref(),
+            Arc::clone(&auth_manager),
+            session_configuration.session_source.clone(),
+        )),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
@@ -3660,6 +3672,11 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
+        agent_identity_manager: Arc::new(crate::agent_identity::AgentIdentityManager::new(
+            config.as_ref(),
+            Arc::clone(&auth_manager),
+            session_configuration.session_source.clone(),
+        )),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
@@ -3762,6 +3779,42 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
+}
+
+#[tokio::test]
+async fn fail_agent_identity_registration_emits_error_and_shutdown() {
+    let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
+
+    session
+        .fail_agent_identity_registration(anyhow::anyhow!("registration exploded"))
+        .await;
+
+    let error_event = timeout(Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("error event should arrive")
+        .expect("error event should be readable");
+    match error_event.msg {
+        EventMsg::Error(ErrorEvent {
+            message,
+            codex_error_info,
+        }) => {
+            assert_eq!(
+                message,
+                "Agent identity registration failed. Codex cannot continue while `features.use_agent_identity` is enabled: registration exploded".to_string()
+            );
+            assert_eq!(codex_error_info, Some(CodexErrorInfo::Other));
+        }
+        other => panic!("expected error event, got {other:?}"),
+    }
+
+    let shutdown_event = timeout(Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("shutdown event should arrive")
+        .expect("shutdown event should be readable");
+    match shutdown_event.msg {
+        EventMsg::ShutdownComplete => {}
+        other => panic!("expected shutdown event, got {other:?}"),
+    }
 }
 
 #[tokio::test]

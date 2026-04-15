@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::RolloutRecorder;
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::agent_identity::AgentIdentityManager;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
@@ -41,6 +42,7 @@ pub(crate) struct SessionServices {
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
+    pub(crate) agent_identity_manager: Arc<AgentIdentityManager>,
     pub(crate) shell_snapshot_tx: watch::Sender<Option<Arc<crate::shell_snapshot::ShellSnapshot>>>,
     pub(crate) show_raw_agent_reasoning: bool,
     pub(crate) exec_policy: Arc<ExecPolicyManager>,
