@@ -12,9 +12,9 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use codex_api::CoreAuthProvider;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
+use codex_provider_auth::CoreAuthProvider;
 use serde_json::Value as JsonValue;
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(

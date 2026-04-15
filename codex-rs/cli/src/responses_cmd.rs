@@ -38,7 +38,7 @@ pub(crate) async fn run_responses_command(
     let api_provider = config
         .model_provider
         .to_api_provider(auth.as_ref().map(codex_login::CodexAuth::auth_mode))?;
-    let api_auth = codex_login::auth_provider_from_auth(auth, &config.model_provider)?;
+    let api_auth = codex_provider_auth::resolve_provider_auth(auth, &config.model_provider)?;
     let client = codex_api::ResponsesClient::new(
         codex_api::ReqwestTransport::new(codex_login::default_client::build_reqwest_client()),
         api_provider,

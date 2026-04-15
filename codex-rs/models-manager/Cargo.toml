@@ -22,6 +22,7 @@ codex-feedback = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-otel = { workspace = true }
+codex-provider-auth = { workspace = true }
 codex-protocol = { workspace = true }
 codex-response-debug-context = { workspace = true }
 codex-utils-output-truncation = { workspace = true }

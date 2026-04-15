@@ -15,7 +15,6 @@ pub use codex_client::RequestTelemetry;
 pub use codex_client::ReqwestTransport;
 pub use codex_client::TransportError;
 
-pub use crate::api_bridge::CoreAuthProvider;
 pub use crate::api_bridge::map_api_error;
 pub use crate::auth::AuthProvider;
 pub use crate::common::CompactionInput;

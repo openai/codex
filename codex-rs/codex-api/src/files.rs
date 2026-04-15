@@ -276,8 +276,8 @@ fn build_reqwest_client() -> reqwest::Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CoreAuthProvider;
     use pretty_assertions::assert_eq;
+    use reqwest::header::HeaderValue;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -291,8 +291,21 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
-    fn chatgpt_auth() -> CoreAuthProvider {
-        CoreAuthProvider::for_test(Some("token"), Some("account_id"))
+    #[derive(Clone, Copy)]
+    struct ChatGptTestAuth;
+
+    impl AuthProvider for ChatGptTestAuth {
+        fn add_auth_headers(&self, headers: &mut reqwest::header::HeaderMap) {
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer token"),
+            );
+            headers.insert("ChatGPT-Account-ID", HeaderValue::from_static("account_id"));
+        }
+    }
+
+    fn chatgpt_auth() -> ChatGptTestAuth {
+        ChatGptTestAuth
     }
 
     fn base_url_for(server: &MockServer) -> String {

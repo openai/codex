@@ -1,4 +1,3 @@
-pub mod api_bridge;
 pub mod auth;
 pub mod auth_env_telemetry;
 pub mod provider_auth;
@@ -19,7 +18,6 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
-pub use api_bridge::auth_provider_from_auth;
 pub use auth::AgentIdentityAuthRecord;
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;

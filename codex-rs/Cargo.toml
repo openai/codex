@@ -92,6 +92,7 @@ members = [
     "thread-store",
     "codex-experimental-api-macros",
     "plugin",
+    "provider-auth",
 ]
 resolver = "2"
 
@@ -154,6 +155,7 @@ codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-plugin = { path = "plugin" }
+codex-provider-auth = { path = "provider-auth" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-realtime-webrtc = { path = "realtime-webrtc" }
