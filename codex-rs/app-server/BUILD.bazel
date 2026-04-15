@@ -6,6 +6,7 @@ codex_rust_crate(
     integration_test_tags_extra_by_stem = {
         "all": ["flaky"],
     },
+    integration_test_args = ["--test-threads=4"],
     integration_test_timeout = "long",
     test_tags = ["no-sandbox"],
 )

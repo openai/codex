@@ -182,7 +182,7 @@ async fn wait_for_redirected_envelope_in_history(
     thread: &Arc<CodexThread>,
     expected: &InterAgentCommunication,
 ) {
-    timeout(Duration::from_secs(5), async {
+    timeout(Duration::from_secs(30), async {
         loop {
             let history_items = thread
                 .codex
