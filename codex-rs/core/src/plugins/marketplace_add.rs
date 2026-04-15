@@ -276,12 +276,18 @@ mod tests {
 
         let config = fs::read_to_string(codex_home.path().join(codex_config::CONFIG_TOML_FILE))?;
         let config: toml::Value = toml::from_str(&config)?;
+        let marketplace = config
+            .get("marketplaces")
+            .and_then(toml::Value::as_table)
+            .and_then(|marketplaces| marketplaces.get("debug"))
+            .and_then(toml::Value::as_table)
+            .expect("debug marketplace should be present in config");
         assert_eq!(
-            config["marketplaces"]["debug"]["source_type"].as_str(),
+            marketplace.get("source_type").and_then(toml::Value::as_str),
             Some("local")
         );
         assert_eq!(
-            config["marketplaces"]["debug"]["source"].as_str(),
+            marketplace.get("source").and_then(toml::Value::as_str),
             Some(expected_source.as_str())
         );
         Ok(())

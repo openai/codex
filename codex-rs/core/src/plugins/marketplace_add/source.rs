@@ -133,6 +133,16 @@ fn looks_like_local_path(source: &str) -> bool {
         || source.starts_with("~/")
         || source == "."
         || source == ".."
+        || {
+            #[cfg(windows)]
+            {
+                source.starts_with(".\\") || source.starts_with("..\\") || source.starts_with('\\')
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        }
 }
 
 fn looks_like_windows_absolute_path(source: &str) -> bool {
@@ -320,6 +330,14 @@ mod tests {
             panic!("expected local path source");
         };
         assert!(path.is_absolute());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_backslash_relative_path_looks_local() {
+        assert!(looks_like_local_path(r".\marketplace"));
+        assert!(looks_like_local_path(r"..\marketplace"));
+        assert!(looks_like_local_path(r"\marketplace"));
     }
 
     #[test]
