@@ -167,6 +167,7 @@ pub fn resolve_marketplace_plugin(
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(marketplace_path)?;
     let marketplace_name = marketplace.name;
+    let marketplace_name_for_not_found = marketplace_name.clone();
     for plugin in marketplace.plugins {
         if plugin.name != plugin_name {
             continue;
@@ -198,11 +199,10 @@ pub fn resolve_marketplace_plugin(
             continue;
         };
 
-        let plugin_id = PluginId::new(name, marketplace_name.clone()).map_err(|err| match err {
-            PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
-        })?;
         return Ok(ResolvedMarketplacePlugin {
-            plugin_id,
+            plugin_id: PluginId::new(name, marketplace_name).map_err(|err| match err {
+                PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+            })?,
             source_path,
             auth_policy: policy.authentication,
         });
@@ -210,7 +210,7 @@ pub fn resolve_marketplace_plugin(
 
     Err(MarketplaceError::PluginNotFound {
         plugin_name: plugin_name.to_string(),
-        marketplace_name,
+        marketplace_name: marketplace_name_for_not_found,
     })
 }
 
@@ -343,10 +343,10 @@ fn discover_marketplace_paths_from_roots(
 ) -> Vec<AbsolutePathBuf> {
     let mut paths = Vec::new();
 
-    if let Some(home) = home_dir {
-        if let Some(path) = find_marketplace_manifest_path(home) {
-            paths.push(path);
-        }
+    if let Some(home) = home_dir
+        && let Some(path) = find_marketplace_manifest_path(home)
+    {
+        paths.push(path);
     }
 
     for root in additional_roots {
@@ -360,12 +360,10 @@ fn discover_marketplace_paths_from_roots(
         }
         if let Some(repo_root) = get_git_repo_root(root.as_path())
             && let Ok(repo_root) = AbsolutePathBuf::try_from(repo_root)
+            && let Some(path) = find_marketplace_manifest_path(repo_root.as_path())
+            && !paths.contains(&path)
         {
-            if let Some(path) = find_marketplace_manifest_path(repo_root.as_path())
-                && !paths.contains(&path)
-            {
-                paths.push(path);
-            }
+            paths.push(path);
         }
     }
 
