@@ -3069,10 +3069,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        if let Err(err) = state_db.reset_memory_data_for_fresh_start().await {
+        if let Err(err) = state_db.clear_memory_data().await {
             self.send_internal_error(
                 request_id,
-                format!("failed to reset memory rows in state db: {err}"),
+                format!("failed to clear memory rows in state db: {err}"),
             )
             .await;
             return;

@@ -20,7 +20,7 @@ use uuid::Uuid;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
-async fn memory_reset_clears_memory_files_and_state_db_rows() -> Result<()> {
+async fn memory_reset_clears_memory_files_and_rows_preserves_threads() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
     let state_db = init_state_db(codex_home.path()).await?;
@@ -53,7 +53,7 @@ async fn memory_reset_clears_memory_files_and_state_db_rows() -> Result<()> {
     assert_eq!(stage1_outputs, Vec::new());
     assert_eq!(
         state_db.get_thread_memory_mode(thread_id).await?.as_deref(),
-        Some("disabled")
+        Some("enabled")
     );
 
     let mut remaining_entries = tokio::fs::read_dir(&memory_root).await?;
