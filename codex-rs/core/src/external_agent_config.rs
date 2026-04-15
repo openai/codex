@@ -45,6 +45,14 @@ pub struct MigrationDetails {
     pub plugins: Vec<PluginsMigration>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PluginImportOutcome {
+    succeeded_marketplaces: Vec<String>,
+    succeeded_plugin_ids: Vec<String>,
+    failed_marketplaces: Vec<String>,
+    failed_plugin_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigMigrationItem {
     pub item_type: ExternalAgentConfigMigrationItemType,
@@ -126,8 +134,28 @@ impl ExternalAgentConfigService {
                     );
                 }
                 ExternalAgentConfigMigrationItemType::Plugins => {
-                    self.import_plugins(migration_item.cwd.as_deref(), migration_item.details)
-                        .await?;
+                    let service = self.clone();
+                    let cwd = migration_item.cwd;
+                    let details = migration_item.details;
+                    tokio::spawn(async move {
+                        match service.import_plugins(cwd.as_deref(), details).await {
+                            Ok(outcome) => {
+                                tracing::info!(
+                                    succeeded_marketplaces = outcome.succeeded_marketplaces.len(),
+                                    succeeded_plugin_ids = outcome.succeeded_plugin_ids.len(),
+                                    failed_marketplaces = outcome.failed_marketplaces.len(),
+                                    failed_plugin_ids = outcome.failed_plugin_ids.len(),
+                                    "external agent config plugin import completed"
+                                );
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    error = %err,
+                                    "external agent config plugin import failed"
+                                );
+                            }
+                        }
+                    });
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::Plugins,
@@ -294,76 +322,79 @@ impl ExternalAgentConfigService {
         &self,
         cwd: Option<&Path>,
         details: Option<MigrationDetails>,
-    ) -> io::Result<()> {
+    ) -> io::Result<PluginImportOutcome> {
         let Some(MigrationDetails { plugins }) = details else {
             return Err(invalid_data_error(
                 "plugins migration item is missing details".to_string(),
             ));
         };
+        let mut outcome = PluginImportOutcome::default();
         let plugins_manager = PluginsManager::new(self.codex_home.clone());
         for plugin_group in plugins {
-            let import_source = read_marketplace_import_source(
-                cwd,
-                &self.external_agent_home,
-                &plugin_group.marketplace_name,
-            )?
-            .ok_or_else(|| {
-                invalid_data_error(format!(
-                    "missing marketplace details for `{}` in source settings",
-                    plugin_group.marketplace_name
-                ))
-            })?;
+            let marketplace_name = plugin_group.marketplace_name.clone();
+            let plugin_ids = plugin_group.plugin_ids;
+            let import_source =
+                read_marketplace_import_source(cwd, &self.external_agent_home, &marketplace_name)?;
+            let Some(import_source) = import_source else {
+                outcome.failed_marketplaces.push(marketplace_name);
+                outcome.failed_plugin_ids.extend(plugin_ids);
+                continue;
+            };
             let request = MarketplaceAddRequest {
                 source: import_source.source,
                 ref_name: import_source.ref_name,
                 sparse_paths: Vec::new(),
             };
-            let outcome = add_marketplace(self.codex_home.clone(), request)
-                .await
-                .map_err(|err| {
-                    invalid_data_error(format!(
-                        "failed to add plugin marketplace `{}`: {err}",
-                        plugin_group.marketplace_name
-                    ))
-                })?;
-            let marketplace_path = AbsolutePathBuf::try_from(
-                outcome
-                    .installed_root
-                    .join(INSTALLED_MARKETPLACE_MANIFEST_RELATIVE_PATH),
-            )
-            .map_err(|err| {
-                invalid_data_error(format!(
-                    "failed to resolve marketplace path for `{}`: {err}",
-                    plugin_group.marketplace_name
-                ))
-            })?;
-            for plugin_id in plugin_group.plugin_ids {
-                let plugin_id = PluginId::parse(&plugin_id).map_err(|err| {
-                    invalid_data_error(format!("invalid plugin id `{plugin_id}`: {err}"))
-                })?;
-                if plugin_id.marketplace_name != plugin_group.marketplace_name {
-                    return Err(invalid_data_error(format!(
-                        "plugin `{}` does not match marketplace `{}`",
-                        plugin_id.as_key(),
-                        plugin_group.marketplace_name
-                    )));
+            let add_marketplace_outcome = add_marketplace(self.codex_home.clone(), request).await;
+            let marketplace_path = match add_marketplace_outcome {
+                Ok(add_marketplace_outcome) => {
+                    match AbsolutePathBuf::try_from(
+                        add_marketplace_outcome
+                            .installed_root
+                            .join(INSTALLED_MARKETPLACE_MANIFEST_RELATIVE_PATH),
+                    ) {
+                        Ok(path) => {
+                            outcome
+                                .succeeded_marketplaces
+                                .push(marketplace_name.clone());
+                            path
+                        }
+                        Err(_) => {
+                            outcome.failed_marketplaces.push(marketplace_name);
+                            outcome.failed_plugin_ids.extend(plugin_ids);
+                            continue;
+                        }
+                    }
                 }
-                plugins_manager
+                Err(_) => {
+                    outcome.failed_marketplaces.push(marketplace_name);
+                    outcome.failed_plugin_ids.extend(plugin_ids);
+                    continue;
+                }
+            };
+            for raw_plugin_id in plugin_ids {
+                let Ok(plugin_id) = PluginId::parse(&raw_plugin_id) else {
+                    outcome.failed_plugin_ids.push(raw_plugin_id);
+                    continue;
+                };
+                if plugin_id.marketplace_name != marketplace_name {
+                    outcome.failed_plugin_ids.push(plugin_id.as_key());
+                    continue;
+                }
+                match plugins_manager
                     .install_plugin(PluginInstallRequest {
                         plugin_name: plugin_id.plugin_name.clone(),
                         marketplace_path: marketplace_path.clone(),
                     })
                     .await
-                    .map_err(|err| {
-                        invalid_data_error(format!(
-                            "failed to install plugin `{}`: {err}",
-                            plugin_id.as_key()
-                        ))
-                    })?;
+                {
+                    Ok(_) => outcome.succeeded_plugin_ids.push(plugin_id.as_key()),
+                    Err(_) => outcome.failed_plugin_ids.push(plugin_id.as_key()),
+                }
             }
         }
 
-        Ok(())
+        Ok(outcome)
     }
 
     fn import_config(&self, cwd: Option<&Path>) -> io::Result<()> {
