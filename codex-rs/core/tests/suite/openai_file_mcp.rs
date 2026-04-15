@@ -10,7 +10,7 @@ use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::DOCUMENT_EXTRACT_TEXT_RESOURCE_URI;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -26,25 +26,14 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const DOCUMENT_EXTRACT_TOOL: &str = "mcp__codex_apps__calendar_extract_text";
+const DOCUMENT_EXTRACT_NAMESPACE: &str = "mcp__codex_apps__calendar";
+const DOCUMENT_EXTRACT_TOOL: &str = "_extract_text";
 
 fn configure_apps(config: &mut Config, chatgpt_base_url: &str) {
     if let Err(err) = config.features.enable(Feature::Apps) {
         panic!("test config should allow feature update: {err}");
     }
     config.chatgpt_base_url = chatgpt_base_url.to_string();
-}
-
-fn tool_by_name<'a>(body: &'a Value, name: &str) -> &'a Value {
-    body.get("tools")
-        .and_then(Value::as_array)
-        .and_then(|tools| {
-            tools.iter().find(|tool| {
-                tool.get("name").and_then(Value::as_str) == Some(name)
-                    || tool.get("type").and_then(Value::as_str) == Some(name)
-            })
-        })
-        .unwrap_or_else(|| panic!("missing tool {name} in /v1/responses request: {body:?}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -93,8 +82,9 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(
+                ev_function_call_with_namespace(
                     call_id,
+                    DOCUMENT_EXTRACT_NAMESPACE,
                     DOCUMENT_EXTRACT_TOOL,
                     &json!({"file": "report.txt"}).to_string(),
                 ),
@@ -123,8 +113,14 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
     .await?;
 
     let requests = mock.requests();
-    let body = requests[0].body_json();
-    let extract_tool = tool_by_name(&body, DOCUMENT_EXTRACT_TOOL);
+    let Some(extract_tool) =
+        requests[0].tool_by_name(DOCUMENT_EXTRACT_NAMESPACE, DOCUMENT_EXTRACT_TOOL)
+    else {
+        let body = requests[0].body_json();
+        panic!(
+            "missing tool {DOCUMENT_EXTRACT_NAMESPACE}{DOCUMENT_EXTRACT_TOOL} in /v1/responses request: {body:?}"
+        )
+    };
     assert_eq!(
         extract_tool.pointer("/parameters/properties/file"),
         Some(&json!({

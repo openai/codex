@@ -36,6 +36,7 @@ use codex_analytics::build_track_events_context;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
@@ -466,6 +467,10 @@ async fn execute_mcp_tool_call(
         metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
     )
     .await?;
+    let request_meta =
+        augment_mcp_tool_request_meta_with_sandbox_state(sess, turn_context, server, request_meta)
+            .await
+            .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
     let result = sess
         .call_tool(server, tool_name, rewritten_arguments, request_meta)
         .await
@@ -477,6 +482,52 @@ async fn execute_mcp_tool_call(
             .contains(&InputModality::Image),
         Ok(result),
     )
+}
+
+async fn augment_mcp_tool_request_meta_with_sandbox_state(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+    mut meta: Option<serde_json::Value>,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let supports_sandbox_state_meta = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .server_supports_sandbox_state_meta_capability(server)
+        .await
+        .unwrap_or(false);
+    if !supports_sandbox_state_meta {
+        return Ok(meta);
+    }
+
+    let sandbox_state = serde_json::to_value(SandboxState {
+        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+        sandbox_cwd: turn_context.cwd.to_path_buf(),
+        use_legacy_landlock: turn_context.features.use_legacy_landlock(),
+    })?;
+
+    match meta.as_mut() {
+        Some(serde_json::Value::Object(map)) => {
+            map.insert(
+                codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
+                sandbox_state,
+            );
+        }
+        Some(_) => {}
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
+                sandbox_state,
+            );
+            meta = Some(serde_json::Value::Object(map));
+        }
+    }
+
+    Ok(meta)
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {

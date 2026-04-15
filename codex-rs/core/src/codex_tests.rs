@@ -904,7 +904,7 @@ fn mcp_tool_exposure_searches_large_effective_tool_sets() {
 }
 
 #[test]
-fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
+fn mcp_tool_exposure_directly_exposes_explicit_apps_without_deferred_overlap() {
     let config = test_config();
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
     let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
@@ -935,13 +935,19 @@ fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
     );
     assert_eq!(
         exposure.deferred_tools.as_ref().map(HashMap::len),
-        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD)
+        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1)
     );
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
         .expect("large tool sets should be discoverable through tool_search");
-    assert!(deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
+    assert!(
+        tool_names
+            .iter()
+            .all(|direct_tool_name| !deferred_tools.contains_key(direct_tool_name)),
+        "direct tools should not also be deferred: {tool_names:?}"
+    );
+    assert!(!deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
     assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
 }
 

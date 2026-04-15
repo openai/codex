@@ -30,21 +30,6 @@ impl StateRuntime {
     /// stage-1 (`memory_stage1`) and phase-2 (`memory_consolidate_global`)
     /// memory pipelines.
     pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
-        self.clear_memory_data_inner(/*disable_existing_threads*/ false)
-            .await
-    }
-
-    /// Resets persisted memory state for a clean-slate local start.
-    ///
-    /// In addition to clearing persisted stage-1 outputs and memory pipeline
-    /// jobs, this disables memory generation for all existing threads so
-    /// historical rollouts are not immediately picked up again.
-    pub async fn reset_memory_data_for_fresh_start(&self) -> anyhow::Result<()> {
-        self.clear_memory_data_inner(/*disable_existing_threads*/ true)
-            .await
-    }
-
-    async fn clear_memory_data_inner(&self, disable_existing_threads: bool) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
@@ -65,18 +50,6 @@ WHERE kind = ? OR kind = ?
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
         .execute(&mut *tx)
         .await?;
-
-        if disable_existing_threads {
-            sqlx::query(
-                r#"
-UPDATE threads
-SET memory_mode = 'disabled'
-WHERE memory_mode = 'enabled'
-                "#,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
 
         tx.commit().await?;
         Ok(())
@@ -1823,7 +1796,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reset_memory_data_for_fresh_start_clears_rows_and_disables_threads() {
+    async fn clear_memory_data_clears_rows_and_preserves_thread_memory_modes() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -1893,9 +1866,9 @@ mod tests {
             .expect("disable existing thread");
 
         runtime
-            .reset_memory_data_for_fresh_start()
+            .clear_memory_data()
             .await
-            .expect("reset memory data");
+            .expect("clear memory data");
 
         let stage1_outputs_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
             .fetch_one(runtime.pool.as_ref())
@@ -1918,7 +1891,7 @@ mod tests {
                 .fetch_one(runtime.pool.as_ref())
                 .await
                 .expect("read enabled thread memory mode");
-        assert_eq!(enabled_memory_mode, "disabled");
+        assert_eq!(enabled_memory_mode, "enabled");
 
         let disabled_memory_mode: String =
             sqlx::query_scalar("SELECT memory_mode FROM threads WHERE id = ?")
