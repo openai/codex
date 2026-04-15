@@ -18,13 +18,14 @@ pub(super) fn test_config(codex_home: &Path) -> RolloutConfig {
 }
 
 pub(super) fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<PathBuf> {
-    write_session_file_with(
+    write_session_file_with_fork(
         root,
         root.join("sessions/2025/01/03"),
         ts,
         uuid,
         "Hello from user",
         Some("test-provider"),
+        /*forked_from_id*/ None,
     )
 }
 
@@ -33,13 +34,14 @@ pub(super) fn write_archived_session_file(
     ts: &str,
     uuid: Uuid,
 ) -> std::io::Result<PathBuf> {
-    write_session_file_with(
+    write_session_file_with_fork(
         root,
         root.join(ARCHIVED_SESSIONS_SUBDIR),
         ts,
         uuid,
         "Archived user message",
         Some("test-provider"),
+        /*forked_from_id*/ None,
     )
 }
 
@@ -50,6 +52,26 @@ pub(super) fn write_session_file_with(
     uuid: Uuid,
     first_user_message: &str,
     model_provider: Option<&str>,
+) -> std::io::Result<PathBuf> {
+    write_session_file_with_fork(
+        root,
+        day_dir,
+        ts,
+        uuid,
+        first_user_message,
+        model_provider,
+        /*forked_from_id*/ None,
+    )
+}
+
+pub(super) fn write_session_file_with_fork(
+    root: &Path,
+    day_dir: PathBuf,
+    ts: &str,
+    uuid: Uuid,
+    first_user_message: &str,
+    model_provider: Option<&str>,
+    forked_from_id: Option<Uuid>,
 ) -> std::io::Result<PathBuf> {
     fs::create_dir_all(&day_dir)?;
     let path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
@@ -65,6 +87,7 @@ pub(super) fn write_session_file_with(
             "cli_version": "test_version",
             "source": "cli",
             "model_provider": model_provider,
+            "forked_from_id": forked_from_id,
             "git": {
                 "commit_hash": "abcdef",
                 "branch": "main",
