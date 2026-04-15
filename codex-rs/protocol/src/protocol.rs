@@ -2765,6 +2765,21 @@ impl fmt::Display for SubAgentSource {
     }
 }
 
+/// Persisted agent-task details that let a resumed thread keep using the same backend task.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct SessionAgentTask {
+    pub agent_runtime_id: String,
+    pub task_id: String,
+    pub registered_at: String,
+}
+
+/// Session-scoped state updates that can be appended after the canonical SessionMeta line.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
+pub struct SessionStateUpdate {
+    #[serde(default)]
+    pub agent_task: Option<SessionAgentTask>,
+}
+
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.
 ///
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
@@ -2834,6 +2849,7 @@ pub struct SessionMetaLine {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
+    SessionState(SessionStateUpdate),
     ResponseItem(ResponseItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
