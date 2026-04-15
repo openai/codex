@@ -1,6 +1,7 @@
 use super::build_current_thread_section;
 use super::build_recent_work_section;
 use super::build_workspace_section_with_user_root;
+use super::format_startup_context_blob;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -158,6 +159,23 @@ fn current_thread_section_keeps_latest_turns_when_history_exceeds_budget() {
         ),
         (true, true, true, false, false),
     );
+}
+
+#[test]
+fn startup_context_blob_is_wrapped_in_tags_and_fits_budget() {
+    let body = format!(
+        "Startup context from Codex.\n{}\n{}",
+        "recent work ".repeat(1_200),
+        "workspace tree ".repeat(800),
+    );
+
+    let wrapped = format_startup_context_blob(&body, /*budget_tokens*/ 200);
+
+    assert!(wrapped.starts_with("<startup_context>\n"));
+    assert!(wrapped.ends_with("\n</startup_context>"));
+    assert!(wrapped.contains("Startup context from Codex."));
+    assert!(wrapped.contains("tokens truncated"));
+    assert!(wrapped.len().div_ceil(4) <= 200);
 }
 
 #[test]
