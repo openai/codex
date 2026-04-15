@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -65,6 +66,8 @@ const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
 const REMOTE_EXEC_SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 const REMOTE_EXEC_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(25);
 static REMOTE_EXEC_SERVER_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static SHARED_REMOTE_EXEC_SERVER: OnceLock<Result<Arc<SharedRemoteExecServer>, String>> =
+    OnceLock::new();
 
 #[derive(Debug)]
 struct RemoteExecServerProcess {
@@ -94,10 +97,11 @@ impl Drop for RemoteExecServerProcess {
     }
 }
 
-impl RemoteExecServerProcess {
-    fn register_cleanup_path(&mut self, path: &Path) {
-        self.cleanup_paths.push(path.display().to_string());
-    }
+#[derive(Debug)]
+struct SharedRemoteExecServer {
+    container_name: String,
+    listen_url: String,
+    _process: RemoteExecServerProcess,
 }
 
 #[derive(Debug)]
@@ -105,7 +109,7 @@ pub struct TestEnv {
     environment: codex_exec_server::Environment,
     cwd: AbsolutePathBuf,
     local_cwd_temp_dir: Option<Arc<TempDir>>,
-    _remote_exec_server_process: Option<RemoteExecServerProcess>,
+    shared_remote_exec_server: Option<Arc<SharedRemoteExecServer>>,
 }
 
 impl TestEnv {
@@ -117,7 +121,7 @@ impl TestEnv {
             environment,
             cwd,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
-            _remote_exec_server_process: None,
+            shared_remote_exec_server: None,
         })
     }
 
@@ -138,12 +142,27 @@ impl TestEnv {
     }
 }
 
+impl Drop for TestEnv {
+    fn drop(&mut self) {
+        if let Some(shared) = &self.shared_remote_exec_server {
+            let script = format!("rm -rf {}", self.cwd.as_path().display());
+            let _ = docker_command_capture_stdout([
+                "exec",
+                &shared.container_name,
+                "sh",
+                "-lc",
+                &script,
+            ]);
+        }
+    }
+}
+
 pub async fn test_env() -> Result<TestEnv> {
     match get_remote_test_env() {
         Some(remote_env) => {
-            let mut remote_process = start_remote_exec_server(&remote_env)?;
-            let remote_ip = remote_container_ip(&remote_env.container_name)?;
-            let websocket_url = rewrite_websocket_host(&remote_process.listen_url, &remote_ip)?;
+            let shared = shared_remote_exec_server(&remote_env)?;
+            let remote_ip = remote_container_ip(&shared.container_name)?;
+            let websocket_url = rewrite_websocket_host(&shared.listen_url, &remote_ip)?;
             let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
             let cwd = remote_aware_cwd_path();
             environment
@@ -154,12 +173,11 @@ pub async fn test_env() -> Result<TestEnv> {
                     /*sandbox*/ None,
                 )
                 .await?;
-            remote_process.process.register_cleanup_path(cwd.as_path());
             Ok(TestEnv {
                 environment,
                 cwd,
                 local_cwd_temp_dir: None,
-                _remote_exec_server_process: Some(remote_process.process),
+                shared_remote_exec_server: Some(shared),
             })
         }
         None => TestEnv::local().await,
@@ -169,6 +187,29 @@ pub async fn test_env() -> Result<TestEnv> {
 struct RemoteExecServerStart {
     process: RemoteExecServerProcess,
     listen_url: String,
+}
+
+fn shared_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<Arc<SharedRemoteExecServer>> {
+    let result = SHARED_REMOTE_EXEC_SERVER.get_or_init(|| {
+        start_shared_remote_exec_server(remote_env)
+            .map(Arc::new)
+            .map_err(|err| format!("{err:#}"))
+    });
+
+    match result {
+        Ok(server) => Ok(Arc::clone(server)),
+        Err(err) => Err(anyhow!(err.clone())),
+    }
+}
+
+fn start_shared_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<SharedRemoteExecServer> {
+    let remote_start = start_remote_exec_server(remote_env)?;
+
+    Ok(SharedRemoteExecServer {
+        container_name: remote_env.container_name.clone(),
+        listen_url: remote_start.listen_url,
+        _process: remote_start.process,
+    })
 }
 
 fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecServerStart> {
