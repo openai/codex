@@ -243,6 +243,15 @@ pub enum CompactionStatus {
     Interrupted,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexHookSource {
+    System,
+    User,
+    Project,
+    Unknown,
+}
+
 #[derive(Clone)]
 pub struct CodexCompactionEvent {
     pub thread_id: String,
@@ -327,10 +336,8 @@ pub(crate) struct HookRunInput {
 
 pub struct HookRunFact {
     pub event_name: HookEventName,
-    pub source_path: PathBuf,
-    pub cwd: PathBuf,
+    pub hook_source: CodexHookSource,
     pub status: HookRunStatus,
-    pub duration_ms: Option<i64>,
 }
 
 pub(crate) struct PluginUsedInput {

@@ -1,5 +1,6 @@
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexHookSource;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
@@ -20,7 +21,6 @@ use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
-use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -305,15 +305,6 @@ pub(crate) struct CodexAppUsedEventRequest {
     pub(crate) event_params: CodexAppMetadata,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum CodexHookSource {
-    System,
-    User,
-    Project,
-    Unknown,
-}
-
 #[derive(Serialize)]
 pub(crate) struct CodexHookRunMetadata {
     pub(crate) thread_id: Option<String>,
@@ -568,10 +559,7 @@ pub(crate) fn codex_hook_run_metadata(
         turn_id: Some(tracking.turn_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
         hook_name: Some(hook.event_name),
-        hook_source: Some(hook_source_for_path(
-            hook.source_path.as_path(),
-            hook.cwd.as_path(),
-        )),
+        hook_source: Some(hook.hook_source),
         status: Some(analytics_hook_status(hook.status)),
     }
 }
@@ -632,31 +620,6 @@ pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Opt
         } => Some(parent_thread_id.to_string()),
         _ => None,
     }
-}
-
-fn hook_source_for_path(source_path: &Path, cwd: &Path) -> CodexHookSource {
-    if source_path.starts_with("/etc/codex") {
-        return CodexHookSource::System;
-    }
-
-    let home = dirs::home_dir();
-    if let Some(home) = home
-        && source_path.starts_with(home.join(".codex"))
-    {
-        return CodexHookSource::User;
-    }
-
-    // Project hooks are loaded from a `.codex/hooks.json` rooted at or above the
-    // current working directory, so classify by walking cwd ancestors.
-    if source_path.ends_with(".codex/hooks.json")
-        && cwd
-            .ancestors()
-            .any(|ancestor| source_path.starts_with(ancestor.join(".codex")))
-    {
-        return CodexHookSource::Project;
-    }
-
-    CodexHookSource::Unknown
 }
 
 fn analytics_hook_status(status: HookRunStatus) -> HookRunStatus {

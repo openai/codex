@@ -1,6 +1,8 @@
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 
+use codex_analytics::CodexHookSource;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
 use codex_hooks::PostToolUseOutcome;
@@ -24,6 +26,7 @@ use serde_json::Value;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config_loader::system_config_toml_file;
 use crate::event_mapping::parse_turn_item;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -358,12 +361,39 @@ fn hook_run_analytics_payload(
         ),
         HookRunFact {
             event_name: completed.run.event_name,
-            source_path: completed.run.source_path.to_path_buf(),
-            cwd: turn_context.cwd.to_path_buf(),
+            hook_source: hook_source_for_path(
+                completed.run.source_path.as_path(),
+                turn_context.config.codex_home.as_path(),
+                turn_context.cwd.as_path(),
+            ),
             status: completed.run.status,
-            duration_ms: completed.run.duration_ms,
         },
     )
+}
+
+fn hook_source_for_path(source_path: &Path, codex_home: &Path, cwd: &Path) -> CodexHookSource {
+    if let Ok(system_config_path) = system_config_toml_file()
+        && let Some(system_config_dir) = system_config_path.as_path().parent()
+        && source_path.starts_with(system_config_dir)
+    {
+        return CodexHookSource::System;
+    }
+
+    if source_path.starts_with(codex_home) {
+        return CodexHookSource::User;
+    }
+
+    // Project hooks are loaded from a `.codex/hooks.json` rooted at or above the
+    // current working directory, so classify by walking cwd ancestors.
+    if source_path.ends_with(Path::new(".codex").join("hooks.json"))
+        && cwd
+            .ancestors()
+            .any(|ancestor| source_path.starts_with(ancestor.join(".codex")))
+    {
+        return CodexHookSource::Project;
+    }
+
+    CodexHookSource::Unknown
 }
 
 fn hook_permission_mode(turn_context: &TurnContext) -> String {
@@ -379,6 +409,7 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
 
 #[cfg(test)]
 mod tests {
+    use codex_analytics::CodexHookSource;
     use codex_protocol::models::ContentItem;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookExecutionMode;
@@ -386,7 +417,6 @@ mod tests {
     use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookScope;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
 
     use super::additional_context_messages;
     use super::hook_run_analytics_payload;
@@ -445,10 +475,8 @@ mod tests {
         assert_eq!(tracking.turn_id, "turn-from-hook");
         assert_eq!(tracking.model_slug, turn_context.model_info.slug);
         assert_eq!(hook.event_name, HookEventName::Stop);
-        assert_eq!(hook.source_path, PathBuf::from("/tmp/hooks.json"));
-        assert_eq!(hook.cwd, turn_context.cwd.to_path_buf());
+        assert_eq!(hook.hook_source, CodexHookSource::Unknown);
         assert_eq!(hook.status, HookRunStatus::Blocked);
-        assert_eq!(hook.duration_ms, Some(27));
     }
 
     #[tokio::test]
@@ -464,6 +492,53 @@ mod tests {
 
         assert_eq!(tracking.turn_id, turn_context.sub_id);
         assert_eq!(hook.status, HookRunStatus::Failed);
+    }
+
+    #[test]
+    fn hook_source_for_path_classifies_user_project_and_unknown() {
+        let codex_home = test_path_buf("/tmp/custom-codex-home").abs();
+        let cwd = test_path_buf("/tmp/worktree/src").abs();
+
+        let system_hooks_path = super::system_config_toml_file()
+            .expect("system config path")
+            .parent()
+            .expect("system config directory")
+            .join("hooks.json");
+
+        assert_eq!(
+            super::hook_source_for_path(
+                system_hooks_path.as_path(),
+                codex_home.as_path(),
+                cwd.as_path(),
+            ),
+            CodexHookSource::System,
+        );
+        assert_eq!(
+            super::hook_source_for_path(
+                codex_home.join("hooks.json").as_path(),
+                codex_home.as_path(),
+                cwd.as_path(),
+            ),
+            CodexHookSource::User,
+        );
+        assert_eq!(
+            super::hook_source_for_path(
+                test_path_buf("/tmp/worktree/.codex/hooks.json")
+                    .abs()
+                    .as_path(),
+                codex_home.as_path(),
+                cwd.as_path(),
+            ),
+            CodexHookSource::Project,
+        );
+        assert_eq!(
+            super::hook_source_for_path(
+                test_path_buf("/tmp/hooks.json").abs().as_path(),
+                codex_home.as_path(),
+                cwd.as_path(),
+            ),
+            CodexHookSource::Unknown,
+        );
     }
 
     fn sample_hook_run(status: HookRunStatus) -> HookRunSummary {

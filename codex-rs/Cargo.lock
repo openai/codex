@@ -1376,7 +1376,6 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",
- "dirs",
  "os_info",
  "pretty_assertions",
  "serde",

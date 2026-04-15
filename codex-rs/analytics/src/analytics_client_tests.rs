@@ -23,6 +23,7 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexHookSource;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -1290,8 +1291,6 @@ fn plugin_management_event_serializes_expected_shape() {
 
 #[test]
 fn hook_run_event_serializes_expected_shape() {
-    let home = dirs::home_dir().expect("home dir should be available for analytics tests");
-
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-3".to_string(),
@@ -1303,10 +1302,8 @@ fn hook_run_event_serializes_expected_shape() {
             &tracking,
             HookRunFact {
                 event_name: HookEventName::PreToolUse,
-                source_path: PathBuf::from(&home).join(".codex/hooks.json"),
-                cwd: PathBuf::from(&home).join("worktree"),
+                hook_source: CodexHookSource::User,
                 status: HookRunStatus::Completed,
-                duration_ms: Some(42),
             },
         ),
     });
@@ -1331,7 +1328,6 @@ fn hook_run_event_serializes_expected_shape() {
 
 #[test]
 fn hook_run_metadata_maps_sources_and_statuses() {
-    let home = dirs::home_dir().expect("home dir should be available for analytics tests");
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
@@ -1342,10 +1338,8 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         &tracking,
         HookRunFact {
             event_name: HookEventName::SessionStart,
-            source_path: PathBuf::from("/etc/codex/hooks.json"),
-            cwd: PathBuf::from(&home).join("worktree"),
+            hook_source: CodexHookSource::System,
             status: HookRunStatus::Completed,
-            duration_ms: None,
         },
     ))
     .expect("serialize system hook");
@@ -1353,10 +1347,8 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         &tracking,
         HookRunFact {
             event_name: HookEventName::Stop,
-            source_path: PathBuf::from(&home).join("worktree/.codex/hooks.json"),
-            cwd: PathBuf::from(&home).join("worktree/src"),
+            hook_source: CodexHookSource::Project,
             status: HookRunStatus::Blocked,
-            duration_ms: None,
         },
     ))
     .expect("serialize project hook");
@@ -1364,10 +1356,8 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         &tracking,
         HookRunFact {
             event_name: HookEventName::UserPromptSubmit,
-            source_path: PathBuf::from("/tmp/hooks.json"),
-            cwd: PathBuf::from(&home).join("worktree"),
+            hook_source: CodexHookSource::Unknown,
             status: HookRunStatus::Failed,
-            duration_ms: None,
         },
     ))
     .expect("serialize unknown hook");
@@ -1382,7 +1372,6 @@ fn hook_run_metadata_maps_sources_and_statuses() {
 
 #[test]
 fn hook_run_metadata_maps_stopped_status() {
-    let home = dirs::home_dir().expect("home dir should be available for analytics tests");
     let tracking = TrackEventsContext {
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
@@ -1393,10 +1382,8 @@ fn hook_run_metadata_maps_stopped_status() {
         &tracking,
         HookRunFact {
             event_name: HookEventName::Stop,
-            source_path: home.join(".codex/hooks.json"),
-            cwd: home.join("worktree"),
+            hook_source: CodexHookSource::User,
             status: HookRunStatus::Stopped,
-            duration_ms: None,
         },
     ))
     .expect("serialize stopped hook");
@@ -1497,10 +1484,8 @@ async fn reducer_ingests_hook_run_fact() {
                 },
                 hook: HookRunFact {
                     event_name: HookEventName::PostToolUse,
-                    source_path: PathBuf::from("/tmp/hooks.json"),
-                    cwd: PathBuf::from("/tmp/project"),
+                    hook_source: CodexHookSource::Unknown,
                     status: HookRunStatus::Failed,
-                    duration_ms: Some(7),
                 },
             })),
             &mut events,
