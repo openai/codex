@@ -181,6 +181,44 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
 }
 
 #[test]
+fn restricted_read_bwrap_remounts_synthetic_root_read_only() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let readable_root = temp_dir.path().join("readable");
+    std::fs::create_dir_all(&readable_root).expect("create readable root");
+    let readable_root =
+        AbsolutePathBuf::from_absolute_path(&readable_root).expect("absolute readable root");
+    let sandbox_policy = SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::Restricted {
+            include_platform_defaults: false,
+            readable_roots: vec![readable_root],
+        },
+        network_access: false,
+    };
+
+    let argv = build_bwrap_argv(
+        vec!["/bin/true".to_string()],
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        temp_dir.path(),
+        temp_dir.path(),
+        BwrapOptions {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+        },
+    )
+    .args;
+
+    let proc_index = argv
+        .windows(2)
+        .position(|window| window == ["--proc", "/proc"])
+        .expect("proc should be mounted");
+    let remount_index = argv
+        .windows(2)
+        .position(|window| window == ["--remount-ro", "/"])
+        .expect("synthetic root should be remounted read-only");
+    assert!(proc_index < remount_index);
+}
+
+#[test]
 fn proxy_only_mode_takes_precedence_over_full_network_policy() {
     let mode = bwrap_network_mode(
         NetworkSandboxPolicy::Enabled,
