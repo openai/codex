@@ -19,11 +19,7 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
-#[cfg(test)]
-use crate::legacy_core::McpManager;
 use crate::legacy_core::config::Config;
-#[cfg(test)]
-use crate::legacy_core::plugins::PluginsManager;
 use crate::legacy_core::web_search_detail;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
@@ -72,6 +68,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::format_env_display;
 use image::DynamicImage;
 use image::ImageReader;
@@ -88,13 +85,12 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(test)]
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+use url::Url;
 
 mod hook_cell;
 
@@ -990,6 +986,38 @@ pub fn new_guardian_approved_action_request(summary: String) -> Box<dyn HistoryC
     Box::new(PrefixedWrappedHistoryCell::new(line, "✔ ".green(), "  "))
 }
 
+pub fn new_guardian_timed_out_patch_request(files: Vec<String>) -> Box<dyn HistoryCell> {
+    let mut summary = vec![
+        "Review ".into(),
+        "timed out".bold(),
+        " before codex could apply ".into(),
+    ];
+    if files.len() == 1 {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files[0].clone()).dim());
+    } else {
+        summary.push("a patch touching ".into());
+        summary.push(Span::from(files.len().to_string()).dim());
+        summary.push(" files".into());
+    }
+
+    Box::new(PrefixedWrappedHistoryCell::new(
+        Line::from(summary),
+        "✗ ".red(),
+        "  ",
+    ))
+}
+
+pub fn new_guardian_timed_out_action_request(summary: String) -> Box<dyn HistoryCell> {
+    let line = Line::from(vec![
+        "Review ".into(),
+        "timed out".bold(),
+        " before ".into(),
+        Span::from(summary).dim(),
+    ]);
+    Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
+}
+
 /// Cyan history cell line showing the current review status.
 pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
     PlainHistoryCell {
@@ -1845,10 +1873,7 @@ pub(crate) fn new_mcp_tools_output(
         lines.push("".into());
     }
 
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
-        config.codex_home.to_path_buf(),
-    )));
-    let effective_servers = mcp_manager.effective_servers(config, /*auth*/ None);
+    let effective_servers = config.mcp_servers.get().clone();
     let mut servers: Vec<_> = effective_servers.iter().collect();
     servers.sort_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -2552,8 +2577,8 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistoryCell {
-    let display_path = display_path_for(&path, cwd);
+pub(crate) fn new_view_image_tool_call(path: AbsolutePathBuf, cwd: &Path) -> PlainHistoryCell {
+    let display_path = display_path_for(path.as_path(), cwd);
 
     let lines: Vec<Line<'static>> = vec![
         vec!["• ".dim(), "Viewed Image".bold()].into(),
@@ -2566,7 +2591,7 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 pub(crate) fn new_image_generation_call(
     call_id: String,
     revised_prompt: Option<String>,
-    saved_path: Option<String>,
+    saved_path: Option<AbsolutePathBuf>,
 ) -> PlainHistoryCell {
     let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
 
@@ -2575,6 +2600,9 @@ pub(crate) fn new_image_generation_call(
         vec!["  └ ".dim(), detail.dim()].into(),
     ];
     if let Some(saved_path) = saved_path {
+        let saved_path = Url::from_file_path(saved_path.as_path())
+            .map(|url| url.to_string())
+            .unwrap_or_else(|_| saved_path.display().to_string());
         lines.push(vec!["  └ ".dim(), "Saved to: ".dim(), saved_path.into()].into());
     }
 
@@ -2964,11 +2992,16 @@ mod tests {
 
     #[test]
     fn image_generation_call_renders_saved_path() {
-        let saved_path = "file:///tmp/generated-image.png".to_string();
+        let saved_path = test_path_buf("/tmp/generated-image.png").abs();
+        let expected_saved_path = format!(
+            "  └ Saved to: {}",
+            Url::from_file_path(saved_path.as_path())
+                .expect("test path should convert to file URL")
+        );
         let cell = new_image_generation_call(
             "call-image-generation".to_string(),
             Some("A tiny blue square".to_string()),
-            Some(saved_path.clone()),
+            Some(saved_path),
         );
 
         assert_eq!(
@@ -2976,7 +3009,7 @@ mod tests {
             vec![
                 "• Generated Image:".to_string(),
                 "  └ A tiny blue square".to_string(),
-                format!("  └ Saved to: {saved_path}"),
+                expected_saved_path,
             ],
         );
     }
@@ -2992,7 +3025,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: test_path_buf("/tmp/project"),
+            cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,

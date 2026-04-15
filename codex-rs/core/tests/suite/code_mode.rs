@@ -178,11 +178,24 @@ async fn run_code_mode_turn_with_rmcp(
     prompt: &str,
     code: &str,
 ) -> Result<(TestCodex, ResponseMock)> {
+    run_code_mode_turn_with_rmcp_mode(server, prompt, code, /*code_mode_only*/ false).await
+}
+
+async fn run_code_mode_turn_with_rmcp_mode(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    code_mode_only: bool,
+) -> Result<(TestCodex, ResponseMock)> {
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
-            let _ = config.features.enable(Feature::CodeMode);
+            let _ = if code_mode_only {
+                config.features.enable(Feature::CodeModeOnly)
+            } else {
+                config.features.enable(Feature::CodeMode)
+            };
 
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
@@ -1832,7 +1845,6 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
         .with_model("gpt-5.3-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
-            let _ = config.features.enable(Feature::ImageDetailOriginal);
         });
     let test = builder.build(&server).await?;
 
@@ -1986,6 +1998,36 @@ env=propagated-env
 isError=false
 contentLength=0"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_only_can_call_mcp_tool() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+const result = await tools.mcp__rmcp__echo({ message: "ping" });
+text(`echo=${result.structuredContent?.echo ?? "missing"}`);
+"#;
+
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp_mode(
+        &server,
+        "use exec to run the rmcp echo tool in code mode only",
+        code,
+        /*code_mode_only*/ true,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode_only rmcp tool call failed unexpectedly: {output}"
+    );
+    assert_eq!(output, "echo=ECHOING: ping");
 
     Ok(())
 }

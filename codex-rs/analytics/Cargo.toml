@@ -29,4 +29,5 @@ tokio = { workspace = true, features = [
 tracing = { workspace = true, features = ["log"] }
 
 [dev-dependencies]
+codex-utils-absolute-path = { workspace = true }
 pretty_assertions = { workspace = true }

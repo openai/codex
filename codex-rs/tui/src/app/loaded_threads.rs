@@ -105,8 +105,9 @@ mod tests {
     use codex_app_server_protocol::ThreadStatus;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
 
     fn test_thread(thread_id: ThreadId, source: SessionSource) -> Thread {
         Thread {
@@ -119,7 +120,7 @@ mod tests {
             updated_at: 0,
             status: ThreadStatus::Idle,
             path: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             cli_version: "0.0.0".to_string(),
             source,
             agent_nickname: None,

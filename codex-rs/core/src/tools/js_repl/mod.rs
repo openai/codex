@@ -45,6 +45,8 @@ use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
@@ -1574,29 +1576,67 @@ impl JsReplManager {
             },
         );
 
-        let payload = if let Some(tool_info) = exec
+        let specs = router.specs();
+        let requested_tool_name = specs
+            .iter()
+            .find_map(|spec| match spec {
+                ToolSpec::Function(tool) if tool.name == req.tool_name => {
+                    Some(ToolName::plain(req.tool_name.clone()))
+                }
+                ToolSpec::Freeform(tool) if tool.name == req.tool_name => {
+                    Some(ToolName::plain(req.tool_name.clone()))
+                }
+                ToolSpec::Namespace(namespace) => {
+                    namespace.tools.iter().find_map(|tool| match tool {
+                        ResponsesApiNamespaceTool::Function(tool) => {
+                            let tool_name =
+                                ToolName::namespaced(namespace.name.clone(), tool.name.clone());
+                            (tool_name.display() == req.tool_name).then_some(tool_name)
+                        }
+                    })
+                }
+                ToolSpec::LocalShell {}
+                | ToolSpec::ImageGeneration { .. }
+                | ToolSpec::ToolSearch { .. }
+                | ToolSpec::WebSearch { .. }
+                | ToolSpec::Function(_)
+                | ToolSpec::Freeform(_) => None,
+            })
+            .unwrap_or_else(|| ToolName::plain(req.tool_name.clone()));
+        let (tool_call_name, payload) = if let Some(tool_info) = exec
             .session
-            .resolve_mcp_tool_info(&req.tool_name, /*namespace*/ None)
+            .resolve_mcp_tool_info(&requested_tool_name)
             .await
         {
-            crate::tools::context::ToolPayload::Mcp {
-                server: tool_info.server_name,
-                tool: tool_info.tool.name.to_string(),
-                raw_arguments: req.arguments.clone(),
-            }
-        } else if is_freeform_tool(&router.specs(), &req.tool_name) {
-            crate::tools::context::ToolPayload::Custom {
-                input: req.arguments.clone(),
-            }
+            (
+                tool_info.canonical_tool_name(),
+                crate::tools::context::ToolPayload::Mcp {
+                    server: tool_info.server_name,
+                    tool: tool_info.tool.name.to_string(),
+                    raw_arguments: req.arguments.clone(),
+                },
+            )
+        } else if matches!(
+            router.find_spec(&requested_tool_name),
+            Some(ToolSpec::Freeform(_))
+        ) {
+            (
+                requested_tool_name,
+                crate::tools::context::ToolPayload::Custom {
+                    input: req.arguments.clone(),
+                },
+            )
         } else {
-            crate::tools::context::ToolPayload::Function {
-                arguments: req.arguments.clone(),
-            }
+            (
+                requested_tool_name,
+                crate::tools::context::ToolPayload::Function {
+                    arguments: req.arguments.clone(),
+                },
+            )
         };
 
-        let tool_name = req.tool_name.clone();
         let call = crate::tools::router::ToolCall {
-            tool_name: codex_tools::ToolName::plain(tool_name.clone()),
+            tool_name: tool_call_name,
             call_id: req.id.clone(),
             payload,
         };
@@ -1714,7 +1754,7 @@ fn emitted_image_content_item(
 ) -> FunctionCallOutputContentItem {
     FunctionCallOutputContentItem::InputImage {
         image_url,
-        detail: normalize_output_image_detail(turn.features.get(), &turn.model_info, detail),
+        detail: normalize_output_image_detail(&turn.model_info, detail),
     }
 }
 
@@ -1753,12 +1793,6 @@ fn split_exec_result_content_items(
             (String::new(), content_items)
         }
     }
-}
-
-fn is_freeform_tool(specs: &[ToolSpec], name: &str) -> bool {
-    specs
-        .iter()
-        .any(|spec| spec.name() == name && matches!(spec, ToolSpec::Freeform(_)))
 }
 
 fn is_js_repl_internal_tool(name: &str) -> bool {
