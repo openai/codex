@@ -50,11 +50,11 @@ use crate::stream_events_utils::record_completed_response_item;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::registry::ToolArgumentDiffConsumerBox;
 use crate::tools::router::ToolRouterParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::unavailable_tool::collect_unavailable_called_tools;
-use crate::util::ApplyPatchInputStream;
 use crate::util::backoff;
 use crate::util::error_or_panic;
 use codex_analytics::AppInvocation;
@@ -92,6 +92,7 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ToolName;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -1859,8 +1860,8 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
-    let mut active_apply_patch_call_id: Option<String> = None;
-    let mut apply_patch_input_stream = ApplyPatchInputStream::default();
+    let mut active_tool_argument_diff_consumer: Option<(String, ToolArgumentDiffConsumerBox)> =
+        None;
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -1904,9 +1905,9 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                if active_apply_patch_call_id
-                    .as_deref()
-                    .is_some_and(|active_call_id| {
+                if active_tool_argument_diff_consumer
+                    .as_ref()
+                    .is_some_and(|(active_call_id, _)| {
                         matches!(
                             &item,
                             ResponseItem::FunctionCall { call_id, .. }
@@ -1915,7 +1916,7 @@ async fn try_run_sampling_request(
                         )
                     })
                 {
-                    active_apply_patch_call_id = None;
+                    active_tool_argument_diff_consumer = None;
                 }
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
@@ -1970,9 +1971,12 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let ResponseItem::CustomToolCall { call_id, name, .. } = &item {
-                    active_apply_patch_call_id = (name == "apply_patch").then(|| call_id.clone());
+                    let tool_name = ToolName::plain(name.as_str());
+                    active_tool_argument_diff_consumer = tool_runtime
+                        .create_diff_consumer(&tool_name)
+                        .map(|consumer| (call_id.clone(), consumer));
                 } else if matches!(&item, ResponseItem::FunctionCall { .. }) {
-                    active_apply_patch_call_id = None;
+                    active_tool_argument_diff_consumer = None;
                 }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
@@ -2106,23 +2110,17 @@ async fn try_run_sampling_request(
                 call_id,
                 delta,
             } => {
-                if !turn_context
-                    .features
-                    .enabled(Feature::ApplyPatchStreamingEvents)
-                {
-                    continue;
-                }
-                let Some(active_call_id) = active_apply_patch_call_id.clone() else {
+                let Some((active_call_id, consumer)) = active_tool_argument_diff_consumer.as_mut()
+                else {
                     continue;
                 };
                 let call_id = match call_id {
-                    Some(call_id) if call_id != active_call_id => continue,
+                    Some(call_id) if call_id.as_str() != active_call_id.as_str() => continue,
                     Some(call_id) => call_id,
-                    None => active_call_id,
+                    None => active_call_id.clone(),
                 };
-                if let Some(event) = apply_patch_input_stream.push_delta(call_id, &delta) {
-                    sess.send_event(&turn_context, EventMsg::PatchApplyDelta(event))
-                        .await;
+                if let Some(event) = consumer.consume_diff(call_id, &delta) {
+                    sess.send_event(&turn_context, event).await;
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {

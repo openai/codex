@@ -16,16 +16,21 @@ use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::ToolArgumentDiffConsumer;
+use crate::tools::registry::ToolArgumentDiffConsumerBox;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::util::ApplyPatchInputStream;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_exec_server::ExecutorFileSystem;
+use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::EventMsg;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
@@ -35,6 +40,19 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub struct ApplyPatchHandler;
+
+#[derive(Default)]
+struct ApplyPatchArgumentDiffConsumer {
+    input_stream: ApplyPatchInputStream,
+}
+
+impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
+    fn consume_diff(&mut self, call_id: String, diff: &str) -> Option<EventMsg> {
+        self.input_stream
+            .push_delta(call_id, diff)
+            .map(EventMsg::PatchApplyDelta)
+    }
+}
 
 fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
     let mut keys = Vec::new();
@@ -140,6 +158,12 @@ impl ToolHandler for ApplyPatchHandler {
 
     async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
+    }
+
+    fn create_diff_consumer(&self, turn: &TurnContext) -> Option<ToolArgumentDiffConsumerBox> {
+        turn.features
+            .enabled(Feature::ApplyPatchStreamingEvents)
+            .then(|| Box::<ApplyPatchArgumentDiffConsumer>::default() as Box<_>)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
