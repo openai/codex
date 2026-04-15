@@ -93,7 +93,8 @@ At most one step can be in_progress at a time.
     })
 });
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ToolHandler for PlanHandler {
     type Output = PlanToolOutput;
 

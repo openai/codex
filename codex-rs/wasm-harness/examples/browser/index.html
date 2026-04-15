@@ -161,8 +161,9 @@
     <main>
       <h1>Codex WASM harness prototype</h1>
       <p>
-        This page exercises the browser boundary: submit a prompt, stream
-        Codex-shaped events from WASM, and resolve when the turn completes.
+        This page exercises the real Codex browser boundary: submit a prompt,
+        stream Codex protocol events from WASM, and resolve when the turn
+        completes.
       </p>
       <section class="api-key-panel" aria-labelledby="api-key-title">
         <div>
@@ -193,7 +194,7 @@
       <form id="prompt-form">
         <input
           id="prompt"
-          value="write hello world in JavaScript, execute it with exec_js, and tell me the result"
+          value="write hello world in JavaScript, run it with exec, and tell me the result"
           autocomplete="off"
         />
         <button type="submit">Run turn</button>
@@ -201,9 +202,9 @@
       <section id="events" aria-live="polite"></section>
     </main>
     <script type="module">
-      import init, { BrowserCodex } from "../pkg/codex_wasm_harness.js";
+      import init, { BrowserCodex } from "../pkg/codex_wasm_harness.js?v=20260414s";
 
-      await init();
+      await init("../pkg/codex_wasm_harness_bg.wasm?v=20260414s");
 
       const form = document.querySelector("#prompt-form");
       const input = document.querySelector("#prompt");
@@ -217,7 +218,10 @@
 
       apiKeyInput.value = readStoredApiKey();
       updateApiKeyStatus();
-      codex.set_code_executor(async (code) => sandbox.execute(code));
+      codex.set_code_executor(async (requestJson) =>
+        sandbox.execute(requestJson),
+      );
+      renderEvent({ type: "page_ready" });
 
       apiKeyInput.addEventListener("input", () => {
         const apiKey = apiKeyInput.value.trim();
@@ -236,6 +240,7 @@
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         events.replaceChildren();
+        renderEvent({ type: "submit_clicked" });
         try {
           await codex.submit_turn(input.value, renderEvent);
         } catch (error) {
@@ -250,6 +255,10 @@
         renderEvent({
           type: "window_error",
           message: event.message,
+          stack:
+            event.error instanceof Error && event.error.stack
+              ? event.error.stack
+              : null,
         });
       });
 
@@ -260,6 +269,10 @@
             event.reason instanceof Error
               ? event.reason.message
               : String(event.reason),
+          stack:
+            event.reason instanceof Error && event.reason.stack
+              ? event.reason.stack
+              : null,
         });
       });
 
@@ -287,7 +300,7 @@
       function updateApiKeyStatus() {
         apiKeyStatus.textContent = apiKeyInput.value
           ? "API key stored in localStorage for this browser."
-          : "No API key stored. The deterministic demo sampler will be used.";
+          : "No API key stored. Enter a key to run the real Codex harness.";
       }
 
       function renderEvent(event) {
@@ -310,6 +323,8 @@
 <html>
   <body>
     <script>
+      const EXIT_SIGNAL = Symbol("codexExit");
+
       function formatValue(value) {
         if (typeof value === "string") {
           return value;
@@ -324,35 +339,106 @@
         }
       }
 
+      function cloneJson(value) {
+        return JSON.parse(JSON.stringify(value ?? null));
+      }
+
       window.addEventListener("message", async (event) => {
         const data = event.data;
         if (!data || data.type !== "exec_js") {
           return;
         }
 
-        const logs = [];
-        const consoleProxy = {
-          log: (...args) => logs.push(args.map(formatValue).join(" ")),
-          error: (...args) => logs.push(args.map(formatValue).join(" ")),
-        };
-
         try {
-          const runner = new Function(
-            "console",
-            "return (async () => {\\n" + data.code + "\\n})();",
+          const request = JSON.parse(data.requestJson);
+          const outputParts = [];
+          const storedValues = cloneJson(request.stored_values) ?? {};
+          const toolsMetadata = Array.isArray(request.enabled_tools)
+            ? request.enabled_tools
+            : [];
+          const consoleProxy = {
+            log: (...args) => outputParts.push(args.map(formatValue).join(" ")),
+            error: (...args) => outputParts.push(args.map(formatValue).join(" ")),
+          };
+          const text = (value) => {
+            const formatted = formatValue(value);
+            if (formatted) {
+              outputParts.push(formatted);
+            }
+          };
+          const notify = text;
+          const store = (key, value) => {
+            if (typeof key !== "string" || !key) {
+              throw new Error("store(key, value) requires a non-empty string key");
+            }
+            storedValues[key] = cloneJson(value);
+          };
+          const load = (key) => storedValues[key];
+          const tools = new Proxy(
+            {},
+            {
+              get(_target, prop) {
+                return async () => {
+                  throw new Error(
+                    "Nested tool " +
+                      String(prop) +
+                      " is unavailable in the browser prototype",
+                  );
+                };
+              },
+            },
           );
-          const result = await runner(consoleProxy);
-          const outputParts = logs.filter(Boolean);
-          const formattedResult = formatValue(result);
-          if (formattedResult) {
-            outputParts.push(formattedResult);
+          let errorText = null;
+          const runner = new Function(
+            "tools",
+            "text",
+            "output_text",
+            "image",
+            "store",
+            "load",
+            "notify",
+            "yield_control",
+            "exit",
+            "ALL_TOOLS",
+            "console",
+            "return (async () => {\\n" + request.source + "\\n})();",
+          );
+
+          try {
+            const result = await runner(
+              tools,
+              text,
+              text,
+              text,
+              store,
+              load,
+              notify,
+              async () => {},
+              () => {
+                throw EXIT_SIGNAL;
+              },
+              toolsMetadata,
+              consoleProxy,
+            );
+            const formattedResult = formatValue(result);
+            if (formattedResult) {
+              outputParts.push(formattedResult);
+            }
+          } catch (error) {
+            if (error !== EXIT_SIGNAL) {
+              errorText =
+                error instanceof Error ? error.message : String(error);
+            }
           }
+
           parent.postMessage(
             {
               type: "exec_js_result",
               requestId: data.requestId,
               ok: true,
               output: outputParts.join("\\n"),
+              storedValues,
+              errorText,
             },
             "*",
           );
@@ -387,19 +473,19 @@
           }
           pending.delete(data.requestId);
           if (data.ok) {
-            entry.resolve(data.output ?? "");
+            entry.resolve(data);
           } else {
             entry.reject(new Error(data.error ?? "sandbox execution failed"));
           }
         });
 
         return {
-          execute(code) {
+          execute(requestJson) {
             return new Promise((resolve, reject) => {
               nextRequestId += 1;
               pending.set(nextRequestId, { resolve, reject });
               iframe.contentWindow.postMessage(
-                { type: "exec_js", requestId: nextRequestId, code },
+                { type: "exec_js", requestId: nextRequestId, requestJson },
                 "*",
               );
             });

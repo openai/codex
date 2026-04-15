@@ -63,7 +63,7 @@ impl AbsolutePathBuf {
         #[cfg(not(target_arch = "wasm32"))]
         let absolute_path = expanded.absolutize()?;
         #[cfg(target_arch = "wasm32")]
-        let absolute_path = normalize_absolute_path(if expanded.is_absolute() {
+        let absolute_path = normalize_absolute_path(if is_effectively_absolute(&expanded) {
             expanded
         } else {
             join_against_base(expanded, &std::env::current_dir()?)?
@@ -79,6 +79,11 @@ impl AbsolutePathBuf {
     /// Construct an absolute path from `path`, resolving relative paths against
     /// the process current working directory.
     pub fn relative_to_current_dir<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let path = path.as_ref();
+        if path.is_absolute() {
+            return Self::from_absolute_path(path);
+        }
+
         Self::resolve_path_against_base(path, std::env::current_dir()?)
     }
 
@@ -119,7 +124,7 @@ impl AbsolutePathBuf {
 
 #[cfg(target_arch = "wasm32")]
 fn join_against_base(path: PathBuf, base_path: &Path) -> std::io::Result<PathBuf> {
-    if path.is_absolute() {
+    if is_effectively_absolute(&path) {
         return Ok(path);
     }
     if !base_path.is_absolute() {
@@ -129,6 +134,19 @@ fn join_against_base(path: PathBuf, base_path: &Path) -> std::io::Result<PathBuf
         ));
     }
     Ok(base_path.join(path))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn is_effectively_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        || path.has_root()
+        || matches!(
+            path.components().next(),
+            Some(Component::RootDir | Component::Prefix(_))
+        )
+        || path
+            .to_string_lossy()
+            .starts_with(std::path::MAIN_SEPARATOR)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -301,6 +319,15 @@ mod tests {
             abs_path_buf.as_path(),
             current_dir.join("file.txt").as_path()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn relative_to_current_dir_keeps_absolute_path() -> std::io::Result<()> {
+        let absolute_dir = tempdir()?;
+        let absolute_path = absolute_dir.path().join("file.txt");
+        let abs_path_buf = AbsolutePathBuf::relative_to_current_dir(&absolute_path)?;
+        assert_eq!(abs_path_buf.as_path(), absolute_path.as_path());
         Ok(())
     }
 

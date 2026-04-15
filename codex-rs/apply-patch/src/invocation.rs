@@ -15,10 +15,10 @@ use crate::ApplyPatchFileChange;
 use crate::ApplyPatchFileUpdate;
 use crate::IoError;
 use crate::MaybeApplyPatchVerified;
-use crate::parser::Hunk;
-use crate::parser::ParseError;
-use crate::parser::parse_patch;
 use crate::unified_diff_from_chunks;
+use super::parser::Hunk;
+use super::parser::ParseError;
+use super::parser::parse_patch;
 use std::str::Utf8Error;
 use tree_sitter::LanguageError;
 

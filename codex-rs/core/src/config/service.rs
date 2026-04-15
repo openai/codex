@@ -434,7 +434,7 @@ async fn create_empty_user_layer(
     } = resolve_symlink_write_paths(config_toml.as_path())
         .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
     let toml_value = match read_path {
-        Some(path) => match tokio::fs::read_to_string(&path).await {
+        Some(path) => match crate::async_fs::read_to_string(&path).await {
             Ok(contents) => toml::from_str(&contents).map_err(|e| {
                 ConfigServiceError::toml("failed to parse existing user config.toml", e)
             })?,

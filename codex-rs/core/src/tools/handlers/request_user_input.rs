@@ -55,7 +55,8 @@ pub struct RequestUserInputHandler {
     pub default_mode_request_user_input: bool,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ToolHandler for RequestUserInputHandler {
     type Output = FunctionToolOutput;
 

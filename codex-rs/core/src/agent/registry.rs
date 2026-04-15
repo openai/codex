@@ -4,7 +4,6 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use rand::prelude::IndexedRandom;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -12,6 +11,22 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn choose_item<T>(items: &[T]) -> Option<&T> {
+    use rand::prelude::IndexedRandom;
+
+    items.choose(&mut rand::rng())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn choose_item<T>(items: &[T]) -> Option<&T> {
+    if items.is_empty() {
+        return None;
+    }
+    let index = (js_sys::Math::random() * items.len() as f64).floor() as usize;
+    items.get(index.min(items.len().saturating_sub(1)))
+}
 
 /// This structure is used to add some limits on the multi-agent capabilities for Codex. In
 /// the current implementation, it limits:
@@ -215,7 +230,7 @@ impl AgentRegistry {
                 .map(|name| format_agent_nickname(name, active_agents.nickname_reset_count))
                 .filter(|name| !active_agents.used_agent_nicknames.contains(name))
                 .collect();
-            if let Some(name) = available_names.choose(&mut rand::rng()) {
+            if let Some(name) = choose_item(&available_names) {
                 name.clone()
             } else {
                 active_agents.used_agent_nicknames.clear();
@@ -227,10 +242,7 @@ impl AgentRegistry {
                         &[],
                     );
                 }
-                format_agent_nickname(
-                    names.choose(&mut rand::rng())?,
-                    active_agents.nickname_reset_count,
-                )
+                format_agent_nickname(choose_item(names)?, active_agents.nickname_reset_count)
             }
         };
         active_agents

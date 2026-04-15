@@ -115,9 +115,9 @@ async fn save_image_generation_result(
         })?;
     let path = image_generation_artifact_path(codex_home, session_id, call_id);
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        crate::async_fs::create_dir_all(parent).await?;
     }
-    tokio::fs::write(&path, bytes).await?;
+    crate::async_fs::write(&path, bytes).await?;
     Ok(path)
 }
 

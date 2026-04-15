@@ -2,6 +2,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::mcp_types::Tool;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -11,11 +12,15 @@ use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::tools::handlers::TOOL_SEARCH_TOOL_NAME;
 use crate::tools::handlers::TOOL_SUGGEST_TOOL_NAME;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
@@ -78,6 +83,7 @@ use codex_tools::create_wait_agent_tool_v2;
 use codex_tools::create_wait_tool;
 use codex_tools::create_write_stdin_tool;
 use codex_tools::dynamic_tool_to_responses_api_tool;
+#[cfg(not(target_arch = "wasm32"))]
 use codex_tools::mcp_tool_to_responses_api_tool;
 use codex_tools::tool_spec_to_code_mode_tool_definition;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -386,7 +392,7 @@ fn push_tool_spec(
 #[cfg(test)]
 pub(crate) fn build_specs(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    mcp_tools: Option<HashMap<String, Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -401,7 +407,7 @@ pub(crate) fn build_specs(
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    mcp_tools: Option<HashMap<String, Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -410,8 +416,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::JsReplHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::JsReplResetHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
@@ -421,20 +430,33 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::ToolSearchHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents::SendInputHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
+    #[cfg(not(target_arch = "wasm32"))]
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use std::sync::Arc;
 
@@ -453,10 +475,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    #[cfg(not(target_arch = "wasm32"))]
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
+    #[cfg(not(target_arch = "wasm32"))]
     let js_repl_handler = Arc::new(JsReplHandler);
+    #[cfg(not(target_arch = "wasm32"))]
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
@@ -587,6 +612,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     );
     builder.register_handler("update_plan", plan_handler);
 
+    #[cfg(not(target_arch = "wasm32"))]
     if config.js_repl_enabled {
         push_tool_spec(
             &mut builder,
@@ -626,6 +652,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("request_permissions", request_permissions_handler);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     if config.search_tool
         && let Some(app_tools) = app_tools
     {
@@ -649,6 +676,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     if config.tool_suggest
         && let Some(discoverable_tools) = discoverable_tools
             .as_ref()
@@ -683,6 +711,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("apply_patch", apply_patch_handler);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     if config
         .experimental_supported_tools
         .iter()
@@ -773,6 +802,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     );
     builder.register_handler("view_image", view_image_handler);
 
+    #[cfg(not(target_arch = "wasm32"))]
     if config.collab_tools {
         if config.multi_agent_v2 {
             push_tool_spec(
@@ -874,6 +904,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     if config.agent_jobs_tools {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
         push_tool_spec(
@@ -894,8 +925,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(mcp_tools) = mcp_tools {
-        let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
+        let mut entries: Vec<(String, Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, tool) in entries.into_iter() {

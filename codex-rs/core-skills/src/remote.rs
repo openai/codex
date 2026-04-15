@@ -11,6 +11,38 @@ use codex_login::default_client::build_reqwest_client;
 
 const REMOTE_SKILLS_API_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg(not(target_arch = "wasm32"))]
+async fn create_dir_all(path: &Path) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(path).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn create_dir_all(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn extract_zip_async(
+    zip_bytes: Vec<u8>,
+    output_dir: PathBuf,
+    prefix_candidates: Vec<String>,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        extract_zip_to_dir(zip_bytes, &output_dir, &prefix_candidates)
+    })
+    .await
+    .context("Zip extraction task failed")?
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn extract_zip_async(
+    zip_bytes: Vec<u8>,
+    output_dir: PathBuf,
+    prefix_candidates: Vec<String>,
+) -> Result<()> {
+    extract_zip_to_dir(zip_bytes, &output_dir, &prefix_candidates)
+}
+
 // Low-level client for the remote skill API. This is intentionally kept around for
 // future wiring, but it is not used yet by any active product surface.
 
@@ -182,18 +214,14 @@ pub async fn export_remote_skill(
     }
 
     let output_dir = codex_home.join("skills").join(skill_id);
-    tokio::fs::create_dir_all(&output_dir)
+    create_dir_all(&output_dir)
         .await
         .context("Failed to create downloaded skills directory")?;
 
     let zip_bytes = body.to_vec();
     let output_dir_clone = output_dir.clone();
     let prefix_candidates = vec![skill_id.to_string()];
-    tokio::task::spawn_blocking(move || {
-        extract_zip_to_dir(zip_bytes, &output_dir_clone, &prefix_candidates)
-    })
-    .await
-    .context("Zip extraction task failed")??;
+    extract_zip_async(zip_bytes, output_dir_clone, prefix_candidates).await?;
 
     Ok(RemoteSkillDownloadResult {
         id: skill_id.to_string(),

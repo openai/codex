@@ -19,6 +19,10 @@ path = "src/bin/command_runner.rs"
 
 [dependencies]
 anyhow = "1.0"
+codex-protocol = { package = "codex-protocol", path = "../protocol" }
+serde = { version = "1.0", features = ["derive"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
 base64 = { workspace = true }
 chrono = { version = "0.4.42", default-features = false, features = [
     "clock",
@@ -28,7 +32,6 @@ codex-utils-pty = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
 dunce = "1.0"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3"
 tokio = { workspace = true, features = ["sync", "rt"] }
@@ -39,16 +42,12 @@ windows = { version = "0.58", features = [
     "Win32_System_Variant",
 ] }
 
-[dependencies.codex-protocol]
-package = "codex-protocol"
-path = "../protocol"
-
-[dependencies.rand]
+[target.'cfg(target_os = "windows")'.dependencies.rand]
 default-features = false
 features = ["std", "small_rng"]
 version = "0.8"
 
-[dependencies.dirs-next]
+[target.'cfg(target_os = "windows")'.dependencies.dirs-next]
 version = "2.0"
 
 [target.'cfg(windows)'.dependencies.windows-sys]

@@ -29,6 +29,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+#[cfg(not(target_arch = "wasm32"))]
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -352,11 +353,19 @@ impl AgentControl {
         let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
             return Ok(resumed_thread_id);
         };
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Ok(resumed_thread_id);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         let Some(state_db_ctx) = resumed_thread.state_db() else {
             return Ok(resumed_thread_id);
         };
 
+        #[cfg(not(target_arch = "wasm32"))]
         let mut resume_queue = VecDeque::from([(thread_id, root_depth)]);
+        #[cfg(not(target_arch = "wasm32"))]
         while let Some((parent_thread_id, parent_depth)) = resume_queue.pop_front() {
             let child_ids = match state_db_ctx
                 .list_thread_spawn_children_with_status(
@@ -617,6 +626,7 @@ impl AgentControl {
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
+        #[cfg(not(target_arch = "wasm32"))]
         if let Ok(thread) = state.get_thread(agent_id).await
             && let Some(state_db_ctx) = thread.state_db()
             && let Err(err) = state_db_ctx
@@ -1045,9 +1055,16 @@ impl AgentControl {
         let Some(parent_thread_id) = session_source.and_then(thread_spawn_parent_thread_id) else {
             return;
         };
+        #[cfg(target_arch = "wasm32")]
+        {
+            return;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         let Some(state_db_ctx) = thread.state_db() else {
             return;
         };
+        #[cfg(not(target_arch = "wasm32"))]
         if let Err(err) = state_db_ctx
             .upsert_thread_spawn_edge(
                 parent_thread_id,

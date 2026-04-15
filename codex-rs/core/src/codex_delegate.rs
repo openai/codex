@@ -112,7 +112,7 @@ pub(crate) async fn run_codex_thread_interactive(
     // context when the later legacy RequestUserInput approval event only carries
     // a call_id plus approval question metadata.
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::<String, McpInvocation>::new()));
-    tokio::spawn(async move {
+    crate::async_runtime::spawn(async move {
         forward_events(
             codex_for_events,
             tx_sub,
@@ -126,7 +126,7 @@ pub(crate) async fn run_codex_thread_interactive(
 
     // Forward ops from the caller to the sub-agent.
     let codex_for_ops = Arc::clone(&codex);
-    tokio::spawn(async move {
+    crate::async_runtime::spawn(async move {
         forward_ops(codex_for_ops, rx_ops, cancel_token_ops).await;
     });
 

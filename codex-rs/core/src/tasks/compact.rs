@@ -11,7 +11,8 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CompactTask;
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SessionTask for CompactTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Compact

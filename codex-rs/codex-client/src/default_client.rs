@@ -115,12 +115,21 @@ impl CodexRequestBuilder {
 
         match self.builder.headers(headers).send().await {
             Ok(response) => {
+                #[cfg(not(target_arch = "wasm32"))]
                 tracing::debug!(
                     method = %self.method,
                     url = %self.url,
                     status = %response.status(),
                     headers = ?response.headers(),
                     version = ?response.version(),
+                    "Request completed"
+                );
+                #[cfg(target_arch = "wasm32")]
+                tracing::debug!(
+                    method = %self.method,
+                    url = %self.url,
+                    status = %response.status(),
+                    headers = ?response.headers(),
                     "Request completed"
                 );
 

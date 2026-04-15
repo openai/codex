@@ -19,6 +19,8 @@ workspace = true
 anyhow = { workspace = true }
 similar = { workspace = true }
 thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 

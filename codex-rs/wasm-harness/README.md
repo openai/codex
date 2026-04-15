@@ -2,71 +2,50 @@
 
 This crate is the first browser-facing seam for a Codex harness prototype.
 
-It now exposes two layers:
+It exposes one browser-facing layer:
 
-- `EmbeddedHarness`: a pure Rust library API that downstream Rust/web repos can
-  depend on directly.
-- `BrowserCodex`: a `wasm_bindgen` adapter that preserves the current browser
-  demo API.
+- `BrowserCodex`: a `wasm_bindgen` adapter that starts a real
+  `codex-core::CodexThread`, calls `CodexThread::submit(Op::UserTurn { ... })`,
+  and streams real Codex protocol events back to JavaScript.
 
-It does not yet call `codex-core::run_turn` or `RegularTask::run`. Instead, it
-establishes the intended browser API shape:
-
-- submit a prompt from JavaScript;
-- stream Codex-shaped turn events back to the page; and
-- resolve after a `turn_complete` event.
-
-The sampler is currently implemented in Rust/WASM. The demo page uses a
-deterministic local response by default, or passes the user's API key into the
-WASM facade so Rust can make a direct browser `fetch` request to the Responses
-API.
+The demo page passes the user's API key into the WASM facade so Rust can make
+browser `fetch` requests to the Responses API through the wasm-compatible
+Codex client stack.
 
 The API key field is for local prototype use only: it stores the key in browser
 `localStorage` and sends it directly from the page. A production browser
 integration should use a proxy or an ephemeral-token flow instead of persisting
 long-lived API keys in the page origin.
 
-The next step is to replace the callback boundary with a real model transport
-and then wire the facade to the Codex turn loop after host services are
-injectable.
+The remaining work is to replace the current browser-only host shims with more
+complete browser implementations for persistence, richer tools, and other
+host-heavy services.
 
 ## Library Boundary
 
-The intended downstream integration point is the pure Rust API:
-
-- `EmbeddedHarness`
-- `ResponsesClient`
-- `ToolExecutor`
-- `EventSink`
-- `HarnessConfig`
-
-That allows downstream webapps to:
+The intended downstream integration point is the crate itself. Downstream
+webapps can:
 
 - depend on `codex-wasm-harness` from a Git branch or local path;
-- supply their own browser/runtime implementations for transport, tools, event
-  rendering, or persistence; and
+- construct `BrowserCodex` from JavaScript or wrap the crate with their own
+  browser bindings;
+- supply their own browser/runtime implementations for host services such as
+  code execution, event rendering, or persistence; and
 - keep app-specific browser glue out of the Codex repo.
-
-The current `BrowserCodex` type remains a thin compatibility wrapper around
-that library API so the demo page keeps working.
-
-The `real-core` feature is an explicit compile probe for depending on
-`codex-core`. It currently does not build for `wasm32-unknown-unknown`; the
-first blocker is native Tokio/Mio networking pulled through the host-heavy
-`codex-core` dependency graph.
 
 ## Current Limitations
 
-This is a boundary prototype, not a port of `codex-core` yet.
+This is a minimal browser port of the Codex turn loop, not full desktop Codex.
 
-- It does not construct a `Session` or `TurnContext`.
-- It does not call `RegularTask::run` or `run_turn`.
-- It does not expose native Codex tools.
-- It emits Codex-shaped events, but not the full protocol event set.
+- It uses the real `CodexThread` turn path, but many host-heavy services are
+  still compiled into degraded wasm implementations.
+- It currently relies on a single injected browser code executor for code mode.
+- Native shell, PTY, MCP, plugin runtime, and filesystem-backed persistence are
+  not available in the browser prototype.
 
-The immediate implementation value is that the browser API and demo page can be
-iterated independently while the host-heavy Codex services are moved behind
-browser-compatible traits.
+The immediate implementation value is that downstream browser work can now
+build on the real Codex harness boundary instead of a custom TypeScript or Rust
+turn loop.
 
 ## Build Sketch
 

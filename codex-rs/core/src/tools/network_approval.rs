@@ -530,16 +530,26 @@ pub(crate) fn build_network_policy_decider(
     network_approval: Arc<NetworkApprovalService>,
     network_policy_decider_session: Arc<RwLock<std::sync::Weak<Session>>>,
 ) -> Arc<dyn NetworkPolicyDecider> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = network_approval;
+        let _ = network_policy_decider_session;
+        return Arc::new(move |_request: NetworkPolicyRequest| async move {
+            Ok(NetworkDecision::ask("not_allowed"))
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     Arc::new(move |request: NetworkPolicyRequest| {
         let network_approval = Arc::clone(&network_approval);
         let network_policy_decider_session = Arc::clone(&network_policy_decider_session);
         async move {
             let Some(session) = network_policy_decider_session.read().await.upgrade() else {
-                return NetworkDecision::ask("not_allowed");
+                return Ok(NetworkDecision::ask("not_allowed"));
             };
-            network_approval
+            Ok(network_approval
                 .handle_inline_policy_request(session, request)
-                .await
+                .await)
         }
     })
 }

@@ -19,16 +19,22 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::timeout;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
 
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 
 /// Streams SSE events from an on-disk fixture for tests.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn stream_from_fixture(
     path: impl AsRef<Path>,
     idle_timeout: Duration,
@@ -45,13 +51,23 @@ pub fn stream_from_fixture(
     let reader = std::io::Cursor::new(content);
     let stream = ReaderStream::new(reader).map_err(|err| TransportError::Network(err.to_string()));
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
-    tokio::spawn(process_sse(
+    spawn_sse_task(process_sse(
         Box::pin(stream),
         tx_event,
         idle_timeout,
         /*telemetry*/ None,
     ));
     Ok(ResponseStream { rx_event })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn stream_from_fixture(
+    _path: impl AsRef<Path>,
+    _idle_timeout: Duration,
+) -> Result<ResponseStream, ApiError> {
+    Err(ApiError::Stream(
+        "SSE fixtures are unavailable on wasm32".to_string(),
+    ))
 }
 
 pub fn spawn_response_stream(
@@ -84,7 +100,7 @@ pub fn spawn_response_stream(
         let _ = turn_state.set(header_value.to_string());
     }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
-    tokio::spawn(async move {
+    spawn_sse_task(async move {
         if let Some(model) = server_model {
             let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
         }
@@ -103,6 +119,73 @@ pub fn spawn_response_stream(
     });
 
     ResponseStream { rx_event }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_sse_task(task: impl std::future::Future<Output = ()> + Send + 'static) {
+    tokio::spawn(task);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_sse_task(task: impl std::future::Future<Output = ()> + 'static) {
+    spawn_local(task);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn next_sse_event<S>(
+    stream: &mut S,
+    idle_timeout: Duration,
+) -> Result<
+    Option<Result<eventsource_stream::Event, eventsource_stream::EventStreamError<TransportError>>>,
+    tokio::time::error::Elapsed,
+>
+where
+    S: futures::Stream<
+            Item = Result<
+                eventsource_stream::Event,
+                eventsource_stream::EventStreamError<TransportError>,
+            >,
+        > + Unpin,
+{
+    timeout(idle_timeout, stream.next()).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn next_sse_event<S>(
+    stream: &mut S,
+    idle_timeout: Duration,
+) -> Result<
+    Option<Result<eventsource_stream::Event, eventsource_stream::EventStreamError<TransportError>>>,
+    tokio::time::error::Elapsed,
+>
+where
+    S: futures::Stream<
+            Item = Result<
+                eventsource_stream::Event,
+                eventsource_stream::EventStreamError<TransportError>,
+            >,
+        > + Unpin,
+{
+    let _ = idle_timeout;
+    Ok(stream.next().await)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sse_poll_start() -> Instant {
+    Instant::now()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn sse_poll_start() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sse_poll_duration_since(start: Instant) -> Duration {
+    start.elapsed()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn sse_poll_duration_since((): ()) -> Duration {
+    Duration::ZERO
 }
 
 #[derive(Debug, Deserialize)]
@@ -365,10 +448,10 @@ pub async fn process_sse(
     let mut last_server_model: Option<String> = None;
 
     loop {
-        let start = Instant::now();
-        let response = timeout(idle_timeout, stream.next()).await;
+        let start = sse_poll_start();
+        let response = next_sse_event(&mut stream, idle_timeout).await;
         if let Some(t) = telemetry.as_ref() {
-            t.on_sse_poll(&response, start.elapsed());
+            t.on_sse_poll(&response, sse_poll_duration_since(start));
         }
         let sse = match response {
             Ok(Some(Ok(sse))) => sse,

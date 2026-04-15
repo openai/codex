@@ -155,6 +155,9 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
 ];
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
+    #[cfg(target_arch = "wasm32")]
+    let raw = std::env::var("CODEX_SQLITE_HOME").ok()?;
+    #[cfg(not(target_arch = "wasm32"))]
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -634,15 +637,25 @@ impl ConfigBuilder {
             cloud_requirements,
             fallback_cwd,
         } = self;
-        let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        let codex_home = codex_home
+            .map_or_else(find_codex_home, std::io::Result::Ok)
+            .map_err(|error| {
+                std::io::Error::new(error.kind(), format!("resolve codex_home failed: {error}"))
+            })?;
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
-            Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
-            None => AbsolutePathBuf::current_dir()?,
-        };
+            Some(path) if path.is_absolute() => {
+                AbsolutePathBuf::try_from(normalize_for_native_workdir(path))
+            }
+            Some(path) => AbsolutePathBuf::relative_to_current_dir(path),
+            None => AbsolutePathBuf::current_dir(),
+        }
+        .map_err(|error| {
+            std::io::Error::new(error.kind(), format!("resolve cwd failed: {error}"))
+        })?;
         harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack = load_config_layers_state(
             &codex_home,
@@ -651,7 +664,10 @@ impl ConfigBuilder {
             loader_overrides,
             cloud_requirements,
         )
-        .await?;
+        .await
+        .map_err(|error| {
+            std::io::Error::new(error.kind(), format!("load config layers failed: {error}"))
+        })?;
         let merged_toml = config_layer_stack.effective_config();
 
         // Note that each layer in ConfigLayerStack should have resolved
@@ -679,6 +695,12 @@ impl ConfigBuilder {
             codex_home,
             config_layer_stack,
         )
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("assemble final config from merged layers failed: {error}"),
+            )
+        })
     }
 }
 
@@ -1964,6 +1986,168 @@ pub(crate) fn resolve_web_search_mode_for_turn(
 }
 
 impl Config {
+    /// Build a session config from the default config shape plus explicit host
+    /// paths, without reading config files from disk.
+    pub fn load_embedded_defaults(codex_home: PathBuf, cwd: PathBuf) -> std::io::Result<Self> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Self::load_embedded_defaults_wasm(codex_home, cwd);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let overrides = ConfigOverrides {
+                cwd: Some(cwd),
+                ..ConfigOverrides::default()
+            };
+            Self::load_config_with_layer_stack(
+                ConfigToml::default(),
+                overrides,
+                codex_home,
+                ConfigLayerStack::default(),
+            )
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn load_embedded_defaults_wasm(codex_home: PathBuf, cwd: PathBuf) -> std::io::Result<Self> {
+        let cfg = ConfigToml::default();
+        let model_provider_id = cfg
+            .model_provider
+            .clone()
+            .unwrap_or_else(|| OPENAI_PROVIDER_ID.to_string());
+        let model_providers = built_in_model_providers(/*openai_base_url*/ None);
+        let model_provider = model_providers
+            .get(&model_provider_id)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Model provider `{model_provider_id}` not found"),
+                )
+            })?
+            .clone();
+        let resolved_cwd = AbsolutePathBuf::try_from(normalize_for_native_workdir(cwd.as_path()))
+            .map_err(|error| {
+            std::io::Error::new(error.kind(), format!("resolve session cwd failed: {error}"))
+        })?;
+        let sandbox_policy = SandboxPolicy::new_read_only_policy();
+        let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+
+        let features = ManagedFeatures::from_configured(Features::with_defaults(), None)?;
+
+        Ok(Self {
+            config_layer_stack: ConfigLayerStack::default(),
+            startup_warnings: Vec::new(),
+            model: cfg.model,
+            service_tier: cfg.service_tier,
+            review_model: cfg.review_model,
+            model_context_window: cfg.model_context_window,
+            model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
+            model_provider_id,
+            model_provider,
+            personality: cfg.personality.or(Some(Personality::Pragmatic)),
+            permissions: Permissions {
+                approval_policy: Constrained::allow_any(AskForApproval::Never),
+                sandbox_policy: Constrained::allow_any(sandbox_policy.clone()),
+                file_system_sandbox_policy,
+                network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+                network: None,
+                allow_login_shell: true,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                windows_sandbox_private_desktop: true,
+            },
+            approvals_reviewer: ApprovalsReviewer::User,
+            enforce_residency: Constrained::allow_any(/*initial_value*/ None),
+            hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            show_raw_agent_reasoning: cfg.show_raw_agent_reasoning.unwrap_or(false),
+            user_instructions: None,
+            base_instructions: None,
+            developer_instructions: cfg.developer_instructions,
+            guardian_developer_instructions: None,
+            compact_prompt: cfg.compact_prompt,
+            commit_attribution: cfg.commit_attribution,
+            notify: cfg.notify,
+            tui_notifications: Notifications::default(),
+            tui_notification_method: NotificationMethod::default(),
+            animations: true,
+            show_tooltips: true,
+            model_availability_nux: ModelAvailabilityNuxConfig::default(),
+            tui_alternate_screen: AltScreenMode::Auto,
+            tui_status_line: None,
+            tui_terminal_title: None,
+            tui_theme: None,
+            cwd: resolved_cwd,
+            cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
+            mcp_servers: Constrained::allow_any(HashMap::new()),
+            mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
+            mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
+            mcp_oauth_callback_url: cfg.mcp_oauth_callback_url,
+            model_providers,
+            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
+            project_doc_fallback_filenames: cfg.project_doc_fallback_filenames.unwrap_or_default(),
+            tool_output_token_limit: cfg.tool_output_token_limit,
+            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_roles: BTreeMap::new(),
+            memories: cfg.memories.unwrap_or_default().into(),
+            codex_home: codex_home.clone(),
+            sqlite_home: codex_home.clone(),
+            log_dir: codex_home.join("log"),
+            history: cfg.history.unwrap_or_default(),
+            ephemeral: true,
+            file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
+            codex_self_exe: None,
+            codex_linux_sandbox_exe: None,
+            main_execve_wrapper_exe: None,
+            js_repl_node_path: None,
+            js_repl_node_module_dirs: Vec::new(),
+            zsh_path: None,
+            model_reasoning_effort: cfg.model_reasoning_effort,
+            plan_mode_reasoning_effort: cfg.plan_mode_reasoning_effort,
+            model_reasoning_summary: cfg.model_reasoning_summary,
+            model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
+            model_catalog: None,
+            model_verbosity: cfg.model_verbosity,
+            chatgpt_base_url: cfg
+                .chatgpt_base_url
+                .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            realtime_audio: RealtimeAudioConfig::default(),
+            experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
+            experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
+            realtime: cfg
+                .realtime
+                .map_or_else(RealtimeConfig::default, |realtime| RealtimeConfig {
+                    version: realtime.version.unwrap_or_default(),
+                    session_type: realtime.session_type.unwrap_or_default(),
+                }),
+            experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
+            experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
+            experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
+            forced_chatgpt_workspace_id: cfg.forced_chatgpt_workspace_id,
+            forced_login_method: cfg.forced_login_method,
+            include_apply_patch_tool: false,
+            web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
+            web_search_config: None,
+            use_experimental_unified_exec_tool: false,
+            background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
+            ghost_snapshot: GhostSnapshotConfig::default(),
+            features,
+            suppress_unstable_features_warning: false,
+            active_profile: None,
+            active_project: ProjectConfig { trust_level: None },
+            windows_wsl_setup_acknowledged: false,
+            notices: Notice::default(),
+            check_for_update_on_startup: true,
+            disable_paste_burst: false,
+            analytics_enabled: Some(true),
+            feedback_enabled: true,
+            tool_suggest: ToolSuggestConfig::default(),
+            otel: OtelConfig::default(),
+        })
+    }
+
     #[cfg(test)]
     fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
@@ -2067,7 +2251,13 @@ impl Config {
             },
             feature_overrides,
         );
-        let features = ManagedFeatures::from_configured(configured_features, feature_requirements)?;
+        let features = ManagedFeatures::from_configured(configured_features, feature_requirements)
+            .map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("resolve managed features failed: {error}"),
+                )
+            })?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let windows_sandbox_private_desktop =
             resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
@@ -2088,11 +2278,20 @@ impl Config {
                     current
                 }
             }
-        }))?;
+        }))
+        .map_err(|error| {
+            std::io::Error::new(error.kind(), format!("resolve session cwd failed: {error}"))
+        })?;
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("normalize additional writable roots failed: {error}"),
+                )
+            })?;
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
             .unwrap_or(ProjectConfig { trust_level: None });
@@ -2125,8 +2324,26 @@ impl Config {
             None => WindowsSandboxLevel::from_features(&features),
         };
         let memories_root = memory_root(&codex_home);
-        std::fs::create_dir_all(&memories_root)?;
-        let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        std::fs::create_dir_all(&memories_root).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "create memories root {} failed: {error}",
+                    memories_root.display()
+                ),
+            )
+        })?;
+        let memories_root =
+            AbsolutePathBuf::from_absolute_path(&memories_root).map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "normalize memories root {} failed: {error}",
+                        memories_root.display()
+                    ),
+                )
+            })?;
         if !additional_writable_roots
             .iter()
             .any(|existing| existing == &memories_root)
@@ -2157,17 +2374,36 @@ impl Config {
                     "default_permissions requires a named permissions profile",
                 )
             })?;
-            let profile = resolve_permission_profile(permissions, default_permissions)?;
+            let profile =
+                resolve_permission_profile(permissions, default_permissions).map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "resolve permissions profile `{default_permissions}` failed: {error}"
+                        ),
+                    )
+                })?;
             let configured_network_proxy_config =
                 network_proxy_config_from_profile_network(profile.network.as_ref());
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile(
-                    permissions,
-                    default_permissions,
-                    &mut startup_warnings,
-                )?;
+            let (mut file_system_sandbox_policy, network_sandbox_policy) = compile_permission_profile(
+                permissions,
+                default_permissions,
+                &mut startup_warnings,
+            )
+            .map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("compile permissions profile `{default_permissions}` failed: {error}"),
+                )
+            })?;
             let mut sandbox_policy = file_system_sandbox_policy
-                .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
+                .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())
+                .map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!("project filesystem policy conversion failed: {error}"),
+                    )
+                })?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
                 file_system_sandbox_policy = file_system_sandbox_policy
                     .with_additional_writable_roots(
@@ -2175,7 +2411,15 @@ impl Config {
                         &additional_writable_roots,
                     );
                 sandbox_policy = file_system_sandbox_policy
-                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
+                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())
+                    .map_err(|error| {
+                        std::io::Error::new(
+                            error.kind(),
+                            format!(
+                                "project filesystem policy conversion after writable roots failed: {error}"
+                            ),
+                        )
+                    })?;
             }
             (
                 configured_network_proxy_config,
@@ -2244,12 +2488,18 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
 
         let agent_roles =
-            agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
+            agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)
+                .map_err(|error| {
+                    std::io::Error::new(error.kind(), format!("load agent roles failed: {error}"))
+                })?;
 
         let openai_base_url = cfg
             .openai_base_url
             .clone()
             .filter(|value| !value.is_empty());
+        #[cfg(target_arch = "wasm32")]
+        let openai_base_url_from_env = None;
+        #[cfg(not(target_arch = "wasm32"))]
         let openai_base_url_from_env = std::env::var(OPENAI_BASE_URL_ENV_VAR)
             .ok()
             .filter(|value| !value.is_empty());
@@ -2409,8 +2659,17 @@ impl Config {
             .model_instructions_file
             .as_ref()
             .or(cfg.model_instructions_file.as_ref());
+        #[cfg(target_arch = "wasm32")]
+        let file_base_instructions = None;
+        #[cfg(not(target_arch = "wasm32"))]
         let file_base_instructions =
-            Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
+            Self::try_read_non_empty_file(model_instructions_path, "model instructions file")
+                .map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!("load base instructions failed: {error}"),
+                    )
+                })?;
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let guardian_developer_instructions = guardian_developer_instructions_from_requirements(
@@ -2429,10 +2688,16 @@ impl Config {
             .experimental_compact_prompt_file
             .as_ref()
             .or(cfg.experimental_compact_prompt_file.as_ref());
+        #[cfg(target_arch = "wasm32")]
+        let file_compact_prompt = None;
+        #[cfg(not(target_arch = "wasm32"))]
         let file_compact_prompt = Self::try_read_non_empty_file(
             experimental_compact_prompt_path,
             "experimental compact prompt file",
-        )?;
+        )
+        .map_err(|error| {
+            std::io::Error::new(error.kind(), format!("load compact prompt failed: {error}"))
+        })?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
@@ -2460,7 +2725,10 @@ impl Config {
                 .model_catalog_json
                 .clone()
                 .or(cfg.model_catalog_json.clone()),
-        )?;
+        )
+        .map_err(|error| {
+            std::io::Error::new(error.kind(), format!("load model catalog failed: {error}"))
+        })?;
 
         let log_dir = cfg
             .log_dir
@@ -2471,6 +2739,9 @@ impl Config {
                 p.push("log");
                 p
             });
+        #[cfg(target_arch = "wasm32")]
+        let sqlite_home = codex_home.to_path_buf();
+        #[cfg(not(target_arch = "wasm32"))]
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
@@ -2484,19 +2755,37 @@ impl Config {
             approval_policy,
             &mut constrained_approval_policy,
             &mut startup_warnings,
-        )?;
+        )
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("apply approval policy constraints failed: {error}"),
+            )
+        })?;
         apply_requirement_constrained_value(
             "sandbox_mode",
             sandbox_policy,
             &mut constrained_sandbox_policy,
             &mut startup_warnings,
-        )?;
+        )
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("apply sandbox policy constraints failed: {error}"),
+            )
+        })?;
         apply_requirement_constrained_value(
             "web_search_mode",
             web_search_mode,
             &mut constrained_web_search_mode,
             &mut startup_warnings,
-        )?;
+        )
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("apply web search constraints failed: {error}"),
+            )
+        })?;
 
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
@@ -2520,12 +2809,21 @@ impl Config {
             } else {
                 err
             }
+        })
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("build network proxy configuration failed: {error}"),
+            )
         })?;
         let network = if has_network_requirements {
             Some(network)
         } else {
             network.enabled().then_some(network)
         };
+        #[cfg(target_arch = "wasm32")]
+        let helper_readable_roots = Vec::new();
+        #[cfg(not(target_arch = "wasm32"))]
         let helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
             zsh_path.as_ref(),

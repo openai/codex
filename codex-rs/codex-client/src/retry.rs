@@ -1,5 +1,6 @@
 use crate::error::TransportError;
 use crate::request::Request;
+#[cfg(not(target_arch = "wasm32"))]
 use rand::Rng;
 use std::future::Future;
 use std::time::Duration;
@@ -42,8 +43,18 @@ pub fn backoff(base: Duration, attempt: u64) -> Duration {
     let exp = 2u64.saturating_pow(attempt as u32 - 1);
     let millis = base.as_millis() as u64;
     let raw = millis.saturating_mul(exp);
-    let jitter: f64 = rand::rng().random_range(0.9..1.1);
+    let jitter = jitter_multiplier();
     Duration::from_millis((raw as f64 * jitter) as u64)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn jitter_multiplier() -> f64 {
+    rand::rng().random_range(0.9..1.1)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn jitter_multiplier() -> f64 {
+    1.0
 }
 
 pub async fn run_with_retry<T, F, Fut>(

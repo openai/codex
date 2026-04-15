@@ -7,7 +7,6 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::fs;
 use tracing::error;
 use tracing::info;
 
@@ -102,7 +101,7 @@ impl ModelsCacheManager {
     }
 
     async fn load(&self) -> io::Result<Option<ModelsCache>> {
-        match fs::read(&self.cache_path).await {
+        match crate::async_fs::read(&self.cache_path).await {
             Ok(contents) => {
                 let cache = serde_json::from_slice(&contents)
                     .map_err(|err| io::Error::new(ErrorKind::InvalidData, err.to_string()))?;
@@ -115,11 +114,11 @@ impl ModelsCacheManager {
 
     async fn save_internal(&self, cache: &ModelsCache) -> io::Result<()> {
         if let Some(parent) = self.cache_path.parent() {
-            fs::create_dir_all(parent).await?;
+            crate::async_fs::create_dir_all(parent).await?;
         }
         let json = serde_json::to_vec_pretty(cache)
             .map_err(|err| io::Error::new(ErrorKind::InvalidData, err.to_string()))?;
-        fs::write(&self.cache_path, json).await
+        crate::async_fs::write(&self.cache_path, json).await
     }
 
     #[cfg(test)]

@@ -7,7 +7,10 @@ use crate::request::Response;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
+#[cfg(not(target_arch = "wasm32"))]
 use futures::stream::BoxStream;
+#[cfg(target_arch = "wasm32")]
+use futures::stream::LocalBoxStream;
 use http::HeaderMap;
 use http::Method;
 use http::StatusCode;
@@ -15,7 +18,11 @@ use tracing::Level;
 use tracing::enabled;
 use tracing::trace;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub type ByteStream = BoxStream<'static, Result<Bytes, TransportError>>;
+
+#[cfg(target_arch = "wasm32")]
+pub type ByteStream = LocalBoxStream<'static, Result<Bytes, TransportError>>;
 
 pub struct StreamResponse {
     pub status: StatusCode,
@@ -23,7 +30,8 @@ pub struct StreamResponse {
     pub bytes: ByteStream,
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait HttpTransport: Send + Sync {
     async fn execute(&self, req: Request) -> Result<Response, TransportError>;
     async fn stream(&self, req: Request) -> Result<StreamResponse, TransportError>;
@@ -75,11 +83,7 @@ impl ReqwestTransport {
                 let compression_start = std::time::Instant::now();
                 let (compressed, content_encoding) = match compression {
                     RequestCompression::None => unreachable!("guarded by compression != None"),
-                    RequestCompression::Zstd => (
-                        zstd::stream::encode_all(std::io::Cursor::new(json), 3)
-                            .map_err(|err| TransportError::Build(err.to_string()))?,
-                        http::HeaderValue::from_static("zstd"),
-                    ),
+                    RequestCompression::Zstd => encode_zstd(json)?,
                 };
                 let post_compression_bytes = compressed.len();
                 let compression_duration = compression_start.elapsed();
@@ -119,7 +123,24 @@ impl ReqwestTransport {
     }
 }
 
-#[async_trait]
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_zstd(json: Vec<u8>) -> Result<(Vec<u8>, http::HeaderValue), TransportError> {
+    Ok((
+        zstd::stream::encode_all(std::io::Cursor::new(json), 3)
+            .map_err(|err| TransportError::Build(err.to_string()))?,
+        http::HeaderValue::from_static("zstd"),
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn encode_zstd(_json: Vec<u8>) -> Result<(Vec<u8>, http::HeaderValue), TransportError> {
+    Err(TransportError::Build(
+        "zstd request compression is unavailable on wasm32".to_string(),
+    ))
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl HttpTransport for ReqwestTransport {
     async fn execute(&self, req: Request) -> Result<Response, TransportError> {
         if enabled!(Level::TRACE) {

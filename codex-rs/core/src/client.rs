@@ -1470,6 +1470,7 @@ fn build_responses_headers(
     headers
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn map_response_stream<S>(
     api_stream: S,
     session_telemetry: SessionTelemetry,
@@ -1483,7 +1484,7 @@ where
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
 
-    tokio::spawn(async move {
+    crate::async_runtime::spawn(async move {
         let mut logged_error = false;
         let mut tx_last_response = Some(tx_last_response);
         let mut items_added: Vec<ResponseItem> = Vec::new();
@@ -1547,6 +1548,87 @@ where
                 }
             }
         }
+    });
+
+    (ResponseStream { rx_event }, rx_last_response)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn map_response_stream<S>(
+    api_stream: S,
+    session_telemetry: SessionTelemetry,
+) -> (ResponseStream, oneshot::Receiver<LastResponse>)
+where
+    S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>> + Unpin + 'static,
+{
+    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+    let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
+
+    crate::async_runtime::spawn(async move {
+        let mut logged_error = false;
+        let mut tx_last_response = Some(tx_last_response);
+        let mut items_added: Vec<ResponseItem> = Vec::new();
+        let mut api_stream = api_stream;
+        while let Some(event) = api_stream.next().await {
+            match event {
+                Ok(ResponseEvent::OutputItemDone(item)) => {
+                    items_added.push(item.clone());
+                    if tx_event
+                        .send(Ok(ResponseEvent::OutputItemDone(item)))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Ok(ResponseEvent::Completed {
+                    response_id,
+                    token_usage,
+                }) => {
+                    if let Some(usage) = &token_usage {
+                        session_telemetry.sse_event_completed(
+                            usage.input_tokens,
+                            usage.output_tokens,
+                            Some(usage.cached_input_tokens),
+                            Some(usage.reasoning_output_tokens),
+                            usage.total_tokens,
+                        );
+                    }
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::Completed {
+                            response_id: response_id.clone(),
+                            token_usage: token_usage.clone(),
+                        }))
+                        .await;
+                    if let Some(tx_last_response) = tx_last_response.take() {
+                        let _ = tx_last_response.send(LastResponse {
+                            response_id,
+                            items_added,
+                        });
+                    }
+                    return;
+                }
+                Ok(event) => {
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+                Err(err) => {
+                    if !logged_error {
+                        tracing::warn!("error while forwarding model stream event: {err:#}");
+                        logged_error = true;
+                    }
+                    let _ = tx_event.send(Err(map_api_error(err))).await;
+                    return;
+                }
+            }
+        }
+        let _ = tx_event
+            .send(Err(CodexErr::Stream(
+                "model stream closed unexpectedly".into(),
+                None,
+            )))
+            .await;
     });
 
     (ResponseStream { rx_event }, rx_last_response)

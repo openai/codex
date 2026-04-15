@@ -79,15 +79,8 @@ indexmap = { workspace = true }
 libc = { workspace = true }
 notify = { workspace = true }
 once_cell = { workspace = true }
-rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
-rmcp = { workspace = true, default-features = false, features = [
-    "base64",
-    "macros",
-    "schemars",
-    "server",
-] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -97,20 +90,13 @@ similar = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = [
-    "io-std",
-    "macros",
-    "process",
-    "rt-multi-thread",
-    "signal",
-] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
-which = { workspace = true }
 wildmatch = { workspace = true }
 zip = { workspace = true }
 
@@ -124,7 +110,19 @@ core-foundation = "0.9"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 codex-rollout = { workspace = true }
 codex-state = { workspace = true }
+rand = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = [
+    "base64",
+    "macros",
+    "schemars",
+    "server",
+] }
 tokio-tungstenite = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "process", "rt-multi-thread", "signal"] }
+which = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
 
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]

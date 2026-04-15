@@ -228,6 +228,14 @@ pub struct Environment {
     filesystem: Arc<dyn ExecutorFileSystem>,
 }
 
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Environment")
+            .field("exec_server_url", &self.exec_server_url)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for Environment {
     fn default() -> Self {
         Self {

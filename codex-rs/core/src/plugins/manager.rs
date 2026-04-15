@@ -1019,7 +1019,7 @@ impl PluginsManager {
 
             let config = config.clone();
             let manager = Arc::clone(self);
-            tokio::spawn(async move {
+            crate::async_runtime::spawn(async move {
                 let auth = auth_manager.auth().await;
                 if let Err(err) = manager
                     .featured_plugin_ids_for_config(&config, auth.as_ref())

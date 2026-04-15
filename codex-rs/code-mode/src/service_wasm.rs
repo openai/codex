@@ -10,7 +10,8 @@ use crate::ExecuteRequest;
 use crate::RuntimeResponse;
 use crate::WaitRequest;
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait CodeModeTurnHost: Send + Sync {
     async fn invoke_tool(
         &self,
@@ -22,7 +23,8 @@ pub trait CodeModeTurnHost: Send + Sync {
     async fn notify(&self, call_id: String, cell_id: String, text: String) -> Result<(), String>;
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait CodeModeRuntime: Send + Sync {
     async fn stored_values(&self) -> HashMap<String, JsonValue>;
 
@@ -92,7 +94,8 @@ pub trait CodeModeTurnWorkerHandle: Send {}
 
 impl CodeModeTurnWorkerHandle for CodeModeTurnWorker {}
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl CodeModeRuntime for CodeModeService {
     async fn stored_values(&self) -> HashMap<String, JsonValue> {
         CodeModeService::stored_values(self).await

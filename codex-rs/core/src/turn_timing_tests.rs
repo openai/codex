@@ -4,11 +4,11 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
-use std::time::Instant;
 
 use super::TurnTimingState;
 use super::response_item_records_turn_ttft;
 use crate::ResponseEvent;
+use crate::monotonic_time::Instant;
 
 #[tokio::test]
 async fn turn_timing_state_records_ttft_only_once_per_turn() {

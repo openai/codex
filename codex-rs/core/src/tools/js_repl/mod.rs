@@ -1957,10 +1957,20 @@ pub(crate) fn resolve_node(config_path: Option<&Path>) -> Option<PathBuf> {
         return Some(path.to_path_buf());
     }
 
-    if let Ok(path) = which::which("node") {
+    if let Some(path) = resolve_node_from_path() {
         return Some(path);
     }
 
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_node_from_path() -> Option<PathBuf> {
+    which::which("node").ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn resolve_node_from_path() -> Option<PathBuf> {
     None
 }
 

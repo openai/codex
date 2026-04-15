@@ -163,7 +163,7 @@ pub(super) fn start_startup_remote_plugin_sync_once(
         return;
     }
 
-    tokio::spawn(async move {
+    crate::async_runtime::spawn(async move {
         if marker_path.is_file() {
             return;
         }
@@ -236,9 +236,9 @@ async fn wait_for_startup_remote_plugin_sync_prerequisites(codex_home: &Path) ->
 async fn write_startup_remote_plugin_sync_marker(codex_home: &Path) -> std::io::Result<()> {
     let marker_path = startup_remote_plugin_sync_marker_path(codex_home);
     if let Some(parent) = marker_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        crate::async_fs::create_dir_all(parent).await?;
     }
-    tokio::fs::write(marker_path, b"ok\n").await
+    crate::async_fs::write(marker_path, b"ok\n").await
 }
 
 fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<TempDir, String> {

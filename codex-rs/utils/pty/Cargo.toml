@@ -9,6 +9,9 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 portable-pty = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 

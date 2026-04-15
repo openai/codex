@@ -26,7 +26,8 @@ pub(crate) struct GhostSnapshotTask {
 
 const SNAPSHOT_WARNING_THRESHOLD: Duration = Duration::from_secs(240);
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl SessionTask for GhostSnapshotTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular
@@ -43,7 +44,7 @@ impl SessionTask for GhostSnapshotTask {
         _input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
-        tokio::task::spawn(async move {
+        crate::async_runtime::spawn(async move {
             let token = self.token;
             let warnings_enabled = !ctx.ghost_snapshot.disable_warnings;
             // Channel used to signal when the snapshot work has finished so the
@@ -56,7 +57,7 @@ impl SessionTask for GhostSnapshotTask {
                 // Fire a generic warning if the snapshot is still running after
                 // three minutes; this helps users discover large untracked files
                 // that might need to be added to .gitignore.
-                tokio::task::spawn(async move {
+                crate::async_runtime::spawn(async move {
                     tokio::select! {
                         _ = tokio::time::sleep(SNAPSHOT_WARNING_THRESHOLD) => {
                             session_for_warning.session

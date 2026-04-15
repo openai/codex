@@ -134,12 +134,6 @@ use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
-use rmcp::model::ListResourceTemplatesResult;
-use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParams;
-use rmcp::model::ReadResourceRequestParams;
-use rmcp::model::ReadResourceResult;
-use rmcp::model::RequestId;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -270,6 +264,12 @@ use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+use crate::mcp_types::ListResourceTemplatesResult;
+use crate::mcp_types::ListResourcesResult;
+use crate::mcp_types::PaginatedRequestParams;
+use crate::mcp_types::ReadResourceRequestParams;
+use crate::mcp_types::ReadResourceResult;
+use crate::mcp_types::RequestId;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -520,6 +520,7 @@ impl Codex {
             warn!("{message}");
             config.startup_warnings.push(message);
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if config.features.enabled(Feature::CodeMode)
             && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
         {
@@ -673,7 +674,7 @@ impl Codex {
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
-        let session_loop_handle = tokio::spawn(async move {
+        let session_loop_handle = crate::async_runtime::spawn(async move {
             submission_loop(session_for_loop, config, rx_sub)
                 .instrument(info_span!("session_loop", thread_id = %thread_id))
                 .await;
@@ -1338,7 +1339,7 @@ impl Session {
     fn start_skills_watcher_listener(self: &Arc<Self>) {
         let mut rx = self.services.skills_watcher.subscribe();
         let weak_sess = Arc::downgrade(self);
-        tokio::spawn(async move {
+        crate::async_runtime::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
@@ -3233,14 +3234,7 @@ impl Session {
                 "Overwriting existing pending elicitation for server_name: {server_name}, request_id: {request_id}"
             );
         }
-        let id = match request_id {
-            rmcp::model::NumberOrString::String(value) => {
-                codex_protocol::mcp::RequestId::String(value.to_string())
-            }
-            rmcp::model::NumberOrString::Number(value) => {
-                codex_protocol::mcp::RequestId::Integer(value)
-            }
-        };
+        let id = request_id.clone();
         let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
             turn_id: params.turn_id,
             server_name,
@@ -4797,7 +4791,7 @@ mod handlers {
             sess.active_turn_context_and_cancellation_token().await
         {
             let session = Arc::clone(sess);
-            tokio::spawn(async move {
+            crate::async_runtime::spawn(async move {
                 execute_user_shell_command(
                     session,
                     turn_context,
@@ -4842,12 +4836,7 @@ mod handlers {
             content,
             meta,
         };
-        let request_id = match request_id {
-            ProtocolRequestId::String(value) => {
-                rmcp::model::NumberOrString::String(std::sync::Arc::from(value))
-            }
-            ProtocolRequestId::Integer(value) => rmcp::model::NumberOrString::Number(value),
-        };
+        let request_id = request_id;
         if let Err(err) = sess
             .resolve_elicitation(server_name, request_id, response)
             .await
@@ -4940,7 +4929,7 @@ mod handlers {
     pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
         let id = sess.conversation_id;
         let config = Arc::clone(config);
-        tokio::spawn(async move {
+        crate::async_runtime::spawn(async move {
             if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await {
                 warn!("failed to append to message history: {e}");
             }
@@ -4957,7 +4946,7 @@ mod handlers {
         let config = Arc::clone(config);
         let sess_clone = Arc::clone(sess);
 
-        tokio::spawn(async move {
+        crate::async_runtime::spawn(async move {
             // Run lookup in blocking thread because it does file IO + locking.
             let entry_opt = tokio::task::spawn_blocking(move || {
                 crate::message_history::lookup(log_id, offset, &config)

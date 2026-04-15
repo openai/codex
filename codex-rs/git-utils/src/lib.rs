@@ -7,6 +7,8 @@ mod errors;
 mod ghost_commits;
 #[cfg(not(target_arch = "wasm32"))]
 mod info;
+#[cfg(target_arch = "wasm32")]
+mod info_wasm;
 mod operations;
 mod platform;
 
@@ -60,6 +62,36 @@ pub use info::local_git_branches;
 pub use info::recent_commits;
 #[cfg(not(target_arch = "wasm32"))]
 pub use info::resolve_root_git_project_for_trust;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::CommitLogEntry;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::GitDiffToRemote;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::GitInfo;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::collect_git_info;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::current_branch_name;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::default_branch_name;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::get_git_remote_urls;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::get_git_remote_urls_assume_git_repo;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::get_git_repo_root;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::get_has_changes;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::get_head_commit_hash;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::git_diff_to_remote;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::local_git_branches;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::recent_commits;
+#[cfg(target_arch = "wasm32")]
+pub use info_wasm::resolve_root_git_project_for_trust;
 pub use platform::create_symlink;
 use schemars::JsonSchema;
 use serde::Deserialize;

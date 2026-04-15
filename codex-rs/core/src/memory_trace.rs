@@ -93,7 +93,7 @@ async fn prepare_trace(index: usize, path: &Path) -> Result<PreparedTrace> {
 }
 
 async fn load_trace_text(path: &Path) -> Result<String> {
-    let raw = tokio::fs::read(path).await?;
+    let raw = crate::async_fs::read(path).await?;
     Ok(decode_trace_bytes(&raw))
 }
 

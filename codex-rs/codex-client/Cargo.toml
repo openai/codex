@@ -11,19 +11,24 @@ eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 opentelemetry = { workspace = true }
-rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
-rustls = { workspace = true }
-rustls-native-certs = { workspace = true }
-rustls-pki-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 codex-utils-rustls-provider = { workspace = true }
+rand = { workspace = true }
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
+rustls-pki-types = { workspace = true }
 zstd = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { workspace = true }
 
 [lints]
 workspace = true

@@ -13,7 +13,16 @@ use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
-use tokio::fs;
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_skill_contents(path: &std::path::Path) -> std::io::Result<String> {
+    tokio::fs::read_to_string(path).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn read_skill_contents(path: &std::path::Path) -> std::io::Result<String> {
+    std::fs::read_to_string(path)
+}
 
 #[derive(Debug, Default)]
 pub struct SkillInjections {
@@ -38,7 +47,7 @@ pub async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        match fs::read_to_string(&skill.path_to_skills_md).await {
+        match read_skill_contents(&skill.path_to_skills_md).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {

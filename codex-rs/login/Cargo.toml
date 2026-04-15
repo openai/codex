@@ -14,19 +14,23 @@ chrono = { workspace = true, features = ["serde"] }
 codex-app-server-protocol = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
-codex-keyring-store = { workspace = true }
 codex-protocol = { workspace = true }
-codex-terminal-detection = { workspace = true }
 codex-utils-template = { workspace = true }
 once_cell = { workspace = true }
-os_info = { workspace = true }
-rand = { workspace = true }
-reqwest = { workspace = true, features = ["json", "blocking"] }
+reqwest = { workspace = true, features = ["json"] }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+codex-keyring-store = { workspace = true }
+codex-terminal-detection = { workspace = true }
+os_info = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+sha2 = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
@@ -35,7 +39,6 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
-tracing = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 webbrowser = { workspace = true }

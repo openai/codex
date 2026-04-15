@@ -30,10 +30,15 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 shlex = { workspace = true }
-tokio = { workspace = true, features = ["fs", "macros", "rt"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 zip = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["fs", "macros", "rt"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

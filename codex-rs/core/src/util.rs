@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use codex_protocol::ThreadId;
-use rand::Rng;
 use tracing::error;
 
 use crate::auth_env_telemetry::AuthEnvTelemetry;
@@ -11,6 +10,18 @@ use crate::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn random_f64_in_range(start: f64, end: f64) -> f64 {
+    use rand::Rng;
+
+    rand::rng().random_range(start..end)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn random_f64_in_range(start: f64, end: f64) -> f64 {
+    start + (end - start) * js_sys::Math::random()
+}
 
 /// Emit structured feedback metadata as key/value pairs.
 ///
@@ -204,7 +215,7 @@ pub(crate) fn emit_feedback_auth_recovery_tags(
 pub fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);
     let base = (INITIAL_DELAY_MS as f64 * exp) as u64;
-    let jitter = rand::rng().random_range(0.9..1.1);
+    let jitter = random_f64_in_range(0.9, 1.1);
     Duration::from_millis((base as f64 * jitter) as u64)
 }
 

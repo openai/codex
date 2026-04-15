@@ -19,6 +19,16 @@ use toml_edit::Item;
 use toml_edit::Table;
 use toml_edit::Value;
 
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_config_contents(path: &Path) -> io::Result<String> {
+    tokio::fs::read_to_string(path).await
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn read_config_contents(path: &Path) -> io::Result<String> {
+    std::fs::read_to_string(path)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextPosition {
     pub line: usize,
@@ -169,7 +179,7 @@ where
         let Some(path) = config_path_for_layer(layer, config_toml_file) else {
             continue;
         };
-        let contents = match tokio::fs::read_to_string(&path).await {
+        let contents = match read_config_contents(&path).await {
             Ok(contents) => contents,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => {

@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 use crate::error::ApiError;
 use codex_client::Request;
 use codex_client::RequestTelemetry;
@@ -10,6 +11,7 @@ use http::StatusCode;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_tungstenite::tungstenite::Error;
@@ -56,6 +58,24 @@ fn http_status(err: &TransportError) -> Option<StatusCode> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn request_start_time() -> Instant {
+    Instant::now()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn request_start_time() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn request_duration_since(start: Instant) -> Duration {
+    start.elapsed()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn request_duration_since((): ()) -> Duration {
+    Duration::ZERO
+}
+
 impl WithStatus for Response {
     fn status(&self) -> StatusCode {
         self.status
@@ -85,14 +105,14 @@ where
         let telemetry = telemetry.clone();
         let send = send.clone();
         async move {
-            let start = Instant::now();
+            let start = request_start_time();
             let result = send(req).await;
             if let Some(t) = telemetry.as_ref() {
                 let (status, err) = match &result {
                     Ok(resp) => (Some(resp.status()), None),
                     Err(err) => (http_status(err), Some(err)),
                 };
-                t.on_request(attempt, status, err, start.elapsed());
+                t.on_request(attempt, status, err, request_duration_since(start));
             }
             result
         }

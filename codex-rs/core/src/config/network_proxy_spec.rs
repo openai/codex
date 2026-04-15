@@ -137,7 +137,7 @@ impl NetworkProxySpec {
                 None => builder.policy_decider(|_request| async {
                     // In restricted sandbox modes, allowlist misses should ask for
                     // explicit network approval instead of hard-denying.
-                    NetworkDecision::ask("not_allowed")
+                    Ok(NetworkDecision::ask("not_allowed"))
                 }),
             };
         }

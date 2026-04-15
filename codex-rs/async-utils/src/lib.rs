@@ -7,18 +7,36 @@ pub enum CancelErr {
     Cancelled,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait OrCancelExt: Sized {
     type Output;
 
     async fn or_cancel(self, token: &CancellationToken) -> Result<Self::Output, CancelErr>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl<F> OrCancelExt for F
 where
     F: Future + Send,
     F::Output: Send,
+{
+    type Output = F::Output;
+
+    async fn or_cancel(self, token: &CancellationToken) -> Result<Self::Output, CancelErr> {
+        tokio::select! {
+            _ = token.cancelled() => Err(CancelErr::Cancelled),
+            res = self => Ok(res),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+impl<F> OrCancelExt for F
+where
+    F: Future,
 {
     type Output = F::Output;
 

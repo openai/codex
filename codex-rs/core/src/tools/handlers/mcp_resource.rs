@@ -6,13 +6,6 @@ use std::time::Instant;
 use async_trait::async_trait;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::function_call_output_content_items_to_text;
-use rmcp::model::ListResourceTemplatesResult;
-use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParams;
-use rmcp::model::ReadResourceRequestParams;
-use rmcp::model::ReadResourceResult;
-use rmcp::model::Resource;
-use rmcp::model::ResourceTemplate;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -21,6 +14,13 @@ use serde_json::Value;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::mcp_types::ListResourceTemplatesResult;
+use crate::mcp_types::ListResourcesResult;
+use crate::mcp_types::PaginatedRequestParams;
+use crate::mcp_types::ReadResourceRequestParams;
+use crate::mcp_types::ReadResourceResult;
+use crate::mcp_types::Resource;
+use crate::mcp_types::ResourceTemplate;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
@@ -178,7 +178,8 @@ struct ReadResourcePayload {
     result: ReadResourceResult,
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ToolHandler for McpResourceHandler {
     type Output = FunctionToolOutput;
 

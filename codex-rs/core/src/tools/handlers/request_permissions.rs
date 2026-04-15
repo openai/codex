@@ -17,7 +17,8 @@ pub(crate) fn request_permissions_tool_description() -> String {
 
 pub struct RequestPermissionsHandler;
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ToolHandler for RequestPermissionsHandler {
     type Output = FunctionToolOutput;
 

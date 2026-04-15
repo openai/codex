@@ -1,3 +1,4 @@
+#[cfg_attr(target_arch = "wasm32", path = "custom_ca_wasm.rs")]
 mod custom_ca;
 mod default_client;
 mod error;

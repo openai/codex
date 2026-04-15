@@ -9,7 +9,7 @@ const CODE_MODE_ONLY_PREFACE: &str =
     "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly";
 const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
-- All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
+- If nested tools are enabled for this session, they are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
 - Nested tool methods take either a string or an object as their input argument.
 - Nested tools return either an object or a string, based on the description.
 - Runs raw JavaScript -- no Node, no file system, no network access, no console.
@@ -89,6 +89,7 @@ pub fn parse_exec_source(input: &str) -> Result<ParsedExecSource, String> {
     let rest = lines.next().unwrap_or_default();
     let trimmed = first_line.trim_start();
     let Some(pragma) = trimmed.strip_prefix(CODE_MODE_PRAGMA_PREFIX) else {
+        args.code = normalize_exec_source(&args.code)?;
         return Ok(args);
     };
 
@@ -149,10 +150,56 @@ pub fn parse_exec_source(input: &str) -> Result<ParsedExecSource, String> {
         );
     }
 
-    args.code = rest.to_string();
+    args.code = normalize_exec_source(rest)?;
     args.yield_time_ms = pragma.yield_time_ms;
     args.max_output_tokens = pragma.max_output_tokens;
     Ok(args)
+}
+
+fn normalize_exec_source(code: &str) -> Result<String, String> {
+    let trimmed = code.trim();
+    if trimmed.starts_with("```") {
+        return Err(
+            "exec expects raw JavaScript source, not markdown code fences. Resend plain JS only (optional first line `// @exec: ...`).".to_string(),
+        );
+    }
+    let Ok(value) = serde_json::from_str::<JsonValue>(trimmed) else {
+        return Ok(code.to_string());
+    };
+    match value {
+        JsonValue::Object(object) => {
+            if object.len() == 1
+                && let Some(JsonValue::String(source)) = object.get("code")
+            {
+                return Ok(source.clone());
+            }
+            if let Some(command) = object
+                .get("command")
+                .or_else(|| object.get("cmd"))
+                .and_then(JsonValue::as_str)
+                && let Some(source) = extract_node_dash_e_source(command)
+            {
+                return Ok(source);
+            }
+            Err(
+                "exec is a freeform tool and expects raw JavaScript source. Resend plain JS only (optional first line `// @exec: ...`); do not send JSON (`{\"code\":...}`), quoted code, or markdown fences.".to_string(),
+            )
+        }
+        JsonValue::String(_) => Err(
+            "exec is a freeform tool and expects raw JavaScript source. Resend plain JS only (optional first line `// @exec: ...`); do not send JSON (`{\"code\":...}`), quoted code, or markdown fences.".to_string(),
+        ),
+        _ => Ok(code.to_string()),
+    }
+}
+
+fn extract_node_dash_e_source(command: &str) -> Option<String> {
+    let parts = shlex::split(command)?;
+    match parts.as_slice() {
+        [program, flag, source] if program == "node" && (flag == "-e" || flag == "--eval") => {
+            Some(source.clone())
+        }
+        _ => None,
+    }
 }
 
 pub fn is_code_mode_nested_tool(tool_name: &str) -> bool {
@@ -185,6 +232,8 @@ pub fn build_exec_tool_description(
             .collect::<Vec<_>>()
             .join("\n\n");
         sections.push(nested_tool_reference);
+    } else {
+        sections.push("No nested tools are enabled for this session. Use plain JavaScript together with the built-in helpers such as `text(...)`.".to_string());
     }
 
     sections.join("\n\n")
@@ -511,6 +560,51 @@ mod tests {
     }
 
     #[test]
+    fn parse_exec_source_unwraps_code_json_object() {
+        let parsed = parse_exec_source("{\"code\":\"text('hi')\"}").expect("expected parse");
+        assert_eq!(
+            parsed,
+            ParsedExecSource {
+                code: "text('hi')".to_string(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_exec_source_unwraps_node_dash_e_command_object() {
+        let parsed = parse_exec_source("{\"command\":\"node -e \\\"text('hi')\\\"\"}")
+            .expect("expected parse");
+        assert_eq!(
+            parsed,
+            ParsedExecSource {
+                code: "text('hi')".to_string(),
+                yield_time_ms: None,
+                max_output_tokens: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_exec_source_rejects_non_code_json_object_input() {
+        let err = parse_exec_source("{\"command\":\"which node\"}").expect_err("expected error");
+        assert_eq!(
+            err,
+            "exec is a freeform tool and expects raw JavaScript source. Resend plain JS only (optional first line `// @exec: ...`); do not send JSON (`{\"code\":...}`), quoted code, or markdown fences."
+        );
+    }
+
+    #[test]
+    fn parse_exec_source_rejects_markdown_fences() {
+        let err = parse_exec_source("```js\ntext('hi')\n```").expect_err("expected error");
+        assert_eq!(
+            err,
+            "exec expects raw JavaScript source, not markdown code fences. Resend plain JS only (optional first line `// @exec: ...`)."
+        );
+    }
+
+    #[test]
     fn normalize_identifier_rewrites_invalid_characters() {
         assert_eq!(
             "mcp__ologs__get_profile",
@@ -557,5 +651,11 @@ mod tests {
             /*code_mode_only*/ true,
         );
         assert!(description.contains("### `foo` (`foo`)"));
+    }
+
+    #[test]
+    fn code_mode_only_description_mentions_absent_nested_tools() {
+        let description = build_exec_tool_description(&[], /*code_mode_only*/ true);
+        assert!(description.contains("No nested tools are enabled for this session"));
     }
 }

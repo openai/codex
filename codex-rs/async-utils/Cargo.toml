@@ -9,8 +9,13 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 tokio-util.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [dev-dependencies]
 pretty_assertions.workspace = true

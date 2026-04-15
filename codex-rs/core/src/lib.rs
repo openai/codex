@@ -9,12 +9,16 @@ pub mod api_bridge;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
+mod async_fs;
+mod async_runtime;
 pub use codex_login as auth;
 mod auth_env_telemetry;
 mod client;
 mod client_common;
 pub mod codex;
+#[cfg_attr(target_arch = "wasm32", path = "realtime_context_wasm.rs")]
 mod realtime_context;
+#[cfg_attr(target_arch = "wasm32", path = "realtime_conversation_wasm.rs")]
 mod realtime_conversation;
 pub use codex::SteerInputError;
 mod codex_thread;
@@ -26,6 +30,7 @@ mod codex_delegate;
 mod command_canonicalization;
 mod commit_attribution;
 pub mod config;
+#[cfg_attr(target_arch = "wasm32", path = "config_loader_wasm.rs")]
 pub mod config_loader;
 pub mod connectors;
 mod context_manager;
@@ -33,8 +38,10 @@ mod contextual_user_message;
 pub use codex_utils_path::env;
 mod environment_context;
 pub mod error;
+#[cfg_attr(target_arch = "wasm32", path = "exec_wasm.rs")]
 pub mod exec;
 pub mod exec_env;
+#[cfg_attr(target_arch = "wasm32", path = "exec_policy_wasm.rs")]
 mod exec_policy;
 pub mod external_agent_config;
 pub mod file_watcher;
@@ -44,10 +51,13 @@ mod git_info_tests;
 mod guardian;
 mod hook_runtime;
 pub mod instructions;
+#[cfg_attr(target_arch = "wasm32", path = "landlock_wasm.rs")]
 pub mod landlock;
 pub mod mcp;
+#[cfg_attr(target_arch = "wasm32", path = "mcp_connection_manager_wasm.rs")]
 mod mcp_connection_manager;
 mod mcp_tool_approval_templates;
+mod mcp_types;
 pub mod models_manager;
 mod network_policy_decision;
 pub mod network_proxy_loader;
@@ -57,12 +67,16 @@ pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
 pub use mcp_connection_manager::SandboxState;
 pub use text_encoding::bytes_to_string_smart;
 mod mcp_tool_call;
+#[cfg_attr(target_arch = "wasm32", path = "memories_wasm.rs")]
 mod memories;
 pub mod mention_syntax;
+#[cfg_attr(target_arch = "wasm32", path = "message_history_wasm.rs")]
 pub mod message_history;
 mod model_provider_info;
+mod monotonic_time;
 pub mod utils;
 pub use utils::path_utils;
+#[cfg_attr(target_arch = "wasm32", path = "personality_migration_wasm.rs")]
 pub mod personality_migration;
 pub mod plugins;
 mod provider_auth;
@@ -144,13 +158,16 @@ mod default_client_forwarding;
 pub mod default_client {
     pub use super::default_client_forwarding::*;
 }
+#[cfg_attr(target_arch = "wasm32", path = "project_doc_wasm.rs")]
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;
 mod session_rollout_init_error;
 pub mod shell;
+#[cfg_attr(target_arch = "wasm32", path = "shell_snapshot_wasm.rs")]
 pub mod shell_snapshot;
+#[cfg_attr(target_arch = "wasm32", path = "spawn_wasm.rs")]
 pub mod spawn;
 pub mod state_db_bridge;
 pub mod state_db {
@@ -216,4 +233,5 @@ pub use file_watcher::FileWatcherEvent;
 pub use turn_metadata::build_turn_metadata_header;
 pub mod compact;
 pub mod memory_trace;
+#[cfg_attr(target_arch = "wasm32", path = "otel_init_wasm.rs")]
 pub mod otel_init;

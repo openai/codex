@@ -29,6 +29,8 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::mcp_types::RequestId;
+use crate::mcp_types::ToolAnnotations;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
@@ -51,7 +53,6 @@ use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
-use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -792,9 +793,8 @@ async fn maybe_request_mcp_tool_approval(
     question.question =
         mcp_tool_approval_question_text(question.question, monitor_reason.as_deref());
     if tool_call_mcp_elicitation_enabled {
-        let request_id = rmcp::model::RequestId::String(
-            format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}").into(),
-        );
+        let request_id =
+            RequestId::String(format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}"));
         let params = build_mcp_tool_approval_elicitation_request(
             sess.as_ref(),
             turn_context.as_ref(),
@@ -1015,7 +1015,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         connector_name: tool_info.connector_name,
         connector_description,
         tool_title: tool_info.tool.title,
-        tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
+        tool_description: tool_info.tool.description.map(Into::into),
         codex_apps_meta: tool_info
             .tool
             .meta

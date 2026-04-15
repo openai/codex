@@ -1,6 +1,10 @@
+#[cfg_attr(target_arch = "wasm32", path = "pipe_wasm.rs")]
 pub mod pipe;
+#[cfg_attr(target_arch = "wasm32", path = "process_wasm.rs")]
 mod process;
+#[cfg_attr(target_arch = "wasm32", path = "process_group_wasm.rs")]
 pub mod process_group;
+#[cfg_attr(target_arch = "wasm32", path = "pty_wasm.rs")]
 pub mod pty;
 #[cfg(test)]
 mod tests;

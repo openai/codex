@@ -81,7 +81,6 @@ mod wasm {
     use codex_protocol::models::BaseInstructions;
     use codex_protocol::protocol::InitialHistory;
     use codex_protocol::protocol::RolloutItem;
-    use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
 
@@ -99,6 +98,7 @@ mod wasm {
         ]
     });
 
+    pub use codex_protocol::protocol::SessionMeta;
     pub use session_index::append_thread_name;
     pub use session_index::find_thread_name_by_id;
     pub use session_index::find_thread_path_by_name_str;
@@ -138,6 +138,11 @@ mod wasm {
 
     pub mod policy {
         pub use super::EventPersistenceMode;
+        use codex_protocol::models::ResponseItem;
+
+        pub fn should_persist_response_item_for_memories(_item: &ResponseItem) -> bool {
+            false
+        }
     }
 
     #[derive(Clone)]
@@ -466,7 +471,20 @@ mod wasm {
         crate::error::CodexErr::Fatal(err.to_string())
     }
 
-    pub(crate) mod truncation {}
+    pub(crate) mod truncation {
+        use codex_protocol::protocol::RolloutItem;
+
+        pub(crate) fn user_message_positions_in_rollout(_items: &[RolloutItem]) -> Vec<usize> {
+            Vec::new()
+        }
+
+        pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
+            items: &[RolloutItem],
+            _n_from_start: usize,
+        ) -> Vec<RolloutItem> {
+            items.to_vec()
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

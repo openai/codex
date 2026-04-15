@@ -30,8 +30,6 @@ use std::sync::Weak;
 
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
-use rand::Rng;
-use rand::rng;
 use tokio::sync::Mutex;
 
 use crate::codex::Session;
@@ -44,6 +42,18 @@ mod head_tail_buffer;
 mod process;
 mod process_manager;
 mod process_state;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn random_hex_nibble() -> u8 {
+    use rand::Rng;
+
+    rand::rng().random_range(0..16)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn random_hex_nibble() -> u8 {
+    (js_sys::Math::random() * 16.0).floor() as u8
+}
 
 pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     process_manager::set_deterministic_process_ids_for_tests(enabled);
@@ -163,9 +173,8 @@ pub(crate) fn resolve_max_tokens(max_tokens: Option<usize>) -> usize {
 }
 
 pub(crate) fn generate_chunk_id() -> String {
-    let mut rng = rng();
     (0..6)
-        .map(|_| format!("{:x}", rng.random_range(0..16)))
+        .map(|_| format!("{:x}", random_hex_nibble()))
         .collect()
 }
 

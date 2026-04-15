@@ -1,4 +1,3 @@
-use rand::Rng;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -70,6 +69,18 @@ const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
 /// must not be toggled.
 static FORCE_DETERMINISTIC_PROCESS_IDS: AtomicBool = AtomicBool::new(false);
 
+#[cfg(not(target_arch = "wasm32"))]
+fn random_process_id() -> i32 {
+    use rand::Rng;
+
+    rand::rng().random_range(1_000..100_000)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn random_process_id() -> i32 {
+    1_000 + (js_sys::Math::random() * 99_000.0).floor() as i32
+}
+
 pub(super) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     FORCE_DETERMINISTIC_PROCESS_IDS.store(enabled, Ordering::Relaxed);
 }
@@ -123,7 +134,7 @@ impl UnifiedExecProcessManager {
                     .unwrap_or(1000)
             } else {
                 // production mode → random
-                rand::rng().random_range(1_000..100_000)
+                random_process_id()
             };
 
             if store.reserved_process_ids.contains(&process_id) {

@@ -2,6 +2,7 @@ pub mod code_mode;
 pub mod context;
 pub mod events;
 pub(crate) mod handlers;
+#[cfg_attr(target_arch = "wasm32", path = "js_repl_wasm.rs")]
 pub mod js_repl;
 pub(crate) mod network_approval;
 pub mod orchestrator;

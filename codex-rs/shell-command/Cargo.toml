@@ -16,9 +16,11 @@ regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
-url = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]

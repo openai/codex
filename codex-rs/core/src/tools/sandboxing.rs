@@ -28,13 +28,21 @@ use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use futures::Future;
+#[cfg(not(target_arch = "wasm32"))]
 use futures::future::BoxFuture;
+#[cfg(target_arch = "wasm32")]
+use futures::future::LocalBoxFuture;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::Path;
 use std::sync::Arc;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type ApprovalFuture<'a, T> = BoxFuture<'a, T>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type ApprovalFuture<'a, T> = LocalBoxFuture<'a, T>;
 
 #[derive(Clone, Default, Debug)]
 pub(crate) struct ApprovalStore {
@@ -281,7 +289,7 @@ pub(crate) trait Approvable<Req> {
         &'a mut self,
         req: &'a Req,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision>;
+    ) -> ApprovalFuture<'a, ReviewDecision>;
 }
 
 pub(crate) trait Sandboxable {

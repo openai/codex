@@ -20,6 +20,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::monotonic_time::Instant;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -114,7 +115,8 @@ struct CoreTurnHost {
     tool_runtime: ToolCallRuntime,
 }
 
-#[async_trait::async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl CodeModeTurnHost for CoreTurnHost {
     async fn invoke_tool(
         &self,
@@ -155,7 +157,7 @@ pub(super) async fn handle_runtime_response(
     exec: &ExecContext,
     response: RuntimeResponse,
     max_output_tokens: Option<usize>,
-    started_at: std::time::Instant,
+    started_at: Instant,
 ) -> Result<FunctionToolOutput, String> {
     let script_status = format_script_status(&response);
 
@@ -247,6 +249,12 @@ fn truncate_code_mode_result(
 pub(super) async fn build_enabled_tools(
     exec: &ExecContext,
 ) -> Vec<codex_code_mode::ToolDefinition> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = exec;
+        return Vec::new();
+    }
+
     let router = build_nested_router(exec).await;
     let mut out = router
         .specs()

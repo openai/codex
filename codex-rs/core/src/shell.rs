@@ -162,6 +162,16 @@ fn file_exists(path: &PathBuf) -> Option<PathBuf> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_binary_path(binary_name: &str) -> Option<PathBuf> {
+    which::which(binary_name).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn resolve_binary_path(_binary_name: &str) -> Option<PathBuf> {
+    None
+}
+
 fn get_shell_path(
     shell_type: ShellType,
     provided_path: Option<&PathBuf>,
@@ -183,7 +193,7 @@ fn get_shell_path(
         return Some(default_shell_path);
     }
 
-    if let Ok(path) = which::which(binary_name) {
+    if let Some(path) = resolve_binary_path(binary_name) {
         return Some(path);
     }
 

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::function_tool::FunctionCallError;
+use crate::monotonic_time::Instant;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -32,7 +33,7 @@ impl CodeModeExecuteHandler {
             .code_mode_service
             .stored_values()
             .await;
-        let started_at = std::time::Instant::now();
+        let started_at = Instant::now();
         let response = exec
             .session
             .services
@@ -53,7 +54,8 @@ impl CodeModeExecuteHandler {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ToolHandler for CodeModeExecuteHandler {
     type Output = FunctionToolOutput;
 

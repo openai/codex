@@ -1,6 +1,10 @@
+#[cfg(not(target_arch = "wasm32"))]
 mod engine;
+#[cfg_attr(target_arch = "wasm32", path = "events_wasm/mod.rs")]
 pub mod events;
+#[cfg_attr(target_arch = "wasm32", path = "legacy_notify_wasm.rs")]
 mod legacy_notify;
+#[cfg_attr(target_arch = "wasm32", path = "registry_wasm.rs")]
 mod registry;
 mod schema;
 mod types;

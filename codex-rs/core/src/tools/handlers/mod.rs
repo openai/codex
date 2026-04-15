@@ -1,19 +1,27 @@
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
 mod dynamic;
+#[cfg(not(target_arch = "wasm32"))]
 mod js_repl;
+#[cfg(not(target_arch = "wasm32"))]
 mod list_dir;
 mod mcp;
 mod mcp_resource;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod multi_agents;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod multi_agents_common;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod multi_agents_v2;
 mod plan;
 mod request_permissions;
 mod request_user_input;
 mod shell;
 mod test_sync;
+#[cfg(not(target_arch = "wasm32"))]
 mod tool_search;
+#[cfg(not(target_arch = "wasm32"))]
 mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
@@ -37,11 +45,16 @@ pub use apply_patch::ApplyPatchHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
+#[cfg(not(target_arch = "wasm32"))]
 pub use js_repl::JsReplHandler;
+#[cfg(not(target_arch = "wasm32"))]
 pub use js_repl::JsReplResetHandler;
+#[cfg(not(target_arch = "wasm32"))]
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
 pub use plan::PlanHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub(crate) use request_permissions::request_permissions_tool_description;
@@ -50,10 +63,31 @@ pub(crate) use request_user_input::request_user_input_tool_description;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: u64 = 30_000;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use multi_agents_common::MAX_WAIT_TIMEOUT_MS;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const MAX_WAIT_TIMEOUT_MS: u64 = 3_600_000;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use multi_agents_common::MIN_WAIT_TIMEOUT_MS;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const MIN_WAIT_TIMEOUT_MS: u64 = 10_000;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use tool_search::DEFAULT_LIMIT as TOOL_SEARCH_DEFAULT_LIMIT;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const TOOL_SEARCH_DEFAULT_LIMIT: usize = 8;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use tool_search::TOOL_SEARCH_TOOL_NAME;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+#[cfg(not(target_arch = "wasm32"))]
 pub use tool_search::ToolSearchHandler;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use tool_suggest::TOOL_SUGGEST_TOOL_NAME;
+#[cfg(target_arch = "wasm32")]
+pub(crate) const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
+#[cfg(not(target_arch = "wasm32"))]
 pub use tool_suggest::ToolSuggestHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;

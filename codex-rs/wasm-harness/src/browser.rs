@@ -1,141 +1,196 @@
-use crate::EXEC_JS_TOOL_NAME;
-use crate::EmbeddedHarness;
-use crate::EventSink;
-use crate::HarnessConfig;
 use crate::HarnessError;
-use crate::ResponsesClient;
-use crate::ResponsesFunctionCall;
-use crate::ResponsesRequest;
-use crate::ResponsesResponse;
-use crate::ResponsesTool;
-use crate::ToolExecutor;
 use async_trait::async_trait;
+use codex_core::AuthManager;
+use codex_core::CodeModeRuntime;
+use codex_core::CodexAuth;
+use codex_core::ThreadManager;
+use codex_core::config::Config;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_exec_server::EnvironmentManager;
+use codex_features::Feature;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::user_input::UserInput;
 use js_sys::Function;
 use js_sys::Promise;
 use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tokio::task::LocalSet;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::Headers;
-use web_sys::RequestInit;
-use web_sys::RequestMode;
-use web_sys::Response;
 
-const RESPONSES_API_URL: &str = "https://api.openai.com/v1/responses";
+const BROWSER_CODEX_HOME: &str = "/codex-wasm";
+const BROWSER_CWD: &str = "/workspace";
+const DEFAULT_MODEL: &str = "gpt-5-codex";
 
 #[derive(Default)]
-struct BrowserResponsesClient {
-    api_key: String,
+struct BrowserRuntimeState {
+    executor: Mutex<Option<JsFunctionHandle>>,
+    stored_values: Mutex<HashMap<String, JsonValue>>,
 }
 
-impl BrowserResponsesClient {
-    fn set_api_key(&mut self, api_key: String) {
-        self.api_key = api_key;
+#[derive(Clone)]
+struct JsFunctionHandle(Function);
+
+unsafe impl Send for JsFunctionHandle {}
+unsafe impl Sync for JsFunctionHandle {}
+
+#[derive(Clone)]
+struct BrowserCodeModeRuntime {
+    state: Arc<BrowserRuntimeState>,
+}
+
+struct BrowserCodeModeTurnWorker;
+
+impl codex_code_mode::CodeModeTurnWorkerHandle for BrowserCodeModeTurnWorker {}
+
+#[derive(Serialize)]
+struct JsExecutorToolDefinition {
+    name: String,
+    description: String,
+}
+
+#[derive(Serialize)]
+struct JsExecutorRequest {
+    source: String,
+    stored_values: HashMap<String, JsonValue>,
+    enabled_tools: Vec<JsExecutorToolDefinition>,
+}
+
+#[derive(Deserialize)]
+struct JsExecutorResponse {
+    output: Option<String>,
+    #[serde(default)]
+    stored_values: HashMap<String, JsonValue>,
+    error_text: Option<String>,
+}
+
+impl BrowserCodeModeRuntime {
+    fn new(state: Arc<BrowserRuntimeState>) -> Self {
+        Self { state }
     }
 }
 
 #[async_trait(?Send)]
-impl ResponsesClient for BrowserResponsesClient {
-    async fn create_response(
+impl CodeModeRuntime for BrowserCodeModeRuntime {
+    async fn stored_values(&self) -> HashMap<String, JsonValue> {
+        self.state
+            .stored_values
+            .lock()
+            .expect("browser stored values mutex poisoned")
+            .clone()
+    }
+
+    async fn replace_stored_values(&self, values: HashMap<String, JsonValue>) {
+        *self
+            .state
+            .stored_values
+            .lock()
+            .expect("browser stored values mutex poisoned") = values;
+    }
+
+    async fn execute(
         &self,
-        request: ResponsesRequest,
-    ) -> Result<ResponsesResponse, HarnessError> {
-        if self.api_key.trim().is_empty() {
-            return Ok(default_demo_response(&request.input.to_string()));
-        }
-
-        let body = serde_json::to_string(&request)?;
-
-        let headers = Headers::new().map_err(js_exception)?;
-        headers
-            .append("Authorization", &format!("Bearer {}", self.api_key.trim()))
-            .map_err(js_exception)?;
-        headers
-            .append("Content-Type", "application/json")
-            .map_err(js_exception)?;
-
-        let request_init = RequestInit::new();
-        request_init.set_method("POST");
-        request_init.set_mode(RequestMode::Cors);
-        request_init.set_headers(&headers);
-        request_init.set_body(&JsValue::from_str(&body));
-
-        let window = web_sys::window().ok_or_else(|| HarnessError::new("window is unavailable"))?;
-        let response_value =
-            JsFuture::from(window.fetch_with_str_and_init(RESPONSES_API_URL, &request_init))
-                .await
-                .map_err(js_fetch_error)?;
-        let response: Response = response_value.dyn_into().map_err(js_exception)?;
-        let status = response.status();
-        let ok = response.ok();
-        let json = JsFuture::from(response.json().map_err(js_exception)?)
-            .await
-            .map_err(js_fetch_error)?;
-        let response_body = parse_response_body(json)?;
-
-        if !ok {
-            let message = response_body
-                .error
-                .as_ref()
-                .and_then(|err| err.message.clone())
-                .unwrap_or_else(|| format!("Responses API returned {status}"));
-            return Err(HarnessError::new(message));
-        }
-
-        Ok(response_body)
-    }
-}
-
-#[derive(Default)]
-struct BrowserToolExecutor {
-    code_executor: Option<Function>,
-}
-
-impl BrowserToolExecutor {
-    fn set_code_executor(&mut self, executor: Function) {
-        self.code_executor = Some(executor);
-    }
-
-    fn clear_code_executor(&mut self) {
-        self.code_executor = None;
-    }
-}
-
-#[async_trait(?Send)]
-impl ToolExecutor for BrowserToolExecutor {
-    fn tools(&self) -> Vec<ResponsesTool> {
-        self.code_executor
-            .as_ref()
-            .map(|_| vec![ResponsesTool::exec_js()])
-            .unwrap_or_default()
-    }
-
-    async fn execute(&self, function_call: &ResponsesFunctionCall) -> Result<String, HarnessError> {
-        if function_call.name != EXEC_JS_TOOL_NAME {
-            return Err(HarnessError::new(format!(
-                "browser prototype does not implement tool `{}`",
-                function_call.name
-            )));
-        }
-
-        let executor = self.code_executor.as_ref().ok_or_else(|| {
-            HarnessError::new("`exec_js` was requested but no browser executor is registered")
-        })?;
-        let args: ExecJsArguments = serde_json::from_str(&function_call.arguments)?;
+        request: codex_code_mode::ExecuteRequest,
+    ) -> Result<codex_code_mode::RuntimeResponse, String> {
+        let executor_request = JsExecutorRequest {
+            source: request.source,
+            stored_values: request.stored_values,
+            enabled_tools: request
+                .enabled_tools
+                .into_iter()
+                .map(|tool| JsExecutorToolDefinition {
+                    name: tool.name,
+                    description: tool.description,
+                })
+                .collect(),
+        };
+        let executor_input = serde_json::to_string(&executor_request)
+            .map_err(|error| format!("failed to serialize browser exec request: {error}"))?;
+        let executor = self
+            .state
+            .executor
+            .lock()
+            .expect("browser code executor mutex poisoned")
+            .clone()
+            .ok_or_else(|| "no browser code executor is registered".to_string())?;
         let value = executor
-            .call1(&JsValue::NULL, &JsValue::from_str(&args.code))
-            .map_err(js_exception)?;
-        let value = await_possible_promise(value).await?;
-        js_value_to_string(value)
+            .0
+            .call1(&JsValue::NULL, &JsValue::from_str(&executor_input))
+            .map_err(|error| js_value_to_string_lossy(&error))?;
+        let value = await_possible_promise(value)
+            .await
+            .map_err(|err| err.to_string())?;
+        let response_json = js_value_to_string(value).map_err(|err| err.to_string())?;
+        let response: JsExecutorResponse = serde_json::from_str(&response_json)
+            .map_err(|error| format!("failed to parse browser exec response: {error}"))?;
+        let text = response.output.unwrap_or_default();
+        let content_items = if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![codex_code_mode::FunctionCallOutputContentItem::InputText { text }]
+        };
+        Ok(codex_code_mode::RuntimeResponse::Result {
+            cell_id: request.tool_call_id,
+            content_items,
+            stored_values: response.stored_values,
+            error_text: response.error_text,
+        })
     }
+
+    async fn wait(
+        &self,
+        request: codex_code_mode::WaitRequest,
+    ) -> Result<codex_code_mode::RuntimeResponse, String> {
+        Ok(codex_code_mode::RuntimeResponse::Result {
+            cell_id: request.cell_id,
+            content_items: Vec::new(),
+            stored_values: self.stored_values().await,
+            error_text: Some("browser code mode wait is not implemented".to_string()),
+        })
+    }
+
+    fn start_turn_worker(
+        &self,
+        _host: Arc<dyn codex_code_mode::CodeModeTurnHost>,
+    ) -> Box<dyn codex_code_mode::CodeModeTurnWorkerHandle> {
+        Box::new(BrowserCodeModeTurnWorker)
+    }
+}
+
+struct BrowserSession {
+    config: Config,
+    thread: Arc<codex_core::CodexThread>,
+    session_configured: SessionConfiguredEvent,
 }
 
 struct JsEventSink<'a> {
     on_event: &'a Function,
 }
 
-impl EventSink for JsEventSink<'_> {
-    fn emit(&self, event: &crate::HarnessEvent) -> Result<(), HarnessError> {
+impl JsEventSink<'_> {
+    fn emit_debug(&self, stage: &str) -> Result<(), HarnessError> {
+        let payload = serde_json::json!({
+            "type": "debug",
+            "stage": stage,
+        });
+        let value = js_sys::JSON::parse(&payload.to_string()).map_err(js_exception)?;
+        self.on_event
+            .call1(&JsValue::NULL, &value)
+            .map_err(js_exception)?;
+        Ok(())
+    }
+
+    fn emit_event(&self, event: &Event) -> Result<(), HarnessError> {
         let json = serde_json::to_string(event)?;
         let value = js_sys::JSON::parse(&json).map_err(js_exception)?;
         self.on_event
@@ -143,17 +198,21 @@ impl EventSink for JsEventSink<'_> {
             .map_err(js_exception)?;
         Ok(())
     }
+
+    fn emit_msg(&self, msg: EventMsg) -> Result<(), HarnessError> {
+        self.emit_event(&Event {
+            id: String::new(),
+            msg,
+        })
+    }
 }
 
-#[derive(Debug, Deserialize)]
-struct ExecJsArguments {
-    code: String,
-}
-
-/// Browser entrypoint for the prototype harness.
+/// Browser entrypoint for the wasm Codex harness.
 #[wasm_bindgen]
 pub struct BrowserCodex {
-    harness: EmbeddedHarness<BrowserResponsesClient, BrowserToolExecutor>,
+    api_key: String,
+    runtime_state: Arc<BrowserRuntimeState>,
+    session: Option<BrowserSession>,
 }
 
 #[wasm_bindgen]
@@ -161,23 +220,32 @@ impl BrowserCodex {
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new(api_key: String) -> Self {
-        let mut client = BrowserResponsesClient::default();
-        client.set_api_key(api_key);
-        let tool_executor = BrowserToolExecutor::default();
-        let harness = EmbeddedHarness::new(HarnessConfig::default(), client, tool_executor);
-        Self { harness }
+        Self {
+            api_key,
+            runtime_state: Arc::new(BrowserRuntimeState::default()),
+            session: None,
+        }
     }
 
     pub fn set_api_key(&mut self, api_key: String) {
-        self.harness.responses_client_mut().set_api_key(api_key);
+        self.api_key = api_key;
+        self.session = None;
     }
 
     pub fn set_code_executor(&mut self, executor: Function) {
-        self.harness.tool_executor_mut().set_code_executor(executor);
+        *self
+            .runtime_state
+            .executor
+            .lock()
+            .expect("browser code executor mutex poisoned") = Some(JsFunctionHandle(executor));
     }
 
     pub fn clear_code_executor(&mut self) {
-        self.harness.tool_executor_mut().clear_code_executor();
+        *self
+            .runtime_state
+            .executor
+            .lock()
+            .expect("browser code executor mutex poisoned") = None;
     }
 
     pub async fn submit_turn(
@@ -185,24 +253,152 @@ impl BrowserCodex {
         prompt: String,
         on_event: Function,
     ) -> Result<JsValue, JsValue> {
-        let sink = JsEventSink {
-            on_event: &on_event,
-        };
-        let agent_message = self
-            .harness
-            .submit_turn(prompt, &sink)
-            .await
-            .map_err(harness_error_to_js)?;
-        Ok(JsValue::from_str(&agent_message))
+        let local = LocalSet::new();
+        let result = local
+            .run_until(self.submit_turn_inner(prompt, on_event))
+            .await;
+        // Local tasks spawned for a turn are scoped to this LocalSet, so the
+        // browser prototype starts a fresh harness session for each submission.
+        self.session = None;
+        result
     }
 }
 
-fn parse_response_body(value: JsValue) -> Result<ResponsesResponse, HarnessError> {
-    let json = js_sys::JSON::stringify(&value)
-        .map_err(js_exception)?
-        .as_string()
-        .ok_or_else(|| HarnessError::new("Responses API returned non-JSON output"))?;
-    serde_json::from_str(&json).map_err(HarnessError::from)
+impl BrowserCodex {
+    async fn submit_turn_inner(
+        &mut self,
+        prompt: String,
+        on_event: Function,
+    ) -> Result<JsValue, JsValue> {
+        if self.api_key.trim().is_empty() {
+            return Err(harness_error_to_js(HarnessError::new(
+                "an OpenAI API key is required to run the real Codex harness",
+            )));
+        }
+
+        let sink = JsEventSink {
+            on_event: &on_event,
+        };
+        sink.emit_debug("submit_turn:start")
+            .map_err(harness_error_to_js)?;
+        let session = if let Some(session) = self.session.as_ref() {
+            sink.emit_debug("submit_turn:reuse_session")
+                .map_err(harness_error_to_js)?;
+            session
+        } else {
+            sink.emit_debug("submit_turn:create_session")
+                .map_err(harness_error_to_js)?;
+            let session = self.create_session().await.map_err(|error| {
+                harness_error_to_js(HarnessError::new(format!("create_session failed: {error}")))
+            })?;
+            sink.emit_msg(EventMsg::SessionConfigured(
+                session.session_configured.clone(),
+            ))
+            .map_err(harness_error_to_js)?;
+            self.session = Some(session);
+            sink.emit_debug("submit_turn:session_created")
+                .map_err(harness_error_to_js)?;
+            self.session
+                .as_ref()
+                .expect("browser session just initialized")
+        };
+
+        sink.emit_debug("submit_turn:calling_submit")
+            .map_err(harness_error_to_js)?;
+        let submission_id = session
+            .thread
+            .submit(Op::UserTurn {
+                items: vec![UserInput::Text {
+                    text: prompt,
+                    text_elements: Vec::new(),
+                }],
+                cwd: PathBuf::from(BROWSER_CWD),
+                approval_policy: session.config.permissions.approval_policy.get().clone(),
+                approvals_reviewer: Some(session.config.approvals_reviewer),
+                sandbox_policy: session.config.permissions.sandbox_policy.get().clone(),
+                model: session
+                    .config
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+                effort: session.config.model_reasoning_effort,
+                summary: session.config.model_reasoning_summary,
+                service_tier: None,
+                final_output_json_schema: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+            .await
+            .map_err(|error| {
+                harness_error_to_js(HarnessError::new(format!("submit failed: {error}")))
+            })?;
+        sink.emit_debug("submit_turn:submit_returned")
+            .map_err(harness_error_to_js)?;
+
+        loop {
+            let event = session.thread.next_event().await.map_err(|error| {
+                harness_error_to_js(HarnessError::new(format!("next_event failed: {error}")))
+            })?;
+            sink.emit_event(&event).map_err(harness_error_to_js)?;
+            if event.id == submission_id
+                && matches!(
+                    event.msg,
+                    EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) | EventMsg::Error(_)
+                )
+            {
+                break;
+            }
+        }
+
+        Ok(JsValue::from_str(&submission_id))
+    }
+
+    async fn create_session(&self) -> Result<BrowserSession, HarnessError> {
+        let config = build_browser_config()
+            .await
+            .map_err(|error| HarnessError::new(format!("build_browser_config: {error}")))?;
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key(self.api_key.trim()));
+        let environment_manager = Arc::new(EnvironmentManager::new(None));
+        let manager = ThreadManager::new(
+            &config,
+            auth_manager,
+            SessionSource::Custom("codex_wasm".to_string()),
+            CollaborationModesConfig::default(),
+            environment_manager,
+        );
+        let thread = manager
+            .start_thread_with_code_mode_runtime(
+                config.clone(),
+                Arc::new(BrowserCodeModeRuntime::new(Arc::clone(&self.runtime_state))),
+            )
+            .await
+            .map_err(|error| {
+                HarnessError::new(format!("start_thread_with_code_mode_runtime: {error}"))
+            })?;
+        Ok(BrowserSession {
+            config,
+            thread: thread.thread,
+            session_configured: thread.session_configured,
+        })
+    }
+}
+
+async fn build_browser_config() -> Result<Config, HarnessError> {
+    let mut config = Config::load_embedded_defaults(
+        PathBuf::from(BROWSER_CODEX_HOME),
+        PathBuf::from(BROWSER_CWD),
+    )
+    .map_err(|error| HarnessError::new(error.to_string()))?;
+    let _ = config.features.enable(Feature::CodeMode);
+    let _ = config.features.enable(Feature::CodeModeOnly);
+    config.model = Some(
+        config
+            .model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+    );
+    Ok(config)
 }
 
 async fn await_possible_promise(value: JsValue) -> Result<JsValue, HarnessError> {
@@ -232,13 +428,6 @@ fn js_exception(error: JsValue) -> HarnessError {
     HarnessError::new(js_value_to_string_lossy(&error))
 }
 
-fn js_fetch_error(error: JsValue) -> HarnessError {
-    HarnessError::new(format!(
-        "browser fetch failed: {}",
-        js_value_to_string_lossy(&error)
-    ))
-}
-
 fn js_value_to_string_lossy(value: &JsValue) -> String {
     if let Some(text) = value.as_string() {
         return text;
@@ -252,20 +441,4 @@ fn js_value_to_string_lossy(value: &JsValue) -> String {
 
 fn harness_error_to_js(error: HarnessError) -> JsValue {
     JsValue::from_str(error.message())
-}
-
-fn default_demo_response(input: &str) -> ResponsesResponse {
-    let prompt = serde_json::from_str::<String>(input).unwrap_or_else(|_| input.to_string());
-    let output_text = if prompt.to_ascii_lowercase().contains("hello world") {
-        "Here is a minimal hello world example:\n\n```js\nconsole.log(\"hello world\");\n```"
-            .to_string()
-    } else {
-        format!("Demo mode is active because no API key was provided. Prompt received:\n\n{prompt}")
-    };
-    ResponsesResponse {
-        id: Some("demo-response".to_string()),
-        output_text: Some(output_text),
-        output: Some(Vec::new()),
-        error: None,
-    }
 }

@@ -7,7 +7,6 @@ mod user_shell;
 
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::select;
@@ -29,6 +28,7 @@ use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
+use crate::monotonic_time::Instant;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
@@ -125,7 +125,8 @@ impl SessionTaskContext {
 /// intentionally small: implementers identify themselves via
 /// [`SessionTask::kind`], perform their work in [`SessionTask::run`], and may
 /// release resources in [`SessionTask::abort`].
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Describes the type of work the task performs so the session can
     /// surface it in telemetry and UI.
@@ -227,7 +228,7 @@ impl Session {
             turn.id = %turn_context.sub_id,
             model = %turn_context.model_info.slug,
         );
-        let handle = tokio::spawn(
+        let handle = crate::async_runtime::spawn(
             async move {
                 let ctx_for_finish = Arc::clone(&ctx);
                 let last_agent_message = task_for_run
@@ -456,10 +457,15 @@ impl Session {
 
         if should_clear_active_turn {
             let session = Arc::clone(self);
+            #[cfg(not(target_arch = "wasm32"))]
             let _scheduler = tokio::task::spawn_blocking(move || {
                 tokio::runtime::Handle::current().block_on(async move {
                     session.maybe_start_turn_for_pending_work().await;
                 });
+            });
+            #[cfg(target_arch = "wasm32")]
+            let _scheduler = crate::async_runtime::spawn(async move {
+                session.maybe_start_turn_for_pending_work().await;
             });
         }
     }

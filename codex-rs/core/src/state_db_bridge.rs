@@ -64,6 +64,12 @@ pub mod wasm {
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct LogEntry;
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ThreadMetadataStub {
+        pub agent_nickname: Option<String>,
+        pub agent_role: Option<String>,
+    }
+
     pub async fn init(_config: &Config) -> Option<StateDbHandle> {
         None
     }
@@ -182,6 +188,26 @@ pub mod wasm {
         _stage: &str,
     ) -> bool {
         false
+    }
+
+    impl StateRuntimeStub {
+        pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        pub async fn record_stage1_output_usage(
+            &self,
+            _thread_ids: &[ThreadId],
+        ) -> anyhow::Result<usize> {
+            Ok(0)
+        }
+
+        pub async fn get_thread(
+            &self,
+            _id: ThreadId,
+        ) -> anyhow::Result<Option<ThreadMetadataStub>> {
+            Ok(None)
+        }
     }
 }
 

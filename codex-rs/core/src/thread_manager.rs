@@ -86,6 +86,12 @@ impl Drop for TempCodexHomeGuard {
 }
 
 fn build_skills_watcher(skills_manager: Arc<SkillsManager>) -> Arc<SkillsWatcher> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = skills_manager;
+        return Arc::new(SkillsWatcher::noop());
+    }
+
     if should_use_test_thread_manager_behavior()
         && let Ok(handle) = Handle::try_current()
         && handle.runtime_flavor() == RuntimeFlavor::CurrentThread

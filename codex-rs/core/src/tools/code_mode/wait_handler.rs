@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
+use crate::monotonic_time::Instant;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -39,7 +40,8 @@ where
     })
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl ToolHandler for CodeModeWaitHandler {
     type Output = FunctionToolOutput;
 
@@ -60,7 +62,7 @@ impl ToolHandler for CodeModeWaitHandler {
             ToolPayload::Function { arguments } if tool_name == WAIT_TOOL_NAME => {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
-                let started_at = std::time::Instant::now();
+                let started_at = Instant::now();
                 let response = exec
                     .session
                     .services

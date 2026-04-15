@@ -343,7 +343,7 @@ web-sys = "0.3.85"
 webbrowser = "1.0"
 which = "8"
 wildmatch = "2.6.1"
-zip = "2.4.2"
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 
 wiremock = "0.6"
