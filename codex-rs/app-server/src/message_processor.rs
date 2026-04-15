@@ -225,6 +225,7 @@ impl ConnectionSessionState {
 
 pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
@@ -246,6 +247,7 @@ impl MessageProcessor {
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
         let MessageProcessorArgs {
             outgoing,
+            analytics_events_client,
             arg0_paths,
             config,
             environment_manager,
