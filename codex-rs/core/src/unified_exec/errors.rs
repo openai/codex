@@ -3,6 +3,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub(crate) enum UnifiedExecError {
+    #[error("stop turn")]
+    StopTurn(Option<String>),
     #[error("Failed to create unified exec process: {message}")]
     CreateProcess { message: String },
     #[error("Unified exec process failed: {message}")]
@@ -26,6 +28,10 @@ pub(crate) enum UnifiedExecError {
 }
 
 impl UnifiedExecError {
+    pub(crate) fn stop_turn(reason: Option<String>) -> Self {
+        Self::StopTurn(reason)
+    }
+
     pub(crate) fn create_process(message: String) -> Self {
         Self::CreateProcess { message }
     }

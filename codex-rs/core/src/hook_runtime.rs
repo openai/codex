@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
 use codex_hooks::PostToolUseOutcome;
@@ -157,7 +156,7 @@ pub(crate) async fn run_permission_request_hooks(
     turn_context: &Arc<TurnContext>,
     run_id_suffix: &str,
     payload: PermissionRequestPayload,
-) -> Option<PermissionRequestDecision> {
+) -> PermissionRequestOutcome {
     let request = PermissionRequestRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
@@ -173,13 +172,10 @@ pub(crate) async fn run_permission_request_hooks(
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
-    let PermissionRequestOutcome {
-        hook_events,
-        decision,
-    } = sess.hooks().run_permission_request(request).await;
-    emit_hook_completed_events(sess, turn_context, hook_events).await;
+    let outcome = sess.hooks().run_permission_request(request).await;
+    emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
 
-    decision
+    outcome
 }
 
 pub(crate) async fn run_post_tool_use_hooks(

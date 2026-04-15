@@ -32,6 +32,11 @@ pub(crate) struct ToolCallRuntime {
     parallel_execution: Arc<RwLock<()>>,
 }
 
+pub(crate) enum ToolCallCompletion {
+    Response(ResponseInputItem),
+    StopTurn { reason: Option<String> },
+}
+
 impl ToolCallRuntime {
     pub(crate) fn new(
         router: Arc<ToolRouter>,
@@ -57,15 +62,20 @@ impl ToolCallRuntime {
         self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+    ) -> impl std::future::Future<Output = Result<ToolCallCompletion, CodexErr>> {
         let error_call = call.clone();
         let future =
             self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
         async move {
             match future.await {
-                Ok(response) => Ok(response.into_response()),
+                Ok(response) => Ok(ToolCallCompletion::Response(response.into_response())),
+                Err(FunctionCallError::StopTurn(reason)) => {
+                    Ok(ToolCallCompletion::StopTurn { reason })
+                }
                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
-                Err(other) => Ok(Self::failure_response(error_call, other)),
+                Err(other) => Ok(ToolCallCompletion::Response(Self::failure_response(
+                    error_call, other,
+                ))),
             }
         }
         .in_current_span()

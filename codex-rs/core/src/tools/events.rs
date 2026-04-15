@@ -353,6 +353,14 @@ impl ToolEmitter {
                 let result = Err(FunctionCallError::RespondToModel(normalized));
                 (event, result)
             }
+            Err(ToolError::StopTurn(reason)) => {
+                let message = reason
+                    .clone()
+                    .unwrap_or_else(|| "PermissionRequest hook stopped execution".to_string());
+                let event = ToolEventStage::Failure(ToolEventFailure::Rejected(message));
+                let result = Err(FunctionCallError::StopTurn(reason));
+                (event, result)
+            }
         };
         self.emit(ctx, event).await;
         result

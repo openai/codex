@@ -275,11 +275,7 @@ fn unsupported_pre_tool_use_universal(universal: &UniversalOutput) -> Option<Str
 }
 
 fn unsupported_permission_request_universal(universal: &UniversalOutput) -> Option<String> {
-    if !universal.continue_processing {
-        Some("PermissionRequest hook returned unsupported continue:false".to_string())
-    } else if universal.stop_reason.is_some() {
-        Some("PermissionRequest hook returned unsupported stopReason".to_string())
-    } else if universal.suppress_output {
+    if universal.suppress_output {
         Some("PermissionRequest hook returned unsupported suppressOutput".to_string())
     } else {
         None
@@ -489,6 +485,32 @@ mod tests {
         assert_eq!(
             parsed.invalid_reason,
             Some("PermissionRequest hook returned unsupported interrupt:true".to_string())
+        );
+    }
+
+    #[test]
+    fn permission_request_accepts_continue_false_and_stop_reason() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": false,
+                "stopReason": "stop now",
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(parsed.invalid_reason, None);
+        assert!(!parsed.universal.continue_processing);
+        assert_eq!(parsed.universal.stop_reason.as_deref(), Some("stop now"));
+        assert_eq!(
+            parsed.decision,
+            Some(super::PermissionRequestDecision::Allow)
         );
     }
 }

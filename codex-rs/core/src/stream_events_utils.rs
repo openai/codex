@@ -14,6 +14,7 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::citations::get_thread_id_from_citations;
 use crate::memories::citations::parse_memory_citation;
 use crate::parse_turn_item;
+use crate::tools::parallel::ToolCallCompletion;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;
@@ -184,7 +185,7 @@ async fn record_stage1_output_usage_for_completed_item(
 /// queuing any tool execution futures. This records items immediately so
 /// history and rollout stay in sync even if the turn is later cancelled.
 pub(crate) type InFlightFuture<'f> =
-    Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
+    Pin<Box<dyn Future<Output = Result<ToolCallCompletion>> + Send + 'f>>;
 
 #[derive(Default)]
 pub(crate) struct OutputItemResult {
@@ -318,6 +319,11 @@ pub(crate) async fn handle_output_item_done(
                     .await;
             }
 
+            output.needs_follow_up = true;
+        }
+        Err(FunctionCallError::StopTurn(_)) => {
+            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
+                .await;
             output.needs_follow_up = true;
         }
         // A fatal error occurred; surface it back into history.

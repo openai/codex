@@ -118,6 +118,7 @@ enum PendingApprovalDecision {
 enum NetworkApprovalOutcome {
     DeniedByUser,
     DeniedByPolicy(String),
+    StopTurn(Option<String>),
 }
 
 /// Whether an allowlist miss may be reviewed instead of hard-denied.
@@ -381,7 +382,7 @@ impl NetworkApprovalService {
         let command = owner_call
             .as_ref()
             .map_or_else(|| prompt_command.join(" "), |call| call.command.clone());
-        if let Some(permission_request_decision) = run_permission_request_hooks(
+        let permission_request_outcome = run_permission_request_hooks(
             &session,
             &turn_context,
             &guardian_approval_id,
@@ -391,8 +392,21 @@ impl NetworkApprovalService {
                 description: Some(format!("network-access {target}")),
             },
         )
-        .await
-        {
+        .await;
+        if permission_request_outcome.should_stop {
+            if let Some(owner_call) = owner_call.as_ref() {
+                self.record_call_outcome(
+                    &owner_call.registration_id,
+                    NetworkApprovalOutcome::StopTurn(permission_request_outcome.stop_reason),
+                )
+                .await;
+            }
+            pending.set_decision(PendingApprovalDecision::Deny).await;
+            let mut pending_approvals = self.pending_host_approvals.lock().await;
+            pending_approvals.remove(&key);
+            return NetworkDecision::deny(REASON_NOT_ALLOWED);
+        }
+        if let Some(permission_request_decision) = permission_request_outcome.decision {
             match permission_request_decision {
                 PermissionRequestDecision::Allow => {
                     pending
@@ -668,6 +682,7 @@ pub(crate) async fn finish_immediate_network_approval(
             Err(ToolError::Rejected("rejected by user".to_string()))
         }
         Some(NetworkApprovalOutcome::DeniedByPolicy(message)) => Err(ToolError::Rejected(message)),
+        Some(NetworkApprovalOutcome::StopTurn(reason)) => Err(ToolError::StopTurn(reason)),
         None => Ok(()),
     }
 }

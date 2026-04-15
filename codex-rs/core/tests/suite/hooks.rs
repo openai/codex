@@ -294,6 +294,11 @@ elif mode == "deny":
             }}
         }}
     }}))
+elif mode == "continue_false":
+    print(json.dumps({{
+        "continue": False,
+        "stopReason": reason
+    }}))
 elif mode == "exit_2":
     sys.stderr.write(reason + "\n")
     raise SystemExit(2)
@@ -1222,6 +1227,81 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_continue_false_stops_turn_without_tool_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-continue-false";
+    let marker = std::env::temp_dir().join("permissionrequest-continue-false-marker");
+    let command = format!("rm -f {}", marker.display());
+    let stop_reason = "stop after permission request";
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some(PERMISSION_REQUEST_HOOK_MATCHER),
+                "continue_false",
+                stop_reason,
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    fs::write(&marker, "seed").context("create permission request continue-false marker")?;
+
+    test.submit_turn_with_policies(
+        "run the shell command after permission request hook",
+        AskForApproval::OnRequest,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    assert_eq!(responses.requests().len(), 1);
+    assert!(
+        marker.exists(),
+        "continue:false should stop before the tool executes"
+    );
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        /*description*/ None,
+    )?;
+    assert!(
+        timeout(
+            Duration::from_secs(2),
+            wait_for_event(&test.codex, |event| matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_)
+            ))
+        )
+        .await
+        .is_err(),
+        "expected the permission request hook to stop before approval UI appears"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1298,6 +1378,96 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
         &command,
         Some(justification),
     )?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_continue_false_stops_exec_command_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "permissionrequest-exec-command-continue-false";
+    let marker = std::env::temp_dir().join("permissionrequest-exec-command-continue-false-marker");
+    let command = format!("rm -f {}", marker.display());
+    let stop_reason = "stop after permission request";
+    let justification = "keep the temporary marker in place";
+    let args = serde_json::json!({
+        "cmd": command,
+        "login": true,
+        "sandbox_permissions": "require_escalated",
+        "justification": justification,
+    });
+    let responses = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            core_test_support::responses::ev_function_call(
+                call_id,
+                "exec_command",
+                &serde_json::to_string(&args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_permission_request_hook(
+                home,
+                Some(PERMISSION_REQUEST_HOOK_MATCHER),
+                "continue_false",
+                stop_reason,
+            ) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    fs::write(&marker, "seed").context("create exec command continue-false marker")?;
+
+    test.submit_turn_with_policies(
+        "run the exec command after permission request hook",
+        AskForApproval::OnRequest,
+        codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+    )
+    .await?;
+
+    assert_eq!(responses.requests().len(), 1);
+    assert!(
+        marker.exists(),
+        "continue:false should stop before exec_command executes"
+    );
+    assert_single_permission_request_hook_input(
+        test.codex_home_path(),
+        &command,
+        Some(justification),
+    )?;
+    assert!(
+        timeout(
+            Duration::from_secs(2),
+            wait_for_event(&test.codex, |event| matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_)
+            ))
+        )
+        .await
+        .is_err(),
+        "expected the permission request hook to stop before approval UI appears"
+    );
 
     Ok(())
 }

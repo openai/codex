@@ -369,14 +369,17 @@ impl ToolOrchestrator {
         T: ToolRuntime<Rq, Out>,
     {
         if let Some(permission_request) = tool.permission_request_payload(req) {
-            match run_permission_request_hooks(
+            let permission_request_outcome = run_permission_request_hooks(
                 approval_ctx.session,
                 approval_ctx.turn,
                 permission_request_run_id,
                 permission_request,
             )
-            .await
-            {
+            .await;
+            if permission_request_outcome.should_stop {
+                return Err(ToolError::StopTurn(permission_request_outcome.stop_reason));
+            }
+            match permission_request_outcome.decision {
                 Some(PermissionRequestDecision::Allow) => {
                     telemetry.otel.tool_decision(
                         telemetry.tool_name,

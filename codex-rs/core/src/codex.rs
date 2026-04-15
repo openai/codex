@@ -317,6 +317,7 @@ use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
+use crate::tools::parallel::ToolCallCompletion;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouterParams;
 use crate::tools::sandboxing::ApprovalStore;
@@ -6508,10 +6509,12 @@ pub(crate) async fn run_turn(
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
+                    stop_requested,
                 } = sampling_request_output;
                 can_drain_pending_input = true;
                 let has_pending_input = sess.has_pending_input().await;
-                let needs_follow_up = model_needs_follow_up || has_pending_input;
+                let needs_follow_up =
+                    !stop_requested && (model_needs_follow_up || has_pending_input);
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
 
@@ -6525,6 +6528,7 @@ pub(crate) async fn run_turn(
                     auto_compact_limit,
                     token_limit_reached,
                     model_needs_follow_up,
+                    stop_requested,
                     has_pending_input,
                     needs_follow_up,
                     "post sampling token usage"
@@ -7290,6 +7294,7 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
+    stop_requested: bool,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -7812,22 +7817,26 @@ async fn handle_assistant_item_done_in_plan_mode(
 }
 
 async fn drain_in_flight(
-    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ToolCallCompletion>>>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-) -> CodexResult<()> {
+) -> CodexResult<bool> {
     while let Some(res) = in_flight.next().await {
         match res {
-            Ok(response_input) => {
+            Ok(ToolCallCompletion::Response(response_input)) => {
                 sess.record_conversation_items(&turn_context, &[response_input.into()])
                     .await;
+            }
+            Ok(ToolCallCompletion::StopTurn { reason }) => {
+                debug!(?reason, "tool requested turn stop");
+                return Ok(true);
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7870,7 +7879,7 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
+    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ToolCallCompletion>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
@@ -7953,6 +7962,25 @@ async fn try_run_sampling_request(
                     cancellation_token: cancellation_token.child_token(),
                 };
 
+                let preempt_for_mailbox_mail = match &item {
+                    ResponseItem::Message { role, phase, .. } => {
+                        role == "assistant" && matches!(phase, Some(MessagePhase::Commentary))
+                    }
+                    ResponseItem::Reasoning { .. } => true,
+                    ResponseItem::LocalShellCall { .. }
+                    | ResponseItem::FunctionCall { .. }
+                    | ResponseItem::ToolSearchCall { .. }
+                    | ResponseItem::FunctionCallOutput { .. }
+                    | ResponseItem::CustomToolCall { .. }
+                    | ResponseItem::CustomToolCallOutput { .. }
+                    | ResponseItem::ToolSearchOutput { .. }
+                    | ResponseItem::WebSearchCall { .. }
+                    | ResponseItem::ImageGenerationCall { .. }
+                    | ResponseItem::GhostSnapshot { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::Other => false,
+                };
+
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_active_item)
                         .instrument(handle_responses)
@@ -7968,6 +7996,14 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                // todo: remove before stabilizing multi-agent v2
+                if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
+                    break Ok(SamplingRequestResult {
+                        needs_follow_up: true,
+                        last_agent_message,
+                        stop_requested: false,
+                    });
+                }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(
@@ -8066,6 +8102,7 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
+                    stop_requested: false,
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -8156,7 +8193,8 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    let stop_requested =
+        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
 
     if cancellation_token.is_cancelled() {
         return Err(CodexErr::TurnAborted);
@@ -8173,7 +8211,13 @@ async fn try_run_sampling_request(
         }
     }
 
-    outcome
+    outcome.map(|mut outcome| {
+        if stop_requested {
+            outcome.needs_follow_up = false;
+            outcome.stop_requested = true;
+        }
+        outcome
+    })
 }
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
