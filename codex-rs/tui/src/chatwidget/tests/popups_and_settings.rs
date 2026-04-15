@@ -364,7 +364,7 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
 }
 
 #[tokio::test]
-async fn plugins_popup_refresh_replaces_selection_with_first_row() {
+async fn plugins_popup_refresh_preserves_selected_row_position() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
@@ -393,7 +393,7 @@ async fn plugins_popup_refresh_replaces_selection_with_first_row() {
 
     let before = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
-        before.contains("› Slack"),
+        before.contains("› [-] Slack"),
         "expected Slack to be selected before refresh, got:\n{before}"
     );
 
@@ -431,8 +431,12 @@ async fn plugins_popup_refresh_replaces_selection_with_first_row() {
 
     let after = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
-        after.contains("› Airtable"),
-        "expected refresh to rebuild the popup from the new first row, got:\n{after}"
+        after.contains("› [-] Notion"),
+        "expected refresh to preserve the selected row position, got:\n{after}"
+    );
+    assert!(
+        after.contains("Airtable"),
+        "expected refreshed popup to include the updated plugin list, got:\n{after}"
     );
     assert!(
         after.contains("Slack"),
