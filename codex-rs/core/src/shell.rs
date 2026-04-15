@@ -1,5 +1,6 @@
-use crate::shell_detect::detect_shell_type;
 use crate::shell_snapshot::ShellSnapshot;
+use codex_shell_command::shell_detect::ShellType as DetectedShellType;
+use codex_shell_command::shell_detect::detect_shell_type as detect_known_shell_type;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -87,6 +88,16 @@ impl PartialEq for Shell {
 }
 
 impl Eq for Shell {}
+
+fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
+    match detect_known_shell_type(shell_path)? {
+        DetectedShellType::Zsh => Some(ShellType::Zsh),
+        DetectedShellType::Bash => Some(ShellType::Bash),
+        DetectedShellType::PowerShell => Some(ShellType::PowerShell),
+        DetectedShellType::Sh => Some(ShellType::Sh),
+        DetectedShellType::Cmd => Some(ShellType::Cmd),
+    }
+}
 
 #[cfg(unix)]
 fn get_user_shell_path() -> Option<PathBuf> {

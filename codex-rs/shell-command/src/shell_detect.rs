@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
+/// Shell executable families that Codex treats as known command wrappers.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum ShellType {
+pub enum ShellType {
     Zsh,
     Bash,
     PowerShell,
@@ -9,7 +10,7 @@ pub(crate) enum ShellType {
     Cmd,
 }
 
-pub(crate) fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
+pub fn detect_shell_type(shell_path: &PathBuf) -> Option<ShellType> {
     let shell_text = shell_path.as_os_str().to_str()?;
     // Keep this exact: repo-local files named like shells must not inherit
     // shell-wrapper trust in approval or display decisions.
