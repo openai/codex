@@ -6,6 +6,7 @@ use super::ChatWidget;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionRowDisplay;
 use crate::bottom_pane::SelectionTab;
 use crate::bottom_pane::SelectionToggle;
 use crate::bottom_pane::SelectionViewParams;
@@ -1079,6 +1080,7 @@ impl ChatWidget {
             is_searchable: true,
             search_placeholder: Some("Type to search plugins".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
+            row_display: SelectionRowDisplay::SingleLine,
             name_column_width,
             initial_selected_idx,
             ..Default::default()

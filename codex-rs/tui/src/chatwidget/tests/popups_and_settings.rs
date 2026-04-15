@@ -164,6 +164,52 @@ async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_
 }
 
 #[tokio::test]
+async fn plugins_popup_truncates_long_descriptions_in_list_rows() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-alpha",
+            "alpha",
+            Some("Alpha"),
+            Some("Short description."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-verbose",
+            "verbose",
+            Some("Verbose Plugin"),
+            Some("This description keeps going and going until the row would normally wrap."),
+            /*installed*/ false,
+            /*enabled*/ true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.on_plugins_loaded(cwd, Ok(response));
+    chat.add_plugins_output();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 70);
+    let verbose_row = popup
+        .lines()
+        .find(|line| line.contains("Verbose Plugin"))
+        .expect("expected verbose plugin row in popup");
+    insta::assert_snapshot!(
+        verbose_row,
+        @"  [-] Verbose Plugin  Available · ChatGPT Marketplace · This descri…"
+    );
+    assert!(
+        !popup
+            .contains("This description keeps going and going until the row would normally wrap."),
+        "expected the long plugin description to truncate instead of wrapping, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn plugins_popup_add_marketplace_tab_opens_prompt_and_submits_source() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);

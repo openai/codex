@@ -662,6 +662,28 @@ pub(crate) fn render_rows_single_line(
     max_results: usize,
     empty_message: &str,
 ) -> u16 {
+    render_rows_single_line_with_col_width_mode(
+        area,
+        buf,
+        rows_all,
+        state,
+        max_results,
+        empty_message,
+        ColumnWidthConfig::default(),
+    )
+}
+
+/// Render a list of rows as a single line each (no wrapping), truncating overflow with an
+/// ellipsis while honoring the configured column width behavior.
+pub(crate) fn render_rows_single_line_with_col_width_mode(
+    area: Rect,
+    buf: &mut Buffer,
+    rows_all: &[GenericDisplayRow],
+    state: &ScrollState,
+    max_results: usize,
+    empty_message: &str,
+    column_width: ColumnWidthConfig,
+) -> u16 {
     if rows_all.is_empty() {
         if area.height > 0 {
             Line::from(empty_message.dim().italic()).render(area, buf);
@@ -686,13 +708,7 @@ pub(crate) fn render_rows_single_line(
         }
     }
 
-    let desc_col = compute_desc_col(
-        rows_all,
-        start_idx,
-        visible_items,
-        area.width,
-        ColumnWidthConfig::default(),
-    );
+    let desc_col = compute_desc_col(rows_all, start_idx, visible_items, area.width, column_width);
 
     let mut cur_y = area.y;
     let mut rendered_lines: u16 = 0;
