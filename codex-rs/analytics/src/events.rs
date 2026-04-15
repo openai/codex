@@ -314,14 +314,6 @@ pub(crate) enum CodexHookSource {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum CodexHookStatus {
-    Success,
-    Error,
-    Blocked,
-}
-
 #[derive(Serialize)]
 pub(crate) struct CodexHookRunMetadata {
     pub(crate) thread_id: Option<String>,
@@ -329,7 +321,7 @@ pub(crate) struct CodexHookRunMetadata {
     pub(crate) model_slug: Option<String>,
     pub(crate) hook_name: Option<HookEventName>,
     pub(crate) hook_source: Option<CodexHookSource>,
-    pub(crate) status: Option<CodexHookStatus>,
+    pub(crate) status: Option<HookRunStatus>,
 }
 
 #[derive(Serialize)]
@@ -580,7 +572,7 @@ pub(crate) fn codex_hook_run_metadata(
             hook.source_path.as_path(),
             hook.cwd.as_path(),
         )),
-        status: Some(hook_status(hook.status)),
+        status: Some(analytics_hook_status(hook.status)),
     }
 }
 
@@ -667,12 +659,10 @@ fn hook_source_for_path(source_path: &Path, cwd: &Path) -> CodexHookSource {
     CodexHookSource::Unknown
 }
 
-fn hook_status(status: HookRunStatus) -> CodexHookStatus {
+fn analytics_hook_status(status: HookRunStatus) -> HookRunStatus {
     match status {
-        HookRunStatus::Completed => CodexHookStatus::Success,
-        HookRunStatus::Blocked => CodexHookStatus::Blocked,
-        HookRunStatus::Running | HookRunStatus::Failed | HookRunStatus::Stopped => {
-            CodexHookStatus::Error
-        }
+        // Running is unexpected here and normalized defensively.
+        HookRunStatus::Running => HookRunStatus::Failed,
+        other => other,
     }
 }

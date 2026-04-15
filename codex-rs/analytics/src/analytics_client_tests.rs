@@ -1323,7 +1323,7 @@ fn hook_run_event_serializes_expected_shape() {
                 "model_slug": "gpt-5",
                 "hook_name": "pre_tool_use",
                 "hook_source": "user",
-                "status": "success"
+                "status": "completed"
             }
         })
     );
@@ -1373,11 +1373,36 @@ fn hook_run_metadata_maps_sources_and_statuses() {
     .expect("serialize unknown hook");
 
     assert_eq!(system["hook_source"], "system");
-    assert_eq!(system["status"], "success");
+    assert_eq!(system["status"], "completed");
     assert_eq!(project["hook_source"], "project");
     assert_eq!(project["status"], "blocked");
     assert_eq!(unknown["hook_source"], "unknown");
-    assert_eq!(unknown["status"], "error");
+    assert_eq!(unknown["status"], "failed");
+}
+
+#[test]
+fn hook_run_metadata_maps_stopped_status() {
+    let home = dirs::home_dir().expect("home dir should be available for analytics tests");
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+
+    let stopped = serde_json::to_value(codex_hook_run_metadata(
+        &tracking,
+        HookRunFact {
+            event_name: HookEventName::Stop,
+            source_path: home.join(".codex/hooks.json"),
+            cwd: home.join("worktree"),
+            status: HookRunStatus::Stopped,
+            duration_ms: None,
+        },
+    ))
+    .expect("serialize stopped hook");
+
+    assert_eq!(stopped["hook_source"], "user");
+    assert_eq!(stopped["status"], "stopped");
 }
 
 #[test]
@@ -1487,7 +1512,7 @@ async fn reducer_ingests_hook_run_fact() {
     assert_eq!(payload[0]["event_type"], "codex_hook_run");
     assert_eq!(payload[0]["event_params"]["hook_name"], "post_tool_use");
     assert_eq!(payload[0]["event_params"]["hook_source"], "unknown");
-    assert_eq!(payload[0]["event_params"]["status"], "error");
+    assert_eq!(payload[0]["event_params"]["status"], "failed");
 }
 
 #[tokio::test]
