@@ -94,6 +94,17 @@ print_bazel_test_log_tails() {
     local rel_path="${target#//}"
     rel_path="${rel_path/://}"
     local test_log="${testlogs_dir}/${rel_path}/test.log"
+    local printed_test_log
+
+    printed_test_log="$(
+      grep -F "FAIL: ${target} " "$console_log" \
+        | sed -nE 's#.*\(see ([^)]+/test\.log)\).*#\1#p' \
+        | tr -d '\r' \
+        | head -n 1
+    )"
+    if [[ -n "$printed_test_log" ]]; then
+      test_log="$printed_test_log"
+    fi
 
     echo "::group::Bazel test log tail for ${target}"
     if [[ -f "$test_log" ]]; then

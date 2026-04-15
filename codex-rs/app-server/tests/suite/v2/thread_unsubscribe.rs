@@ -32,6 +32,30 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+fn command_that_waits_for_path(path: &std::path::Path) -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let path = path.display().to_string().replace('\'', "''");
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            format!(
+                "$path = '{path}'; while (-not (Test-Path -LiteralPath $path)) {{ Start-Sleep -Milliseconds 50 }}"
+            ),
+        ]
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let path = path.display().to_string().replace('\'', r#"'\''"#);
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("while [ ! -e '{path}' ]; do sleep 0.05; done"),
+        ]
+    }
+}
+
 async fn wait_for_responses_request_count_to_stabilize(
     server: &wiremock::MockServer,
     expected_count: usize,
@@ -128,20 +152,13 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
 
 #[tokio::test]
 async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
-    #[cfg(target_os = "windows")]
-    let shell_command = vec![
-        "powershell".to_string(),
-        "-Command".to_string(),
-        "Start-Sleep -Seconds 1".to_string(),
-    ];
-    #[cfg(not(target_os = "windows"))]
-    let shell_command = vec!["sleep".to_string(), "1".to_string()];
-
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
+    let command_release_path = tmp.path().join("release-command");
+    let shell_command = command_that_waits_for_path(&command_release_path);
 
     let server = create_mock_responses_server_sequence_unchecked(vec![
         create_shell_command_sse_response(
@@ -197,14 +214,13 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     let unsubscribe = to_response::<ThreadUnsubscribeResponse>(unsubscribe_resp)?;
     assert_eq!(unsubscribe.status, ThreadUnsubscribeStatus::Unsubscribed);
 
-    assert!(
-        timeout(
-            std::time::Duration::from_millis(250),
-            mcp.read_stream_until_notification_message("thread/closed"),
-        )
-        .await
-        .is_err()
+    let closed_while_command_running = timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("thread/closed"),
     );
+    let closed_while_command_running = closed_while_command_running.await;
+    std::fs::write(&command_release_path, b"release")?;
+    assert!(closed_while_command_running.is_err());
 
     wait_for_responses_request_count_to_stabilize(
         &server,
