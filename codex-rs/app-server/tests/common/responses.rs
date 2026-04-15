@@ -10,7 +10,13 @@ pub fn create_shell_command_sse_response(
 ) -> anyhow::Result<String> {
     // The `arguments` for the `shell_command` tool is a serialized JSON object.
     let command_str = shlex::try_join(command.iter().map(String::as_str))?;
-    create_shell_command_sse_response_from_command(&command_str, workdir, timeout_ms, call_id, None)
+    create_shell_command_sse_response_from_command(
+        &command_str,
+        workdir,
+        timeout_ms,
+        call_id,
+        /*login*/ None,
+    )
 }
 
 pub fn create_shell_command_sse_response_from_command(
