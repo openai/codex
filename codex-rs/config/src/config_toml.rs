@@ -36,6 +36,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -149,9 +150,9 @@ pub struct ConfigToml {
     /// Set to an empty string to disable automatic commit attribution.
     pub commit_attribution: Option<String>,
 
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]

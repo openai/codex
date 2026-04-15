@@ -48,6 +48,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::ForcedChatgptWorkspaceIds;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -4421,6 +4422,44 @@ fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
         err.to_string().contains("must contain at least one model"),
         "unexpected error: {err}"
     );
+    Ok(())
+}
+
+#[test]
+fn forced_chatgpt_workspace_id_accepts_string_and_list() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let single_cfg: ConfigToml = toml::from_str(r#"forced_chatgpt_workspace_id = " org_single ""#)
+        .expect("single workspace id should parse");
+
+    let single_config = Config::load_from_base_config_with_overrides(
+        single_cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )?;
+
+    assert_eq!(
+        single_config.forced_chatgpt_workspace_id,
+        Some(ForcedChatgptWorkspaceIds::Single("org_single".to_string()))
+    );
+
+    let list_cfg: ConfigToml =
+        toml::from_str(r#"forced_chatgpt_workspace_id = [" org_a ", "", "org_b"]"#)
+            .expect("workspace id list should parse");
+
+    let list_config = Config::load_from_base_config_with_overrides(
+        list_cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )?;
+
+    assert_eq!(
+        list_config.forced_chatgpt_workspace_id,
+        Some(ForcedChatgptWorkspaceIds::Multiple(vec![
+            "org_a".to_string(),
+            "org_b".to_string()
+        ]))
+    );
+
     Ok(())
 }
 

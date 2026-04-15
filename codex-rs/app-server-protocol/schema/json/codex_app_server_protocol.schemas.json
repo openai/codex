@@ -6431,9 +6431,13 @@
             ]
           },
           "forced_chatgpt_workspace_id": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ForcedChatgptWorkspaceIds"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "forced_login_method": {
@@ -7642,6 +7646,20 @@
           "path"
         ],
         "type": "object"
+      },
+      "ForcedChatgptWorkspaceIds": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ],
+        "description": "Workspace IDs that ChatGPT auth is allowed to use.\n\nThis accepts the historical single-string config form as well as a list of allowed workspace IDs."
       },
       "ForcedLoginMethod": {
         "enum": [
