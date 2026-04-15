@@ -3,13 +3,18 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
+use codex_app_server_protocol::RateLimitReachedType;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailResponse;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::account::PlanType as AccountPlanType;
 use pretty_assertions::assert_eq;
@@ -118,6 +123,9 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 "reset_at": secondary_reset_timestamp,
             }
         },
+        "rate_limit_reached_type": {
+            "type": "workspace_member_usage_limit_reached",
+        },
         "additional_rate_limits": [
             {
                 "limit_name": "codex_other",
@@ -173,6 +181,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
             }),
             credits: None,
             plan_type: Some(AccountPlanType::Pro),
+            rate_limit_reached_type: Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached),
         },
         rate_limits_by_limit_id: Some(
             [
@@ -193,6 +202,9 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                         }),
                         credits: None,
                         plan_type: Some(AccountPlanType::Pro),
+                        rate_limit_reached_type: Some(
+                            RateLimitReachedType::WorkspaceMemberUsageLimitReached,
+                        ),
                     },
                 ),
                 (
@@ -208,6 +220,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                         secondary: None,
                         credits: None,
                         plan_type: Some(AccountPlanType::Pro),
+                        rate_limit_reached_type: None,
                     },
                 ),
             ]
@@ -216,6 +229,53 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
         ),
     };
     assert_eq!(received, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn send_add_credits_nudge_email_posts_expected_body() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let server = MockServer::start().await;
+    let server_url = server.uri();
+    write_chatgpt_base_url(codex_home.path(), &server_url)?;
+
+    Mock::given(method("POST"))
+        .and(path("/api/codex/accounts/send_add_credits_nudge_email"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .and(wiremock::matchers::body_json(json!({
+            "credit_type": "usage_limit",
+        })))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_add_credits_nudge_email_request(SendAddCreditsNudgeEmailParams {
+            credit_type: AddCreditsNudgeCreditType::UsageLimit,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: SendAddCreditsNudgeEmailResponse = to_response(response)?;
+
+    assert_eq!(received.status, AddCreditsNudgeEmailStatus::Sent,);
 
     Ok(())
 }

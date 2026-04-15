@@ -4702,6 +4702,16 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::realtime_conversation_list_voices(&sess, sub.id.clone()).await;
                     false
                 }
+                Op::SendAddCreditsNudgeEmail { credit_type } => {
+                    handlers::send_add_credits_nudge_email(
+                        &sess,
+                        &config,
+                        sub.id.clone(),
+                        credit_type,
+                    )
+                    .await;
+                    false
+                }
                 Op::OverrideTurnContext {
                     cwd,
                     approval_policy,
@@ -4931,8 +4941,13 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
+    use codex_backend_client::Client as BackendClient;
     use codex_mcp::collect_mcp_snapshot_from_manager;
     use codex_mcp::compute_auth_statuses;
+    use codex_protocol::protocol::AddCreditsNudgeCreditType;
+    use codex_protocol::protocol::AddCreditsNudgeEmailResponseEvent;
+    use codex_protocol::protocol::AddCreditsNudgeEmailResult;
+    use codex_protocol::protocol::AddCreditsNudgeEmailStatus;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -4966,6 +4981,7 @@ mod handlers {
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
+    use reqwest::StatusCode;
     use serde_json::Value;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -4991,6 +5007,51 @@ mod handlers {
             ),
         })
         .await;
+    }
+
+    pub async fn send_add_credits_nudge_email(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        sub_id: String,
+        credit_type: AddCreditsNudgeCreditType,
+    ) {
+        let result = match send_add_credits_nudge_email_inner(sess, config, credit_type).await {
+            Ok(status) => status.into(),
+            Err(message) => AddCreditsNudgeEmailResult::Failed { message },
+        };
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::AddCreditsNudgeEmailResponse(AddCreditsNudgeEmailResponseEvent {
+                result,
+            }),
+        })
+        .await;
+    }
+
+    async fn send_add_credits_nudge_email_inner(
+        sess: &Arc<Session>,
+        config: &Arc<Config>,
+        credit_type: AddCreditsNudgeCreditType,
+    ) -> Result<AddCreditsNudgeEmailStatus, String> {
+        let Some(auth) = sess.services.auth_manager.auth().await else {
+            return Err(
+                "codex account authentication required to notify workspace owner".to_string(),
+            );
+        };
+
+        if !auth.is_chatgpt_auth() {
+            return Err("chatgpt authentication required to notify workspace owner".to_string());
+        }
+
+        let client = BackendClient::from_auth(config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| format!("failed to construct backend client: {err}"))?;
+        match client.send_add_credits_nudge_email(credit_type).await {
+            Ok(()) => Ok(AddCreditsNudgeEmailStatus::Sent),
+            Err(err) if err.status() == Some(StatusCode::TOO_MANY_REQUESTS) => {
+                Ok(AddCreditsNudgeEmailStatus::CooldownActive)
+            }
+            Err(err) => Err(format!("failed to notify workspace owner: {err}")),
+        }
     }
 
     pub async fn override_turn_context(
@@ -7470,6 +7531,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListSkillsResponse(_)
         | EventMsg::RealtimeConversationListVoicesResponse(_)
+        | EventMsg::AddCreditsNudgeEmailResponse(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)

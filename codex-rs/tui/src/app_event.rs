@@ -20,6 +20,8 @@ use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::AddCreditsNudgeCreditType;
+use codex_protocol::protocol::AddCreditsNudgeEmailResult;
 use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -169,6 +171,16 @@ pub(crate) enum AppEvent {
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,
         result: Result<Vec<RateLimitSnapshot>, String>,
+    },
+
+    /// Send a user-confirmed request to notify the workspace owner.
+    SendAddCreditsNudgeEmail {
+        credit_type: AddCreditsNudgeCreditType,
+    },
+
+    /// Result of notifying the workspace owner.
+    AddCreditsNudgeEmailFinished {
+        result: AddCreditsNudgeEmailResult,
     },
 
     /// Result of prefetching connectors.

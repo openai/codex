@@ -134,6 +134,8 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
+use codex_protocol::protocol::AddCreditsNudgeCreditType;
+use codex_protocol::protocol::AddCreditsNudgeEmailResult;
 #[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 #[cfg(test)]
@@ -189,6 +191,7 @@ use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
+use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -770,8 +773,10 @@ pub(crate) struct ChatWidget {
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
     plan_type: Option<PlanType>,
+    codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     rate_limit_warnings: RateLimitWarningState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
+    add_credits_nudge_email_in_flight: bool,
     adaptive_chunking: AdaptiveChunkingPolicy,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
@@ -2681,6 +2686,9 @@ impl ChatWidget {
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
             let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
+            if is_codex_limit {
+                self.codex_rate_limit_reached_type = snapshot.rate_limit_reached_type;
+            }
             let warnings = if is_codex_limit {
                 self.rate_limit_warnings.take_warnings(
                     snapshot
@@ -2744,6 +2752,7 @@ impl ChatWidget {
             }
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
+            self.codex_rate_limit_reached_type = None;
         }
         self.refresh_status_line();
     }
@@ -2796,6 +2805,13 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    fn on_rate_limit_error(&mut self, message: String) {
+        self.on_error(message);
+        if let Some(credit_type) = self.workspace_owner_nudge_credit_type() {
+            self.open_workspace_owner_nudge_prompt(credit_type);
+        }
+    }
+
     fn handle_non_retry_error(
         &mut self,
         message: String,
@@ -2812,7 +2828,7 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                    self.on_error(message)
+                    self.on_rate_limit_error(message)
                 }
             }
         } else {
@@ -4803,8 +4819,10 @@ impl ChatWidget {
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
             plan_type: initial_plan_type,
+            codex_rate_limit_reached_type: None,
             rate_limit_warnings: RateLimitWarningState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+            add_credits_nudge_email_in_flight: false,
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
@@ -6638,6 +6656,9 @@ impl ChatWidget {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
             }
+            EventMsg::AddCreditsNudgeEmailResponse(ev) => {
+                self.finish_add_credits_nudge_email_request(ev.result);
+            }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
             EventMsg::ModelReroute(_) => {}
@@ -6658,7 +6679,7 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
+                            self.on_rate_limit_error(message)
                         }
                     }
                 } else {
@@ -7456,6 +7477,91 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn workspace_owner_nudge_credit_type(&self) -> Option<AddCreditsNudgeCreditType> {
+        match self.codex_rate_limit_reached_type {
+            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted) => {
+                Some(AddCreditsNudgeCreditType::Credits)
+            }
+            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) => {
+                Some(AddCreditsNudgeCreditType::UsageLimit)
+            }
+            Some(
+                RateLimitReachedType::RateLimitReached
+                | RateLimitReachedType::WorkspaceOwnerCreditsDepleted
+                | RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+            )
+            | None => None,
+        }
+    }
+
+    fn open_workspace_owner_nudge_prompt(&mut self, credit_type: AddCreditsNudgeCreditType) {
+        if self.add_credits_nudge_email_in_flight {
+            return;
+        }
+
+        let prompt = match credit_type {
+            AddCreditsNudgeCreditType::Credits => {
+                "Your workspace is out of credits. Notify your workspace owner?"
+            }
+            AddCreditsNudgeCreditType::UsageLimit => {
+                "Your workspace usage limit has been reached. Request an increase from your workspace owner?"
+            }
+        };
+        let send_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::SendAddCreditsNudgeEmail { credit_type });
+        })];
+        let items = vec![
+            SelectionItem {
+                name: "Yes".to_string(),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('y'))),
+                actions: send_actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "No".to_string(),
+                display_shortcut: Some(key_hint::plain(KeyCode::Char('n'))),
+                is_default: true,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Workspace limit reached".to_string()),
+            subtitle: Some(prompt.to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx: Some(1),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn start_add_credits_nudge_email_request(&mut self) {
+        self.add_credits_nudge_email_in_flight = true;
+    }
+
+    pub(crate) fn finish_add_credits_nudge_email_request(
+        &mut self,
+        result: AddCreditsNudgeEmailResult,
+    ) {
+        self.add_credits_nudge_email_in_flight = false;
+        let message = match result {
+            AddCreditsNudgeEmailResult::Sent => "Workspace owner notified.",
+            AddCreditsNudgeEmailResult::CooldownActive => {
+                "Workspace owner was already notified recently."
+            }
+            AddCreditsNudgeEmailResult::Failed { .. } => {
+                "Could not notify your workspace owner. Please try again."
+            }
+        };
+        self.add_to_history(history_cell::new_info_event(
+            message.to_string(),
+            /*hint*/ None,
+        ));
+        self.request_redraw();
     }
 
     /// Open a popup to choose a quick auto model. Selecting "All models"

@@ -32,6 +32,8 @@ pub use self::additional_rate_limit_details::AdditionalRateLimitDetails;
 
 pub(crate) mod rate_limit_status_payload;
 pub use self::rate_limit_status_payload::PlanType;
+pub use self::rate_limit_status_payload::RateLimitReachedKind;
+pub use self::rate_limit_status_payload::RateLimitReachedType;
 pub use self::rate_limit_status_payload::RateLimitStatusPayload;
 
 pub(crate) mod rate_limit_status_details;

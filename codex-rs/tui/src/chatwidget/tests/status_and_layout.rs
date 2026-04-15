@@ -235,6 +235,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
             balance: Some("17.5".to_string()),
         }),
         plan_type: None,
+        rate_limit_reached_type: None,
     }));
     let initial_balance = chat
         .rate_limit_snapshots_by_limit_id
@@ -254,6 +255,7 @@ async fn rate_limit_snapshot_keeps_prior_credits_when_missing_from_headers() {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     }));
 
     let display = chat
@@ -292,6 +294,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         }),
         credits: None,
         plan_type: Some(PlanType::Plus),
+        rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Plus));
 
@@ -310,6 +313,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         }),
         credits: None,
         plan_type: Some(PlanType::Pro),
+        rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
 
@@ -328,6 +332,7 @@ async fn rate_limit_snapshot_updates_and_retains_plan_type() {
         }),
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     }));
     assert_eq!(chat.plan_type, Some(PlanType::Pro));
 }
@@ -351,6 +356,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
             balance: Some("5.00".to_string()),
         }),
         plan_type: Some(PlanType::Pro),
+        rate_limit_reached_type: None,
     }));
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
@@ -364,6 +370,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
         secondary: None,
         credits: None,
         plan_type: Some(PlanType::Pro),
+        rate_limit_reached_type: None,
     }));
 
     let codex = chat
@@ -416,6 +423,7 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     }));
 
     assert!(matches!(
@@ -491,6 +499,143 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
+#[tokio::test]
+async fn workspace_member_credits_depleted_prompts_and_sends_credits() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut limits = snapshot(/*percent*/ 100.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
+    chat.on_rate_limit_snapshot(Some(limits));
+
+    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    let popup = render_bottom_popup(&chat, /*width*/ 90);
+    assert!(popup.contains("Your workspace is out of credits. Notify your workspace owner?"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let event = next_send_add_credits_nudge_email_event(&mut rx);
+    assert_eq!(
+        event,
+        codex_protocol::protocol::AddCreditsNudgeCreditType::Credits
+    );
+}
+
+#[tokio::test]
+async fn workspace_member_usage_limit_prompts_and_sends_usage_limit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut limits = snapshot(/*percent*/ 100.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(limits));
+
+    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains(
+        "Your workspace usage limit has been reached. Request an increase from your workspace owner?"
+    ));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let event = next_send_add_credits_nudge_email_event(&mut rx);
+    assert_eq!(
+        event,
+        codex_protocol::protocol::AddCreditsNudgeCreditType::UsageLimit
+    );
+}
+
+#[tokio::test]
+async fn workspace_owner_limit_states_do_not_prompt_for_owner_nudge() {
+    for limit_type in [
+        RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+        RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+        RateLimitReachedType::RateLimitReached,
+    ] {
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let mut limits = snapshot(/*percent*/ 100.0);
+        limits.rate_limit_reached_type = Some(limit_type);
+        chat.on_rate_limit_snapshot(Some(limits));
+
+        chat.on_rate_limit_error("Usage limit reached.".to_string());
+        let popup = render_bottom_popup(&chat, /*width*/ 90);
+        assert!(!popup.contains("workspace owner"));
+    }
+}
+
+#[tokio::test]
+async fn missing_rate_limit_reached_type_does_not_prompt_or_refresh() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
+
+    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    let popup = render_bottom_popup(&chat, /*width*/ 90);
+    assert!(!popup.contains("workspace owner"));
+    assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
+}
+
+#[tokio::test]
+async fn workspace_owner_nudge_default_no_dismisses_without_sending() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut limits = snapshot(/*percent*/ 100.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
+    chat.on_rate_limit_snapshot(Some(limits));
+
+    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
+}
+
+#[tokio::test]
+async fn workspace_owner_nudge_completion_renders_feedback() {
+    let cases = [
+        (
+            AddCreditsNudgeEmailResult::Sent,
+            "Workspace owner notified.",
+        ),
+        (
+            AddCreditsNudgeEmailResult::CooldownActive,
+            "Workspace owner was already notified recently.",
+        ),
+        (
+            AddCreditsNudgeEmailResult::Failed {
+                message: "request failed".to_string(),
+            },
+            "Could not notify your workspace owner. Please try again.",
+        ),
+    ];
+
+    for (result, expected) in cases {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.finish_add_credits_nudge_email_request(result);
+        let rendered = drain_insert_history(&mut rx)
+            .into_iter()
+            .map(|lines| lines_to_single_string(&lines))
+            .collect::<String>();
+        assert!(rendered.contains(expected), "rendered: {rendered}");
+    }
+}
+
+fn next_send_add_credits_nudge_email_event(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> codex_protocol::protocol::AddCreditsNudgeCreditType {
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::SendAddCreditsNudgeEmail { credit_type } = event {
+            return credit_type;
+        }
+    }
+    panic!("expected SendAddCreditsNudgeEmail app event");
+}
+
+fn assert_no_owner_nudge_or_rate_limit_refresh(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) {
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            !matches!(
+                event,
+                AppEvent::SendAddCreditsNudgeEmail { .. } | AppEvent::RefreshRateLimits { .. }
+            ),
+            "unexpected event: {event:?}"
+        );
+    }
 }
 
 #[tokio::test]

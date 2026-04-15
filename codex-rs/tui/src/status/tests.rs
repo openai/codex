@@ -138,6 +138,7 @@ async fn status_snapshot_includes_reasoning_details() {
         }),
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -321,6 +322,7 @@ async fn status_snapshot_includes_monthly_limit() {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -372,6 +374,7 @@ async fn status_snapshot_shows_unlimited_credits() {
             balance: None,
         }),
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
@@ -421,6 +424,7 @@ async fn status_snapshot_shows_positive_credits() {
             balance: Some("12.5".to_string()),
         }),
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
@@ -470,6 +474,7 @@ async fn status_snapshot_hides_zero_credits() {
             balance: Some("0".to_string()),
         }),
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
@@ -517,6 +522,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
             balance: None,
         }),
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let model_slug = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
@@ -622,6 +628,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -735,6 +742,7 @@ async fn status_snapshot_shows_refreshing_limits_notice() {
         }),
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -805,6 +813,7 @@ async fn status_snapshot_includes_credits_and_limits() {
             balance: Some("37.5".to_string()),
         }),
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
 
@@ -858,6 +867,7 @@ async fn status_snapshot_shows_unavailable_limits_message() {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
@@ -914,6 +924,7 @@ async fn status_snapshot_treats_refreshing_empty_limits_as_unavailable() {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 6, 7, 8, 9, 10)
@@ -984,6 +995,7 @@ async fn status_snapshot_shows_stale_limits_message() {
         }),
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);
@@ -1054,6 +1066,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
             balance: Some("80".to_string()),
         }),
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     let rate_display = rate_limit_snapshot_display(&snapshot, captured_at);
     let now = captured_at + ChronoDuration::minutes(20);
