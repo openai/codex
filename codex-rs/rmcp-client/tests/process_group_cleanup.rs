@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_rmcp_client::LocalStdioTransportRuntime;
+use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 
 fn process_exists(pid: u32) -> bool {
@@ -80,7 +80,7 @@ async fn drop_kills_wrapper_process_group() -> Result<()> {
         )])),
         &[],
         /*cwd*/ None,
-        Arc::new(LocalStdioTransportRuntime),
+        Arc::new(LocalStdioServerLauncher),
     )
     .await?;
 
