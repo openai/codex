@@ -148,12 +148,11 @@ impl QueuedInterrupt {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::approvals::ExecApprovalRequestEvent;
     use codex_protocol::protocol::ExecCommandBeginEvent;
     use codex_protocol::protocol::ExecCommandSource;
     use codex_protocol::request_user_input::RequestUserInputEvent;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -172,7 +171,7 @@ mod tests {
             approval_id: approval_id.map(str::to_string),
             turn_id: "turn".to_string(),
             command: vec!["true".to_string()],
-            cwd: PathBuf::from("."),
+            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
             reason: None,
             network_approval_context: None,
             proposed_execpolicy_amendment: None,
@@ -189,7 +188,7 @@ mod tests {
             process_id: None,
             turn_id: "turn".to_string(),
             command: vec!["true".to_string()],
-            cwd: PathBuf::from("."),
+            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
             parsed_cmd: Vec::new(),
             source: ExecCommandSource::Agent,
             interaction_input: None,
