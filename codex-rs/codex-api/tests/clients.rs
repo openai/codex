@@ -91,9 +91,7 @@ impl HttpTransport for RecordingTransport {
 struct NoAuth;
 
 impl AuthProvider for NoAuth {
-    fn bearer_token(&self) -> Option<String> {
-        None
-    }
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
 #[derive(Clone)]
@@ -112,12 +110,16 @@ impl StaticAuth {
 }
 
 impl AuthProvider for StaticAuth {
-    fn bearer_token(&self) -> Option<String> {
-        Some(self.token.clone())
-    }
-
-    fn account_id(&self) -> Option<String> {
-        Some(self.account_id.clone())
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        let token = &self.token;
+        headers.insert(
+            http::header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}")).expect("valid authorization header"),
+        );
+        headers.insert(
+            "ChatGPT-Account-ID",
+            HeaderValue::from_str(&self.account_id).expect("valid account header"),
+        );
     }
 }
 
