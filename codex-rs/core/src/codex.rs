@@ -44,6 +44,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
+use crate::unavailable_tool::collect_unavailable_called_tools;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -7229,7 +7230,22 @@ pub(crate) async fn built_tools(
         &turn_context.config,
         &turn_context.tools_config,
     );
-    let direct_mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+    let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+    let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
+    let unavailable_called_tools = if turn_context
+        .config
+        .features
+        .enabled(Feature::UnavailableDummyTools)
+    {
+        let exposed_tool_names = mcp_tools
+            .iter()
+            .chain(deferred_mcp_tools.iter())
+            .flat_map(|tools| tools.keys().map(String::as_str))
+            .collect::<HashSet<_>>();
+        collect_unavailable_called_tools(input, &exposed_tool_names)
+    } else {
+        Vec::new()
+    };
 
     let parallel_mcp_server_names = turn_context
         .config
@@ -7246,8 +7262,9 @@ pub(crate) async fn built_tools(
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: direct_mcp_tools,
-            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
+            mcp_tools,
+            deferred_mcp_tools,
+            unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
