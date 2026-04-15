@@ -1578,7 +1578,7 @@ impl Session {
     async fn fail_agent_identity_registration(self: &Arc<Self>, error: anyhow::Error) {
         warn!(error = %error, "agent identity registration failed");
         let message = format!(
-            "Agent identity registration failed. Codex cannot continue while `features.use_agent_identity` is enabled: {error}"
+            "Agent identity registration failed while `features.use_agent_identity` is enabled: {error}"
         );
         self.send_event_raw(Event {
             id: self.next_internal_sub_id(),
@@ -1588,7 +1588,6 @@ impl Session {
             }),
         })
         .await;
-        handlers::shutdown(self, self.next_internal_sub_id()).await;
     }
 
     async fn cached_agent_task_for_current_binding(&self) -> Option<RegisteredAgentTask> {
@@ -6493,7 +6492,16 @@ pub(crate) async fn run_turn(
     }
     if let Err(error) = sess.ensure_agent_task_registered().await {
         warn!(error = %error, "agent task registration failed");
-        sess.fail_agent_identity_registration(error).await;
+        sess.send_event(
+            turn_context.as_ref(),
+            EventMsg::Error(ErrorEvent {
+                message: format!(
+                    "Agent task registration failed. Please try again; Codex will attempt to register the task again on the next turn: {error}"
+                ),
+                codex_error_info: Some(CodexErrorInfo::Other),
+            }),
+        )
+        .await;
         return None;
     }
 
