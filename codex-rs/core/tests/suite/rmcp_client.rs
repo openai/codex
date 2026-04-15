@@ -12,6 +12,7 @@ use std::time::UNIX_EPOCH;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
+use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
 use codex_models_manager::manager::RefreshStrategy;
 
 use codex_protocol::config_types::ReasoningSummary;
@@ -231,6 +232,105 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         .expect("wrapped MCP output should preserve structured JSON");
     assert_eq!(output_json["echo"], "ECHOING: ping");
     assert_eq!(output_json["env"], expected_env_value);
+
+    server.verify().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let call_id = "sandbox-meta-call";
+    let server_name = "rmcp";
+    let tool_name = format!("mcp__{server_name}__sandbox_meta");
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call(call_id, &tool_name, "{}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp sandbox meta completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = stdio_server_bin()?;
+    let fixture = test_codex()
+        .with_config(move |config| {
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                server_name.to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    supports_parallel_tool_calls: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
+                    tools: HashMap::new(),
+                },
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        })
+        .build(&server)
+        .await?;
+
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    fixture
+        .submit_turn_with_policy("call the rmcp sandbox_meta tool", sandbox_policy.clone())
+        .await?;
+
+    let output_item = final_mock.single_request().function_call_output(call_id);
+    let output_text = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("function_call_output output should be a string");
+    let wrapped_payload = split_wall_time_wrapped_output(output_text);
+    let output_json: Value = serde_json::from_str(wrapped_payload)
+        .expect("wrapped MCP output should preserve sandbox metadata JSON");
+    let Value::Object(meta) = output_json else {
+        panic!("sandbox_meta should return metadata object: {output_json:?}");
+    };
+
+    let sandbox_meta = meta
+        .get(MCP_SANDBOX_STATE_META_CAPABILITY)
+        .expect("sandbox state metadata should be present");
+    let expected_sandbox_policy = serde_json::to_value(&sandbox_policy)?;
+    assert_eq!(
+        sandbox_meta.get("sandboxPolicy"),
+        Some(&expected_sandbox_policy)
+    );
+    assert_eq!(
+        sandbox_meta.get("sandboxCwd").and_then(Value::as_str),
+        fixture.cwd.path().to_str()
+    );
+    assert_eq!(sandbox_meta.get("useLegacyLandlock"), Some(&json!(false)));
 
     server.verify().await;
 

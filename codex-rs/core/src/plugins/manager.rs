@@ -46,6 +46,7 @@ use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
 use codex_config::types::McpServerConfig;
 use codex_config::types::PluginConfig;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -1031,7 +1032,8 @@ impl PluginsManager {
             manifest_paths,
             self.restriction_product,
             &skill_config_rules,
-        );
+        )
+        .await;
         let apps = load_apps_from_paths(
             source_path.as_path(),
             plugin_app_config_paths(source_path.as_path(), manifest_paths),
@@ -1751,7 +1753,8 @@ async fn load_plugin(
         manifest_paths,
         restriction_product,
         skill_config_rules,
-    );
+    )
+    .await;
     let has_enabled_skills = resolved_skills.has_enabled_skills();
     loaded_plugin.disabled_skill_paths = resolved_skills.disabled_skill_paths;
     loaded_plugin.has_enabled_skills = has_enabled_skills;
@@ -1795,20 +1798,21 @@ impl ResolvedPluginSkills {
     }
 }
 
-fn load_plugin_skills(
+async fn load_plugin_skills(
     plugin_root: &AbsolutePathBuf,
     manifest_paths: &PluginManifestPaths,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
 ) -> ResolvedPluginSkills {
-    let outcome = load_skills_from_roots(
-        plugin_skill_roots(plugin_root, manifest_paths)
-            .into_iter()
-            .map(|path| SkillRoot {
-                path,
-                scope: SkillScope::User,
-            }),
-    );
+    let roots = plugin_skill_roots(plugin_root, manifest_paths)
+        .into_iter()
+        .map(|path| SkillRoot {
+            path,
+            scope: SkillScope::User,
+            file_system: Arc::clone(&LOCAL_FS),
+        })
+        .collect::<Vec<_>>();
+    let outcome = load_skills_from_roots(roots).await;
     let had_errors = !outcome.errors.is_empty();
     let skills = outcome
         .skills
