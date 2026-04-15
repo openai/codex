@@ -34,6 +34,10 @@ codex_rust_crate(
     integration_test_flaky_by_stem = {
         "all": [
             "suite::abort_tasks::interrupt_tool_records_history_entries",
+            "suite::apply_patch_cli::apply_patch_cli_rejects_invalid_hunk_header::applypatchmodeloutput_function_expects",
+        ],
+        "responses_headers": [
+            "responses_stream_includes_turn_metadata_header_for_git_workspace_e2e",
         ],
     },
     integration_test_timeout = "long",
