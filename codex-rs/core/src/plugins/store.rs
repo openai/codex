@@ -8,6 +8,10 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs as unix_fs;
+#[cfg(windows)]
+use std::os::windows::fs as windows_fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -348,19 +352,56 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreErr
             entry.map_err(|err| PluginStoreError::io("failed to enumerate plugin source", err))?;
         let source_path = entry.path();
         let target_path = target.join(entry.file_name());
-        let file_type = entry
-            .file_type()
+        let metadata = fs::symlink_metadata(&source_path)
             .map_err(|err| PluginStoreError::io("failed to inspect plugin source entry", err))?;
+        let file_type = metadata.file_type();
 
         if file_type.is_dir() {
             copy_dir_recursive(&source_path, &target_path)?;
         } else if file_type.is_file() {
             fs::copy(&source_path, &target_path)
                 .map_err(|err| PluginStoreError::io("failed to copy plugin file", err))?;
+        } else if file_type.is_symlink() {
+            copy_symlink(&source_path, &target_path)?;
         }
     }
 
     Ok(())
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Path, target: &Path) -> Result<(), PluginStoreError> {
+    let link_target = fs::read_link(source)
+        .map_err(|err| PluginStoreError::io("failed to read plugin symlink", err))?;
+    unix_fs::symlink(link_target, target)
+        .map_err(|err| PluginStoreError::io("failed to copy plugin symlink", err))
+}
+
+#[cfg(windows)]
+fn copy_symlink(source: &Path, target: &Path) -> Result<(), PluginStoreError> {
+    let link_target = fs::read_link(source)
+        .map_err(|err| PluginStoreError::io("failed to read plugin symlink", err))?;
+    let resolved_target = if link_target.is_absolute() {
+        link_target.clone()
+    } else {
+        source
+            .parent()
+            .map(|parent| parent.join(&link_target))
+            .unwrap_or_else(|| link_target.clone())
+    };
+    let result = if resolved_target.is_dir() {
+        windows_fs::symlink_dir(link_target, target)
+    } else {
+        windows_fs::symlink_file(link_target, target)
+    };
+    result.map_err(|err| PluginStoreError::io("failed to copy plugin symlink", err))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn copy_symlink(_source: &Path, _target: &Path) -> Result<(), PluginStoreError> {
+    Err(PluginStoreError::Invalid(
+        "plugin symlinks are not supported on this platform".to_string(),
+    ))
 }
 
 #[cfg(test)]
