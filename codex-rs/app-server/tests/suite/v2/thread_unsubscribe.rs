@@ -1,15 +1,11 @@
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
-use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
-use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
@@ -26,35 +22,14 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use core_test_support::responses;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-fn command_that_waits_for_path(path: &std::path::Path) -> Vec<String> {
-    #[cfg(target_os = "windows")]
-    {
-        let path = path.display().to_string().replace('\'', "''");
-        vec![
-            "powershell".to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            format!(
-                "$path = '{path}'; while (-not (Test-Path -LiteralPath $path)) {{ Start-Sleep -Milliseconds 50 }}"
-            ),
-        ]
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let path = path.display().to_string().replace('\'', r#"'\''"#);
-        vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!("while [ ! -e '{path}' ]; do sleep 0.05; done"),
-        ]
-    }
-}
 
 async fn wait_for_responses_request_count_to_stabilize(
     server: &wiremock::MockServer,
@@ -157,20 +132,19 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     std::fs::create_dir(&codex_home)?;
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
-    let command_release_path = tmp.path().join("release-command");
-    let shell_command = command_that_waits_for_path(&command_release_path);
 
-    let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_shell_command_sse_response(
-            shell_command.clone(),
-            Some(&working_directory),
-            Some(10_000),
-            "call_sleep",
-        )?,
-        create_final_assistant_message_sse_response("Done")?,
-    ])
+    let (release_response_tx, release_response_rx) = oneshot::channel();
+    let (server, mut completions) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        gate: Some(release_response_rx),
+        body: responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    }]])
     .await;
-    create_config_toml(&codex_home, &server.uri())?;
+    let response_completed = completions.remove(0);
+    create_config_toml(&codex_home, server.uri())?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -195,11 +169,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     .await??;
     let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
 
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        wait_for_command_execution_item_started(&mut mcp),
-    )
-    .await??;
+    timeout(DEFAULT_READ_TIMEOUT, server.wait_for_request_count(1)).await?;
 
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
@@ -219,15 +189,11 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
         mcp.read_stream_until_notification_message("thread/closed"),
     );
     let closed_while_command_running = closed_while_command_running.await;
-    std::fs::write(&command_release_path, b"release")?;
+    let _ = release_response_tx.send(());
     assert!(closed_while_command_running.is_err());
 
-    wait_for_responses_request_count_to_stabilize(
-        &server,
-        /*expected_count*/ 2,
-        std::time::Duration::from_millis(200),
-    )
-    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, response_completed).await??;
+    server.shutdown().await;
 
     Ok(())
 }
@@ -364,19 +330,6 @@ async fn thread_unsubscribe_reports_not_subscribed_before_idle_unload() -> Resul
     );
 
     Ok(())
-}
-
-async fn wait_for_command_execution_item_started(mcp: &mut McpProcess) -> Result<()> {
-    loop {
-        let started_notif = mcp
-            .read_stream_until_notification_message("item/started")
-            .await?;
-        let started_params = started_notif.params.context("item/started params")?;
-        let started: ItemStartedNotification = serde_json::from_value(started_params)?;
-        if let ThreadItem::CommandExecution { .. } = started.item {
-            return Ok(());
-        }
-    }
 }
 
 fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io::Result<()> {
