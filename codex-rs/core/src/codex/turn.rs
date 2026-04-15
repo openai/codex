@@ -50,7 +50,7 @@ use crate::stream_events_utils::record_completed_response_item;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
-use crate::tools::registry::ToolArgumentDiffConsumerBox;
+use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolRouterParams;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
@@ -1860,8 +1860,10 @@ async fn try_run_sampling_request(
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
-    let mut active_tool_argument_diff_consumer: Option<(String, ToolArgumentDiffConsumerBox)> =
-        None;
+    let mut active_tool_argument_diff_consumer: Option<(
+        String,
+        Box<dyn ToolArgumentDiffConsumer>,
+    )> = None;
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
