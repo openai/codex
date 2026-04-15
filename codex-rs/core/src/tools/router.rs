@@ -6,6 +6,7 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::ToolArgumentDiffConsumerBox;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
 use codex_mcp::ToolInfo;
@@ -126,6 +127,14 @@ impl ToolRouter {
             }),
             _ => None,
         })
+    }
+
+    pub(crate) fn create_diff_consumer(
+        &self,
+        tool_name: &ToolName,
+        turn: &TurnContext,
+    ) -> Option<ToolArgumentDiffConsumerBox> {
+        self.registry.create_diff_consumer(tool_name, turn)
     }
 
     fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
