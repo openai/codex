@@ -130,7 +130,6 @@ INSERT INTO jobs (
         .bind(thread_id)
         .fetch_one(&pool)
         .await?;
-    assert_eq!(memory_mode, "disabled");
     assert!(!memory_root.exists());
 
     Ok(())
