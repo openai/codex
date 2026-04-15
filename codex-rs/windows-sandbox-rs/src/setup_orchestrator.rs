@@ -345,6 +345,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && !is_windowsapps_package_dir(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -352,6 +353,14 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
     roots
+}
+
+fn is_windowsapps_package_dir(path: &Path) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    normalized.contains("\\program files\\windowsapps\\")
 }
 
 fn gather_legacy_full_read_roots(
@@ -1058,6 +1067,16 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn windowsapps_package_dirs_are_detected() {
+        assert!(is_windowsapps_package_dir(Path::new(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.409.7971.0_x64__2p2nqsd0c76g0\app\resources"
+        )));
+        assert!(!is_windowsapps_package_dir(Path::new(
+            r"C:\Users\alice\.codex\.sandbox\bin"
+        )));
     }
 
     #[test]
