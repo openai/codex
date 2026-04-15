@@ -1,7 +1,7 @@
+use super::CreateSeatbeltCommandArgsParams;
 use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::ProxyPolicyInputs;
-use super::SeatbeltCommandArgs;
 use super::UnixDomainSocketPolicy;
 use super::create_seatbelt_command_args;
 use super::create_seatbelt_command_args_for_legacy_policy;
@@ -155,7 +155,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         },
     ]);
 
-    let args = create_seatbelt_command_args(SeatbeltCommandArgs {
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/bin/true".to_string()],
         file_system_sandbox_policy: &file_system_policy,
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
@@ -221,7 +221,7 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         },
     ]);
 
-    let args = create_seatbelt_command_args(SeatbeltCommandArgs {
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/bin/true".to_string()],
         file_system_sandbox_policy: &file_system_policy,
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
@@ -488,7 +488,7 @@ fn create_seatbelt_args_allowlists_explicit_unix_socket_paths_without_proxy() {
         cwd.path(),
     );
     let extra_allow_unix_sockets = vec![absolute_path("/tmp/codex-browser-use")];
-    let args = create_seatbelt_command_args(SeatbeltCommandArgs {
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
         file_system_sandbox_policy: &file_system_policy,
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
@@ -546,7 +546,7 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
         .await?;
     let extra_allow_unix_sockets = vec![absolute_path(explicit_socket)];
 
-    let args = create_seatbelt_command_args(SeatbeltCommandArgs {
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
         file_system_sandbox_policy: &file_system_policy,
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
@@ -587,7 +587,7 @@ fn create_seatbelt_args_preserves_full_network_with_explicit_unix_socket_paths()
         cwd.path(),
     );
     let extra_allow_unix_sockets = vec![absolute_path("/tmp/codex-browser-use")];
-    let args = create_seatbelt_command_args(SeatbeltCommandArgs {
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
         file_system_sandbox_policy: &file_system_policy,
         network_sandbox_policy: NetworkSandboxPolicy::Enabled,

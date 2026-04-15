@@ -18,7 +18,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
 #[cfg(target_os = "macos")]
-use codex_sandboxing::seatbelt::SeatbeltCommandArgs;
+use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::create_seatbelt_command_args;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -261,7 +261,7 @@ async fn run_command_under_sandbox(
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
-            let args = create_seatbelt_command_args(SeatbeltCommandArgs {
+            let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                 command,
                 file_system_sandbox_policy: &config.permissions.file_system_sandbox_policy,
                 network_sandbox_policy: config.permissions.network_sandbox_policy,

@@ -204,11 +204,11 @@ impl SandboxManager {
             SandboxType::None => (os_argv_to_strings(argv), None),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
+                use crate::seatbelt::CreateSeatbeltCommandArgsParams;
                 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
-                use crate::seatbelt::SeatbeltCommandArgs;
                 use crate::seatbelt::create_seatbelt_command_args;
 
-                let mut args = create_seatbelt_command_args(SeatbeltCommandArgs {
+                let mut args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                     command: os_argv_to_strings(argv),
                     file_system_sandbox_policy: &effective_file_system_policy,
                     network_sandbox_policy: effective_network_policy,

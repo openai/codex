@@ -389,7 +389,7 @@ fn create_seatbelt_command_args_for_legacy_policy(
 ) -> Vec<String> {
     let file_system_sandbox_policy =
         FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_policy_cwd);
-    create_seatbelt_command_args(SeatbeltCommandArgs {
+    create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command,
         file_system_sandbox_policy: &file_system_sandbox_policy,
         network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
@@ -401,7 +401,7 @@ fn create_seatbelt_command_args_for_legacy_policy(
 }
 
 #[derive(Debug)]
-pub struct SeatbeltCommandArgs<'a> {
+pub struct CreateSeatbeltCommandArgsParams<'a> {
     pub command: Vec<String>,
     pub file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
@@ -411,8 +411,8 @@ pub struct SeatbeltCommandArgs<'a> {
     pub extra_allow_unix_sockets: &'a [AbsolutePathBuf],
 }
 
-pub fn create_seatbelt_command_args(args: SeatbeltCommandArgs<'_>) -> Vec<String> {
-    let SeatbeltCommandArgs {
+pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -> Vec<String> {
+    let CreateSeatbeltCommandArgsParams {
         command,
         file_system_sandbox_policy,
         network_sandbox_policy,
