@@ -272,6 +272,11 @@ async fn file_system_methods_cover_surface_area(use_remote: bool) -> Result<()> 
         "hello from trait"
     );
 
+    symlink(
+        source_dir.join("missing-target"),
+        source_dir.join("broken-link"),
+    )?;
+
     let mut entries = file_system
         .read_directory(&absolute_path(source_dir), /*sandbox*/ None)
         .await
