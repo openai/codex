@@ -147,6 +147,7 @@ common:ci-macos --build_metadata=TAG_os=macos
 common:ci-macos --config=remote
 common:ci-macos --strategy=remote
 common:ci-macos --strategy=TestRunner=darwin-sandbox,local
+common:ci-macos --local_test_jobs=2
 
 # Linux-only V8 CI config.
 common:ci-v8 --config=ci
