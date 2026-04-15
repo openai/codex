@@ -47,11 +47,12 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 
-// Windows CI can spend tens of seconds starting the app-server test binary
-// under Bazel before it accepts JSON-RPC or reports its websocket bind address.
-#[cfg(windows)]
+// macOS and Windows CI can spend tens of seconds starting the app-server test
+// binary under Bazel before it accepts JSON-RPC or reports its websocket bind
+// address.
+#[cfg(any(target_os = "macos", windows))]
 pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
-#[cfg(not(windows))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) type WsClient = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
