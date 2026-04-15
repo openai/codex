@@ -56,6 +56,10 @@ codex_rust_crate(
         # succeeds without this workaround.
         "//:AGENTS.md",
     ],
+    test_shard_counts = {
+        "core-all-test": 8,
+        "core-unit-tests": 8,
+    },
     test_tags = ["no-sandbox"],
     unit_test_args = [
         "--skip",
