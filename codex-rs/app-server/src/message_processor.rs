@@ -323,8 +323,8 @@ impl MessageProcessor {
         );
         let external_agent_config_api =
             ExternalAgentConfigApi::new(config.codex_home.to_path_buf());
-        let fs_api = FsApi::default();
-        let fs_watch_manager = FsWatchManager::new(outgoing.clone());
+        let fs_api = FsApi::new(environment_manager.clone());
+        let fs_watch_manager = FsWatchManager::new(outgoing.clone(), environment_manager.clone());
 
         Self {
             outgoing,
