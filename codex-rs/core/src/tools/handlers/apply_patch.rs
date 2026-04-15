@@ -17,7 +17,6 @@ use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolArgumentDiffConsumer;
-use crate::tools::registry::ToolArgumentDiffConsumerBox;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
@@ -169,7 +168,7 @@ impl ToolHandler for ApplyPatchHandler {
         true
     }
 
-    fn create_diff_consumer(&self) -> Option<ToolArgumentDiffConsumerBox> {
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         Some(Box::<ApplyPatchArgumentDiffConsumer>::default())
     }
 
