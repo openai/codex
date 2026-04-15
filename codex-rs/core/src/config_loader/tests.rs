@@ -11,11 +11,17 @@ use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::ConfigRequirementsWithSources;
 use crate::config_loader::RequirementSource;
+use crate::config_loader::load_config_layers_state_with_store;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
+use async_trait::async_trait;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_config_store::ConfigDocumentRead;
+use codex_config_store::ConfigDocumentStore;
+use codex_config_store::ConfigStoreResult;
+use codex_config_store::ReadConfigDocumentParams;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -34,6 +40,25 @@ fn config_error_from_io(err: &std::io::Error) -> &super::ConfigError {
         .and_then(|err| err.downcast_ref::<ConfigLoadError>())
         .map(ConfigLoadError::config_error)
         .expect("expected ConfigLoadError")
+}
+
+#[derive(Default)]
+struct MemoryConfigStore {
+    documents: HashMap<AbsolutePathBuf, ConfigDocumentRead>,
+}
+
+#[async_trait]
+impl ConfigDocumentStore for MemoryConfigStore {
+    async fn read_config_document(
+        &self,
+        params: ReadConfigDocumentParams,
+    ) -> ConfigStoreResult<ConfigDocumentRead> {
+        Ok(self
+            .documents
+            .get(&params.path)
+            .cloned()
+            .unwrap_or(ConfigDocumentRead::Missing))
+    }
 }
 
 async fn make_config_for_test(
@@ -106,6 +131,99 @@ async fn returns_config_error_for_invalid_user_config_toml() {
     let expected_config_error =
         super::config_error_from_toml(&config_path, contents, expected_toml_error);
     assert_eq!(config_error, &expected_config_error);
+}
+
+#[tokio::test]
+async fn loads_user_config_from_config_store() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let cwd = tempdir()?;
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
+    let user_config = toml::from_str::<TomlValue>(r#"model = "store-user-model""#)?;
+    let store = MemoryConfigStore {
+        documents: HashMap::from([(
+            user_file.clone(),
+            ConfigDocumentRead::Present { value: user_config },
+        )]),
+    };
+
+    let state = load_config_layers_state_with_store(
+        codex_home.path(),
+        Some(AbsolutePathBuf::try_from(cwd.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudRequirementsLoader::default(),
+        &store,
+    )
+    .await?;
+
+    let expected_user_layer = ConfigLayerEntry::new(
+        super::ConfigLayerSource::User { file: user_file },
+        toml::from_str::<TomlValue>(r#"model = "store-user-model""#)?,
+    );
+    assert_eq!(state.get_user_layer(), Some(&expected_user_layer));
+    Ok(())
+}
+
+#[tokio::test]
+async fn loads_project_config_from_config_store() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let project = tempdir()?;
+    let dot_codex = project.path().join(".codex");
+    tokio::fs::create_dir(&dot_codex).await?;
+
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
+    let project_root = AbsolutePathBuf::try_from(project.path())?;
+    let project_config_file =
+        AbsolutePathBuf::from_absolute_path(dot_codex.join(CONFIG_TOML_FILE))?;
+    let user_config = toml::Value::try_from(ConfigToml {
+        projects: Some(HashMap::from([(
+            super::project_trust_key(project.path()),
+            ProjectConfig {
+                trust_level: Some(TrustLevel::Trusted),
+            },
+        )])),
+        ..Default::default()
+    })?;
+    let project_config = toml::from_str::<TomlValue>(r#"model = "store-project-model""#)?;
+    let store = MemoryConfigStore {
+        documents: HashMap::from([
+            (
+                user_file,
+                ConfigDocumentRead::Present { value: user_config },
+            ),
+            (
+                project_config_file.clone(),
+                ConfigDocumentRead::Present {
+                    value: project_config.clone(),
+                },
+            ),
+        ]),
+    };
+
+    let state = load_config_layers_state_with_store(
+        codex_home.path(),
+        Some(project_root.clone()),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudRequirementsLoader::default(),
+        &store,
+    )
+    .await?;
+
+    let project_layer = ConfigLayerEntry::new(
+        super::ConfigLayerSource::Project {
+            dot_codex_folder: project_config_file.parent().expect("project config parent"),
+        },
+        project_config,
+    );
+    assert_eq!(
+        state
+            .layers_high_to_low()
+            .into_iter()
+            .find(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. })),
+        Some(&project_layer)
+    );
+    Ok(())
 }
 
 #[tokio::test]

@@ -8,11 +8,13 @@
 //! wire-friendly: prefer primitive fields over Rust-specific error or filesystem types.
 
 mod error;
+mod local;
 mod store;
 mod types;
 
 pub use error::ConfigStoreError;
 pub use error::ConfigStoreResult;
+pub use local::LocalConfigStore;
 pub use store::ConfigDocumentStore;
 pub use types::ConfigDocumentErrorSpan;
 pub use types::ConfigDocumentRead;

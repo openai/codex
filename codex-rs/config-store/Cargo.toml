@@ -16,6 +16,7 @@ async-trait = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
 toml = { workspace = true }
 
 [dev-dependencies]

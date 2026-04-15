@@ -11,6 +11,11 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_config_store::ConfigDocumentRead;
+use codex_config_store::ConfigDocumentStore;
+use codex_config_store::ConfigStoreError;
+use codex_config_store::LocalConfigStore;
+use codex_config_store::ReadConfigDocumentParams;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
@@ -57,6 +62,8 @@ pub use codex_config::TextPosition;
 pub use codex_config::TextRange;
 pub use codex_config::WebSearchModeRequirement;
 pub(crate) use codex_config::build_cli_overrides_layer;
+pub(crate) use codex_config::config_error_from_parse_message;
+#[cfg(test)]
 pub(crate) use codex_config::config_error_from_toml;
 pub use codex_config::default_project_root_markers;
 pub use codex_config::format_config_error;
@@ -124,6 +131,28 @@ pub async fn load_config_layers_state(
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
 ) -> io::Result<ConfigLayerStack> {
+    let config_store = LocalConfigStore;
+    load_config_layers_state_with_store(
+        codex_home,
+        cwd,
+        cli_overrides,
+        overrides,
+        cloud_requirements,
+        &config_store,
+    )
+    .await
+}
+
+/// Equivalent to [load_config_layers_state], using the supplied store for path-addressed
+/// config.toml reads.
+pub async fn load_config_layers_state_with_store(
+    codex_home: &Path,
+    cwd: Option<AbsolutePathBuf>,
+    cli_overrides: &[(String, TomlValue)],
+    overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
+    config_store: &(impl ConfigDocumentStore + ?Sized),
+) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
@@ -172,23 +201,26 @@ pub async fn load_config_layers_state(
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
     let system_config_toml_file = system_config_toml_file()?;
-    let system_layer =
-        load_config_toml_for_required_layer(&system_config_toml_file, |config_toml| {
+    let system_layer = load_config_toml_for_required_layer(
+        config_store,
+        &system_config_toml_file,
+        |config_toml| {
             ConfigLayerEntry::new(
                 ConfigLayerSource::System {
                     file: system_config_toml_file.clone(),
                 },
                 config_toml,
             )
-        })
-        .await?;
+        },
+    )
+    .await?;
     layers.push(system_layer);
 
     // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
     // exists, but is malformed, then this error should be propagated to the
     // user.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
-    let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
+    let user_layer = load_config_toml_for_required_layer(config_store, &user_file, |config_toml| {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: user_file.clone(),
@@ -247,6 +279,7 @@ pub async fn load_config_layers_state(
             }
         };
         let project_layers = load_project_layers(
+            config_store,
             &cwd,
             &project_trust_context.project_root,
             &project_trust_context,
@@ -320,17 +353,14 @@ pub async fn load_config_layers_state(
 /// - If there is an error reading the file or parsing the TOML, returns an
 ///   error.
 async fn load_config_toml_for_required_layer(
-    config_toml: impl AsRef<Path>,
+    config_store: &(impl ConfigDocumentStore + ?Sized),
+    config_toml: &AbsolutePathBuf,
     create_entry: impl FnOnce(TomlValue) -> ConfigLayerEntry,
 ) -> io::Result<ConfigLayerEntry> {
-    let toml_file = config_toml.as_ref();
-    let toml_value = match tokio::fs::read_to_string(toml_file).await {
-        Ok(contents) => {
-            let config: TomlValue = toml::from_str(&contents).map_err(|err| {
-                let config_error = config_error_from_toml(toml_file, &contents, err.clone());
-                io_error_from_config_error(io::ErrorKind::InvalidData, config_error, Some(err))
-            })?;
-            let config_parent = toml_file.parent().ok_or_else(|| {
+    let toml_file = config_toml.as_path();
+    let toml_value = match read_config_document(config_store, config_toml).await? {
+        ConfigDocumentRead::Present { value } => {
+            let config_parent = config_toml.parent().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
@@ -339,21 +369,69 @@ async fn load_config_toml_for_required_layer(
                     ),
                 )
             })?;
-            resolve_relative_paths_in_config_toml(config, config_parent)
+            resolve_relative_paths_in_config_toml(value, config_parent.as_path())
         }
-        Err(e) => {
-            if e.kind() == io::ErrorKind::NotFound {
-                Ok(TomlValue::Table(toml::map::Map::new()))
-            } else {
-                Err(io::Error::new(
-                    e.kind(),
-                    format!("Failed to read config file {}: {e}", toml_file.display()),
-                ))
-            }
+        ConfigDocumentRead::Missing => Ok(TomlValue::Table(toml::map::Map::new())),
+        ConfigDocumentRead::ParseError {
+            raw_toml,
+            message,
+            span,
+        } => {
+            let config_error = config_error_from_parse_message(
+                toml_file,
+                &raw_toml,
+                message,
+                span.map(Into::into),
+            );
+            Err(io_error_from_config_error(
+                io::ErrorKind::InvalidData,
+                config_error,
+                /*source*/ None,
+            ))
         }
+        ConfigDocumentRead::ReadError { kind, message } => Err(io::Error::new(
+            io_error_kind_from_config_document_read_kind(&kind),
+            format!(
+                "Failed to read config file {}: {message}",
+                toml_file.display()
+            ),
+        )),
     }?;
 
     Ok(create_entry(toml_value))
+}
+
+async fn read_config_document(
+    config_store: &(impl ConfigDocumentStore + ?Sized),
+    path: &AbsolutePathBuf,
+) -> io::Result<ConfigDocumentRead> {
+    config_store
+        .read_config_document(ReadConfigDocumentParams { path: path.clone() })
+        .await
+        .map_err(config_store_error_to_io)
+}
+
+fn config_store_error_to_io(error: ConfigStoreError) -> io::Error {
+    match error {
+        ConfigStoreError::InvalidRequest { message } => {
+            io::Error::new(io::ErrorKind::InvalidInput, message)
+        }
+        ConfigStoreError::ReadFailed { message } | ConfigStoreError::Internal { message } => {
+            io::Error::other(message)
+        }
+    }
+}
+
+fn io_error_kind_from_config_document_read_kind(kind: &str) -> io::ErrorKind {
+    match kind {
+        "permission_denied" => io::ErrorKind::PermissionDenied,
+        "invalid_data" => io::ErrorKind::InvalidData,
+        "invalid_input" => io::ErrorKind::InvalidInput,
+        "timed_out" => io::ErrorKind::TimedOut,
+        "interrupted" => io::ErrorKind::Interrupted,
+        "unsupported" => io::ErrorKind::Unsupported,
+        _ => io::ErrorKind::Other,
+    }
 }
 
 /// If available, apply requirements from the platform system
@@ -766,6 +844,7 @@ async fn find_project_root(
 /// starting from folders closest to `project_root` (which is the lowest
 /// precedence) to those closest to `cwd` (which is the highest precedence).
 async fn load_project_layers(
+    config_store: &(impl ConfigDocumentStore + ?Sized),
     cwd: &AbsolutePathBuf,
     project_root: &AbsolutePathBuf,
     trust_context: &ProjectTrustContext,
@@ -810,32 +889,9 @@ async fn load_project_layers(
             continue;
         }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
-        match tokio::fs::read_to_string(&config_file).await {
-            Ok(contents) => {
-                let config: TomlValue = match toml::from_str(&contents) {
-                    Ok(config) => config,
-                    Err(e) => {
-                        if decision.is_trusted() {
-                            let config_file_display = config_file.as_path().display();
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!(
-                                    "Error parsing project config file {config_file_display}: {e}"
-                                ),
-                            ));
-                        }
-                        layers.push(project_layer_entry(
-                            trust_context,
-                            &dot_codex_abs,
-                            &layer_dir,
-                            TomlValue::Table(toml::map::Map::new()),
-                            /*config_toml_exists*/ true,
-                        ));
-                        continue;
-                    }
-                };
-                let config =
-                    resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
+        match read_config_document(config_store, &config_file).await? {
+            ConfigDocumentRead::Present { value } => {
+                let config = resolve_relative_paths_in_config_toml(value, dot_codex_abs.as_path())?;
                 let entry = project_layer_entry(
                     trust_context,
                     &dot_codex_abs,
@@ -845,25 +901,42 @@ async fn load_project_layers(
                 );
                 layers.push(entry);
             }
-            Err(err) => {
-                if err.kind() == io::ErrorKind::NotFound {
-                    // If there is no config.toml file, record an empty entry
-                    // for this project layer, as this may still have subfolders
-                    // that are significant in the overall ConfigLayerStack.
-                    layers.push(project_layer_entry(
-                        trust_context,
-                        &dot_codex_abs,
-                        &layer_dir,
-                        TomlValue::Table(toml::map::Map::new()),
-                        /*config_toml_exists*/ false,
-                    ));
-                } else {
+            ConfigDocumentRead::ParseError { message, .. } => {
+                if decision.is_trusted() {
                     let config_file_display = config_file.as_path().display();
                     return Err(io::Error::new(
-                        err.kind(),
-                        format!("Failed to read project config file {config_file_display}: {err}"),
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Error parsing project config file {config_file_display}: {message}"
+                        ),
                     ));
                 }
+                layers.push(project_layer_entry(
+                    trust_context,
+                    &dot_codex_abs,
+                    &layer_dir,
+                    TomlValue::Table(toml::map::Map::new()),
+                    /*config_toml_exists*/ true,
+                ));
+            }
+            ConfigDocumentRead::Missing => {
+                // If there is no config.toml file, record an empty entry
+                // for this project layer, as this may still have subfolders
+                // that are significant in the overall ConfigLayerStack.
+                layers.push(project_layer_entry(
+                    trust_context,
+                    &dot_codex_abs,
+                    &layer_dir,
+                    TomlValue::Table(toml::map::Map::new()),
+                    /*config_toml_exists*/ false,
+                ));
+            }
+            ConfigDocumentRead::ReadError { kind, message } => {
+                let config_file_display = config_file.as_path().display();
+                return Err(io::Error::new(
+                    io_error_kind_from_config_document_read_kind(&kind),
+                    format!("Failed to read project config file {config_file_display}: {message}"),
+                ));
             }
         }
     }

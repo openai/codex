@@ -106,6 +106,18 @@ pub fn config_error_from_toml(
     ConfigError::new(path.as_ref().to_path_buf(), range, err.message())
 }
 
+pub fn config_error_from_parse_message(
+    path: impl AsRef<Path>,
+    contents: &str,
+    message: impl Into<String>,
+    span: Option<std::ops::Range<usize>>,
+) -> ConfigError {
+    let range = span
+        .map(|span| text_range_from_span(contents, span))
+        .unwrap_or_else(default_range);
+    ConfigError::new(path.as_ref().to_path_buf(), range, message)
+}
+
 pub fn config_error_from_typed_toml<T: DeserializeOwned>(
     path: impl AsRef<Path>,
     contents: &str,

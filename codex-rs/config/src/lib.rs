@@ -51,6 +51,7 @@ pub use diagnostics::ConfigError;
 pub use diagnostics::ConfigLoadError;
 pub use diagnostics::TextPosition;
 pub use diagnostics::TextRange;
+pub use diagnostics::config_error_from_parse_message;
 pub use diagnostics::config_error_from_toml;
 pub use diagnostics::config_error_from_typed_toml;
 pub use diagnostics::first_layer_config_error;

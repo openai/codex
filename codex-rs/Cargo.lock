@@ -1922,6 +1922,7 @@ dependencies = [
  "codex-async-utils",
  "codex-code-mode",
  "codex-config",
+ "codex-config-store",
  "codex-connectors",
  "codex-core-skills",
  "codex-exec-server",
