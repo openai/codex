@@ -132,6 +132,14 @@ pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
     parse_patch_text(patch, mode)
 }
 
+/// Parses streamed patch text that may not have reached `*** End Patch` yet.
+///
+/// This entry point is for progress reporting only; callers must not use its
+/// output to apply a patch.
+pub fn parse_patch_streaming(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
+    parse_patch_text(patch, ParseMode::Streaming)
+}
+
 enum ParseMode {
     /// Parse the patch text argument as is.
     Strict,
@@ -169,6 +177,12 @@ enum ParseMode {
     /// `<<'EOF'` and ends with `EOF\n`. If so, we strip off these markers,
     /// trim() the result, and treat what is left as the patch text.
     Lenient,
+
+    /// Parse partial patch text for progress reporting while the model is
+    /// still streaming tool input. This mode requires a begin marker but does
+    /// not require an end marker, and its output must not be used to apply a
+    /// patch.
+    Streaming,
 }
 
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
@@ -180,16 +194,37 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
                 return Err(e);
             }
             ParseMode::Lenient => check_patch_boundaries_lenient(&lines, e)?,
+            ParseMode::Streaming => check_patch_boundaries_streaming(&lines, e)?,
         },
     };
 
     let mut hunks: Vec<Hunk> = Vec::new();
-    // The above checks ensure that lines.len() >= 2.
-    let last_line_index = lines.len().saturating_sub(1);
-    let mut remaining_lines = &lines[1..last_line_index];
+    // The above checks ensure that lines.len() >= 2 for strict/lenient mode.
+    // Streaming mode may omit the end marker, so its body extends through the
+    // final line unless the final line is an explicit end marker.
+    let body_end_index = if matches!(mode, ParseMode::Streaming)
+        && lines
+            .last()
+            .is_some_and(|line| line.trim() != END_PATCH_MARKER)
+    {
+        lines.len()
+    } else {
+        lines.len().saturating_sub(1)
+    };
+    let mut remaining_lines = &lines[1..body_end_index];
     let mut line_number = 2;
     while !remaining_lines.is_empty() {
-        let (hunk, hunk_lines) = parse_one_hunk(remaining_lines, line_number)?;
+        let parsed_hunk = parse_one_hunk(remaining_lines, line_number);
+        let (hunk, hunk_lines) = match parsed_hunk {
+            Ok(parsed) => parsed,
+            Err(err) if matches!(mode, ParseMode::Streaming) => {
+                if hunks.is_empty() {
+                    return Err(err);
+                }
+                break;
+            }
+            Err(err) => return Err(err),
+        };
         hunks.push(hunk);
         line_number += hunk_lines;
         remaining_lines = &remaining_lines[hunk_lines..]
@@ -200,6 +235,16 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         patch,
         workdir: None,
     })
+}
+
+fn check_patch_boundaries_streaming<'a>(
+    original_lines: &'a [&'a str],
+    original_parse_error: ParseError,
+) -> Result<&'a [&'a str], ParseError> {
+    match original_lines {
+        [first, ..] if first.trim() == BEGIN_PATCH_MARKER => Ok(original_lines),
+        _ => Err(original_parse_error),
+    }
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
@@ -451,6 +496,76 @@ fn parse_update_file_chunk(
     }
 
     Ok((chunk, parsed_lines + start_index))
+}
+
+#[test]
+fn test_parse_patch_streaming() {
+    assert_eq!(
+        parse_patch_streaming("*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor"),
+        Ok(ApplyPatchArgs {
+            hunks: vec![AddFile {
+                path: PathBuf::from("src/hello.txt"),
+                contents: "hello\nwor\n".to_string(),
+            }],
+            patch: "*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor".to_string(),
+            workdir: None,
+        })
+    );
+
+    assert_eq!(
+        parse_patch_streaming(
+            "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new",
+        ),
+        Ok(ApplyPatchArgs {
+            hunks: vec![UpdateFile {
+                path: PathBuf::from("src/old.rs"),
+                move_path: Some(PathBuf::from("src/new.rs")),
+                chunks: vec![UpdateFileChunk {
+                    change_context: None,
+                    old_lines: vec!["old".to_string()],
+                    new_lines: vec!["new".to_string()],
+                    is_end_of_file: false,
+                }],
+            }],
+            patch: "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new".to_string(),
+            workdir: None,
+        })
+    );
+
+    assert!(
+        parse_patch_text(
+            "*** Begin Patch\n*** Delete File: gone.txt",
+            ParseMode::Streaming
+        )
+        .is_ok()
+    );
+    assert!(
+        parse_patch_text(
+            "*** Begin Patch\n*** Delete File: gone.txt",
+            ParseMode::Strict
+        )
+        .is_err()
+    );
+
+    assert_eq!(
+        parse_patch_streaming(
+            "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt\n",
+        ),
+        Ok(ApplyPatchArgs {
+            hunks: vec![
+                AddFile {
+                    path: PathBuf::from("src/one.txt"),
+                    contents: "one\n".to_string(),
+                },
+                DeleteFile {
+                    path: PathBuf::from("src/two.txt"),
+                },
+            ],
+            patch: "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt"
+                .to_string(),
+            workdir: None,
+        })
+    );
 }
 
 #[test]
