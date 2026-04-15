@@ -8173,10 +8173,20 @@ mod tests {
         )
         .await
         .expect("state db should initialize");
-        let memory_mode = state_db
-            .get_thread_memory_mode(thread_id)
-            .await
-            .expect("thread memory mode should be readable");
+        let memory_mode = time::timeout(Duration::from_secs(10), async {
+            loop {
+                let memory_mode = state_db
+                    .get_thread_memory_mode(thread_id)
+                    .await
+                    .expect("thread memory mode should be readable");
+                if memory_mode.as_deref() == Some("disabled") {
+                    break memory_mode;
+                }
+                time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("thread memory mode should update");
         assert_eq!(memory_mode.as_deref(), Some("disabled"));
 
         app_server.shutdown().await?;
