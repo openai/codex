@@ -6898,7 +6898,7 @@ mod tests {
             exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
 
         app.enqueue_primary_thread_session(
-            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            test_thread_session(thread_id, test_path_buf("/tmp/project")),
             Vec::new(),
         )
         .await?;
