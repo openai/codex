@@ -50,8 +50,10 @@ use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::LocalStdioTransportRuntime;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::SendElicitation;
+use codex_rmcp_client::StdioTransportRuntime;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
 use futures::future::Shared;
@@ -1500,7 +1502,8 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd)
+            let runtime = Arc::new(LocalStdioTransportRuntime) as Arc<dyn StdioTransportRuntime>;
+            RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, runtime)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
         }
