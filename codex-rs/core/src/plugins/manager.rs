@@ -15,6 +15,10 @@ use super::marketplace::ResolvedMarketplacePlugin;
 use super::marketplace::list_marketplaces;
 use super::marketplace::load_marketplace;
 use super::marketplace::resolve_marketplace_plugin;
+use super::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
+use super::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
+use super::marketplace_upgrade::configured_git_marketplace_names;
+use super::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use super::read_curated_plugins_sha;
 use super::remote::RemotePluginFetchError;
 use super::remote::RemotePluginMutationError;
@@ -102,10 +106,27 @@ struct CachedFeaturedPluginIds {
     featured_plugin_ids: Vec<String>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct NonCuratedCacheRefreshRequest {
+    roots: Vec<AbsolutePathBuf>,
+    mode: NonCuratedCacheRefreshMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NonCuratedCacheRefreshMode {
+    IfVersionChanged,
+    ForceReinstall,
+}
+
 #[derive(Default)]
 struct NonCuratedCacheRefreshState {
-    requested_roots: Option<Vec<AbsolutePathBuf>>,
-    last_refreshed_roots: Option<Vec<AbsolutePathBuf>>,
+    requested: Option<NonCuratedCacheRefreshRequest>,
+    last_refreshed: Option<NonCuratedCacheRefreshRequest>,
+    in_flight: bool,
+}
+
+#[derive(Default)]
+struct ConfiguredMarketplaceUpgradeState {
     in_flight: bool,
 }
 
@@ -322,6 +343,7 @@ pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
+    configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
     remote_sync_lock: Mutex<()>,
@@ -349,6 +371,9 @@ impl PluginsManager {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
             featured_plugin_ids_cache: RwLock::new(None),
+            configured_marketplace_upgrade_state: RwLock::new(
+                ConfiguredMarketplaceUpgradeState::default(),
+            ),
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             cached_enabled_outcome: RwLock::new(None),
             remote_sync_lock: Mutex::new(()),
@@ -1075,6 +1100,57 @@ impl PluginsManager {
     ) {
         if config.features.enabled(Feature::Plugins) {
             self.start_curated_repo_sync();
+            let should_spawn_marketplace_auto_upgrade = {
+                let mut state = match self.configured_marketplace_upgrade_state.write() {
+                    Ok(state) => state,
+                    Err(err) => err.into_inner(),
+                };
+                if state.in_flight {
+                    false
+                } else {
+                    state.in_flight = true;
+                    true
+                }
+            };
+            if should_spawn_marketplace_auto_upgrade {
+                let manager = Arc::clone(self);
+                let config = config.clone();
+                if let Err(err) = std::thread::Builder::new()
+                    .name("plugins-marketplace-auto-upgrade".to_string())
+                    .spawn(move || {
+                        let outcome = manager.upgrade_configured_marketplaces_for_config(
+                            &config, /*marketplace_name*/ None,
+                        );
+                        match outcome {
+                            Ok(outcome) => {
+                                for error in outcome.errors {
+                                    warn!(
+                                        marketplace = error.marketplace_name,
+                                        error = %error.message,
+                                        "failed to auto-upgrade configured marketplace"
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                warn!("failed to auto-upgrade configured marketplaces: {err}");
+                            }
+                        }
+
+                        let mut state = match manager.configured_marketplace_upgrade_state.write() {
+                            Ok(state) => state,
+                            Err(err) => err.into_inner(),
+                        };
+                        state.in_flight = false;
+                    })
+                {
+                    let mut state = match self.configured_marketplace_upgrade_state.write() {
+                        Ok(state) => state,
+                        Err(err) => err.into_inner(),
+                    };
+                    state.in_flight = false;
+                    warn!("failed to start configured marketplace auto-upgrade task: {err}");
+                }
+            }
             start_startup_remote_plugin_sync_once(
                 Arc::clone(self),
                 self.codex_home.clone(),
@@ -1099,9 +1175,67 @@ impl PluginsManager {
         }
     }
 
-    pub fn maybe_start_non_curated_plugin_cache_refresh_for_roots(
+    pub fn upgrade_configured_marketplaces_for_config(
+        &self,
+        config: &Config,
+        marketplace_name: Option<&str>,
+    ) -> Result<ConfiguredMarketplaceUpgradeOutcome, String> {
+        if let Some(marketplace_name) = marketplace_name
+            && !configured_git_marketplace_names(config)
+                .iter()
+                .any(|name| name == marketplace_name)
+        {
+            return Err(format!(
+                "marketplace `{marketplace_name}` is not configured as a Git marketplace"
+            ));
+        }
+
+        let mut outcome = upgrade_configured_git_marketplaces(
+            self.codex_home.as_path(),
+            config,
+            marketplace_name,
+        );
+        if !outcome.upgraded_roots.is_empty() {
+            match refresh_non_curated_plugin_cache(
+                self.codex_home.as_path(),
+                &outcome.upgraded_roots,
+                NonCuratedCacheRefreshMode::ForceReinstall,
+            ) {
+                Ok(cache_refreshed) => {
+                    if cache_refreshed {
+                        self.clear_cache();
+                    }
+                }
+                Err(err) => {
+                    self.clear_cache();
+                    outcome.errors.push(ConfiguredMarketplaceUpgradeError {
+                        marketplace_name: marketplace_name
+                            .unwrap_or("all configured marketplaces")
+                            .to_string(),
+                        message: format!(
+                            "failed to refresh installed plugin cache after marketplace upgrade: {err}"
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(outcome)
+    }
+
+    pub fn maybe_start_non_curated_plugin_cache_refresh(
         self: &Arc<Self>,
         roots: &[AbsolutePathBuf],
+    ) {
+        self.schedule_non_curated_plugin_cache_refresh(
+            roots,
+            NonCuratedCacheRefreshMode::IfVersionChanged,
+        );
+    }
+
+    fn schedule_non_curated_plugin_cache_refresh(
+        self: &Arc<Self>,
+        roots: &[AbsolutePathBuf],
+        mode: NonCuratedCacheRefreshMode,
     ) {
         let mut roots = roots.to_vec();
         roots.sort_unstable();
@@ -1109,6 +1243,7 @@ impl PluginsManager {
         if roots.is_empty() {
             return;
         }
+        let request = NonCuratedCacheRefreshRequest { roots, mode };
 
         let should_spawn = {
             let mut state = match self.non_curated_cache_refresh_state.write() {
@@ -1116,13 +1251,25 @@ impl PluginsManager {
                 Err(err) => err.into_inner(),
             };
             // Collapse repeated plugin/list requests onto one worker and only queue another pass
-            // when the requested roots set actually changes.
-            if state.requested_roots.as_ref() == Some(&roots)
-                || (!state.in_flight && state.last_refreshed_roots.as_ref() == Some(&roots))
+            // when the requested roots set actually changes. Forced reinstall requests are not
+            // deduped against the last completed pass because the same marketplace root path can
+            // point at newly activated files after an auto-upgrade.
+            if state.requested.as_ref() == Some(&request)
+                || (mode == NonCuratedCacheRefreshMode::IfVersionChanged
+                    && !state.in_flight
+                    && state.last_refreshed.as_ref() == Some(&request))
             {
                 return;
             }
-            state.requested_roots = Some(roots);
+            if mode == NonCuratedCacheRefreshMode::IfVersionChanged
+                && state.requested.as_ref().is_some_and(|requested| {
+                    requested.mode == NonCuratedCacheRefreshMode::ForceReinstall
+                        && requested.roots == request.roots
+                })
+            {
+                return;
+            }
+            state.requested = Some(request);
             if state.in_flight {
                 false
             } else {
@@ -1144,7 +1291,7 @@ impl PluginsManager {
                 Err(err) => err.into_inner(),
             };
             state.in_flight = false;
-            state.requested_roots = None;
+            state.requested = None;
             warn!("failed to start non-curated plugin cache refresh task: {err}");
         }
     }
@@ -1198,15 +1345,15 @@ impl PluginsManager {
 
     fn run_non_curated_plugin_cache_refresh_loop(self: Arc<Self>) {
         loop {
-            let roots = {
+            let request = {
                 let state = match self.non_curated_cache_refresh_state.read() {
                     Ok(state) => state,
                     Err(err) => err.into_inner(),
                 };
-                state.requested_roots.clone()
+                state.requested.clone()
             };
 
-            let Some(roots) = roots else {
+            let Some(request) = request else {
                 let mut state = match self.non_curated_cache_refresh_state.write() {
                     Ok(state) => state,
                     Err(err) => err.into_inner(),
@@ -1215,30 +1362,33 @@ impl PluginsManager {
                 return;
             };
 
-            let refreshed =
-                match refresh_non_curated_plugin_cache(self.codex_home.as_path(), &roots) {
-                    Ok(cache_refreshed) => {
-                        if cache_refreshed {
-                            self.clear_cache();
-                        }
-                        true
-                    }
-                    Err(err) => {
+            let refreshed = match refresh_non_curated_plugin_cache(
+                self.codex_home.as_path(),
+                &request.roots,
+                request.mode,
+            ) {
+                Ok(cache_refreshed) => {
+                    if cache_refreshed {
                         self.clear_cache();
-                        warn!("failed to refresh non-curated plugin cache: {err}");
-                        false
                     }
-                };
+                    true
+                }
+                Err(err) => {
+                    self.clear_cache();
+                    warn!("failed to refresh non-curated plugin cache: {err}");
+                    false
+                }
+            };
 
             let mut state = match self.non_curated_cache_refresh_state.write() {
                 Ok(state) => state,
                 Err(err) => err.into_inner(),
             };
             if refreshed {
-                state.last_refreshed_roots = Some(roots.clone());
+                state.last_refreshed = Some(request.clone());
             }
-            if state.requested_roots.as_ref() == Some(&roots) {
-                state.requested_roots = None;
+            if state.requested.as_ref() == Some(&request) {
+                state.requested = None;
                 state.in_flight = false;
                 return;
             }
@@ -1489,6 +1639,7 @@ fn refresh_curated_plugin_cache(
 fn refresh_non_curated_plugin_cache(
     codex_home: &Path,
     additional_roots: &[AbsolutePathBuf],
+    mode: NonCuratedCacheRefreshMode,
 ) -> Result<bool, String> {
     let configured_non_curated_plugin_ids =
         non_curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
@@ -1557,7 +1708,9 @@ fn refresh_non_curated_plugin_cache(
             continue;
         };
 
-        if store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str()) {
+        if mode == NonCuratedCacheRefreshMode::IfVersionChanged
+            && store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str())
+        {
             continue;
         }
 

@@ -2568,6 +2568,7 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            NonCuratedCacheRefreshMode::IfVersionChanged,
         )
         .expect("cache refresh should succeed")
     );
@@ -2620,6 +2621,7 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            NonCuratedCacheRefreshMode::IfVersionChanged,
         )
         .expect("cache refresh should reinstall missing configured plugin")
     );
@@ -2673,8 +2675,72 @@ enabled = true
         !refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            NonCuratedCacheRefreshMode::IfVersionChanged,
         )
         .expect("cache refresh should be a no-op when configured plugins are current")
+    );
+}
+
+#[test]
+fn refresh_non_curated_plugin_cache_force_reinstalls_current_local_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_plugin(&repo_root, "sample-plugin", "sample-plugin");
+    fs::write(repo_root.join("sample-plugin/skills/SKILL.md"), "new skill").unwrap();
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./sample-plugin"
+      }
+    }
+  ]
+}"#,
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/local",
+        "sample-plugin",
+    );
+    fs::write(
+        tmp.path()
+            .join("plugins/cache/debug/sample-plugin/local/skills/SKILL.md"),
+        "old skill",
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."sample-plugin@debug"]
+enabled = true
+"#,
+    );
+
+    assert!(
+        refresh_non_curated_plugin_cache(
+            tmp.path(),
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            NonCuratedCacheRefreshMode::ForceReinstall,
+        )
+        .expect("cache refresh should reinstall unchanged local version")
+    );
+
+    assert_eq!(
+        fs::read_to_string(
+            tmp.path()
+                .join("plugins/cache/debug/sample-plugin/local/skills/SKILL.md")
+        )
+        .unwrap(),
+        "new skill"
     );
 }
 
@@ -2722,6 +2788,7 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+            NonCuratedCacheRefreshMode::IfVersionChanged,
         )
         .expect("cache refresh should ignore unrelated invalid plugin manifests")
     );
