@@ -135,9 +135,8 @@ impl ToolRouter {
     pub(crate) fn create_diff_consumer(
         &self,
         tool_name: &ToolName,
-        turn: &TurnContext,
     ) -> Option<ToolArgumentDiffConsumerBox> {
-        self.registry.create_diff_consumer(tool_name, turn)
+        self.registry.create_diff_consumer(tool_name)
     }
 
     fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {

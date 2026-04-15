@@ -47,7 +47,16 @@ struct ApplyPatchArgumentDiffConsumer {
 }
 
 impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
-    fn consume_diff(&mut self, call_id: String, diff: &str) -> Option<EventMsg> {
+    fn consume_diff(
+        &mut self,
+        turn: &TurnContext,
+        call_id: String,
+        diff: &str,
+    ) -> Option<EventMsg> {
+        if !turn.features.enabled(Feature::ApplyPatchStreamingEvents) {
+            return None;
+        }
+
         self.input_stream
             .push_delta(call_id, diff)
             .map(EventMsg::PatchApplyDelta)
@@ -160,10 +169,8 @@ impl ToolHandler for ApplyPatchHandler {
         true
     }
 
-    fn create_diff_consumer(&self, turn: &TurnContext) -> Option<ToolArgumentDiffConsumerBox> {
-        turn.features
-            .enabled(Feature::ApplyPatchStreamingEvents)
-            .then(|| Box::<ApplyPatchArgumentDiffConsumer>::default() as Box<_>)
+    fn create_diff_consumer(&self) -> Option<ToolArgumentDiffConsumerBox> {
+        Some(Box::<ApplyPatchArgumentDiffConsumer>::default())
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
