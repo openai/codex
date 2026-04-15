@@ -2,6 +2,7 @@ use crate::JsonSchema;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
+use crate::ToolName;
 use crate::ToolSearchOutputTool;
 use crate::ToolSpec;
 use crate::mcp_tool_to_deferred_responses_api_tool;
@@ -242,7 +243,8 @@ pub fn collect_tool_search_output_tools<'a>(
         let tools = tools
             .iter()
             .map(|tool| {
-                mcp_tool_to_deferred_responses_api_tool(tool.tool_name.to_string(), tool.tool)
+                let tool_name = ToolName::namespaced(tool.tool_namespace, tool.tool_name);
+                mcp_tool_to_deferred_responses_api_tool(&tool_name, tool.tool)
                     .map(ResponsesApiNamespaceTool::Function)
             })
             .collect::<Result<Vec<_>, _>>()?;

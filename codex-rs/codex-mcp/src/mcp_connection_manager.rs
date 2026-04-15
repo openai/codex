@@ -36,6 +36,7 @@ use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_protocol::ToolName;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
@@ -153,6 +154,12 @@ pub struct ToolInfo {
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
     pub connector_description: Option<String>,
+}
+
+impl ToolInfo {
+    pub fn canonical_tool_name(&self) -> ToolName {
+        ToolName::namespaced(self.callable_namespace.clone(), self.callable_name.clone())
+    }
 }
 
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
@@ -1206,14 +1213,11 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    pub async fn resolve_tool_info(&self, name: &str, namespace: Option<&str>) -> Option<ToolInfo> {
-        let qualified_name = match namespace {
-            Some(namespace) if name.starts_with(namespace) => name.to_string(),
-            Some(namespace) => format!("{namespace}{name}"),
-            None => name.to_string(),
-        };
-
-        self.list_all_tools().await.get(&qualified_name).cloned()
+    pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
+        let all_tools = self.list_all_tools().await;
+        all_tools
+            .into_values()
+            .find(|tool| tool.canonical_tool_name() == *tool_name)
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
