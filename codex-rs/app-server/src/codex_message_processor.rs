@@ -392,6 +392,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock as AsyncRwLock;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -523,6 +524,10 @@ pub(crate) struct CodexMessageProcessor {
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
+    /// Coordinates `thread/list` with mutations of list membership or fields
+    /// rendered from list results, so clients do not receive stale list snapshots
+    /// after observing the corresponding mutation response or notification.
+    thread_list_state_lock: Arc<AsyncRwLock<()>>,
     command_exec_manager: CommandExecManager,
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
@@ -548,6 +553,7 @@ struct ListenerTaskContext {
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     analytics_events_client: AnalyticsEventsClient,
     thread_watch_manager: ThreadWatchManager,
+    thread_list_state_lock: Arc<AsyncRwLock<()>>,
     fallback_model_provider: String,
     codex_home: PathBuf,
 }
@@ -789,6 +795,7 @@ impl CodexMessageProcessor {
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
+            thread_list_state_lock: Arc::new(AsyncRwLock::new(())),
             command_exec_manager: CommandExecManager::default(),
             workspace_settings_cache: Arc::new(
                 workspace_settings::WorkspaceSettingsCache::default(),
@@ -2420,6 +2427,7 @@ impl CodexMessageProcessor {
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             analytics_events_client: self.analytics_events_client.clone(),
             thread_watch_manager: self.thread_watch_manager.clone(),
+            thread_list_state_lock: self.thread_list_state_lock.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
         };
@@ -2812,6 +2820,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_archive(&self, request_id: ConnectionRequestId, params: ThreadArchiveParams) {
+        let _thread_list_state_guard = self.thread_list_state_lock.write().await;
         let result = self.thread_archive_response(params).await;
         let archived_thread_ids = result
             .as_ref()
@@ -3018,6 +3027,7 @@ impl CodexMessageProcessor {
             return Err(invalid_request("thread name must not be empty"));
         };
 
+        let _thread_list_state_guard = self.thread_list_state_lock.write().await;
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             self.submit_core_op(request_id, thread.as_ref(), Op::SetThreadName { name })
                 .await
@@ -3159,6 +3169,7 @@ impl CodexMessageProcessor {
             return Err(invalid_request("gitInfo must include at least one field"));
         }
 
+        let _thread_list_state_guard = self.thread_list_state_lock.write().await;
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
@@ -3355,6 +3366,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadUnarchiveParams,
     ) {
+        let _thread_list_state_guard = self.thread_list_state_lock.write().await;
         let result = self.thread_unarchive_response(params).await;
         let notification =
             result
@@ -3588,6 +3600,7 @@ impl CodexMessageProcessor {
             ThreadSortKey::UpdatedAt => StoreThreadSortKey::UpdatedAt,
         };
         let sort_direction = sort_direction.unwrap_or(SortDirection::Desc);
+        let _thread_list_state_guard = self.thread_list_state_lock.read().await;
         let (summaries, next_cursor) = self
             .list_threads_common(
                 requested_page_size,
@@ -4084,6 +4097,7 @@ impl CodexMessageProcessor {
             return;
         }
 
+        let _thread_list_state_guard = self.thread_list_state_lock.write().await;
         match self.resume_running_thread(&request_id, &params).await {
             Ok(true) => return,
             Ok(false) => {}
@@ -7178,6 +7192,7 @@ impl CodexMessageProcessor {
                 pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
                 analytics_events_client: self.analytics_events_client.clone(),
                 thread_watch_manager: self.thread_watch_manager.clone(),
+                thread_list_state_lock: self.thread_list_state_lock.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
             },
@@ -7295,6 +7310,7 @@ impl CodexMessageProcessor {
                 pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
                 analytics_events_client: self.analytics_events_client.clone(),
                 thread_watch_manager: self.thread_watch_manager.clone(),
+                thread_list_state_lock: self.thread_list_state_lock.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
             },
@@ -7343,6 +7359,7 @@ impl CodexMessageProcessor {
             pending_thread_unloads,
             analytics_events_client: _,
             thread_watch_manager,
+            thread_list_state_lock,
             fallback_model_provider,
             codex_home,
         } = listener_task_context;
@@ -7421,6 +7438,7 @@ impl CodexMessageProcessor {
                             thread_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
+                            thread_list_state_lock.clone(),
                             api_version,
                             fallback_model_provider.clone(),
                             codex_home.as_path(),
