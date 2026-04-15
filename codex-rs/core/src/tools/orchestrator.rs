@@ -46,6 +46,11 @@ pub(crate) struct OrchestratorRunResult<Out> {
     pub deferred_network_approval: Option<DeferredNetworkApproval>,
 }
 
+struct ApprovalResult<Rq> {
+    decision: ReviewDecision,
+    updated_req: Option<Rq>,
+}
+
 struct ApprovalTelemetry<'a> {
     otel: &'a SessionTelemetry,
     tool_name: &'a str,
@@ -124,6 +129,7 @@ impl ToolOrchestrator {
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
         let use_guardian = routes_approval_to_guardian(turn_ctx);
+        let mut effective_req = None;
 
         // 1) Approval
         let mut already_approved = false;
@@ -153,9 +159,9 @@ impl ToolOrchestrator {
                     retry_reason: reason,
                     network_approval_context: None,
                 };
-                let decision = Self::request_approval(
+                let approval = Self::request_approval(
                     tool,
-                    req,
+                    effective_req.as_ref().unwrap_or(req),
                     tool_ctx.call_id.as_str(),
                     approval_ctx,
                     turn_ctx,
@@ -166,10 +172,11 @@ impl ToolOrchestrator {
                     },
                 )
                 .await?;
+                effective_req = approval.updated_req.or(effective_req);
                 Self::enforce_approval_decision(
                     tool_ctx.session.as_ref(),
                     guardian_review_id.as_deref(),
-                    decision,
+                    approval.decision,
                 )
                 .await?;
                 already_approved = true;
@@ -183,16 +190,17 @@ impl ToolOrchestrator {
             .requirements_toml()
             .network
             .is_some();
-        let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
-            SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
-            SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.file_system_sandbox_policy,
-                turn_ctx.network_sandbox_policy,
-                tool.sandbox_preference(),
-                turn_ctx.windows_sandbox_level,
-                has_managed_network_requirements,
-            ),
-        };
+        let initial_sandbox =
+            match tool.sandbox_mode_for_first_attempt(effective_req.as_ref().unwrap_or(req)) {
+                SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
+                SandboxOverride::NoOverride => self.sandbox.select_initial(
+                    &turn_ctx.file_system_sandbox_policy,
+                    turn_ctx.network_sandbox_policy,
+                    tool.sandbox_preference(),
+                    turn_ctx.windows_sandbox_level,
+                    has_managed_network_requirements,
+                ),
+            };
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
@@ -215,7 +223,7 @@ impl ToolOrchestrator {
 
         let (first_result, first_deferred_network_approval) = Self::run_attempt(
             tool,
-            req,
+            effective_req.as_ref().unwrap_or(req),
             tool_ctx,
             &initial_attempt,
             has_managed_network_requirements,
@@ -298,9 +306,9 @@ impl ToolOrchestrator {
                         network_approval_context: network_approval_context.clone(),
                     };
 
-                    let decision = Self::request_approval(
+                    let approval = Self::request_approval(
                         tool,
-                        req,
+                        effective_req.as_ref().unwrap_or(req),
                         &format!("{}:retry", tool_ctx.call_id),
                         approval_ctx,
                         turn_ctx,
@@ -311,14 +319,16 @@ impl ToolOrchestrator {
                         },
                     )
                     .await?;
+                    effective_req = approval.updated_req.or(effective_req);
                     Self::enforce_approval_decision(
                         tool_ctx.session.as_ref(),
                         guardian_review_id.as_deref(),
-                        decision,
+                        approval.decision,
                     )
                     .await?;
                 }
 
+                let req = effective_req.as_ref().unwrap_or(req);
                 let escalated_attempt = SandboxAttempt {
                     sandbox: SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
@@ -364,7 +374,7 @@ impl ToolOrchestrator {
         approval_ctx: ApprovalCtx<'_>,
         turn_ctx: &crate::codex::TurnContext,
         telemetry: ApprovalTelemetry<'_>,
-    ) -> Result<ReviewDecision, ToolError>
+    ) -> Result<ApprovalResult<Rq>, ToolError>
     where
         T: ToolRuntime<Rq, Out>,
     {
@@ -377,14 +387,32 @@ impl ToolOrchestrator {
             )
             .await
             {
-                Some(PermissionRequestDecision::Allow { .. }) => {
+                Some(PermissionRequestDecision::Allow { updated_input, .. }) => {
+                    let updated_req = updated_input
+                        .as_ref()
+                        .map(|updated_input| {
+                            tool.updated_request_from_permission_request(
+                                req,
+                                updated_input,
+                                &approval_ctx,
+                            )
+                        })
+                        .transpose()
+                        .map_err(|err| {
+                            ToolError::Rejected(format!(
+                                "PermissionRequest hook returned invalid updatedInput: {err}"
+                            ))
+                        })?;
                     telemetry.otel.tool_decision(
                         telemetry.tool_name,
                         telemetry.call_id,
                         &ReviewDecision::Approved,
                         ToolDecisionSource::Config,
                     );
-                    return Ok(ReviewDecision::Approved);
+                    return Ok(ApprovalResult {
+                        decision: ReviewDecision::Approved,
+                        updated_req,
+                    });
                 }
                 Some(PermissionRequestDecision::Deny { message }) => {
                     telemetry.otel.tool_decision(
@@ -411,7 +439,10 @@ impl ToolOrchestrator {
             &decision,
             otel_source,
         );
-        Ok(decision)
+        Ok(ApprovalResult {
+            decision,
+            updated_req: None,
+        })
     }
 
     // Normalizes approval outcomes from hooks, guardian, and user prompts into

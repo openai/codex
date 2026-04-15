@@ -33,6 +33,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::approval_permission_suggestions;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
+use codex_hooks::PermissionRequestToolInput;
 use codex_hooks::PermissionUpdateDestination;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -42,11 +43,13 @@ use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
+use shlex::split as shlex_split;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct ShellRequest {
     pub command: Vec<String>,
+    pub command_input_kind: ShellRequestCommandInputKind,
     pub hook_command: String,
     pub cwd: AbsolutePathBuf,
     pub timeout_ms: Option<u64>,
@@ -59,6 +62,12 @@ pub struct ShellRequest {
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+}
+
+#[derive(Clone, Debug)]
+pub enum ShellRequestCommandInputKind {
+    Argv,
+    ShellString { use_login_shell: bool },
 }
 
 /// Selects `ShellRuntime` behavior for different callers.
@@ -221,8 +230,41 @@ impl Approvable<ShellRequest> for ShellRuntime {
         })
     }
 
+    fn updated_request_from_permission_request(
+        &self,
+        req: &ShellRequest,
+        updated_input: &PermissionRequestToolInput,
+        approval_ctx: &ApprovalCtx<'_>,
+    ) -> Result<ShellRequest, String> {
+        let mut updated_req = req.clone();
+        updated_req.command = match req.command_input_kind {
+            ShellRequestCommandInputKind::Argv => parse_command_argv(&updated_input.command)?,
+            ShellRequestCommandInputKind::ShellString { use_login_shell } => approval_ctx
+                .session
+                .user_shell()
+                .derive_exec_args(&updated_input.command, use_login_shell),
+        };
+        updated_req.hook_command = updated_input.command.clone();
+        updated_req.justification = updated_input.description.clone();
+        Ok(updated_req)
+    }
+
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {
         sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
+    }
+}
+
+fn parse_command_argv(command: &str) -> Result<Vec<String>, String> {
+    let parsed = shlex_split(command).unwrap_or_else(|| {
+        command
+            .split_whitespace()
+            .map(ToString::to_string)
+            .collect()
+    });
+    if parsed.is_empty() {
+        Err("command cannot be empty".to_string())
+    } else {
+        Ok(parsed)
     }
 }
 

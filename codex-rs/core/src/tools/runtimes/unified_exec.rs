@@ -11,7 +11,9 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
+use crate::shell::Shell;
 use crate::shell::ShellType;
+use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -34,6 +36,7 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_hooks::PermissionRequestToolInput;
 use codex_hooks::PermissionUpdateDestination;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
@@ -46,6 +49,8 @@ use codex_tools::UnifiedExecShellMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Request payload used by the unified-exec runtime after approvals and
 /// sandbox preferences have been resolved for the current turn.
@@ -53,6 +58,8 @@ use std::collections::HashMap;
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub hook_command: String,
+    pub shell: Option<String>,
+    pub use_login_shell: bool,
     pub process_id: i32,
     pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
@@ -201,6 +208,25 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         })
     }
 
+    fn updated_request_from_permission_request(
+        &self,
+        req: &UnifiedExecRequest,
+        updated_input: &PermissionRequestToolInput,
+        approval_ctx: &ApprovalCtx<'_>,
+    ) -> Result<UnifiedExecRequest, String> {
+        let mut updated_req = req.clone();
+        updated_req.command = build_command(
+            &updated_input.command,
+            req.shell.as_deref(),
+            req.use_login_shell,
+            approval_ctx.session.user_shell(),
+            &self.shell_mode,
+        );
+        updated_req.hook_command = updated_input.command.clone();
+        updated_req.justification = updated_input.description.clone();
+        Ok(updated_req)
+    }
+
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
         sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
     }
@@ -345,5 +371,30 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
                 other => ToolError::Rejected(other.to_string()),
             })
+    }
+}
+
+fn build_command(
+    cmd: &str,
+    shell: Option<&str>,
+    use_login_shell: bool,
+    session_shell: Arc<Shell>,
+    shell_mode: &UnifiedExecShellMode,
+) -> Vec<String> {
+    match shell_mode {
+        UnifiedExecShellMode::Direct => {
+            let model_shell = shell.map(|shell_str| {
+                let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
+                shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
+                shell
+            });
+            let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+            shell.derive_exec_args(cmd, use_login_shell)
+        }
+        UnifiedExecShellMode::ZshFork(zsh_fork_config) => vec![
+            zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
+            if use_login_shell { "-lc" } else { "-c" }.to_string(),
+            cmd.to_string(),
+        ],
     }
 }

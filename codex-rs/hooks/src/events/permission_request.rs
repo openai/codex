@@ -1,9 +1,9 @@
 //! Permission-request hook execution.
 //!
 //! This event runs in the approval path, before guardian or user approval UI is
-//! shown. Unlike `pre_tool_use`, handlers do not rewrite tool input or block by
-//! stopping execution outright; instead they can return a concrete allow/deny
-//! decision, or decline to decide and let the normal approval flow continue.
+//! shown. Handlers can return a concrete allow/deny decision, optionally
+//! rewriting the hook-visible tool input for allow decisions, or decline to
+//! decide and let the normal approval flow continue.
 //!
 //! The event also mirrors the rest of the hook system's lifecycle:
 //!
@@ -23,7 +23,6 @@ use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::PermissionRequestCommandInput;
-use crate::schema::PermissionRequestToolInput;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
@@ -88,10 +87,20 @@ pub struct PermissionRequestRequest {
     pub permission_suggestions: Vec<PermissionUpdate>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct PermissionRequestToolInput {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionRequestDecision {
     Allow {
         updated_permissions: Vec<PermissionUpdate>,
+        updated_input: Option<PermissionRequestToolInput>,
     },
     Deny {
         message: String,
@@ -212,16 +221,21 @@ fn resolve_permission_request_decision<'a>(
 ) -> Option<PermissionRequestDecision> {
     let mut saw_allow = false;
     let mut updated_permissions = Vec::new();
+    let mut updated_input = None;
     for decision in decisions {
         match decision {
             PermissionRequestDecision::Allow {
                 updated_permissions: selected_permissions,
+                updated_input: selected_input,
             } => {
                 saw_allow = true;
                 for permission in selected_permissions {
                     if !updated_permissions.contains(permission) {
                         updated_permissions.push(permission.clone());
                     }
+                }
+                if let Some(selected_input) = selected_input {
+                    updated_input = Some(selected_input.clone());
                 }
             }
             PermissionRequestDecision::Deny { message } => {
@@ -233,6 +247,7 @@ fn resolve_permission_request_decision<'a>(
     }
     saw_allow.then_some(PermissionRequestDecision::Allow {
         updated_permissions,
+        updated_input,
     })
 }
 
@@ -242,6 +257,7 @@ fn invalid_permission_updates(
 ) -> Option<String> {
     let PermissionRequestDecision::Allow {
         updated_permissions,
+        updated_input: _,
     } = decision?
     else {
         return None;
@@ -315,9 +331,11 @@ fn parse_completed(
                         match parsed_decision {
                             output_parser::PermissionRequestDecision::Allow {
                                 updated_permissions,
+                                updated_input,
                             } => {
                                 decision = Some(PermissionRequestDecision::Allow {
                                     updated_permissions,
+                                    updated_input,
                                 });
                             }
                             output_parser::PermissionRequestDecision::Deny { message } => {
@@ -387,6 +405,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::PermissionRequestDecision;
+    use super::PermissionRequestToolInput;
     use super::PermissionUpdate;
     use super::PermissionUpdateBehavior;
     use super::PermissionUpdateDestination;
@@ -399,6 +418,7 @@ mod tests {
         let decisions = [
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![],
+                updated_input: None,
             },
             PermissionRequestDecision::Deny {
                 message: "repo deny".to_string(),
@@ -418,9 +438,11 @@ mod tests {
         let decisions = [
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![],
+                updated_input: None,
             },
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![],
+                updated_input: None,
             },
         ];
 
@@ -428,6 +450,7 @@ mod tests {
             resolve_permission_request_decision(decisions.iter()),
             Some(PermissionRequestDecision::Allow {
                 updated_permissions: vec![],
+                updated_input: None,
             })
         );
     }
@@ -451,9 +474,11 @@ mod tests {
         let decisions = [
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![permission.clone()],
+                updated_input: None,
             },
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![permission.clone()],
+                updated_input: None,
             },
         ];
 
@@ -461,6 +486,7 @@ mod tests {
             resolve_permission_request_decision(decisions.iter()),
             Some(PermissionRequestDecision::Allow {
                 updated_permissions: vec![permission],
+                updated_input: None,
             })
         );
     }
@@ -474,9 +500,11 @@ mod tests {
         let decisions = [
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![directory_update.clone()],
+                updated_input: None,
             },
             PermissionRequestDecision::Allow {
                 updated_permissions: vec![directory_update.clone()],
+                updated_input: None,
             },
         ];
 
@@ -484,6 +512,38 @@ mod tests {
             resolve_permission_request_decision(decisions.iter()),
             Some(PermissionRequestDecision::Allow {
                 updated_permissions: vec![directory_update],
+                updated_input: None,
+            })
+        );
+    }
+
+    #[test]
+    fn permission_request_uses_last_updated_input_from_allows() {
+        let decisions = [
+            PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+                updated_input: Some(PermissionRequestToolInput {
+                    command: "echo first".to_string(),
+                    description: Some("first".to_string()),
+                }),
+            },
+            PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+                updated_input: Some(PermissionRequestToolInput {
+                    command: "echo second".to_string(),
+                    description: Some("second".to_string()),
+                }),
+            },
+        ];
+
+        assert_eq!(
+            resolve_permission_request_decision(decisions.iter()),
+            Some(PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+                updated_input: Some(PermissionRequestToolInput {
+                    command: "echo second".to_string(),
+                    description: Some("second".to_string()),
+                }),
             })
         );
     }
@@ -505,6 +565,7 @@ mod tests {
                 behavior: PermissionUpdateBehavior::Allow,
                 destination: PermissionUpdateDestination::UserSettings,
             }],
+            updated_input: None,
         };
 
         assert_eq!(

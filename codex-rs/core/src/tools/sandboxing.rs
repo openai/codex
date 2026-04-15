@@ -10,6 +10,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use codex_hooks::PermissionRequestToolInput;
 use codex_hooks::PermissionUpdate;
 use codex_hooks::PermissionUpdateBehavior;
 use codex_hooks::PermissionUpdateDestination;
@@ -339,6 +340,15 @@ pub(crate) trait Approvable<Req> {
         _approval_ctx: &ApprovalCtx<'_>,
     ) -> Option<PermissionRequestPayload> {
         None
+    }
+
+    fn updated_request_from_permission_request(
+        &self,
+        _req: &Req,
+        _updated_input: &PermissionRequestToolInput,
+        _approval_ctx: &ApprovalCtx<'_>,
+    ) -> Result<Req, String> {
+        Err("PermissionRequest hook returned unsupported updatedInput".to_string())
     }
 
     /// Decide we can request an approval for no-sandbox execution.

@@ -31,6 +31,7 @@ use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
+use crate::tools::runtimes::shell::ShellRequestCommandInputKind;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
 use crate::tools::sandboxing::ToolCtx;
@@ -79,6 +80,7 @@ struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
     hook_command: String,
+    command_input_kind: ShellRequestCommandInputKind,
     additional_permissions: Option<PermissionProfile>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::codex::Session>,
@@ -244,6 +246,7 @@ impl ToolHandler for ShellHandler {
                     tool_name: tool_name.display(),
                     exec_params,
                     hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
+                    command_input_kind: ShellRequestCommandInputKind::Argv,
                     additional_permissions: params.additional_permissions.clone(),
                     prefix_rule,
                     session,
@@ -262,6 +265,7 @@ impl ToolHandler for ShellHandler {
                     tool_name: tool_name.display(),
                     exec_params,
                     hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
+                    command_input_kind: ShellRequestCommandInputKind::Argv,
                     additional_permissions: None,
                     prefix_rule: None,
                     session,
@@ -351,6 +355,8 @@ impl ToolHandler for ShellCommandHandler {
 
         let cwd = resolve_workdir_base_path(&arguments, &turn.cwd)?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
+        let use_login_shell =
+            Self::resolve_use_login_shell(params.login, turn.tools_config.allow_login_shell)?;
         let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
@@ -371,6 +377,7 @@ impl ToolHandler for ShellCommandHandler {
             tool_name: tool_name.display(),
             exec_params,
             hook_command: params.command,
+            command_input_kind: ShellRequestCommandInputKind::ShellString { use_login_shell },
             additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,
@@ -390,6 +397,7 @@ impl ShellHandler {
             tool_name,
             exec_params,
             hook_command,
+            command_input_kind,
             additional_permissions,
             prefix_rule,
             session,
@@ -530,6 +538,7 @@ impl ShellHandler {
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
+            command_input_kind,
             hook_command,
             cwd: exec_params.cwd.clone(),
             timeout_ms: exec_params.expiration.timeout_ms(),

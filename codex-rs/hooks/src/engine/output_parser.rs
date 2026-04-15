@@ -23,6 +23,7 @@ pub(crate) struct PreToolUseOutput {
 pub(crate) enum PermissionRequestDecision {
     Allow {
         updated_permissions: Vec<crate::events::permission_request::PermissionUpdate>,
+        updated_input: Option<PermissionRequestToolInput>,
     },
     Deny {
         message: String,
@@ -63,6 +64,7 @@ pub(crate) struct StopOutput {
     pub invalid_block_reason: Option<String>,
 }
 
+use crate::events::permission_request::PermissionRequestToolInput;
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::PermissionRequestBehaviorWire;
@@ -302,8 +304,10 @@ fn unsupported_permission_request_hook_specific_output(
     decision: Option<&PermissionRequestDecisionWire>,
 ) -> Option<String> {
     let decision = decision?;
-    if decision.updated_input.is_some() {
-        Some("PermissionRequest hook returned unsupported updatedInput".to_string())
+    if matches!(decision.behavior, PermissionRequestBehaviorWire::Deny)
+        && decision.updated_input.is_some()
+    {
+        Some("PermissionRequest hook returned updatedInput for deny decision".to_string())
     } else if matches!(decision.behavior, PermissionRequestBehaviorWire::Deny)
         && decision.updated_permissions.is_some()
     {
@@ -321,6 +325,7 @@ fn permission_request_decision(
     match decision.behavior {
         PermissionRequestBehaviorWire::Allow => PermissionRequestDecision::Allow {
             updated_permissions: decision.updated_permissions.clone().unwrap_or_default(),
+            updated_input: decision.updated_input.clone(),
         },
         PermissionRequestBehaviorWire::Deny => PermissionRequestDecision::Deny {
             message: decision
@@ -431,9 +436,10 @@ mod tests {
 
     use super::PermissionRequestDecision;
     use super::parse_permission_request;
+    use crate::events::permission_request::PermissionRequestToolInput;
 
     #[test]
-    fn permission_request_rejects_reserved_updated_input_field() {
+    fn permission_request_accepts_updated_input_for_allow_decision() {
         let parsed = parse_permission_request(
             &json!({
                 "continue": true,
@@ -441,7 +447,9 @@ mod tests {
                     "hookEventName": "PermissionRequest",
                     "decision": {
                         "behavior": "allow",
-                        "updatedInput": {}
+                        "updatedInput": {
+                            "command": "echo hi"
+                        }
                     }
                 }
             })
@@ -450,8 +458,14 @@ mod tests {
         .expect("permission request hook output should parse");
 
         assert_eq!(
-            parsed.invalid_reason,
-            Some("PermissionRequest hook returned unsupported updatedInput".to_string())
+            parsed.decision,
+            Some(PermissionRequestDecision::Allow {
+                updated_permissions: vec![],
+                updated_input: Some(PermissionRequestToolInput {
+                    command: "echo hi".to_string(),
+                    description: None,
+                }),
+            })
         );
     }
 
@@ -493,6 +507,7 @@ mod tests {
                         crate::events::permission_request::PermissionUpdateBehavior::Allow,
                     destination: crate::events::permission_request::PermissionUpdateDestination::UserSettings,
                 }],
+                updated_input: None,
             })
         );
     }
@@ -528,7 +543,33 @@ mod tests {
                             crate::events::permission_request::PermissionUpdateDestination::Session,
                     },
                 ],
+                updated_input: None,
             })
+        );
+    }
+
+    #[test]
+    fn permission_request_rejects_updated_input_for_deny_decision() {
+        let parsed = parse_permission_request(
+            &json!({
+                "continue": true,
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "deny",
+                        "updatedInput": {
+                            "command": "echo nope"
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("permission request hook output should parse");
+
+        assert_eq!(
+            parsed.invalid_reason,
+            Some("PermissionRequest hook returned updatedInput for deny decision".to_string())
         );
     }
 

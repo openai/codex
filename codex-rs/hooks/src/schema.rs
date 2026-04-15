@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::events::permission_request::PermissionRequestToolInput;
 use crate::events::permission_request::PermissionUpdate;
 
 const GENERATED_DIR: &str = "generated";
@@ -140,11 +141,8 @@ pub(crate) struct PermissionRequestHookSpecificOutputWire {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PermissionRequestDecisionWire {
     pub behavior: PermissionRequestBehaviorWire,
-    /// Reserved for a future input-rewrite capability.
-    ///
-    /// PermissionRequest hooks currently fail closed if this field is present.
     #[serde(default)]
-    pub updated_input: Option<Value>,
+    pub updated_input: Option<PermissionRequestToolInput>,
     #[serde(default)]
     pub updated_permissions: Option<Vec<PermissionUpdate>>,
     #[serde(default)]
@@ -234,15 +232,6 @@ pub(crate) struct PreToolUseCommandInput {
     pub tool_name: String,
     pub tool_input: PreToolUseToolInput,
     pub tool_use_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PermissionRequestToolInput {
-    pub command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
