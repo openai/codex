@@ -1,5 +1,6 @@
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
 use crate::facts::SubAgentThreadStartedInput;
@@ -15,8 +16,11 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,6 +43,7 @@ pub(crate) enum TrackEventRequest {
     GuardianReview(Box<GuardianReviewEventRequest>),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    HookRun(CodexHookRunEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
@@ -300,6 +305,41 @@ pub(crate) struct CodexAppUsedEventRequest {
     pub(crate) event_params: CodexAppMetadata,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CodexHookSource {
+    System,
+    User,
+    Project,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CodexHookStatus {
+    Success,
+    Error,
+    Blocked,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexHookRunMetadata {
+    pub(crate) thread_id: Option<String>,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) model_slug: Option<String>,
+    pub(crate) hook_name: Option<HookEventName>,
+    pub(crate) hook_source: Option<CodexHookSource>,
+    pub(crate) status: Option<CodexHookStatus>,
+    pub(crate) source_path: Option<String>,
+    pub(crate) duration_ms: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexHookRunEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexHookRunMetadata,
+}
+
 #[derive(Serialize)]
 pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_id: String,
@@ -529,6 +569,25 @@ pub(crate) fn codex_plugin_used_metadata(
     }
 }
 
+pub(crate) fn codex_hook_run_metadata(
+    tracking: &TrackEventsContext,
+    hook: HookRunFact,
+) -> CodexHookRunMetadata {
+    CodexHookRunMetadata {
+        thread_id: Some(tracking.thread_id.clone()),
+        turn_id: Some(tracking.turn_id.clone()),
+        model_slug: Some(tracking.model_slug.clone()),
+        hook_name: Some(hook.event_name),
+        hook_source: Some(hook_source_for_path(
+            hook.source_path.as_path(),
+            hook.cwd.as_path(),
+        )),
+        status: Some(hook_status(hook.status)),
+        source_path: Some(hook.source_path.display().to_string()),
+        duration_ms: hook.duration_ms,
+    }
+}
+
 pub(crate) fn current_runtime_metadata() -> CodexRuntimeMetadata {
     let os_info = os_info::get();
     CodexRuntimeMetadata {
@@ -584,5 +643,38 @@ pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Opt
             parent_thread_id, ..
         } => Some(parent_thread_id.to_string()),
         _ => None,
+    }
+}
+
+fn hook_source_for_path(source_path: &Path, cwd: &Path) -> CodexHookSource {
+    if source_path.starts_with("/etc/codex") {
+        return CodexHookSource::System;
+    }
+
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    if let Some(home) = home
+        && source_path.starts_with(home.join(".codex"))
+    {
+        return CodexHookSource::User;
+    }
+
+    if source_path.ends_with(".codex/hooks.json")
+        && cwd
+            .ancestors()
+            .any(|ancestor| source_path.starts_with(ancestor.join(".codex")))
+    {
+        return CodexHookSource::Project;
+    }
+
+    CodexHookSource::Unknown
+}
+
+fn hook_status(status: HookRunStatus) -> CodexHookStatus {
+    match status {
+        HookRunStatus::Completed => CodexHookStatus::Success,
+        HookRunStatus::Blocked => CodexHookStatus::Blocked,
+        HookRunStatus::Running | HookRunStatus::Failed | HookRunStatus::Stopped => {
+            CodexHookStatus::Error
+        }
     }
 }
