@@ -105,8 +105,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     let mut builder = ToolRegistryBuilder::new();
     let McpToolExposure {
-        direct_tools: mcp_tools,
-        deferred_tools: deferred_mcp_tools,
+        mcp_tools,
+        deferred_mcp_tools,
     } = mcp_tool_exposure;
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {

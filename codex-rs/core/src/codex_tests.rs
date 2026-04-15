@@ -871,16 +871,16 @@ fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
         &tools_config,
     );
 
-    let direct_tools = exposure
-        .direct_tools
+    let exposed_mcp_tools = exposure
+        .mcp_tools
         .as_ref()
         .expect("small tool sets should be exposed directly");
-    let mut direct_tool_names: Vec<_> = direct_tools.keys().cloned().collect();
-    direct_tool_names.sort();
+    let mut exposed_mcp_tool_names: Vec<_> = exposed_mcp_tools.keys().cloned().collect();
+    exposed_mcp_tool_names.sort();
     let mut expected_tool_names: Vec<_> = mcp_tools.keys().cloned().collect();
     expected_tool_names.sort();
-    assert_eq!(direct_tool_names, expected_tool_names);
-    assert!(exposure.deferred_tools.is_none());
+    assert_eq!(exposed_mcp_tool_names, expected_tool_names);
+    assert!(exposure.deferred_mcp_tools.is_none());
 }
 
 #[test]
@@ -900,20 +900,20 @@ fn mcp_tool_exposure_searches_large_effective_tool_sets() {
 
     assert!(
         exposure
-            .direct_tools
+            .mcp_tools
             .as_ref()
             .expect("MCP servers should expose a direct tool set")
             .is_empty()
     );
-    let deferred_tools = exposure
-        .deferred_tools
+    let deferred_mcp_tools = exposure
+        .deferred_mcp_tools
         .as_ref()
         .expect("large tool sets should be discoverable through tool_search");
-    let mut deferred_tool_names: Vec<_> = deferred_tools.keys().cloned().collect();
-    deferred_tool_names.sort();
+    let mut deferred_mcp_tool_names: Vec<_> = deferred_mcp_tools.keys().cloned().collect();
+    deferred_mcp_tool_names.sort();
     let mut expected_tool_names: Vec<_> = mcp_tools.keys().cloned().collect();
     expected_tool_names.sort();
-    assert_eq!(deferred_tool_names, expected_tool_names);
+    assert_eq!(deferred_mcp_tool_names, expected_tool_names);
 }
 
 #[test]
@@ -942,7 +942,7 @@ fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
     );
 
     let mut tool_names: Vec<String> = exposure
-        .direct_tools
+        .mcp_tools
         .expect("explicit apps should be exposed directly")
         .into_keys()
         .collect();
@@ -952,15 +952,15 @@ fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
         vec!["mcp__codex_apps__calendar_create_event".to_string()]
     );
     assert_eq!(
-        exposure.deferred_tools.as_ref().map(HashMap::len),
+        exposure.deferred_mcp_tools.as_ref().map(HashMap::len),
         Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD)
     );
-    let deferred_tools = exposure
-        .deferred_tools
+    let deferred_mcp_tools = exposure
+        .deferred_mcp_tools
         .as_ref()
         .expect("large tool sets should be discoverable through tool_search");
-    assert!(deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
-    assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
+    assert!(deferred_mcp_tools.contains_key("mcp__codex_apps__calendar_create_event"));
+    assert!(deferred_mcp_tools.contains_key("mcp__rmcp__tool_0"));
 }
 
 #[tokio::test]
@@ -5326,8 +5326,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
             mcp_tool_exposure: McpToolExposure {
-                direct_tools: Some(tools),
-                deferred_tools: deferred_mcp_tools,
+                mcp_tools: Some(tools),
+                deferred_mcp_tools,
             },
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),

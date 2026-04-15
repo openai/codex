@@ -17,12 +17,12 @@ use super::ToolRouter;
 use super::ToolRouterParams;
 
 fn mcp_tool_exposure(
-    direct_tools: Option<HashMap<String, ToolInfo>>,
-    deferred_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tools: Option<HashMap<String, ToolInfo>>,
+    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
 ) -> McpToolExposure {
     McpToolExposure {
-        direct_tools,
-        deferred_tools,
+        mcp_tools,
+        deferred_mcp_tools,
     }
 }
 
@@ -144,7 +144,7 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
         &turn.tools_config,
         ToolRouterParams {
             mcp_tool_exposure: mcp_tool_exposure(
-                /*direct_tools*/ None, /*deferred_tools*/ None,
+                /*mcp_tools*/ None, /*deferred_mcp_tools*/ None,
             ),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
@@ -195,7 +195,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tool_exposure: mcp_tool_exposure(Some(mcp_tools), /*deferred_tools*/ None),
+            mcp_tool_exposure: mcp_tool_exposure(Some(mcp_tools), /*deferred_mcp_tools*/ None),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
@@ -268,7 +268,7 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
         &turn.tools_config,
         ToolRouterParams {
             mcp_tool_exposure: mcp_tool_exposure(
-                /*direct_tools*/ None, /*deferred_tools*/ None,
+                /*mcp_tools*/ None, /*deferred_mcp_tools*/ None,
             ),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::from(["echo".to_string()]),

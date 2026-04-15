@@ -7209,9 +7209,9 @@ pub(crate) async fn built_tools(
         &turn_context.tools_config,
     );
     let exposed_tool_names = mcp_tool_exposure
-        .direct_tools
+        .mcp_tools
         .iter()
-        .chain(mcp_tool_exposure.deferred_tools.iter())
+        .chain(mcp_tool_exposure.deferred_mcp_tools.iter())
         .flat_map(|tools| tools.keys().map(String::as_str))
         .collect::<HashSet<_>>();
     let unavailable_called_tools = collect_unavailable_called_tools(input, &exposed_tool_names);

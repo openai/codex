@@ -13,8 +13,8 @@ pub(crate) const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct McpToolExposure {
-    pub(crate) direct_tools: Option<HashMap<String, McpToolInfo>>,
-    pub(crate) deferred_tools: Option<HashMap<String, McpToolInfo>>,
+    pub(crate) mcp_tools: Option<HashMap<String, McpToolInfo>>,
+    pub(crate) deferred_mcp_tools: Option<HashMap<String, McpToolInfo>>,
 }
 
 pub(crate) fn build_mcp_tool_exposure(
@@ -25,27 +25,27 @@ pub(crate) fn build_mcp_tool_exposure(
     config: &Config,
     tools_config: &ToolsConfig,
 ) -> McpToolExposure {
-    let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
+    let mut deferred_mcp_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
     if let Some(connectors) = connectors {
-        deferred_tools.extend(filter_codex_apps_mcp_tools(
+        deferred_mcp_tools.extend(filter_codex_apps_mcp_tools(
             all_mcp_tools,
             connectors,
             config,
         ));
     }
 
-    if !tools_config.search_tool || deferred_tools.len() < DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD {
+    if !tools_config.search_tool || deferred_mcp_tools.len() < DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD {
         return McpToolExposure {
-            direct_tools: has_mcp_servers.then_some(deferred_tools),
-            deferred_tools: None,
+            mcp_tools: has_mcp_servers.then_some(deferred_mcp_tools),
+            deferred_mcp_tools: None,
         };
     }
 
-    let direct_tools =
+    let mcp_tools =
         filter_codex_apps_mcp_tools(all_mcp_tools, explicitly_enabled_connectors, config);
     McpToolExposure {
-        direct_tools: has_mcp_servers.then_some(direct_tools),
-        deferred_tools: Some(deferred_tools),
+        mcp_tools: has_mcp_servers.then_some(mcp_tools),
+        deferred_mcp_tools: Some(deferred_mcp_tools),
     }
 }
 

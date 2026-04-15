@@ -248,8 +248,8 @@ fn build_specs_with_unavailable_tools(
     build_specs_with_discoverable_tools(
         config,
         McpToolExposure {
-            direct_tools: mcp_tools,
-            deferred_tools: deferred_mcp_tools,
+            mcp_tools,
+            deferred_mcp_tools,
         },
         unavailable_called_tools,
         /*discoverable_tools*/ None,
