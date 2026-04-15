@@ -79,6 +79,10 @@ impl CodexThread {
         self.codex.shutdown_and_wait().await
     }
 
+    pub async fn cwd(&self) -> AbsolutePathBuf {
+        self.codex.session.cwd().await
+    }
+
     #[doc(hidden)]
     pub async fn ensure_rollout_materialized(&self) {
         self.codex.session.ensure_rollout_materialized().await;
