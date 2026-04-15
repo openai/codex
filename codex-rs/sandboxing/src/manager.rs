@@ -9,12 +9,6 @@ use crate::policy_transforms::EffectiveSandboxPermissions;
 use crate::policy_transforms::effective_file_system_sandbox_policy;
 use crate::policy_transforms::effective_network_sandbox_policy;
 use crate::policy_transforms::should_require_platform_sandbox;
-#[cfg(target_os = "macos")]
-use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
-#[cfg(target_os = "macos")]
-use crate::seatbelt::SeatbeltCommandArgs;
-#[cfg(target_os = "macos")]
-use crate::seatbelt::create_seatbelt_command_args;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -210,6 +204,10 @@ impl SandboxManager {
             SandboxType::None => (os_argv_to_strings(argv), None),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
+                use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+                use crate::seatbelt::SeatbeltCommandArgs;
+                use crate::seatbelt::create_seatbelt_command_args;
+
                 let mut args = create_seatbelt_command_args(SeatbeltCommandArgs {
                     command: os_argv_to_strings(argv),
                     file_system_sandbox_policy: &effective_file_system_policy,

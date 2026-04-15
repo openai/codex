@@ -41,7 +41,7 @@ pub struct SeatbeltCommand {
 
 fn parse_allow_unix_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
     AbsolutePathBuf::relative_to_current_dir(raw)
-        .map_err(|err| format!("invalid path {raw:?}: {err}"))
+        .map_err(|err| format!("invalid path {raw}: {err}"))
 }
 
 #[derive(Debug, Parser)]
