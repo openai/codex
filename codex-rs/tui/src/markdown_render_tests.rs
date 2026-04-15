@@ -4,6 +4,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
 use std::path::Path;
+use unicode_width::UnicodeWidthStr;
 
 use crate::markdown_render::COLON_LOCATION_SUFFIX_RE;
 use crate::markdown_render::HASH_LOCATION_SUFFIX_RE;
@@ -1446,6 +1447,52 @@ fn table_with_emoji_cells_renders_boxed_table() {
     assert!(
         !lines.iter().any(|line| line.starts_with("|:---")),
         "did not expect pipe-delimiter fallback for emoji content: {lines:?}"
+    );
+}
+
+#[test]
+fn table_with_emoji_sequence_cells_has_consistent_display_width() {
+    let md = "| Left aligned | Center aligned | Right aligned |\n\
+              |:-------------|:--------------:|--------------:|\n\
+              | alpha | 🅰️ | 10 |\n\
+              | **beta** | 🅱️ | 200 |\n\
+              | _gamma_ | 🔤 | 3,000 |\n\
+              | `delta()` | 🔢 | 40,000 |\n\
+              | epsilon ([link](https://example.com/epsilon)) | 🔗 | 500,000 |\n\
+              | zeta | ↔️ | 6,000,000 |\n\
+              | eta | 1️⃣ | 70,000,000 |\n\
+              | theta | 👩‍💻 | 800,000,000 |\n";
+    let text = crate::markdown_render::render_markdown_text_with_width(md, Some(120));
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.clone()).collect())
+        .collect();
+    let table_lines: Vec<&str> = lines
+        .iter()
+        .filter(|line| {
+            line.contains(|ch| {
+                matches!(
+                    ch,
+                    '┌' | '┬' | '┐' | '├' | '┼' | '┤' | '└' | '┴' | '┘' | '│'
+                )
+            })
+        })
+        .map(String::as_str)
+        .collect();
+    let expected_width = table_lines
+        .first()
+        .expect("expected unicode table to render as a box")
+        .width();
+
+    assert!(
+        table_lines.iter().all(|line| line.width() == expected_width),
+        "expected every rendered table row to have width {expected_width}: {table_lines:?}"
+    );
+    assert!(
+        table_lines.iter().any(|line| line.contains("🅰️"))
+            && table_lines.iter().any(|line| line.contains("👩‍💻")),
+        "expected emoji sequence stress cells inside table: {table_lines:?}"
     );
 }
 
