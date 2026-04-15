@@ -4944,6 +4944,8 @@ mod handlers {
     use crate::config_loader::load_config_layers_state;
     use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
     use crate::realtime_context::truncate_realtime_text_to_token_budget;
+    use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
+    use crate::realtime_conversation::prefix_realtime_v2_text;
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -5164,6 +5166,11 @@ mod handlers {
         if text.is_empty() {
             return;
         }
+        let text = if sess.conversation.is_running_v2().await {
+            prefix_realtime_v2_text(text, REALTIME_USER_TEXT_PREFIX)
+        } else {
+            text
+        };
         let text = truncate_realtime_text_to_token_budget(&text, REALTIME_TURN_TOKEN_BUDGET);
         if text.is_empty() {
             return;
