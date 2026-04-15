@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::io;
 use tempfile::TempDir;
 
 fn fixture_paths() -> (TempDir, PathBuf, PathBuf) {
@@ -11,6 +12,15 @@ fn fixture_paths() -> (TempDir, PathBuf, PathBuf) {
 
 fn service_for_paths(claude_home: PathBuf, codex_home: PathBuf) -> ExternalAgentConfigService {
     ExternalAgentConfigService::new_for_test(codex_home, claude_home)
+}
+
+fn github_plugin_details() -> MigrationDetails {
+    MigrationDetails {
+        plugins: vec![PluginsMigration {
+            marketplace_name: "acme-tools".to_string(),
+            plugin_names: vec!["formatter".to_string()],
+        }],
+    }
 }
 
 #[test]
@@ -44,6 +54,7 @@ fn detect_home_lists_config_skills_and_agents_md() {
                 codex_home.join("config.toml").display()
             ),
             cwd: None,
+            details: None,
         },
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Skills,
@@ -53,6 +64,7 @@ fn detect_home_lists_config_skills_and_agents_md() {
                 agents_skills.display()
             ),
             cwd: None,
+            details: None,
         },
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
@@ -62,6 +74,7 @@ fn detect_home_lists_config_skills_and_agents_md() {
                 codex_home.join("AGENTS.md").display()
             ),
             cwd: None,
+            details: None,
         },
     ];
 
@@ -93,6 +106,7 @@ fn detect_repo_lists_agents_md_for_each_cwd() {
                 repo_root.join("AGENTS.md").display(),
             ),
             cwd: Some(repo_root.clone()),
+            details: None,
         },
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
@@ -102,14 +116,15 @@ fn detect_repo_lists_agents_md_for_each_cwd() {
                 repo_root.join("AGENTS.md").display(),
             ),
             cwd: Some(repo_root),
+            details: None,
         },
     ];
 
     assert_eq!(items, expected);
 }
 
-#[test]
-fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
+#[tokio::test]
+async fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
     let (_root, claude_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
@@ -134,18 +149,22 @@ fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: String::new(),
                 cwd: None,
+                details: None,
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Config,
                 description: String::new(),
                 cwd: None,
+                details: None,
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: String::new(),
                 cwd: None,
+                details: None,
             },
         ])
+        .await
         .expect("import");
 
     assert_eq!(
@@ -164,8 +183,8 @@ fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
     );
 }
 
-#[test]
-fn import_home_skips_empty_config_migration() {
+#[tokio::test]
+async fn import_home_skips_empty_config_migration() {
     let (_root, claude_home, codex_home) = fixture_paths();
     fs::create_dir_all(&claude_home).expect("create claude home");
     fs::write(
@@ -179,7 +198,9 @@ fn import_home_skips_empty_config_migration() {
             item_type: ExternalAgentConfigMigrationItemType::Config,
             description: String::new(),
             cwd: None,
+            details: None,
         }])
+        .await
         .expect("import");
 
     assert!(!codex_home.join("config.toml").exists());
@@ -239,8 +260,8 @@ fn detect_home_skips_skills_when_all_skill_directories_exist() {
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
-#[test]
-fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
+#[tokio::test]
+async fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo-a");
     let repo_with_existing_target = root.path().join("repo-b");
@@ -264,13 +285,16 @@ fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: String::new(),
                 cwd: Some(repo_root.clone()),
+                details: None,
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: String::new(),
                 cwd: Some(repo_with_existing_target.clone()),
+                details: None,
             },
         ])
+        .await
         .expect("import");
 
     assert_eq!(
@@ -284,8 +308,8 @@ fn import_repo_agents_md_rewrites_terms_and_skips_non_empty_targets() {
     );
 }
 
-#[test]
-fn import_repo_agents_md_overwrites_empty_targets() {
+#[tokio::test]
+async fn import_repo_agents_md_overwrites_empty_targets() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).expect("create git");
@@ -297,7 +321,9 @@ fn import_repo_agents_md_overwrites_empty_targets() {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: String::new(),
             cwd: Some(repo_root.clone()),
+            details: None,
         }])
+        .await
         .expect("import");
 
     assert_eq!(
@@ -336,12 +362,13 @@ fn detect_repo_prefers_non_empty_dot_claude_agents_source() {
                 repo_root.join("AGENTS.md").display(),
             ),
             cwd: Some(repo_root),
+            details: None,
         }]
     );
 }
 
-#[test]
-fn import_repo_uses_non_empty_dot_claude_agents_source() {
+#[tokio::test]
+async fn import_repo_uses_non_empty_dot_claude_agents_source() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).expect("create git");
@@ -358,7 +385,9 @@ fn import_repo_uses_non_empty_dot_claude_agents_source() {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: String::new(),
             cwd: Some(repo_root.clone()),
+            details: None,
         }])
+        .await
         .expect("import");
 
     assert_eq!(
@@ -375,6 +404,141 @@ fn migration_metric_tags_for_skills_include_skills_count() {
             ("migration_type", "skills".to_string()),
             ("skills_count", "3".to_string()),
         ]
+    );
+}
+
+#[test]
+fn detect_home_lists_enabled_plugins_from_settings() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true,
+            "deployer@acme-tools": true,
+            "analyzer@security-plugins": false
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(claude_home.clone(), codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Import enabled plugins from {}",
+                claude_home.join("settings.json").display()
+            ),
+            cwd: None,
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["deployer".to_string(), "formatter".to_string()],
+                }],
+            }),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn import_plugins_requires_details() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+
+    let err = service_for_paths(claude_home, codex_home)
+        .import_plugins(/*cwd*/ None, /*details*/ None)
+        .await
+        .expect_err("expected missing details error");
+
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(err.to_string(), "plugins migration item is missing details");
+}
+
+#[tokio::test]
+async fn import_plugins_requires_source_marketplace_details() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "github",
+              "repo": "acme-corp/claude-plugins"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let outcome = service_for_paths(claude_home, codex_home)
+        .import_plugins(
+            /*cwd*/ None,
+            Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "other-tools".to_string(),
+                    plugin_names: github_plugin_details().plugins[0].plugin_names.clone(),
+                }],
+            }),
+        )
+        .await
+        .expect("import plugins");
+
+    assert_eq!(
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: Vec::new(),
+            succeeded_plugin_ids: Vec::new(),
+            failed_marketplaces: vec!["other-tools".to_string()],
+            failed_plugin_ids: vec!["formatter@other-tools".to_string()],
+        }
+    );
+}
+
+#[tokio::test]
+async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace() {
+    let (_root, claude_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&claude_home).expect("create claude home");
+    fs::write(
+        claude_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "local",
+              "path": "./external_plugins/acme-tools"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let outcome = service_for_paths(claude_home, codex_home)
+        .import_plugins(/*cwd*/ None, Some(github_plugin_details()))
+        .await
+        .expect("import plugins");
+
+    assert_eq!(
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: Vec::new(),
+            succeeded_plugin_ids: Vec::new(),
+            failed_marketplaces: vec!["acme-tools".to_string()],
+            failed_plugin_ids: vec!["formatter@acme-tools".to_string()],
+        }
     );
 }
 
