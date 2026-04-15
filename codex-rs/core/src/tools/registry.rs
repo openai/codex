@@ -8,8 +8,10 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
+use crate::rollout_trace::RolloutTraceRecorder;
 use crate::sandbox_tags::sandbox_tag;
 use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -22,6 +24,7 @@ use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_rollout_trace::ExecutionStatus;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -72,6 +75,16 @@ pub trait ToolHandler: Send + Sync {
         _result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         None
+    }
+
+    /// Returns `true` when this handler is represented by a trace object other
+    /// than `ToolCall`.
+    ///
+    /// Protocol events are runtime observations on the `ToolCall`; they do not
+    /// suppress the canonical tool boundary. The public code-mode `exec` tool is
+    /// the exception because `CodeCell` owns that model-visible boundary.
+    fn uses_first_class_trace_object(&self, _invocation: &ToolInvocation) -> bool {
+        false
     }
 
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
@@ -132,6 +145,8 @@ trait AnyToolHandler: Send + Sync {
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload>;
 
+    fn uses_first_class_trace_object(&self, invocation: &ToolInvocation) -> bool;
+
     fn handle_any<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -163,6 +178,10 @@ where
         ToolHandler::post_tool_use_payload(self, call_id, payload, result)
     }
 
+    fn uses_first_class_trace_object(&self, invocation: &ToolInvocation) -> bool {
+        ToolHandler::uses_first_class_trace_object(self, invocation)
+    }
+
     fn handle_any<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -182,6 +201,60 @@ where
 
 pub struct ToolRegistry {
     handlers: HashMap<ToolName, Arc<dyn AnyToolHandler>>,
+}
+
+/// No-op capable trace handle for one resolved tool dispatch.
+///
+/// The registry has several early-return paths after a handler is selected:
+/// pre-use hooks, handler execution, after-use hooks, and result status all
+/// affect the trace lifecycle. Keeping the trace eligibility and event writes
+/// behind this helper makes those paths say what happened instead of repeating
+/// the Direct/CodeMode/JsRepl/first-class-object policy at each branch.
+struct DispatchTrace {
+    recorder: Option<RolloutTraceRecorder>,
+}
+
+impl DispatchTrace {
+    fn new(invocation: &ToolInvocation, handler: &dyn AnyToolHandler) -> Self {
+        let should_trace = matches!(
+            invocation.source,
+            ToolCallSource::Direct | ToolCallSource::CodeMode { .. }
+        ) && !handler.uses_first_class_trace_object(invocation);
+
+        let recorder = should_trace
+            .then(|| invocation.session.services.rollout_trace.clone())
+            .flatten();
+        Self { recorder }
+    }
+
+    fn record_started(&self, invocation: &ToolInvocation) {
+        if let Some(recorder) = &self.recorder {
+            recorder.record_dispatched_tool_call_started(invocation);
+        }
+    }
+
+    fn record_completed(&self, invocation: &ToolInvocation, result: &AnyToolResult) {
+        if let Some(recorder) = &self.recorder {
+            let status = if result.result.success_for_logging() {
+                ExecutionStatus::Completed
+            } else {
+                ExecutionStatus::Failed
+            };
+            recorder.record_dispatched_tool_call_ended(
+                invocation,
+                status,
+                result.result.as_ref(),
+                &result.call_id,
+                &result.payload,
+            );
+        }
+    }
+
+    fn record_failed(&self, invocation: &ToolInvocation, error: &FunctionCallError) {
+        if let Some(recorder) = &self.recorder {
+            recorder.record_dispatched_tool_call_failed(invocation, &error.to_string());
+        }
+    }
 }
 
 impl ToolRegistry {
@@ -288,6 +361,9 @@ impl ToolRegistry {
             return Err(FunctionCallError::Fatal(message));
         }
 
+        let dispatch_trace = DispatchTrace::new(&invocation, handler.as_ref());
+        dispatch_trace.record_started(&invocation);
+
         if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
             && let Some(reason) = run_pre_tool_use_hooks(
                 &invocation.session,
@@ -297,10 +373,12 @@ impl ToolRegistry {
             )
             .await
         {
-            return Err(FunctionCallError::RespondToModel(format!(
+            let err = FunctionCallError::RespondToModel(format!(
                 "Command blocked by PreToolUse hook: {reason}. Command: {}",
                 pre_tool_use_payload.command
-            )));
+            ));
+            dispatch_trace.record_failed(&invocation, &err);
+            return Err(err);
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
@@ -383,6 +461,7 @@ impl ToolRegistry {
         .await;
 
         if let Some(err) = hook_abort_error {
+            dispatch_trace.record_failed(&invocation, &err);
             return Err(err);
         }
 
@@ -422,9 +501,13 @@ impl ToolRegistry {
                 let result = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
+                dispatch_trace.record_completed(&invocation, &result);
                 Ok(result)
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                dispatch_trace.record_failed(&invocation, &err);
+                Err(err)
+            }
         }
     }
 }

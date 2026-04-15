@@ -23,7 +23,9 @@ pub use runtime::DEFAULT_WAIT_YIELD_TIME_MS;
 pub use runtime::ExecuteRequest;
 pub use runtime::RuntimeResponse;
 pub use runtime::WaitRequest;
+pub use runtime::WaitResponse;
 pub use service::CodeModeService;
+pub use service::CodeModeToolInvocation;
 pub use service::CodeModeTurnHost;
 pub use service::CodeModeTurnWorker;
 

@@ -28,11 +28,18 @@ use tokio::sync::Mutex;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {
     Direct,
     JsRepl,
-    CodeMode,
+    CodeMode {
+        /// Runtime cell that issued the nested tool request.
+        cell_id: String,
+        /// Code-mode's per-cell tool invocation id. This is useful for
+        /// debugging the JS/runtime bridge, but it is not the Codex tool call id
+        /// because the runtime id only needs to be unique within one cell.
+        runtime_tool_call_id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -42,6 +49,7 @@ pub struct ToolInvocation {
     pub tracker: SharedTurnDiffTracker,
     pub call_id: String,
     pub tool_name: ToolName,
+    pub source: ToolCallSource,
     pub payload: ToolPayload,
 }
 
