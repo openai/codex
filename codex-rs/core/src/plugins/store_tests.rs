@@ -59,6 +59,45 @@ fn install_copies_plugin_into_default_marketplace() {
     assert!(installed_path.join("skills/SKILL.md").is_file());
 }
 
+#[cfg(unix)]
+#[test]
+fn install_preserves_plugin_symlinks() {
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+    let source_plugin = tmp.path().join("sample-plugin");
+    fs::create_dir_all(source_plugin.join("bundle/Versions/A")).unwrap();
+    fs::write(
+        source_plugin.join("bundle/Versions/A/payload.txt"),
+        "payload",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("A", source_plugin.join("bundle/Versions/Current")).unwrap();
+    std::os::unix::fs::symlink(
+        "Versions/Current/payload.txt",
+        source_plugin.join("bundle/payload.txt"),
+    )
+    .unwrap();
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    PluginStore::new(tmp.path().to_path_buf())
+        .install(AbsolutePathBuf::try_from(source_plugin).unwrap(), plugin_id)
+        .unwrap();
+
+    let installed_path = tmp.path().join("plugins/cache/debug/sample-plugin/local");
+    assert_eq!(
+        fs::read_link(installed_path.join("bundle/Versions/Current")).unwrap(),
+        PathBuf::from("A"),
+    );
+    assert_eq!(
+        fs::read_link(installed_path.join("bundle/payload.txt")).unwrap(),
+        PathBuf::from("Versions/Current/payload.txt"),
+    );
+    assert_eq!(
+        fs::read_to_string(installed_path.join("bundle/payload.txt")).unwrap(),
+        "payload",
+    );
+}
+
 #[test]
 fn install_uses_manifest_name_for_destination_and_key() {
     let tmp = tempdir().unwrap();
