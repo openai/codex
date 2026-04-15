@@ -3,7 +3,6 @@ use crate::plugins::PluginId;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::PluginsManager;
 use crate::plugins::add_marketplace;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -185,7 +184,7 @@ impl ExternalAgentConfigService {
             |repo_root| repo_root.join(".codex").join("config.toml"),
         );
         if let Some(settings) = settings.as_ref() {
-            let migrated = build_config_from_external(&settings)?;
+            let migrated = build_config_from_external(settings)?;
             if !is_empty_toml_table(&migrated) {
                 let mut should_include = true;
                 if target_config.exists() {
@@ -352,23 +351,12 @@ impl ExternalAgentConfigService {
             let add_marketplace_outcome = add_marketplace(self.codex_home.clone(), request).await;
             let marketplace_path = match add_marketplace_outcome {
                 Ok(add_marketplace_outcome) => {
-                    match AbsolutePathBuf::try_from(
-                        add_marketplace_outcome
-                            .installed_root
-                            .join(INSTALLED_MARKETPLACE_MANIFEST_RELATIVE_PATH),
-                    ) {
-                        Ok(path) => {
-                            outcome
-                                .succeeded_marketplaces
-                                .push(marketplace_name.clone());
-                            path
-                        }
-                        Err(_) => {
-                            outcome.failed_marketplaces.push(marketplace_name);
-                            outcome.failed_plugin_ids.extend(plugin_ids);
-                            continue;
-                        }
-                    }
+                    outcome
+                        .succeeded_marketplaces
+                        .push(marketplace_name.clone());
+                    add_marketplace_outcome
+                        .installed_root
+                        .join(INSTALLED_MARKETPLACE_MANIFEST_RELATIVE_PATH)
                 }
                 Err(_) => {
                     outcome.failed_marketplaces.push(marketplace_name);
