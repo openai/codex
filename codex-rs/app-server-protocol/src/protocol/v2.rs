@@ -3790,6 +3790,9 @@ pub struct Thread {
     pub git_info: Option<GitInfo>,
     /// Optional user-facing thread title.
     pub name: Option<String>,
+    /// Latest known token usage for the thread, when available from runtime or rollout history.
+    #[serde(default)]
+    pub token_usage: Option<ThreadTokenUsage>,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
@@ -8710,6 +8713,7 @@ mod tests {
                 "agentRole": null,
                 "gitInfo": null,
                 "name": null,
+                "tokenUsage": null,
                 "turns": []
             },
             "model": "gpt-5",

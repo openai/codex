@@ -129,6 +129,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -1839,6 +1840,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);
+                                thread.token_usage = last_token_usage_from_rollout_items(&items);
                                 thread.status = thread_watch_manager
                                     .loaded_status_for_thread(&thread.id)
                                     .await;
@@ -2296,6 +2298,15 @@ async fn handle_token_count_event(
             ))
             .await;
     }
+}
+
+fn last_token_usage_from_rollout_items(items: &[RolloutItem]) -> Option<ThreadTokenUsage> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => {
+            ev.info.clone().map(ThreadTokenUsage::from)
+        }
+        _ => None,
+    })
 }
 
 async fn handle_error(

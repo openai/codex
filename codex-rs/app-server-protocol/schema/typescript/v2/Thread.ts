@@ -5,6 +5,7 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { GitInfo } from "./GitInfo";
 import type { SessionSource } from "./SessionSource";
 import type { ThreadStatus } from "./ThreadStatus";
+import type { ThreadTokenUsage } from "./ThreadTokenUsage";
 import type { Turn } from "./Turn";
 
 export type Thread = { id: string,
@@ -68,6 +69,10 @@ gitInfo: GitInfo | null,
  * Optional user-facing thread title.
  */
 name: string | null,
+/**
+ * Latest known token usage for the thread, when available from runtime or rollout history.
+ */
+tokenUsage: ThreadTokenUsage | null,
 /**
  * Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
  * (when `includeTurns` is true) responses.

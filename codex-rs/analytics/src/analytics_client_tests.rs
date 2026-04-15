@@ -121,6 +121,7 @@ fn sample_thread_with_source(
         agent_role: None,
         git_info: None,
         name: None,
+        token_usage: None,
         turns: Vec::new(),
     }
 }

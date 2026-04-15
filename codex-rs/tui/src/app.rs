@@ -3195,6 +3195,7 @@ impl App {
                 history_entry_count: 0,
                 network_proxy: None,
                 rollout_path: thread.path.clone(),
+                token_usage: None,
             });
         session.thread_id = thread_id;
         session.thread_name = thread.name.clone();
@@ -3202,6 +3203,7 @@ impl App {
         session.cwd = thread.cwd.clone();
         session.instruction_source_paths = Vec::new();
         session.rollout_path = thread.path.clone();
+        session.token_usage = thread.token_usage.clone();
         if let Some(model) =
             read_session_model(&self.config, thread_id, thread.path.as_deref()).await
         {
@@ -7725,6 +7727,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn thread_session_token_usage_seeds_status_line_on_resume() {
+        let mut app = make_test_app().await;
+        app.chat_widget
+            .setup_status_line(vec![crate::bottom_pane::StatusLineItem::ContextUsed]);
+        let mut session = test_thread_session(ThreadId::new(), test_path_buf("/tmp/project"));
+        session.token_usage = Some(ThreadTokenUsage {
+            total: TokenUsageBreakdown {
+                total_tokens: 99_000,
+                input_tokens: 99_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+            },
+            last: TokenUsageBreakdown {
+                total_tokens: 99_000,
+                input_tokens: 99_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+            },
+            model_context_window: Some(112_000),
+        });
+
+        app.chat_widget.handle_thread_session(session);
+
+        assert_eq!(
+            app.chat_widget.status_line_text(),
+            Some("Context 87% used".into())
+        );
+    }
+
+    #[tokio::test]
     async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
         let mut app = make_test_app().await;
         let mut app_server =
@@ -9109,6 +9143,7 @@ guardian_approval = true
                     agent_role: Some("explorer".to_string()),
                     git_info: None,
                     name: Some("agent thread".to_string()),
+                    token_usage: None,
                     turns: Vec::new(),
                 },
             }),
@@ -9190,6 +9225,7 @@ guardian_approval = true
                     agent_role: Some("explorer".to_string()),
                     git_info: None,
                     name: Some("agent thread".to_string()),
+                    token_usage: None,
                     turns: Vec::new(),
                 },
             }),
@@ -9637,6 +9673,7 @@ guardian_approval = true
             history_entry_count: 0,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
+            token_usage: None,
         }
     }
 
@@ -11187,6 +11224,7 @@ guardian_approval = true
                     agent_role: None,
                     git_info: None,
                     name: None,
+                    token_usage: None,
                     turns: Vec::new(),
                 },
             },

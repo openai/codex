@@ -177,6 +177,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnarchivedNotification;
@@ -4050,7 +4051,7 @@ impl CodexMessageProcessor {
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
             match read_rollout_items_from_rollout(rollout_path).await {
                 Ok(items) => {
-                    thread.turns = build_turns_from_rollout_items(&items);
+                    apply_rollout_items_to_thread(&mut thread, &items, /*active_turn*/ None);
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     self.send_invalid_request_error(
@@ -8781,26 +8782,46 @@ async fn populate_thread_turns(
     turn_source: ThreadTurnSource<'_>,
     active_turn: Option<&Turn>,
 ) -> std::result::Result<(), String> {
-    let mut turns = match turn_source {
+    match turn_source {
         ThreadTurnSource::RolloutPath(rollout_path) => {
-            read_rollout_items_from_rollout(rollout_path)
+            let items = read_rollout_items_from_rollout(rollout_path)
                 .await
-                .map(|items| build_turns_from_rollout_items(&items))
                 .map_err(|err| {
                     format!(
                         "failed to load rollout `{}` for thread {}: {err}",
                         rollout_path.display(),
                         thread.id
                     )
-                })?
+                })?;
+            apply_rollout_items_to_thread(thread, &items, active_turn);
         }
-        ThreadTurnSource::HistoryItems(items) => build_turns_from_rollout_items(items),
-    };
+        ThreadTurnSource::HistoryItems(items) => {
+            apply_rollout_items_to_thread(thread, items, active_turn);
+        }
+    }
+    Ok(())
+}
+
+fn apply_rollout_items_to_thread(
+    thread: &mut Thread,
+    items: &[RolloutItem],
+    active_turn: Option<&Turn>,
+) {
+    let mut turns = build_turns_from_rollout_items(items);
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
     }
     thread.turns = turns;
-    Ok(())
+    thread.token_usage = last_token_usage_from_rollout_items(items);
+}
+
+fn last_token_usage_from_rollout_items(items: &[RolloutItem]) -> Option<ThreadTokenUsage> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => {
+            ev.info.clone().map(ThreadTokenUsage::from)
+        }
+        _ => None,
+    })
 }
 
 async fn resolve_pending_server_request(
@@ -9783,6 +9804,7 @@ fn build_thread_from_snapshot(
         source: config_snapshot.session_source.clone().into(),
         git_info: None,
         name: None,
+        token_usage: None,
         turns: Vec::new(),
     }
 }
@@ -9838,6 +9860,7 @@ pub(crate) fn summary_to_thread(
         source: source.into(),
         git_info,
         name: None,
+        token_usage: None,
         turns: Vec::new(),
     }
 }
@@ -9849,16 +9872,77 @@ mod tests {
     use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
     use codex_app_server_protocol::ServerRequestPayload;
+    use codex_app_server_protocol::TokenUsageBreakdown;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::TokenCountEvent;
+    use codex_protocol::protocol::TokenUsage;
+    use codex_protocol::protocol::TokenUsageInfo;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn token_usage_info(total_tokens: i64, model_context_window: Option<i64>) -> TokenUsageInfo {
+        TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: total_tokens,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                total_tokens,
+            },
+            last_token_usage: TokenUsage {
+                input_tokens: total_tokens,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                total_tokens,
+            },
+            model_context_window,
+        }
+    }
+
+    #[test]
+    fn last_token_usage_from_rollout_items_uses_latest_token_count() {
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+                info: Some(token_usage_info(100, Some(1_000))),
+                rate_limits: None,
+            })),
+            RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
+                info: Some(token_usage_info(250, Some(2_000))),
+                rate_limits: None,
+            })),
+        ];
+
+        let usage = last_token_usage_from_rollout_items(&items).expect("token usage");
+
+        assert_eq!(
+            usage,
+            ThreadTokenUsage {
+                total: TokenUsageBreakdown {
+                    total_tokens: 250,
+                    input_tokens: 250,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                },
+                last: TokenUsageBreakdown {
+                    total_tokens: 250,
+                    input_tokens: 250,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                },
+                model_context_window: Some(2_000),
+            }
+        );
+    }
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {

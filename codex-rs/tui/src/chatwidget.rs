@@ -2069,8 +2069,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
+        let token_usage = session.token_usage.clone();
         self.instruction_source_paths = session.instruction_source_paths.clone();
         self.on_session_configured(thread_session_state_to_legacy_event(session));
+        if let Some(token_usage) = token_usage {
+            self.set_token_info(Some(token_usage_info_from_app_server(token_usage)));
+        }
     }
 
     fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
@@ -2658,6 +2662,8 @@ impl ChatWidget {
                 self.token_info = None;
             }
         }
+        self.refresh_status_surfaces();
+        self.request_redraw();
     }
 
     #[cfg(test)]

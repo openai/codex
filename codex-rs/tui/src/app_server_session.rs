@@ -64,6 +64,7 @@ use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
+use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
@@ -143,6 +144,7 @@ pub(crate) struct ThreadSessionState {
     pub(crate) history_entry_count: u64,
     pub(crate) network_proxy: Option<SessionNetworkProxyRuntime>,
     pub(crate) rollout_path: Option<PathBuf>,
+    pub(crate) token_usage: Option<ThreadTokenUsage>,
 }
 
 #[derive(Clone, Copy)]
@@ -1016,6 +1018,7 @@ async fn thread_session_state_from_thread_start_response(
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
+        response.thread.token_usage.clone(),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1039,6 +1042,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
+        response.thread.token_usage.clone(),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1062,6 +1066,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
+        response.thread.token_usage.clone(),
         response.model.clone(),
         response.model_provider.clone(),
         response.service_tier,
@@ -1104,6 +1109,7 @@ async fn thread_session_state_from_thread_response(
     forked_from_id: Option<String>,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
+    token_usage: Option<ThreadTokenUsage>,
     model: String,
     model_provider_id: String,
     service_tier: Option<codex_protocol::config_types::ServiceTier>,
@@ -1142,6 +1148,7 @@ async fn thread_session_state_from_thread_response(
         history_entry_count,
         network_proxy: None,
         rollout_path,
+        token_usage,
     })
 }
 
@@ -1198,6 +1205,7 @@ mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use codex_app_server_protocol::ThreadStatus;
+    use codex_app_server_protocol::TokenUsageBreakdown;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -1317,6 +1325,23 @@ mod tests {
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
         let forked_from_id = ThreadId::new();
+        let token_usage = ThreadTokenUsage {
+            total: TokenUsageBreakdown {
+                total_tokens: 870,
+                input_tokens: 870,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+            },
+            last: TokenUsageBreakdown {
+                total_tokens: 870,
+                input_tokens: 870,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+            },
+            model_context_window: Some(1_000),
+        };
         let response = ThreadResumeResponse {
             thread: codex_app_server_protocol::Thread {
                 id: thread_id.to_string(),
@@ -1335,6 +1360,7 @@ mod tests {
                 agent_role: None,
                 git_info: None,
                 name: None,
+                token_usage: Some(token_usage.clone()),
                 turns: vec![Turn {
                     id: "turn-1".to_string(),
                     items: vec![
@@ -1378,6 +1404,7 @@ mod tests {
             started.session.instruction_source_paths,
             response.instruction_sources
         );
+        assert_eq!(started.session.token_usage, Some(token_usage));
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);
     }
@@ -1400,6 +1427,7 @@ mod tests {
             /*forked_from_id*/ None,
             Some("restore".to_string()),
             /*rollout_path*/ None,
+            /*token_usage*/ None,
             "gpt-5.4".to_string(),
             "openai".to_string(),
             /*service_tier*/ None,
@@ -1430,6 +1458,7 @@ mod tests {
             Some(forked_from_id.to_string()),
             Some("restore".to_string()),
             /*rollout_path*/ None,
+            /*token_usage*/ None,
             "gpt-5.4".to_string(),
             "openai".to_string(),
             /*service_tier*/ None,

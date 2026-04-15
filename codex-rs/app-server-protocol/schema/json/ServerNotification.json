@@ -2531,6 +2531,18 @@
           ],
           "description": "Current runtime status for the thread."
         },
+        "tokenUsage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadTokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Latest known token usage for the thread, when available from runtime or rollout history."
+        },
         "turns": {
           "description": "Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
           "items": {
