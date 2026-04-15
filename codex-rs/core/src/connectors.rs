@@ -233,6 +233,8 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         SandboxPolicy::new_read_only_policy(),
+        /*environment*/ None,
+        config.codex_home.to_path_buf(),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         ToolPluginProvenance::default(),

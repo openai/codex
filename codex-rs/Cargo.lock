@@ -2396,6 +2396,7 @@ dependencies = [
  "async-channel",
  "codex-async-utils",
  "codex-config",
+ "codex-exec-server",
  "codex-login",
  "codex-otel",
  "codex-plugin",
