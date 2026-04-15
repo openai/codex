@@ -7,6 +7,8 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::path_utils;
 use crate::shell::Shell;
+use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -98,8 +100,17 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
     let mut override_env = explicit_env_overrides.clone();
-    if let Some(thread_id) = env.get(CODEX_THREAD_ID_ENV_VAR) {
-        override_env.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+    // Snapshot files can contain stale per-session runtime state. Restore the
+    // live values (or unset state) after sourcing the snapshot so it cannot
+    // reintroduce an old thread id or sandbox marker into this command.
+    for key in [
+        CODEX_THREAD_ID_ENV_VAR,
+        CODEX_SANDBOX_ENV_VAR,
+        CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR,
+    ] {
+        override_env
+            .entry(key.to_string())
+            .or_insert_with(|| env.get(key).cloned().unwrap_or_default());
     }
     let (override_captures, override_exports) = build_override_exports(&override_env);
     let rewritten_script = if override_exports.is_empty() {
