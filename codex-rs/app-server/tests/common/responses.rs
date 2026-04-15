@@ -10,11 +10,31 @@ pub fn create_shell_command_sse_response(
 ) -> anyhow::Result<String> {
     // The `arguments` for the `shell_command` tool is a serialized JSON object.
     let command_str = shlex::try_join(command.iter().map(String::as_str))?;
-    let tool_call_arguments = serde_json::to_string(&json!({
-        "command": command_str,
+    create_shell_command_sse_response_from_command(&command_str, workdir, timeout_ms, call_id, None)
+}
+
+pub fn create_shell_command_sse_response_from_command(
+    command: &str,
+    workdir: Option<&Path>,
+    timeout_ms: Option<u64>,
+    call_id: &str,
+    login: Option<bool>,
+) -> anyhow::Result<String> {
+    // Use this when a test already has a shell command string. It fixes string
+    // quoting for those callers by avoiding a rebuild from argv with POSIX
+    // rules, which can change how Windows PowerShell parses the command; for
+    // sleep-based tests, nested parsing can add another PowerShell startup
+    // before the requested sleep even begins.
+    let mut tool_call_arguments = json!({
+        "command": command,
         "workdir": workdir.map(|w| w.to_string_lossy()),
         "timeout_ms": timeout_ms
-    }))?;
+    });
+    if let Some(login) = login {
+        tool_call_arguments["login"] = json!(login);
+    }
+
+    let tool_call_arguments = serde_json::to_string(&tool_call_arguments)?;
     Ok(responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_function_call(call_id, "shell_command", &tool_call_arguments),

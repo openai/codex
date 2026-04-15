@@ -4,7 +4,7 @@ use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
+use app_test_support::create_shell_command_sse_response_from_command;
 use app_test_support::to_response;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -129,13 +129,9 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
 #[tokio::test]
 async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     #[cfg(target_os = "windows")]
-    let shell_command = vec![
-        "powershell".to_string(),
-        "-Command".to_string(),
-        "Start-Sleep -Seconds 1".to_string(),
-    ];
+    let shell_command = "Start-Sleep -Seconds 1";
     #[cfg(not(target_os = "windows"))]
-    let shell_command = vec!["sleep".to_string(), "1".to_string()];
+    let shell_command = "sleep 1";
 
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
@@ -144,11 +140,12 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     std::fs::create_dir(&working_directory)?;
 
     let server = create_mock_responses_server_sequence_unchecked(vec![
-        create_shell_command_sse_response(
-            shell_command.clone(),
+        create_shell_command_sse_response_from_command(
+            shell_command,
             Some(&working_directory),
             Some(10_000),
             "call_sleep",
+            Some(false),
         )?,
         create_final_assistant_message_sse_response("Done")?,
     ])
