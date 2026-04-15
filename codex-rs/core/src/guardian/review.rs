@@ -241,6 +241,7 @@ impl GuardianReviewAnalyticsResult {
             terminal.guardian_model = Some(metadata.guardian_model);
             terminal.guardian_reasoning_effort = metadata.guardian_reasoning_effort;
             terminal.had_prior_review_context = Some(metadata.had_prior_review_context);
+            terminal.reviewed_action_truncated = metadata.reviewed_action_truncated;
             terminal.token_usage = metadata.token_usage;
         }
 
