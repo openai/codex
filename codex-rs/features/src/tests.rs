@@ -184,6 +184,16 @@ fn use_agent_identity_is_under_development() {
 }
 
 #[test]
+fn workspace_dependencies_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::WorkspaceDependencies.stage(), Stage::Stable);
+    assert_eq!(Feature::WorkspaceDependencies.default_enabled(), true);
+    assert_eq!(
+        feature_for_key("workspace_dependencies"),
+        Some(Feature::WorkspaceDependencies)
+    );
+}
+
+#[test]
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));

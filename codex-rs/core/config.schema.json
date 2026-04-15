@@ -523,6 +523,9 @@
             },
             "web_search_request": {
               "type": "boolean"
+            },
+            "workspace_dependencies": {
+              "type": "boolean"
             }
           },
           "type": "object"
@@ -810,7 +813,8 @@
     },
     "MarketplaceSourceType": {
       "enum": [
-        "git"
+        "git",
+        "local"
       ],
       "type": "string"
     },
@@ -2378,6 +2382,9 @@
           "type": "boolean"
         },
         "web_search_request": {
+          "type": "boolean"
+        },
+        "workspace_dependencies": {
           "type": "boolean"
         }
       },

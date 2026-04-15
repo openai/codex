@@ -253,7 +253,7 @@ fn collect_tool_search_output_tools_preserves_search_order_while_grouping_by_nam
             }),
             ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
                 name: "mcp__docs__".to_string(),
-                description: "Tools from the docs MCP server.".to_string(),
+                description: "Tools in the mcp__docs__ namespace.".to_string(),
                 tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                     name: "search".to_string(),
                     description: "Search docs.".to_string(),
@@ -272,7 +272,7 @@ fn collect_tool_search_output_tools_preserves_search_order_while_grouping_by_nam
 }
 
 #[test]
-fn collect_tool_search_output_tools_falls_back_to_connector_name_description() {
+fn collect_tool_search_output_tools_ignores_blank_connector_description() {
     let gmail_batch_read_email = mcp_tool("gmail-batch-read-email", "Read multiple emails.");
 
     let tools = collect_tool_search_output_tools([ToolSearchResultSource {
@@ -281,7 +281,7 @@ fn collect_tool_search_output_tools_falls_back_to_connector_name_description() {
         tool_name: "_batch_read_email",
         tool: &gmail_batch_read_email,
         connector_name: Some("Gmail"),
-        connector_description: None,
+        connector_description: Some("   "),
     }])
     .expect("collect tool search output tools");
 
