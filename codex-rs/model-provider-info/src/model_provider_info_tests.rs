@@ -131,7 +131,7 @@ supports_websockets = true
 
 #[test]
 fn test_supports_remote_compaction_for_openai() {
-    let provider = ModelProviderInfo::create_openai_provider(/* base_url */ None);
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
 
     assert!(provider.supports_remote_compaction());
 }
