@@ -14,6 +14,7 @@ use codex_core::file_watcher::FileWatcherSubscriber;
 use codex_core::file_watcher::Receiver;
 use codex_core::file_watcher::WatchPath;
 use codex_core::file_watcher::WatchRegistration;
+use codex_exec_server::EnvironmentManager;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
@@ -71,6 +72,7 @@ impl DebouncedReceiver {
 #[derive(Clone)]
 pub(crate) struct FsWatchManager {
     outgoing: Arc<OutgoingMessageSender>,
+    environment_manager: Arc<EnvironmentManager>,
     file_watcher: Arc<FileWatcher>,
     state: Arc<AsyncMutex<FsWatchState>>,
 }
@@ -93,7 +95,10 @@ struct WatchKey {
 }
 
 impl FsWatchManager {
-    pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>) -> Self {
+    pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        environment_manager: Arc<EnvironmentManager>,
+    ) -> Self {
         let file_watcher = match FileWatcher::new() {
             Ok(file_watcher) => Arc::new(file_watcher),
             Err(err) => {
@@ -101,15 +106,17 @@ impl FsWatchManager {
                 Arc::new(FileWatcher::noop())
             }
         };
-        Self::new_with_file_watcher(outgoing, file_watcher)
+        Self::new_with_file_watcher(outgoing, environment_manager, file_watcher)
     }
 
     fn new_with_file_watcher(
         outgoing: Arc<OutgoingMessageSender>,
+        environment_manager: Arc<EnvironmentManager>,
         file_watcher: Arc<FileWatcher>,
     ) -> Self {
         Self {
             outgoing,
+            environment_manager,
             file_watcher,
             state: Arc::new(AsyncMutex::new(FsWatchState::default())),
         }
@@ -120,6 +127,19 @@ impl FsWatchManager {
         connection_id: ConnectionId,
         params: FsWatchParams,
     ) -> Result<FsWatchResponse, JSONRPCErrorError> {
+        let environment = self
+            .environment_manager
+            .environment(params.environment_id.as_deref())
+            .await
+            .map_err(|err| invalid_request(format!("failed to resolve environment: {err}")))?;
+        let environment =
+            environment.ok_or_else(|| invalid_request("the selected environment is disabled"))?;
+        if environment.is_remote() {
+            return Err(invalid_request(
+                "fs/watch is unavailable for remote environments",
+            ));
+        }
+
         let watch_id = params.watch_id;
         let watch_key = WatchKey {
             connection_id,
@@ -217,6 +237,7 @@ impl FsWatchManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_exec_server::EnvironmentManager;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -235,6 +256,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(OUTGOING_BUFFER);
         FsWatchManager::new_with_file_watcher(
             Arc::new(OutgoingMessageSender::new(tx)),
+            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             Arc::new(FileWatcher::noop()),
         )
     }
@@ -254,6 +276,7 @@ mod tests {
                 FsWatchParams {
                     watch_id: watch_id.clone(),
                     path: path.clone(),
+                    environment_id: None,
                 },
             )
             .await
@@ -284,6 +307,7 @@ mod tests {
                 FsWatchParams {
                     watch_id: "watch-head".to_string(),
                     path: absolute_path(head_path),
+                    environment_id: None,
                 },
             )
             .await
@@ -331,6 +355,7 @@ mod tests {
                 FsWatchParams {
                     watch_id: "watch-head".to_string(),
                     path: absolute_path(head_path),
+                    environment_id: None,
                 },
             )
             .await
@@ -342,6 +367,7 @@ mod tests {
                 FsWatchParams {
                     watch_id: "watch-head".to_string(),
                     path: absolute_path(fetch_head_path),
+                    environment_id: None,
                 },
             )
             .await
@@ -368,6 +394,7 @@ mod tests {
                 FsWatchParams {
                     watch_id: "watch-head".to_string(),
                     path: absolute_path(head_path.clone()),
+                    environment_id: None,
                 },
             )
             .await
@@ -378,6 +405,7 @@ mod tests {
                 FsWatchParams {
                     watch_id: "watch-fetch-head".to_string(),
                     path: absolute_path(fetch_head_path),
+                    environment_id: None,
                 },
             )
             .await
@@ -388,6 +416,7 @@ mod tests {
                 FsWatchParams {
                     watch_id: "watch-packed-refs".to_string(),
                     path: absolute_path(packed_refs_path),
+                    environment_id: None,
                 },
             )
             .await

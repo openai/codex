@@ -20,7 +20,7 @@ use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use std::io;
@@ -28,24 +28,36 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct FsApi {
-    file_system: Arc<dyn ExecutorFileSystem>,
-}
-
-impl Default for FsApi {
-    fn default() -> Self {
-        Self {
-            file_system: Environment::default().get_filesystem(),
-        }
-    }
+    environment_manager: Arc<EnvironmentManager>,
 }
 
 impl FsApi {
+    pub(crate) fn new(environment_manager: Arc<EnvironmentManager>) -> Self {
+        Self {
+            environment_manager,
+        }
+    }
+
+    async fn file_system(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Result<Arc<dyn ExecutorFileSystem>, JSONRPCErrorError> {
+        let environment = self
+            .environment_manager
+            .environment(environment_id)
+            .await
+            .map_err(|err| invalid_request(format!("failed to resolve environment: {err}")))?;
+        let environment =
+            environment.ok_or_else(|| invalid_request("the selected environment is disabled"))?;
+        Ok(environment.get_filesystem())
+    }
+
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
-        let bytes = self
-            .file_system
+        let file_system = self.file_system(params.environment_id.as_deref()).await?;
+        let bytes = file_system
             .read_file(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -58,12 +70,13 @@ impl FsApi {
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+        let file_system = self.file_system(params.environment_id.as_deref()).await?;
         let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
             invalid_request(format!(
                 "fs/writeFile requires valid base64 dataBase64: {err}"
             ))
         })?;
-        self.file_system
+        file_system
             .write_file(&params.path, bytes, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -74,7 +87,8 @@ impl FsApi {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
-        self.file_system
+        let file_system = self.file_system(params.environment_id.as_deref()).await?;
+        file_system
             .create_directory(
                 &params.path,
                 CreateDirectoryOptions {
@@ -91,8 +105,8 @@ impl FsApi {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
-        let metadata = self
-            .file_system
+        let file_system = self.file_system(params.environment_id.as_deref()).await?;
+        let metadata = file_system
             .get_metadata(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -109,8 +123,8 @@ impl FsApi {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
-        let entries = self
-            .file_system
+        let file_system = self.file_system(params.environment_id.as_deref()).await?;
+        let entries = file_system
             .read_directory(&params.path, /*sandbox*/ None)
             .await
             .map_err(map_fs_error)?;
@@ -130,7 +144,8 @@ impl FsApi {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
-        self.file_system
+        let file_system = self.file_system(params.environment_id.as_deref()).await?;
+        file_system
             .remove(
                 &params.path,
                 RemoveOptions {
@@ -148,7 +163,8 @@ impl FsApi {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
-        self.file_system
+        let file_system = self.file_system(params.environment_id.as_deref()).await?;
+        file_system
             .copy(
                 &params.source_path,
                 &params.destination_path,

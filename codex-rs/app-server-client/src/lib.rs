@@ -1219,6 +1219,7 @@ mod tests {
                     request_id: RequestId::Integer(2),
                     params: ThreadStartParams {
                         ephemeral: Some(true),
+                        environment_id: None,
                         ..ThreadStartParams::default()
                     },
                 })
@@ -1238,6 +1239,7 @@ mod tests {
                 request_id: RequestId::Integer(3),
                 params: ThreadStartParams {
                     ephemeral: Some(true),
+                    environment_id: None,
                     ..ThreadStartParams::default()
                 },
             })

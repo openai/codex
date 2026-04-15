@@ -2279,6 +2279,53 @@ pub struct FeedbackUploadResponse {
     pub thread_id: String,
 }
 
+/// Register or replace a named execution environment.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentRegisterParams {
+    /// Logical environment identifier used by thread and fs APIs.
+    pub environment_id: String,
+    /// Optional exec-server websocket URL; omit for local execution.
+    #[ts(optional = nullable)]
+    pub exec_server_url: Option<String>,
+}
+
+/// Successful response for `environment/register`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentRegisterResponse {}
+
+/// List named execution environments registered with the app-server.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentListParams {
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentListEntry {
+    pub environment_id: String,
+    #[ts(optional = nullable)]
+    pub exec_server_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct EnvironmentListResponse {
+    pub data: Vec<EnvironmentListEntry>,
+    #[ts(optional = nullable)]
+    pub next_cursor: Option<String>,
+}
+
 /// Read a file from the host filesystem.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2286,6 +2333,9 @@ pub struct FeedbackUploadResponse {
 pub struct FsReadFileParams {
     /// Absolute path to read.
     pub path: AbsolutePathBuf,
+    /// Optional environment selection. Omit to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Base64-encoded file contents returned by `fs/readFile`.
@@ -2306,6 +2356,9 @@ pub struct FsWriteFileParams {
     pub path: AbsolutePathBuf,
     /// File contents encoded as base64.
     pub data_base64: String,
+    /// Optional environment selection. Omit to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/writeFile`.
@@ -2324,6 +2377,9 @@ pub struct FsCreateDirectoryParams {
     /// Whether parent directories should also be created. Defaults to `true`.
     #[ts(optional = nullable)]
     pub recursive: Option<bool>,
+    /// Optional environment selection. Omit to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/createDirectory`.
@@ -2339,6 +2395,9 @@ pub struct FsCreateDirectoryResponse {}
 pub struct FsGetMetadataParams {
     /// Absolute path to inspect.
     pub path: AbsolutePathBuf,
+    /// Optional environment selection. Omit to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Metadata returned by `fs/getMetadata`.
@@ -2367,6 +2426,9 @@ pub struct FsGetMetadataResponse {
 pub struct FsReadDirectoryParams {
     /// Absolute directory path to read.
     pub path: AbsolutePathBuf,
+    /// Optional environment selection. Omit to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// A directory entry returned by `fs/readDirectory`.
@@ -2404,6 +2466,9 @@ pub struct FsRemoveParams {
     /// Whether missing paths should be ignored. Defaults to `true`.
     #[ts(optional = nullable)]
     pub force: Option<bool>,
+    /// Optional environment selection. Omit to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/remove`.
@@ -2424,6 +2489,9 @@ pub struct FsCopyParams {
     /// Required for directory copies; ignored for file copies.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recursive: bool,
+    /// Optional environment selection. Omit to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/copy`.
@@ -2441,6 +2509,9 @@ pub struct FsWatchParams {
     pub watch_id: String,
     /// Absolute file or directory path to watch.
     pub path: AbsolutePathBuf,
+    /// Optional environment selection. Omit to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/watch`.
@@ -2701,6 +2772,8 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -6904,6 +6977,7 @@ mod tests {
     fn fs_read_file_params_round_trip() {
         let params = FsReadFileParams {
             path: absolute_path("tmp/example.txt"),
+            environment_id: Some("dev".to_string()),
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
@@ -6911,6 +6985,7 @@ mod tests {
             value,
             json!({
                 "path": absolute_path_string("tmp/example.txt"),
+                "environmentId": "dev",
             })
         );
 
@@ -6924,6 +6999,7 @@ mod tests {
         let params = FsCreateDirectoryParams {
             path: absolute_path("tmp/example"),
             recursive: None,
+            environment_id: Some("dev".to_string()),
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/createDirectory params");
@@ -6932,6 +7008,7 @@ mod tests {
             json!({
                 "path": absolute_path_string("tmp/example"),
                 "recursive": null,
+                "environmentId": "dev",
             })
         );
 
@@ -6945,6 +7022,7 @@ mod tests {
         let params = FsWriteFileParams {
             path: absolute_path("tmp/example.bin"),
             data_base64: "AAE=".to_string(),
+            environment_id: Some("dev".to_string()),
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/writeFile params");
@@ -6953,6 +7031,7 @@ mod tests {
             json!({
                 "path": absolute_path_string("tmp/example.bin"),
                 "dataBase64": "AAE=",
+                "environmentId": "dev",
             })
         );
 
@@ -6967,6 +7046,7 @@ mod tests {
             source_path: absolute_path("tmp/source"),
             destination_path: absolute_path("tmp/destination"),
             recursive: true,
+            environment_id: Some("dev".to_string()),
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/copy params");
@@ -6976,6 +7056,7 @@ mod tests {
                 "sourcePath": absolute_path_string("tmp/source"),
                 "destinationPath": absolute_path_string("tmp/destination"),
                 "recursive": true,
+                "environmentId": "dev",
             })
         );
 
@@ -7717,6 +7798,7 @@ mod tests {
                         request_permissions: true,
                         mcp_elicitations: false,
                     }),
+                    environment_id: None,
                     ..Default::default()
                 },
             },
@@ -8688,6 +8770,16 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn thread_start_params_round_trip_environment_id() {
+        let params: ThreadStartParams =
+            serde_json::from_value(json!({ "environmentId": "dev" })).expect("deserialize params");
+        assert_eq!(params.environment_id.as_deref(), Some("dev"));
+
+        let serialized = serde_json::to_value(&params).expect("serialize params");
+        assert_eq!(serialized.get("environmentId"), Some(&json!("dev")));
     }
 
     #[test]

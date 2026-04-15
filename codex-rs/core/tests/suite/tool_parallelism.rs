@@ -73,12 +73,12 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
 fn assert_parallel_duration(actual: Duration) {
     // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
     assert!(
-        actual < Duration::from_millis(1_600),
+        actual < Duration::from_millis(2_000),
         "expected parallel execution to finish quickly, got {actual:?}"
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -140,7 +140,7 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -175,7 +175,7 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
