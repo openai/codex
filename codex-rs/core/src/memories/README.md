@@ -84,10 +84,11 @@ What it does:
   - `raw_memories.md` (merged raw memories, latest first)
   - `rollout_summaries/` (one summary file per retained rollout)
 - prunes stale rollout summaries that are no longer retained
-- prunes old resource files from memory extensions under
+- finds old resource files from memory extensions under
   `memories_extensions/<extension>/resources/` for extension directories that
   have an `instructions.md`, using the memory module retention window
-- if there are no inputs, marks the job successful and exits
+- if there are no Phase 1 inputs or old extension resources, marks the job
+  successful and exits
 
 If there is input, it then:
 
@@ -95,11 +96,13 @@ If there is input, it then:
 - builds the Phase 2 prompt with a diff of the current Phase 1 input
   selection versus the last successful Phase 2 selection (`added`,
   `retained`, `removed`)
-- includes deleted extension resource paths in the prompt diff
+- includes old extension resource paths in the prompt diff
 - runs it with no approvals, no network, and local write access only
 - disables collab for that agent (to prevent recursive delegation)
 - watches the agent status and heartbeats the global job lease while it runs
 - marks the phase-2 job success/failure in the state DB when the agent finishes
+- prunes old extension resource files after the consolidation agent completes
+  and the successful Phase 2 job is recorded
 
 Selection diff behavior:
 

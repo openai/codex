@@ -3,7 +3,9 @@ use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
 use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
-use crate::memories::extensions::prune_old_extension_resources;
+use crate::memories::extensions::PendingExtensionResourceRemoval;
+use crate::memories::extensions::find_old_extension_resources;
+use crate::memories::extensions::remove_extension_resources;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
@@ -113,8 +115,12 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         job::failed(session, db, &claim, "failed_rebuild_raw_memories").await;
         return;
     }
-    let removed_extension_resources = prune_old_extension_resources(&root).await;
-    if raw_memories.is_empty() {
+    let pending_extension_resource_removals = find_old_extension_resources(&root).await;
+    let removed_extension_resources = pending_extension_resource_removals
+        .iter()
+        .map(|resource| resource.removed.clone())
+        .collect::<Vec<_>>();
+    if raw_memories.is_empty() && pending_extension_resource_removals.is_empty() {
         // We check only after sync of the file system.
         job::succeed(
             session,
@@ -172,6 +178,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         claim,
         new_watermark,
         raw_memories.clone(),
+        pending_extension_resource_removals,
         thread_id,
         phase_two_e2e_timer,
     );
@@ -270,15 +277,15 @@ mod job {
         completion_watermark: i64,
         selected_outputs: &[codex_state::Stage1Output],
         reason: &'static str,
-    ) {
+    ) -> bool {
         session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
             /*inc*/ 1,
             &[("status", reason)],
         );
-        let _ = db
-            .mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
-            .await;
+        db.mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
+            .await
+            .unwrap_or(false)
     }
 }
 
@@ -346,6 +353,7 @@ mod agent {
         claim: Claim,
         new_watermark: i64,
         selected_outputs: Vec<codex_state::Stage1Output>,
+        pending_extension_resource_removals: Vec<PendingExtensionResourceRemoval>,
         thread_id: ThreadId,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
@@ -382,7 +390,7 @@ mod agent {
                 if let Some(token_usage) = agent_control.get_total_token_usage(thread_id).await {
                     emit_token_usage_metrics(&session, &token_usage);
                 }
-                job::succeed(
+                if job::succeed(
                     &session,
                     &db,
                     &claim,
@@ -390,7 +398,10 @@ mod agent {
                     &selected_outputs,
                     "succeeded",
                 )
-                .await;
+                .await
+                {
+                    remove_extension_resources(&pending_extension_resource_removals).await;
+                }
             } else {
                 job::failed(&session, &db, &claim, "failed_agent").await;
             }

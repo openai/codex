@@ -4,6 +4,7 @@ use chrono::Duration;
 use chrono::NaiveDateTime;
 use chrono::Utc;
 use std::path::Path;
+use std::path::PathBuf;
 use tracing::warn;
 
 const FILENAME_TS_FORMAT: &str = "%Y-%m-%dT%H-%M-%S";
@@ -15,28 +16,34 @@ pub(super) struct RemovedExtensionResource {
     pub(super) resource_path: String,
 }
 
-pub(super) async fn prune_old_extension_resources(
-    memory_root: &Path,
-) -> Vec<RemovedExtensionResource> {
-    prune_old_extension_resources_with_now(memory_root, Utc::now()).await
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingExtensionResourceRemoval {
+    pub(super) removed: RemovedExtensionResource,
+    path: PathBuf,
 }
 
-async fn prune_old_extension_resources_with_now(
+pub(super) async fn find_old_extension_resources(
+    memory_root: &Path,
+) -> Vec<PendingExtensionResourceRemoval> {
+    find_old_extension_resources_with_now(memory_root, Utc::now()).await
+}
+
+async fn find_old_extension_resources_with_now(
     memory_root: &Path,
     now: DateTime<Utc>,
-) -> Vec<RemovedExtensionResource> {
-    let mut removed = Vec::new();
+) -> Vec<PendingExtensionResourceRemoval> {
+    let mut pending = Vec::new();
     let cutoff = now - Duration::days(EXTENSION_RESOURCE_RETENTION_DAYS);
     let extensions_root = memory_extensions_root(memory_root);
     let mut extensions = match tokio::fs::read_dir(&extensions_root).await {
         Ok(extensions) => extensions,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return removed,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return pending,
         Err(err) => {
             warn!(
                 "failed reading memory extensions root {}: {err}",
                 extensions_root.display()
             );
-            return removed;
+            return pending;
         }
     };
 
@@ -99,28 +106,36 @@ async fn prune_old_extension_resources_with_now(
                 continue;
             }
 
-            if let Err(err) = tokio::fs::remove_file(&resource_file_path).await
-                && err.kind() != std::io::ErrorKind::NotFound
-            {
-                warn!(
-                    "failed pruning old memory extension resource {}: {err}",
-                    resource_file_path.display()
-                );
-                continue;
-            }
-            removed.push(RemovedExtensionResource {
-                extension: extension.clone(),
-                resource_path: format!("resources/{file_name}"),
+            pending.push(PendingExtensionResourceRemoval {
+                removed: RemovedExtensionResource {
+                    extension: extension.clone(),
+                    resource_path: format!("resources/{file_name}"),
+                },
+                path: resource_file_path,
             });
         }
     }
 
-    removed.sort_by(|left, right| {
-        left.extension
-            .cmp(&right.extension)
-            .then_with(|| left.resource_path.cmp(&right.resource_path))
+    pending.sort_by(|left, right| {
+        left.removed
+            .extension
+            .cmp(&right.removed.extension)
+            .then_with(|| left.removed.resource_path.cmp(&right.removed.resource_path))
     });
-    removed
+    pending
+}
+
+pub(super) async fn remove_extension_resources(resources: &[PendingExtensionResourceRemoval]) {
+    for resource in resources {
+        if let Err(err) = tokio::fs::remove_file(&resource.path).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                "failed pruning old memory extension resource {}: {err}",
+                resource.path.display()
+            );
+        }
+    }
 }
 
 fn resource_timestamp(file_name: &str) -> Option<DateTime<Utc>> {
@@ -136,7 +151,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn prunes_only_old_resources_from_extensions_with_instructions() {
+    async fn finds_only_old_resources_from_extensions_with_instructions() {
         let codex_home = TempDir::new().expect("create temp codex home");
         let memory_root = codex_home.path().join("memories");
         let extensions_root = memory_extensions_root(&memory_root);
@@ -176,10 +191,13 @@ mod tests {
             .await
             .expect("write ignored resource");
 
-        let removed = prune_old_extension_resources_with_now(&memory_root, now).await;
+        let pending = find_old_extension_resources_with_now(&memory_root, now).await;
 
         assert_eq!(
-            removed,
+            pending
+                .iter()
+                .map(|resource| resource.removed.clone())
+                .collect::<Vec<_>>(),
             vec![
                 RemovedExtensionResource {
                     extension: "telepathy".to_string(),
@@ -191,6 +209,19 @@ mod tests {
                 },
             ]
         );
+        assert!(
+            tokio::fs::try_exists(&old_file)
+                .await
+                .expect("check old file before remove")
+        );
+        assert!(
+            tokio::fs::try_exists(&exact_cutoff_file)
+                .await
+                .expect("check cutoff file before remove")
+        );
+
+        remove_extension_resources(&pending).await;
+
         assert!(
             !tokio::fs::try_exists(&old_file)
                 .await
