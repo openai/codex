@@ -952,6 +952,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     assert_eq!(metadata.guardian_model, "gpt-5.4");
     assert_eq!(metadata.guardian_reasoning_effort.as_deref(), Some("low"));
     assert!(!metadata.had_prior_review_context);
+    assert!(
+        metadata.time_to_first_token_ms.is_some(),
+        "guardian review metadata should capture TTFT when the nested turn completes"
+    );
 
     let request = request_log.single_request();
     let mut settings = Settings::clone_current();
