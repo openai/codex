@@ -276,8 +276,8 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     ToolRouter::from_config(
         &nested_tools_config,
         ToolRouterParams {
-            mcp_tools: Some(listed_mcp_tools),
             deferred_mcp_tools: None,
+            mcp_tools: Some(listed_mcp_tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names,
             discoverable_tools: None,

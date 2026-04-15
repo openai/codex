@@ -31,8 +31,8 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tools: Some(mcp_tools),
             deferred_mcp_tools,
+            mcp_tools: Some(mcp_tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
@@ -85,8 +85,8 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tools: Some(mcp_tools),
             deferred_mcp_tools,
+            mcp_tools: Some(mcp_tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
@@ -132,8 +132,8 @@ async fn js_repl_tools_only_blocks_namespaced_js_repl_tool() -> anyhow::Result<(
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tools: None,
             deferred_mcp_tools: None,
+            mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
@@ -183,8 +183,8 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tools: Some(mcp_tools),
             deferred_mcp_tools: None,
+            mcp_tools: Some(mcp_tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
@@ -256,8 +256,8 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tools: None,
             deferred_mcp_tools: None,
+            mcp_tools: None,
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::from(["echo".to_string()]),
             discoverable_tools: None,

@@ -870,12 +870,11 @@ fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
         &tools_config,
     );
 
-    let exposed_mcp_tools = &exposure.direct_tools;
-    let mut exposed_mcp_tool_names: Vec<_> = exposed_mcp_tools.keys().cloned().collect();
-    exposed_mcp_tool_names.sort();
+    let mut direct_tool_names: Vec<_> = exposure.direct_tools.keys().cloned().collect();
+    direct_tool_names.sort();
     let mut expected_tool_names: Vec<_> = mcp_tools.keys().cloned().collect();
     expected_tool_names.sort();
-    assert_eq!(exposed_mcp_tool_names, expected_tool_names);
+    assert_eq!(direct_tool_names, expected_tool_names);
     assert!(exposure.deferred_tools.is_none());
 }
 
@@ -5309,8 +5308,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
-            mcp_tools: Some(tools),
             deferred_mcp_tools,
+            mcp_tools: Some(tools),
             unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
