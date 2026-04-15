@@ -1,12 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-provider-auth"
+name = "codex-model-provider"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "codex_provider_auth"
+name = "codex_model_provider"
 path = "src/lib.rs"
 
 [lints]

@@ -5,7 +5,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 
-use crate::core_auth_provider::CoreAuthProvider;
+use crate::bearer_auth_provider::BearerAuthProvider;
 
 /// Returns the provider-scoped auth manager when this provider uses command-backed auth.
 ///
@@ -20,12 +20,12 @@ pub(crate) fn auth_manager_for_provider(
     }
 }
 
-fn core_auth_provider_from_auth(
+fn bearer_auth_provider_from_auth(
     auth: Option<CodexAuth>,
     provider: &ModelProviderInfo,
-) -> codex_protocol::error::Result<CoreAuthProvider> {
+) -> codex_protocol::error::Result<BearerAuthProvider> {
     if let Some(api_key) = provider.api_key()? {
-        return Ok(CoreAuthProvider {
+        return Ok(BearerAuthProvider {
             token: Some(api_key),
             account_id: None,
             is_fedramp_account: false,
@@ -33,7 +33,7 @@ fn core_auth_provider_from_auth(
     }
 
     if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(CoreAuthProvider {
+        return Ok(BearerAuthProvider {
             token: Some(token),
             account_id: None,
             is_fedramp_account: false,
@@ -42,13 +42,13 @@ fn core_auth_provider_from_auth(
 
     if let Some(auth) = auth {
         let token = auth.get_token()?;
-        Ok(CoreAuthProvider {
+        Ok(BearerAuthProvider {
             token: Some(token),
             account_id: auth.get_account_id(),
             is_fedramp_account: auth.is_fedramp_account(),
         })
     } else {
-        Ok(CoreAuthProvider {
+        Ok(BearerAuthProvider {
             token: None,
             account_id: None,
             is_fedramp_account: false,
@@ -60,6 +60,6 @@ pub(crate) fn resolve_provider_auth(
     auth: Option<CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<Arc<dyn AuthProvider>> {
-    let api_auth = core_auth_provider_from_auth(auth, provider)?;
+    let api_auth = bearer_auth_provider_from_auth(auth, provider)?;
     Ok(Arc::new(api_auth))
 }

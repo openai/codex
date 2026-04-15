@@ -1,6 +1,6 @@
 use clap::Parser;
 use codex_core::config::Config;
-use codex_provider_auth::create_model_provider;
+use codex_model_provider::create_model_provider;
 use codex_utils_cli::CliConfigOverrides;
 use serde_json::json;
 use tokio::io::AsyncReadExt;

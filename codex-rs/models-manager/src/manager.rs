@@ -16,6 +16,8 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
+use codex_model_provider::SharedModelProvider;
+use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -24,8 +26,6 @@ use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_provider_auth::SharedModelProvider;
-use codex_provider_auth::create_model_provider;
 use codex_response_debug_context::extract_response_debug_context;
 use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
@@ -432,15 +432,13 @@ impl ModelsManager {
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
-        let Some(auth_manager) = self.provider.auth_manager() else {
-            return Ok(());
-        };
+        let codex_api_key_env_enabled = self
+            .provider
+            .auth_manager()
+            .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
         let provider_auth = self.provider.resolve_auth().await?;
         let auth_mode = provider_auth.auth.as_ref().map(CodexAuth::auth_mode);
-        let auth_env = collect_auth_env_telemetry(
-            self.provider.info(),
-            auth_manager.codex_api_key_env_enabled(),
-        );
+        let auth_env = collect_auth_env_telemetry(self.provider.info(), codex_api_key_env_enabled);
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),

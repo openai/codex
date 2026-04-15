@@ -9,8 +9,8 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 
-use crate::provider_auth::auth_manager_for_provider;
-use crate::provider_auth::resolve_provider_auth;
+use crate::auth::auth_manager_for_provider;
+use crate::auth::resolve_provider_auth;
 
 /// Runtime provider abstraction used by model execution.
 ///

@@ -2,14 +2,15 @@ use codex_api::AuthProvider;
 use http::HeaderMap;
 use http::HeaderValue;
 
+/// Bearer-token auth provider for OpenAI-compatible model-provider requests.
 #[derive(Clone, Default)]
-pub struct CoreAuthProvider {
+pub struct BearerAuthProvider {
     pub token: Option<String>,
     pub account_id: Option<String>,
     pub is_fedramp_account: bool,
 }
 
-impl CoreAuthProvider {
+impl BearerAuthProvider {
     pub fn for_test(token: Option<&str>, account_id: Option<&str>) -> Self {
         Self {
             token: token.map(str::to_string),
@@ -19,7 +20,7 @@ impl CoreAuthProvider {
     }
 }
 
-impl AuthProvider for CoreAuthProvider {
+impl AuthProvider for BearerAuthProvider {
     fn add_auth_headers(&self, headers: &mut HeaderMap) {
         if let Some(token) = self.token.as_ref()
             && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
@@ -53,8 +54,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn core_auth_provider_reports_when_auth_header_will_attach() {
-        let auth = CoreAuthProvider {
+    fn bearer_auth_provider_reports_when_auth_header_will_attach() {
+        let auth = BearerAuthProvider {
             token: Some("access-token".to_string()),
             account_id: None,
             is_fedramp_account: false,
@@ -65,8 +66,8 @@ mod tests {
     }
 
     #[test]
-    fn core_auth_provider_adds_auth_headers() {
-        let auth = CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123"));
+    fn bearer_auth_provider_adds_auth_headers() {
+        let auth = BearerAuthProvider::for_test(Some("access-token"), Some("workspace-123"));
         let mut headers = HeaderMap::new();
 
         auth.add_auth_headers(&mut headers);
@@ -86,8 +87,8 @@ mod tests {
     }
 
     #[test]
-    fn core_auth_provider_adds_fedramp_routing_header_for_fedramp_accounts() {
-        let auth = CoreAuthProvider {
+    fn bearer_auth_provider_adds_fedramp_routing_header_for_fedramp_accounts() {
+        let auth = BearerAuthProvider {
             token: Some("access-token".to_string()),
             account_id: Some("workspace-123".to_string()),
             is_fedramp_account: true,
