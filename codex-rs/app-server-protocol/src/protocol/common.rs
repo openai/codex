@@ -382,6 +382,7 @@ client_request_definitions! {
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("memory"),
         response: v2::MemoryResetResponse,
     },
     ThreadUnarchive => "thread/unarchive" {
