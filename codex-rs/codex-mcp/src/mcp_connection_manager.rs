@@ -35,7 +35,9 @@ use async_channel::Sender;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
+use codex_config::McpServerEnvironment;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::Environment;
 use codex_protocol::ToolName;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -50,6 +52,7 @@ use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::ExecutorStdioServerLauncher;
 use codex_rmcp_client::LocalStdioServerLauncher;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::SendElicitation;
@@ -493,6 +496,8 @@ impl AsyncManagedClient {
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
+        environment: Option<Arc<Environment>>,
+        remote_stdio_cwd: PathBuf,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -509,8 +514,16 @@ impl AsyncManagedClient {
                     return Err(error.into());
                 }
 
-                let client =
-                    Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+                let client = Arc::new(
+                    make_rmcp_client(
+                        &server_name,
+                        config.clone(),
+                        store_mode,
+                        environment,
+                        remote_stdio_cwd,
+                    )
+                    .await?,
+                );
                 match start_server_task(
                     server_name,
                     client,
@@ -710,6 +723,8 @@ impl McpConnectionManager {
         submit_id: String,
         tx_event: Sender<Event>,
         initial_sandbox_policy: SandboxPolicy,
+        environment: Option<Arc<Environment>>,
+        remote_stdio_cwd: PathBuf,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
@@ -754,6 +769,8 @@ impl McpConnectionManager {
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
                 Arc::clone(&tool_plugin_provenance),
+                environment.clone(),
+                remote_stdio_cwd.clone(),
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -1483,9 +1500,17 @@ struct StartServerTaskParams {
 
 async fn make_rmcp_client(
     server_name: &str,
-    transport: McpServerTransportConfig,
+    config: McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
+    exec_environment: Option<Arc<Environment>>,
+    remote_stdio_cwd: PathBuf,
 ) -> Result<RmcpClient, StartupOutcomeError> {
+    let McpServerConfig {
+        transport,
+        environment,
+        ..
+    } = config;
+
     match transport {
         McpServerTransportConfig::Stdio {
             command,
@@ -1501,7 +1526,26 @@ async fn make_rmcp_client(
                     .map(|(key, value)| (key.into(), value.into()))
                     .collect::<HashMap<_, _>>()
             });
-            let launcher = Arc::new(LocalStdioServerLauncher) as Arc<dyn StdioServerLauncher>;
+            let launcher = match environment {
+                McpServerEnvironment::Local => {
+                    Arc::new(LocalStdioServerLauncher) as Arc<dyn StdioServerLauncher>
+                }
+                McpServerEnvironment::Remote => {
+                    let exec_environment = exec_environment.ok_or_else(|| {
+                        StartupOutcomeError::from(anyhow!(
+                            "remote MCP server `{server_name}` requires an executor environment"
+                        ))
+                    })?;
+                    Arc::new(ExecutorStdioServerLauncher::new(
+                        exec_environment.get_exec_backend(),
+                        remote_stdio_cwd,
+                    ))
+                }
+            };
+
+            // `RmcpClient` always sees a launched MCP stdio server. The
+            // launcher hides whether that means a local child process or an
+            // executor process whose stdin/stdout bytes cross the process API.
             RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd, launcher)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
@@ -1511,23 +1555,34 @@ async fn make_rmcp_client(
             http_headers,
             env_http_headers,
             bearer_token_env_var,
-        } => {
-            let resolved_bearer_token =
-                match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
-                    Ok(token) => token,
-                    Err(error) => return Err(error.into()),
-                };
-            RmcpClient::new_streamable_http_client(
-                server_name,
-                &url,
-                resolved_bearer_token,
-                http_headers,
-                env_http_headers,
-                store_mode,
-            )
-            .await
-            .map_err(StartupOutcomeError::from)
-        }
+        } => match environment {
+            McpServerEnvironment::Local => {
+                // Local streamable HTTP remains the existing reqwest path from
+                // the orchestrator process.
+                let resolved_bearer_token =
+                    match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
+                        Ok(token) => token,
+                        Err(error) => return Err(error.into()),
+                    };
+                RmcpClient::new_streamable_http_client(
+                    server_name,
+                    &url,
+                    resolved_bearer_token,
+                    http_headers,
+                    env_http_headers,
+                    store_mode,
+                )
+                .await
+                .map_err(StartupOutcomeError::from)
+            }
+            McpServerEnvironment::Remote => Err(StartupOutcomeError::from(anyhow!(
+                // Remote HTTP needs the future low-level executor
+                // `network/request` API so reqwest runs on the executor side.
+                // Do not fall back to local HTTP here; the config explicitly
+                // asked for remote placement.
+                "remote streamable HTTP MCP server `{server_name}` is not implemented yet"
+            ))),
+        },
     }
 }
 
