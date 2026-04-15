@@ -288,7 +288,7 @@ async fn run_session_picker_with_loader(
                             return Ok(sel);
                         }
                     }
-                    TuiEvent::Draw => {
+                    TuiEvent::Draw | TuiEvent::Resize => {
                         if let Ok(size) = alt.tui.terminal.size() {
                             let list_height = size.height.saturating_sub(4) as usize;
                             state.update_view_rows(list_height);

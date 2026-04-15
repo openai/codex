@@ -292,6 +292,7 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
         | TerminalName::GnomeTerminal
         | TerminalName::Vte
         | TerminalName::WindowsTerminal
+        | TerminalName::Superset
         | TerminalName::Dumb
         | TerminalName::Unknown => key_hint::alt(KeyCode::Up),
     }
