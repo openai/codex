@@ -65,6 +65,20 @@ codex app-server generate-ts --out DIR
 codex app-server generate-json-schema --out DIR
 ```
 
+## Capability discovery
+
+Clients that need to conditionally use rollout-era features can query machine-readable app-server capabilities:
+
+```
+codex app-server capabilities
+```
+
+The command currently reports whether websocket auth supports direct capability-token SHA-256 digests:
+
+```json
+{"websocketAuth":{"capabilityTokenSha256":true}}
+```
+
 ## Core Primitives
 
 The API exposes three top level primitives representing an interaction between a user and Codex:
