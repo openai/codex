@@ -470,10 +470,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             range: None,
         })
         .collect();
-    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
-        arg0_paths.codex_self_exe.clone(),
-        arg0_paths.codex_linux_sandbox_exe.clone(),
-    )?;
+    let local_runtime_paths =
+        ExecServerRuntimePaths::from_optional_paths(arg0_paths.codex_self_exe.clone())?;
     let in_process_start_args = InProcessClientStartArgs {
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),

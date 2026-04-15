@@ -100,7 +100,7 @@ impl FileSystemSandboxRunner {
                 enforce_managed_network: false,
                 network: None,
                 sandbox_policy_cwd: cwd.as_path(),
-                codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
+                codex_linux_sandbox_exe: Some(self.runtime_paths.codex_self_exe.as_path()),
                 use_legacy_landlock: sandbox_context.use_legacy_landlock,
                 windows_sandbox_level: sandbox_context.windows_sandbox_level,
                 windows_sandbox_private_desktop: sandbox_context.windows_sandbox_private_desktop,
@@ -356,11 +356,8 @@ mod tests {
     #[test]
     fn helper_permissions_strip_network_grants() {
         let codex_self_exe = std::env::current_exe().expect("current exe");
-        let runtime_paths = ExecServerRuntimePaths::new(
-            codex_self_exe.clone(),
-            /*codex_linux_sandbox_exe*/ None,
-        )
-        .expect("runtime paths");
+        let runtime_paths =
+            ExecServerRuntimePaths::new(codex_self_exe.clone()).expect("runtime paths");
         let runner = FileSystemSandboxRunner::new(runtime_paths);
         let readable = AbsolutePathBuf::from_absolute_path(
             codex_self_exe.parent().expect("current exe parent"),
@@ -399,11 +396,8 @@ mod tests {
     #[test]
     fn helper_permissions_include_helper_read_root_without_additional_permissions() {
         let codex_self_exe = std::env::current_exe().expect("current exe");
-        let runtime_paths = ExecServerRuntimePaths::new(
-            codex_self_exe.clone(),
-            /*codex_linux_sandbox_exe*/ None,
-        )
-        .expect("runtime paths");
+        let runtime_paths =
+            ExecServerRuntimePaths::new(codex_self_exe.clone()).expect("runtime paths");
         let runner = FileSystemSandboxRunner::new(runtime_paths);
         let readable = AbsolutePathBuf::from_absolute_path(
             codex_self_exe.parent().expect("current exe parent"),

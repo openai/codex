@@ -362,10 +362,7 @@ pub async fn run_main_with_transport(
     auth: AppServerWebsocketAuthSettings,
 ) -> IoResult<()> {
     let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
-        ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?,
+        ExecServerRuntimePaths::from_optional_paths(arg0_paths.codex_self_exe.clone())?,
     )));
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);

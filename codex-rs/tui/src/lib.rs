@@ -734,10 +734,7 @@ pub async fn run_main(
     };
 
     let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
-        ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?,
+        ExecServerRuntimePaths::from_optional_paths(arg0_paths.codex_self_exe.clone())?,
     )));
     let cwd = cli.cwd.clone();
     let config_cwd =

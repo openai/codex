@@ -297,11 +297,9 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_carries_local_runtime_paths() {
-        let runtime_paths = ExecServerRuntimePaths::new(
-            std::env::current_exe().expect("current exe"),
-            /*codex_linux_sandbox_exe*/ None,
-        )
-        .expect("runtime paths");
+        let runtime_paths =
+            ExecServerRuntimePaths::new(std::env::current_exe().expect("current exe"))
+                .expect("runtime paths");
         let manager = EnvironmentManager::new_with_runtime_paths(
             /*exec_server_url*/ None,
             Some(runtime_paths.clone()),

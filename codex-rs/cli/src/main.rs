@@ -1126,10 +1126,7 @@ async fn run_exec_server_command(
         .codex_self_exe
         .clone()
         .ok_or_else(|| anyhow::anyhow!("Codex executable path is not configured"))?;
-    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
-        codex_self_exe,
-        arg0_paths.codex_linux_sandbox_exe.clone(),
-    )?;
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(codex_self_exe)?;
     codex_exec_server::run_main(&cmd.listen, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)

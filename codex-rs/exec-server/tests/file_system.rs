@@ -50,10 +50,7 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
         })
     } else {
         let helper_paths = test_codex_helper_paths()?;
-        let runtime_paths = ExecServerRuntimePaths::new(
-            helper_paths.codex_exe.clone(),
-            helper_paths.codex_linux_sandbox_exe.clone(),
-        )?;
+        let runtime_paths = ExecServerRuntimePaths::new(helper_paths.codex_exe.clone())?;
         Ok(FileSystemContext {
             file_system: Arc::new(LocalFileSystem::with_runtime_paths(runtime_paths)),
             _helper_paths: Some(helper_paths),
