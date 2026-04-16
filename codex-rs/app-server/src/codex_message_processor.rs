@@ -3100,18 +3100,24 @@ impl CodexMessageProcessor {
         thread_id: ThreadId,
     ) -> Result<Option<StateDbHandle>, JSONRPCErrorError> {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            return Ok(thread.state_db());
-        }
-
-        match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                return Err(invalid_request(format!("thread not found: {thread_id}")));
+            if thread.rollout_path().is_none() {
+                return Ok(None);
             }
-            Err(err) => {
-                return Err(internal_error(format!(
-                    "failed to locate thread id {thread_id}: {err}"
-                )));
+            if let Some(state_db) = thread.state_db() {
+                return Ok(Some(state_db));
+            }
+        } else {
+            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
+            {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err(invalid_request(format!("thread not found: {thread_id}")));
+                }
+                Err(err) => {
+                    return Err(internal_error(format!(
+                        "failed to locate thread id {thread_id}: {err}"
+                    )));
+                }
             }
         }
 
