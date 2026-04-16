@@ -72,7 +72,6 @@ use crate::status::RateLimitWindowDisplay;
 use crate::status::StatusAccountDisplay;
 use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
-use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
@@ -96,6 +95,7 @@ use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ToolRequestUserInputParams;
@@ -314,6 +314,7 @@ use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
+use crate::bottom_pane::GoalStatusIndicator;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -358,6 +359,8 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod goal_status;
+use self::goal_status::goal_status_indicator_from_app_goal;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod session_header;
@@ -976,6 +979,8 @@ pub(crate) struct ChatWidget {
     status_line_branch_pending: bool,
     // True once we've attempted a branch lookup for the current CWD.
     status_line_branch_lookup_complete: bool,
+    // Current thread-goal status shown in the status line when plan mode is inactive.
+    current_goal_status_indicator: Option<GoalStatusIndicator>,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
@@ -1036,6 +1041,11 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+}
+
+enum UserMessageHistoryRecord {
+    UserMessageText,
+    Override(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -2019,6 +2029,7 @@ impl ChatWidget {
         self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
+        self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
         let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
@@ -3140,7 +3151,8 @@ impl ChatWidget {
         );
     }
 
-    /// Handle a turn aborted due to user interrupt (Esc).
+    /// Handle a turn aborted due to user interrupt (Esc), budget exhaustion,
+    /// or review completion.
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
@@ -3156,7 +3168,7 @@ impl ChatWidget {
                 ));
             } else {
                 self.add_to_history(history_cell::new_error_event(
-                    "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
+                    self.interrupted_turn_message(reason),
                 ));
             }
         }
@@ -4081,6 +4093,20 @@ impl ChatWidget {
         self.refresh_status_line();
     }
 
+    fn interrupted_turn_message(&self, reason: TurnAbortReason) -> String {
+        if reason == TurnAbortReason::BudgetExceeded
+            || (reason == TurnAbortReason::Interrupted
+                && matches!(
+                    self.current_goal_status_indicator,
+                    Some(GoalStatusIndicator::BudgetStopped { .. })
+                ))
+        {
+            return "Goal budget reached - the turn was stopped.".to_string();
+        }
+
+        "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_string()
+    }
+
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
         let DeprecationNoticeEvent { summary, details } = event;
         self.add_to_history(history_cell::new_deprecation_notice(summary, details));
@@ -4960,6 +4986,7 @@ impl ChatWidget {
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
+            current_goal_status_indicator: None,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
@@ -4981,6 +5008,7 @@ impl ChatWidget {
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
+        widget.sync_goal_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -5365,6 +5393,17 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_history_record(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+        );
+    }
+
+    fn submit_user_message_with_history_record(
+        &mut self,
+        user_message: UserMessage,
+        history_record: UserMessageHistoryRecord,
+    ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -5586,18 +5625,27 @@ impl ChatWidget {
             return;
         }
 
-        // Persist the text to cross-session message history. Mentions are
-        // encoded into placeholder syntax so recall can reconstruct the
-        // mention bindings in a future session.
-        if !text.is_empty() {
-            let encoded_mentions = mention_bindings
-                .iter()
-                .map(|binding| LinkedMention {
-                    mention: binding.mention.clone(),
-                    path: binding.path.clone(),
-                })
-                .collect::<Vec<_>>();
-            let history_text = encode_history_mentions(&text, &encoded_mentions);
+        // Persist the submitted text to cross-session message history. Mentions are encoded into
+        // placeholder syntax so recall can reconstruct the mention bindings in a future session.
+        let history_text = match history_record {
+            UserMessageHistoryRecord::UserMessageText if !text.is_empty() => {
+                let encoded_mentions = mention_bindings
+                    .iter()
+                    .map(|binding| LinkedMention {
+                        mention: binding.mention.clone(),
+                        path: binding.path.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                Some(encode_history_mentions(&text, &encoded_mentions))
+            }
+            UserMessageHistoryRecord::Override(history_text) if !history_text.is_empty() => {
+                Some(history_text)
+            }
+            UserMessageHistoryRecord::UserMessageText | UserMessageHistoryRecord::Override(_) => {
+                None
+            }
+        };
+        if let Some(history_text) = history_text {
             self.submit_op(Op::AddToHistory { text: history_text });
         }
 
@@ -6122,6 +6170,9 @@ impl ChatWidget {
                         );
                     }
                 }
+            }
+            ServerNotification::ThreadGoalUpdated(notification) => {
+                self.on_thread_goal_updated(notification.goal);
             }
             ServerNotification::TurnStarted(notification) => {
                 self.last_turn_id = Some(notification.turn.id);
@@ -6650,6 +6701,7 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
+            EventMsg::ThreadGoalUpdated(_) => {}
             // NOTE: All three AgentMessage arms feed `record_agent_markdown` even
             // when the message is otherwise not rendered (thread-snapshot replay,
             // non-review live messages). This ensures the copy source stays
@@ -6751,6 +6803,12 @@ impl ChatWidget {
                 }
                 TurnAbortReason::ReviewEnded => {
                     self.on_interrupted_turn(ev.reason);
+                }
+                TurnAbortReason::BudgetExceeded => {
+                    self.submit_pending_steers_after_interrupt = false;
+                    self.pending_steers.clear();
+                    self.refresh_pending_input_preview();
+                    self.on_error(self.interrupted_turn_message(ev.reason))
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
@@ -9196,6 +9254,13 @@ impl ChatWidget {
             self.sync_plugins_command_enabled();
             self.refresh_plugin_mentions();
         }
+        if feature == Feature::GoalMode {
+            self.sync_goal_command_enabled();
+            if !enabled {
+                self.current_goal_status_indicator = None;
+                self.update_collaboration_mode_indicator();
+            }
+        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -9439,6 +9504,11 @@ impl ChatWidget {
             .set_plugins_command_enabled(self.config.features.enabled(Feature::Plugins));
     }
 
+    fn sync_goal_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_goal_command_enabled(self.config.features.enabled(Feature::GoalMode));
+    }
+
     fn current_model_supports_personality(&self) -> bool {
         let model = self.current_model();
         self.model_catalog
@@ -9611,7 +9681,24 @@ impl ChatWidget {
 
     fn update_collaboration_mode_indicator(&mut self) {
         let indicator = self.collaboration_mode_indicator();
+        let goal_indicator =
+            if indicator.is_none() && self.config.features.enabled(Feature::GoalMode) {
+                self.current_goal_status_indicator.clone()
+            } else {
+                None
+            };
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
+        self.bottom_pane.set_goal_status_indicator(goal_indicator);
+    }
+
+    fn on_thread_goal_updated(&mut self, goal: AppThreadGoal) {
+        if !self.config.features.enabled(Feature::GoalMode) {
+            self.current_goal_status_indicator = None;
+            self.update_collaboration_mode_indicator();
+            return;
+        }
+        self.current_goal_status_indicator = goal_status_indicator_from_app_goal(&goal);
+        self.update_collaboration_mode_indicator();
     }
 
     fn personality_label(personality: Personality) -> &'static str {
@@ -10102,7 +10189,14 @@ impl ChatWidget {
 
         if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
             if self.is_cancellable_work_active() {
-                self.submit_op(AppCommand::interrupt());
+                if self.quit_shortcut_active_for(key) {
+                    self.quit_shortcut_expires_at = None;
+                    self.quit_shortcut_key = None;
+                    self.request_immediate_exit();
+                } else {
+                    self.arm_quit_shortcut(key);
+                    self.submit_op(AppCommand::interrupt());
+                }
             } else {
                 self.request_quit_without_confirmation();
             }

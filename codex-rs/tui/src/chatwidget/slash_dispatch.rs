@@ -151,6 +151,23 @@ impl ChatWidget {
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
             }
+            SlashCommand::Goal => {
+                if !self.config.features.enabled(Feature::GoalMode) {
+                    return;
+                }
+                if let Some(thread_id) = self.thread_id {
+                    self.app_event_tx
+                        .send(AppEvent::ToggleThreadGoal { thread_id });
+                } else {
+                    self.add_info_message(
+                        "Usage: /goal <objective, optionally with a token budget>".to_string(),
+                        Some(
+                            "Example: /goal keep improving this benchmark for up to 50K tokens"
+                                .to_string(),
+                        ),
+                    );
+                }
+            }
             SlashCommand::Collab => {
                 if !self.collaboration_modes_enabled() {
                     self.add_info_message(
@@ -476,6 +493,25 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Goal if !trimmed.is_empty() => {
+                if !self.config.features.enabled(Feature::GoalMode) {
+                    return;
+                }
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                let prompt = format!(
+                    "Set the current thread goal to the following long-running objective, extracting any explicit token budget from it, then continue working toward it:\n\n{prepared_args}"
+                );
+                self.submit_user_message_with_history_record(
+                    prompt.into(),
+                    UserMessageHistoryRecord::Override(format!("/goal {prepared_args}")),
+                );
+                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self

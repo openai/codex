@@ -95,6 +95,14 @@ pub(crate) enum CollaborationModeIndicator {
     Execute,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GoalStatusIndicator {
+    Active { usage: Option<String> },
+    Paused,
+    BudgetStopped { usage: Option<String> },
+    Complete,
+}
+
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
@@ -481,6 +489,32 @@ pub(crate) fn mode_indicator_line(
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
     indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
+}
+
+pub(crate) fn goal_status_indicator_line(
+    indicator: Option<&GoalStatusIndicator>,
+) -> Option<Line<'static>> {
+    let indicator = indicator?;
+    let label = match indicator {
+        GoalStatusIndicator::Active { usage } => {
+            if let Some(usage) = usage {
+                format!("Pursuing goal ({usage})")
+            } else {
+                "Pursuing goal".to_string()
+            }
+        }
+        GoalStatusIndicator::Paused => "Goal paused (/goal to toggle)".to_string(),
+        GoalStatusIndicator::BudgetStopped { usage } => {
+            if let Some(usage) = usage {
+                format!("Goal unmet ({usage})")
+            } else {
+                "Goal abandoned".to_string()
+            }
+        }
+        GoalStatusIndicator::Complete => "Goal achieved".to_string(),
+    };
+
+    Some(Line::from(vec![Span::from(label).magenta()]))
 }
 
 fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {

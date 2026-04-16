@@ -35,6 +35,11 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadGoalGetParams;
+use codex_app_server_protocol::ThreadGoalGetResponse;
+use codex_app_server_protocol::ThreadGoalSetParams;
+use codex_app_server_protocol::ThreadGoalSetResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -547,6 +552,44 @@ impl AppServerSession {
             .await
             .wrap_err("memory/reset failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn thread_goal_get(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadGoalGetResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadGoalGet {
+                request_id,
+                params: ThreadGoalGetParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/goal/get failed in TUI")
+    }
+
+    pub(crate) async fn thread_goal_set(
+        &mut self,
+        thread_id: ThreadId,
+        objective: Option<String>,
+        status: Option<ThreadGoalStatus>,
+        token_budget: Option<Option<i64>>,
+    ) -> Result<ThreadGoalSetResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadGoalSet {
+                request_id,
+                params: ThreadGoalSetParams {
+                    thread_id: thread_id.to_string(),
+                    objective,
+                    status,
+                    token_budget,
+                },
+            })
+            .await
+            .wrap_err("thread/goal/set failed in TUI")
     }
 
     pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {

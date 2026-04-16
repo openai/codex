@@ -165,6 +165,11 @@ pub(crate) enum AppEvent {
         origin: RateLimitRefreshOrigin,
     },
 
+    /// Toggle the current thread goal between active and paused, or show goal usage.
+    ToggleThreadGoal {
+        thread_id: ThreadId,
+    },
+
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,

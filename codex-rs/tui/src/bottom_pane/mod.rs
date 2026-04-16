@@ -88,6 +88,9 @@ mod skill_popup;
 mod skills_toggle_view;
 mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
+pub(crate) use footer::GoalStatusIndicator;
+#[cfg(test)]
+pub(crate) use footer::goal_status_indicator_line;
 pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;
@@ -322,6 +325,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_goal_status_indicator(&mut self, indicator: Option<GoalStatusIndicator>) {
+        self.composer.set_goal_status_indicator(indicator);
+        self.request_redraw();
+    }
+
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.composer.set_personality_command_enabled(enabled);
         self.request_redraw();
@@ -329,6 +337,11 @@ impl BottomPane {
 
     pub fn set_fast_command_enabled(&mut self, enabled: bool) {
         self.composer.set_fast_command_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_goal_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_goal_command_enabled(enabled);
         self.request_redraw();
     }
 

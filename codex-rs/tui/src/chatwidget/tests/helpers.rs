@@ -288,6 +288,7 @@ pub(super) async fn make_chatwidget_manual(
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
         status_line_branch_lookup_complete: false,
+        current_goal_status_indicator: None,
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
         last_rendered_user_message_event: None,

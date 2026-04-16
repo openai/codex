@@ -1217,6 +1217,79 @@ async fn interrupted_turn_error_message_snapshot() {
     assert_chatwidget_snapshot!("interrupted_turn_error_message", last);
 }
 
+#[tokio::test]
+async fn interrupted_turn_after_goal_budget_stopped_uses_budget_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+
+    chat.handle_server_notification(
+        codex_app_server_protocol::ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                goal: codex_app_server_protocol::ThreadGoal {
+                    thread_id: "thread-1".to_string(),
+                    objective: "Run until the token budget is stopped".to_string(),
+                    status: codex_app_server_protocol::ThreadGoalStatus::BudgetStopped,
+                    token_budget: Some(10_000),
+                    tokens_used: 10_500,
+                    created_at: 0,
+                    updated_at: 1,
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        codex_app_server_protocol::ServerNotification::TurnCompleted(
+            codex_app_server_protocol::TurnCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn: codex_app_server_protocol::Turn {
+                    id: "turn-1".to_string(),
+                    items: Vec::new(),
+                    status: codex_app_server_protocol::TurnStatus::Interrupted,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let last = lines_to_single_string(cells.last().unwrap());
+    assert_chatwidget_snapshot!("interrupted_turn_goal_budget_stopped_message", last);
+}
+
+#[tokio::test]
+async fn direct_budget_stopped_turn_uses_budget_message_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::BudgetExceeded,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let last = lines_to_single_string(cells.last().unwrap());
+    assert_chatwidget_snapshot!("direct_budget_stopped_turn_message", last);
+}
+
 // Snapshot test: interrupting specifically to submit pending steers shows an
 // informational banner instead of the generic "tell the model what to do
 // differently" error prompt.

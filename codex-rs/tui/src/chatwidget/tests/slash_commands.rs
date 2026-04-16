@@ -23,6 +23,19 @@ fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
     chat.bottom_pane.composer_text()
 }
 
+fn next_add_to_history_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::AddToHistory { text }) => return text,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected AddToHistory op but queue was empty"),
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected AddToHistory op but channel closed")
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -122,6 +135,54 @@ async fn inline_slash_command_is_available_from_local_recall_after_dispatch() {
     let _ = drain_insert_history(&mut rx);
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     assert_eq!(chat.bottom_pane.composer_text(), "/rename Better title");
+}
+
+#[tokio::test]
+async fn goal_slash_command_records_original_command_in_history() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    let command = "/goal write a cat poem for 5 minutes";
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: test_path_buf("/home/user/project").abs(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+
+    submit_composer_text(&mut chat, command);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut op_rx), command);
+    assert_eq!(recall_latest_after_clearing(&mut chat), command);
 }
 
 #[tokio::test]

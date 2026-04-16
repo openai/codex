@@ -59,6 +59,7 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::status::format_tokens_compact;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -94,6 +95,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::ThreadGoal;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
@@ -162,6 +165,9 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use uuid::Uuid;
+
+const THREAD_UNSUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 mod agent_navigation;
 mod app_server_adapter;
 pub(crate) mod app_server_requests;
@@ -246,6 +252,27 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
         },
         _ => None,
     }
+}
+
+fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
+    match status {
+        ThreadGoalStatus::Active => "active",
+        ThreadGoalStatus::Paused => "paused",
+        ThreadGoalStatus::BudgetStopped => "stopped due to budget",
+        ThreadGoalStatus::Complete => "complete",
+    }
+}
+
+fn goal_usage_summary(goal: &ThreadGoal) -> String {
+    let mut parts = vec![format!("Objective: {}", goal.objective)];
+    if let Some(token_budget) = goal.token_budget {
+        parts.push(format!(
+            "Tokens: {}/{}.",
+            format_tokens_compact(goal.tokens_used),
+            format_tokens_compact(token_budget)
+        ));
+    }
+    parts.join(" ")
 }
 
 fn default_exec_approval_decisions(
@@ -1658,10 +1685,28 @@ impl App {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
-            if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+            Self::unsubscribe_thread_with_timeout(app_server, thread_id).await;
+            self.abort_thread_event_listener(thread_id);
+        }
+    }
+
+    async fn unsubscribe_thread_with_timeout(
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        match tokio::time::timeout(
+            THREAD_UNSUBSCRIBE_TIMEOUT,
+            app_server.thread_unsubscribe(thread_id),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
             }
-            self.abort_thread_event_listener(thread_id);
+            Err(_) => {
+                tracing::warn!("timed out unsubscribing thread {thread_id}");
+            }
         }
     }
 
@@ -3452,9 +3497,7 @@ impl App {
         let tracked_thread_ids: Vec<ThreadId> =
             self.thread_event_channels.keys().copied().collect();
         for thread_id in tracked_thread_ids {
-            if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
-                tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {err}");
-            }
+            Self::unsubscribe_thread_with_timeout(app_server, thread_id).await;
         }
         self.config = config.clone();
         match app_server
@@ -4298,6 +4341,54 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    async fn toggle_thread_goal(&mut self, app_server: &mut AppServerSession, thread_id: ThreadId) {
+        let response = match app_server.thread_goal_get(thread_id).await {
+            Ok(response) => response,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to read thread goal: {err}"));
+                return;
+            }
+        };
+
+        let Some(goal) = response.goal else {
+            self.chat_widget.add_info_message(
+                "Usage: /goal <objective, optionally with a time or token budget>".to_string(),
+                Some("No goal is currently set for this thread.".to_string()),
+            );
+            return;
+        };
+
+        let next_status = match goal.status {
+            ThreadGoalStatus::Active => Some(ThreadGoalStatus::Paused),
+            ThreadGoalStatus::Paused => Some(ThreadGoalStatus::Active),
+            ThreadGoalStatus::BudgetStopped | ThreadGoalStatus::Complete => None,
+        };
+
+        if let Some(status) = next_status {
+            match app_server
+                .thread_goal_set(thread_id, None, Some(status), None)
+                .await
+            {
+                Ok(response) => self.chat_widget.add_info_message(
+                    format!("Goal {}", goal_status_label(response.goal.status)),
+                    Some(goal_usage_summary(&response.goal)),
+                ),
+                Err(err) => self
+                    .chat_widget
+                    .add_error_message(format!("Failed to update thread goal: {err}")),
+            }
+        } else {
+            self.chat_widget.add_info_message(
+                format!("Goal {}", goal_status_label(goal.status)),
+                Some(format!(
+                    "{} Use /goal <new objective> to replace it.",
+                    goal_usage_summary(&goal)
+                )),
+            );
+        }
+    }
+
     async fn handle_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -4679,6 +4770,9 @@ impl App {
             }
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
+            }
+            AppEvent::ToggleThreadGoal { thread_id } => {
+                self.toggle_thread_goal(app_server, thread_id).await;
             }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {
@@ -6611,6 +6705,30 @@ mod tests {
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
+    }
+
+    fn test_thread_goal(token_budget: Option<i64>, tokens_used: i64) -> ThreadGoal {
+        ThreadGoal {
+            thread_id: "thread-1".to_string(),
+            objective: "Complete the task described in ../gameboy-long-running-prompt5.txt"
+                .to_string(),
+            status: ThreadGoalStatus::BudgetStopped,
+            token_budget,
+            tokens_used,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn goal_usage_summary_formats_budgeted_tokens() {
+        assert_eq!(
+            goal_usage_summary(&test_thread_goal(
+                /*token_budget*/ Some(50_000),
+                /*tokens_used*/ 63_876,
+            )),
+            "Objective: Complete the task described in ../gameboy-long-running-prompt5.txt Tokens: 63.9K/50K."
+        );
     }
 
     #[test]

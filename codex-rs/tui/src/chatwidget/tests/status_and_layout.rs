@@ -1,4 +1,5 @@
 use super::*;
+use crate::bottom_pane::goal_status_indicator_line;
 use pretty_assertions::assert_eq;
 
 /// Receiving a TokenCount event without usage clears the context indicator.
@@ -523,6 +524,9 @@ async fn streaming_final_answer_keeps_task_running_state() {
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
 }
 
 #[tokio::test]
@@ -1231,6 +1235,141 @@ async fn status_line_model_with_reasoning_context_remaining_percent_footer_snaps
         "status_line_model_with_reasoning_context_remaining_percent_footer",
         normalized_backend_snapshot(terminal.backend())
     );
+}
+
+#[tokio::test]
+async fn status_line_goal_active_token_budget_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
+    chat.refresh_status_line();
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                goal: test_thread_goal(
+                    codex_app_server_protocol::ThreadGoalStatus::Active,
+                    /*token_budget*/ Some(50_000),
+                    /*tokens_used*/ 40_000,
+                ),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw goal status footer");
+    assert_chatwidget_snapshot!(
+        "status_line_goal_active_token_budget_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[test]
+fn goal_status_indicator_formats_statuses_and_budgets() {
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(50_000),
+            /*tokens_used*/ 40_000,
+        )),
+        Some(GoalStatusIndicator::Active {
+            usage: Some("40K / 50K".to_string()),
+        })
+    );
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+            /*tokens_used*/ 0,
+        )),
+        Some(GoalStatusIndicator::Active { usage: None })
+    );
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::BudgetStopped,
+            /*token_budget*/ Some(50_000),
+            /*tokens_used*/ 51_000,
+        )),
+        Some(GoalStatusIndicator::BudgetStopped {
+            usage: Some("51K / 50K tokens".to_string()),
+        })
+    );
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::BudgetStopped,
+            /*token_budget*/ None,
+            /*tokens_used*/ 0,
+        )),
+        Some(GoalStatusIndicator::BudgetStopped { usage: None })
+    );
+    assert_eq!(
+        goal_status_indicator_from_app_goal(&test_thread_goal(
+            codex_app_server_protocol::ThreadGoalStatus::Complete,
+            /*token_budget*/ Some(50_000),
+            /*tokens_used*/ 40_000,
+        )),
+        Some(GoalStatusIndicator::Complete)
+    );
+}
+
+#[test]
+fn goal_status_indicator_line_formats_goal_mode_text() {
+    let cases = [
+        (
+            GoalStatusIndicator::Active {
+                usage: Some("4K / 5K".to_string()),
+            },
+            "Pursuing goal (4K / 5K)",
+        ),
+        (
+            GoalStatusIndicator::BudgetStopped {
+                usage: Some("4K / 5K tokens".to_string()),
+            },
+            "Goal unmet (4K / 5K tokens)",
+        ),
+        (GoalStatusIndicator::Paused, "Goal paused (/goal to toggle)"),
+        (
+            GoalStatusIndicator::BudgetStopped { usage: None },
+            "Goal abandoned",
+        ),
+        (GoalStatusIndicator::Complete, "Goal achieved"),
+    ];
+
+    for (indicator, expected) in cases {
+        let line =
+            goal_status_indicator_line(Some(&indicator)).expect("goal indicator should render");
+        let actual = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(expected, actual);
+    }
+}
+
+fn test_thread_goal(
+    status: codex_app_server_protocol::ThreadGoalStatus,
+    token_budget: Option<i64>,
+    tokens_used: i64,
+) -> codex_app_server_protocol::ThreadGoal {
+    codex_app_server_protocol::ThreadGoal {
+        thread_id: "thread-1".to_string(),
+        objective: "Keep improving the benchmark".to_string(),
+        status,
+        token_budget,
+        tokens_used,
+        created_at: 0,
+        updated_at: 0,
+    }
 }
 
 #[tokio::test]
