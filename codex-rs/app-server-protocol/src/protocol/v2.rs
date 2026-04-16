@@ -5797,7 +5797,8 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub additional_permissions: Option<AdditionalPermissionProfile>,
-    /// Optional proposed execpolicy amendment to allow similar commands without prompting.
+    /// Optional proposed execpolicy amendment that clients may present as an
+    /// explicit persistent approval option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
