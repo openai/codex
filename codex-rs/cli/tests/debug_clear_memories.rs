@@ -125,7 +125,8 @@ INSERT INTO jobs (
     .fetch_one(&pool)
     .await?;
     assert_eq!(memory_jobs_count, 0);
-    assert!(!memory_root.exists());
+    assert!(memory_root.exists());
+    assert_eq!(std::fs::read_dir(memory_root)?.count(), 0);
 
     Ok(())
 }

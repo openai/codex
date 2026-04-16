@@ -144,6 +144,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
+            experimental_environment: None,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
@@ -737,6 +738,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                 tool: "image".to_string(),
                 arguments: Some(json!({})),
             },
+            mcp_app_resource_uri: None,
         },
     );
 

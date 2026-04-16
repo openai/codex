@@ -226,12 +226,11 @@ impl ActionKind {
                 let _ = fs::remove_file(&path);
                 let patch = build_add_file_patch(&patch_path, content);
                 let command = shell_apply_patch_command(&patch);
-                let event = shell_event(
-                    call_id,
-                    &command,
-                    /*timeout_ms*/ 30_000,
-                    sandbox_permissions,
-                )?;
+                // Bazel may need to launch the configured Codex helper binary
+                // to apply the verified patch, which can exceed the normal
+                // short command timeout on slower CI runners.
+                let timeout_ms = 30_000;
+                let event = shell_event(call_id, &command, timeout_ms, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
         }
