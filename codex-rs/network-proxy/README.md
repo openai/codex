@@ -83,9 +83,10 @@ prefix = "Bearer "
 
 # `match.body` is reserved for a future release. Current hooks match only on
 # method/path/query/headers and can mutate outbound request headers.
-# `match.path_prefixes` accepts literal prefixes by default.
-# Prefix with `glob:` to opt into wildcard matching, for example
-# `glob:/repos/*/codex/issues*` or `glob:*preview*`.
+# `match.path_prefixes` accepts literal prefixes by default. Prefix path,
+# query, or header matchers with `glob:` to opt into wildcard matching.
+# Use `literal:` when a literal value must start with a reserved prefix.
+# In paths, `*` and `?` do not match `/`; use `**` when crossing segments is intended.
 ```
 
 ### 2) Run the proxy

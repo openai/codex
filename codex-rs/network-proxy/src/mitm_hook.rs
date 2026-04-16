@@ -18,6 +18,7 @@ use std::path::Path;
 use url::form_urlencoded;
 
 const GLOB_PREFIX: &str = "glob:";
+const LITERAL_PREFIX: &str = "literal:";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
@@ -121,6 +122,11 @@ pub enum PathMatcher {
 pub enum ValueMatcher {
     Exact(String),
     Glob(CompiledGlobMatcher),
+}
+
+enum MatcherPattern<'a> {
+    Literal(&'a str),
+    Glob(&'a str),
 }
 
 #[derive(Clone)]
@@ -468,13 +474,17 @@ fn compile_path_matchers(path_prefixes: &[String]) -> Result<Vec<PathMatcher>> {
     path_prefixes
         .iter()
         .map(|prefix| {
-            if prefix.is_empty() {
-                return Err(anyhow!("path_prefixes must not contain empty entries"));
-            }
-
-            match parse_glob_pattern(prefix)? {
-                Some(glob_pattern) => Ok(PathMatcher::Glob(compile_glob_matcher(glob_pattern)?)),
-                None => Ok(PathMatcher::Prefix(prefix.clone())),
+            match parse_matcher_pattern(prefix)? {
+                MatcherPattern::Literal(prefix) => {
+                    if prefix.is_empty() {
+                        return Err(anyhow!("path_prefixes must not contain empty entries"));
+                    }
+                    Ok(PathMatcher::Prefix(prefix.to_string()))
+                }
+                MatcherPattern::Glob(glob_pattern) => Ok(PathMatcher::Glob(compile_glob_matcher(
+                    glob_pattern,
+                    /*literal_separator*/ true,
+                )?)),
             }
         })
         .collect()
@@ -483,25 +493,35 @@ fn compile_path_matchers(path_prefixes: &[String]) -> Result<Vec<PathMatcher>> {
 fn compile_value_matchers(values: &[String]) -> Result<Vec<ValueMatcher>> {
     values
         .iter()
-        .map(|value| match parse_glob_pattern(value)? {
-            Some(glob_pattern) => Ok(ValueMatcher::Glob(compile_glob_matcher(glob_pattern)?)),
-            None => Ok(ValueMatcher::Exact(value.clone())),
+        .map(|value| match parse_matcher_pattern(value)? {
+            MatcherPattern::Literal(value) => Ok(ValueMatcher::Exact(value.to_string())),
+            MatcherPattern::Glob(glob_pattern) => Ok(ValueMatcher::Glob(compile_glob_matcher(
+                glob_pattern,
+                /*literal_separator*/ false,
+            )?)),
         })
         .collect()
 }
 
-fn parse_glob_pattern(pattern: &str) -> Result<Option<&str>> {
+fn parse_matcher_pattern(pattern: &str) -> Result<MatcherPattern<'_>> {
+    if let Some(literal) = pattern.strip_prefix(LITERAL_PREFIX) {
+        return Ok(MatcherPattern::Literal(literal));
+    }
     let Some(glob_pattern) = pattern.strip_prefix(GLOB_PREFIX) else {
-        return Ok(None);
+        return Ok(MatcherPattern::Literal(pattern));
     };
     if glob_pattern.is_empty() {
         return Err(anyhow!("glob pattern must not be empty"));
     }
-    Ok(Some(glob_pattern))
+    Ok(MatcherPattern::Glob(glob_pattern))
 }
 
-fn compile_glob_matcher(pattern: &str) -> Result<CompiledGlobMatcher> {
-    GlobBuilder::new(pattern)
+fn compile_glob_matcher(pattern: &str, literal_separator: bool) -> Result<CompiledGlobMatcher> {
+    let mut builder = GlobBuilder::new(pattern);
+    builder
+        .backslash_escape(true)
+        .literal_separator(literal_separator);
+    builder
         .build()
         .map(|glob| CompiledGlobMatcher {
             pattern: pattern.to_string(),
@@ -873,6 +893,31 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_path_wildcard_does_not_cross_segment_boundaries() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.path_prefixes = vec!["glob:/repos/*/codex/issues*".to_string()];
+        config.network.mitm_hooks = vec![hook];
+
+        let hooks = compile_mitm_hooks_with_resolvers(
+            &config,
+            |_| Some("abc".to_string()),
+            |_| Err(anyhow!("unexpected file lookup")),
+        )
+        .unwrap();
+        let nested_req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/openai/private/codex/issues")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &nested_req),
+            HookEvaluation::HookedHostNoMatch
+        );
+    }
+
+    #[test]
     fn evaluate_treats_glob_metacharacters_as_literal_without_glob_prefix() {
         let mut config = base_config();
         let mut hook = github_hook();
@@ -900,6 +945,49 @@ mod tests {
             .method(Method::POST)
             .uri("/repos/draft/codex/issues?state=open")
             .header("x-github-api-version", "2022-11-28-preview")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &exact_req),
+            HookEvaluation::Matched {
+                actions: hooks.get("api.github.com").unwrap()[0].actions.clone(),
+            }
+        );
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &non_literal_req),
+            HookEvaluation::HookedHostNoMatch
+        );
+    }
+
+    #[test]
+    fn evaluate_allows_literal_values_with_reserved_prefixes() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.query =
+            BTreeMap::from([("state".to_string(), vec!["literal:glob:*".to_string()])]);
+        hook.matcher.headers = BTreeMap::from([(
+            "x-github-api-version".to_string(),
+            vec!["literal:glob:*".to_string()],
+        )]);
+        config.network.mitm_hooks = vec![hook];
+
+        let hooks = compile_mitm_hooks_with_resolvers(
+            &config,
+            |_| Some("abc".to_string()),
+            |_| Err(anyhow!("unexpected file lookup")),
+        )
+        .unwrap();
+        let exact_req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/openai/codex/issues?state=glob%3A%2A")
+            .header("x-github-api-version", "glob:*")
+            .body(Body::empty())
+            .unwrap();
+        let non_literal_req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/openai/codex/issues?state=glob%3Aopen")
+            .header("x-github-api-version", "glob:preview")
             .body(Body::empty())
             .unwrap();
 
