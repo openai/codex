@@ -110,7 +110,7 @@ pub(crate) async fn build_realtime_startup_context(
         parts.push(section);
     }
 
-    let context = format_startup_context_blob(&parts.join("\n\n"));
+    let context = format_startup_context_blob(&parts.join("\n\n"), budget_tokens);
     debug!(
         approx_tokens = approx_token_count(&context),
         requested_budget_tokens = budget_tokens,
@@ -466,8 +466,25 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
     Some(format!("{heading}{body}"))
 }
 
-fn format_startup_context_blob(body: &str) -> String {
-    format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}")
+fn format_startup_context_blob(body: &str, budget_tokens: usize) -> String {
+    let wrapper = format!("{STARTUP_CONTEXT_OPEN_TAG}\n\n{STARTUP_CONTEXT_CLOSE_TAG}");
+    let mut body_budget = budget_tokens.saturating_sub(approx_token_count(&wrapper));
+
+    loop {
+        let body = truncate_text(body, TruncationPolicy::Tokens(body_budget));
+        let wrapped = format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}");
+        let wrapped_tokens = approx_token_count(&wrapped);
+        if wrapped_tokens <= budget_tokens || body_budget == 0 {
+            return wrapped;
+        }
+
+        let excess_tokens = wrapped_tokens.saturating_sub(budget_tokens);
+        let next_budget = body_budget.saturating_sub(excess_tokens.max(1));
+        if next_budget == body_budget {
+            return wrapped;
+        }
+        body_budget = next_budget;
+    }
 }
 
 async fn format_thread_group(
