@@ -29,6 +29,7 @@ SELECT
     status,
     token_budget,
     tokens_used,
+    time_used_seconds,
     created_at_ms,
     updated_at_ms
 FROM thread_goals
@@ -59,14 +60,16 @@ INSERT INTO thread_goals (
     status,
     token_budget,
     tokens_used,
+    time_used_seconds,
     created_at_ms,
     updated_at_ms
-) VALUES (?, ?, ?, ?, 0, ?, ?)
+) VALUES (?, ?, ?, ?, 0, 0, ?, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
     objective = excluded.objective,
     status = excluded.status,
     token_budget = excluded.token_budget,
     tokens_used = 0,
+    time_used_seconds = 0,
     created_at_ms = excluded.created_at_ms,
     updated_at_ms = excluded.updated_at_ms
             "#,
@@ -183,10 +186,13 @@ WHERE thread_id = ?
     pub async fn account_thread_goal_usage(
         &self,
         thread_id: ThreadId,
+        time_delta_seconds: i64,
         token_delta: i64,
         mode: ThreadGoalAccountingMode,
     ) -> anyhow::Result<ThreadGoalAccountingOutcome> {
-        if token_delta <= 0 {
+        let time_delta_seconds = time_delta_seconds.max(0);
+        let token_delta = token_delta.max(0);
+        if time_delta_seconds == 0 && token_delta == 0 {
             return Ok(ThreadGoalAccountingOutcome::Unchanged(
                 self.get_thread_goal(thread_id).await?,
             ));
@@ -201,6 +207,7 @@ WHERE thread_id = ?
             r#"
 UPDATE thread_goals
 SET
+    time_used_seconds = time_used_seconds + ?,
     tokens_used = tokens_used + ?,
     status = CASE
         WHEN status = 'active' AND token_budget IS NOT NULL AND tokens_used + ? >= token_budget
@@ -214,6 +221,7 @@ WHERE thread_id = ?
         );
 
         let result = sqlx::query(&query)
+            .bind(time_delta_seconds)
             .bind(token_delta)
             .bind(token_delta)
             .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
@@ -303,6 +311,7 @@ mod tests {
         assert_eq!(crate::ThreadGoalStatus::Active, replaced.status);
         assert_eq!(None, replaced.token_budget);
         assert_eq!(0, replaced.tokens_used);
+        assert_eq!(0, replaced.time_used_seconds);
     }
 
     #[tokio::test]
@@ -414,6 +423,7 @@ mod tests {
         let outcome = runtime
             .account_thread_goal_usage(
                 thread_id,
+                /*time_delta_seconds*/ 7,
                 /*token_delta*/ 5,
                 ThreadGoalAccountingMode::ActiveOnly,
             )
@@ -424,10 +434,12 @@ mod tests {
         };
         assert_eq!(crate::ThreadGoalStatus::Active, goal.status);
         assert_eq!(5, goal.tokens_used);
+        assert_eq!(7, goal.time_used_seconds);
 
         let outcome = runtime
             .account_thread_goal_usage(
                 thread_id,
+                /*time_delta_seconds*/ 3,
                 /*token_delta*/ 15,
                 ThreadGoalAccountingMode::ActiveOnly,
             )
@@ -438,10 +450,12 @@ mod tests {
         };
         assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
         assert_eq!(20, goal.tokens_used);
+        assert_eq!(10, goal.time_used_seconds);
 
         let outcome = runtime
             .account_thread_goal_usage(
                 thread_id,
+                /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
                 ThreadGoalAccountingMode::ActiveOnly,
             )
@@ -452,6 +466,7 @@ mod tests {
         };
         assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
         assert_eq!(20, goal.tokens_used);
+        assert_eq!(10, goal.time_used_seconds);
     }
 
     #[tokio::test]
@@ -471,6 +486,7 @@ mod tests {
         let active_only = runtime
             .account_thread_goal_usage(
                 thread_id,
+                /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
                 ThreadGoalAccountingMode::ActiveOnly,
             )
@@ -481,10 +497,12 @@ mod tests {
         };
         assert_eq!(crate::ThreadGoalStatus::Complete, goal.status);
         assert_eq!(0, goal.tokens_used);
+        assert_eq!(0, goal.time_used_seconds);
 
         let completing_turn = runtime
             .account_thread_goal_usage(
                 thread_id,
+                /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
                 ThreadGoalAccountingMode::ActiveOrComplete,
             )
@@ -495,6 +513,7 @@ mod tests {
         };
         assert_eq!(crate::ThreadGoalStatus::Complete, goal.status);
         assert_eq!(200, goal.tokens_used);
+        assert_eq!(30, goal.time_used_seconds);
     }
 
     #[tokio::test]
@@ -513,11 +532,13 @@ mod tests {
 
         let first = runtime.account_thread_goal_usage(
             thread_id,
+            /*time_delta_seconds*/ 4,
             /*token_delta*/ 40,
             ThreadGoalAccountingMode::ActiveOnly,
         );
         let second = runtime.account_thread_goal_usage(
             thread_id,
+            /*time_delta_seconds*/ 6,
             /*token_delta*/ 60,
             ThreadGoalAccountingMode::ActiveOnly,
         );
@@ -531,5 +552,6 @@ mod tests {
             .expect("goal read should succeed")
             .expect("goal should exist");
         assert_eq!(100, goal.tokens_used);
+        assert_eq!(10, goal.time_used_seconds);
     }
 }

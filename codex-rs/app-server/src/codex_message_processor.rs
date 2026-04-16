@@ -9477,6 +9477,7 @@ fn api_thread_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
         status: thread_goal_status_from_state(goal.status),
         token_budget: goal.token_budget,
         tokens_used: goal.tokens_used,
+        time_used_seconds: goal.time_used_seconds,
         created_at: goal.created_at.timestamp(),
         updated_at: goal.updated_at.timestamp(),
     }

@@ -3542,6 +3542,7 @@ pub struct ThreadGoal {
     #[ts(optional)]
     pub token_budget: Option<i64>,
     pub tokens_used: i64,
+    pub time_used_seconds: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }
