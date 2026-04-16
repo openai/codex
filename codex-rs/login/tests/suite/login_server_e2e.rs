@@ -117,7 +117,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some(state),
-        forced_chatgpt_workspace_id: Some(chatgpt_account_id.to_string()),
+        forced_chatgpt_workspace_id: Some(vec![chatgpt_account_id.to_string()]),
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -199,6 +199,45 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
 }
 
 #[tokio::test]
+async fn login_server_includes_all_forced_workspace_query_params() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (issuer_addr, _issuer_handle) = start_mock_issuer("org-123");
+    let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
+
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().to_path_buf();
+    let state = "state-multi".to_string();
+
+    let opts = ServerOptions {
+        codex_home,
+        cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        client_id: codex_login::CLIENT_ID.to_string(),
+        issuer,
+        port: 0,
+        open_browser: false,
+        force_state: Some(state),
+        forced_chatgpt_workspace_id: Some(vec![
+            "org-required-a".to_string(),
+            "org-required-b".to_string(),
+        ]),
+    };
+    let server = run_login_server(opts)?;
+    assert!(
+        server
+            .auth_url
+            .contains("allowed_workspace_id=org-required-a")
+    );
+    assert!(
+        server
+            .auth_url
+            .contains("allowed_workspace_id=org-required-b")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -217,7 +256,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         port: 0,
         open_browser: false,
         force_state: Some(state.clone()),
-        forced_chatgpt_workspace_id: Some("org-required".to_string()),
+        forced_chatgpt_workspace_id: Some(vec!["org-required".to_string()]),
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -234,7 +273,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     assert!(resp.status().is_success());
     let body = resp.text().await?;
     assert!(
-        body.contains("Login is restricted to workspace id org-required"),
+        body.contains("Login is restricted to workspace id(s) org-required"),
         "error body should mention workspace restriction"
     );
 

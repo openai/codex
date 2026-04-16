@@ -62,6 +62,23 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
 
+/// Backward-compatible shape for workspace restrictions in config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[serde(untagged)]
+pub enum ForcedChatgptWorkspaceIds {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ForcedChatgptWorkspaceIds {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value],
+            Self::Multiple(values) => values,
+        }
+    }
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -149,9 +166,9 @@ pub struct ConfigToml {
     /// Set to an empty string to disable automatic commit attribution.
     pub commit_attribution: Option<String>,
 
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
@@ -407,7 +424,9 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
+            forced_chatgpt_workspace_id: config_toml
+                .forced_chatgpt_workspace_id
+                .map(ForcedChatgptWorkspaceIds::into_vec),
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,

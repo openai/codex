@@ -198,7 +198,7 @@ pub struct UserSavedConfig {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_settings: Option<SandboxSettings>,
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub model: Option<String>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
