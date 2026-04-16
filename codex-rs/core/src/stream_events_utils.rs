@@ -143,9 +143,7 @@ pub(crate) async fn record_completed_response_item(
 fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
     matches!(
         item,
-        ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-            | ResponseItem::ToolSearchCall { .. }
+        ResponseItem::ToolSearchCall { .. }
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
     )

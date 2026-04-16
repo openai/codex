@@ -34,7 +34,7 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
 }
 
 #[test]
-fn external_context_pollution_items_include_custom_tools_and_tool_search() {
+fn external_context_pollution_items_include_web_search_and_tool_search() {
     let polluting_items = vec![
         ResponseItem::WebSearchCall {
             id: None,
@@ -54,18 +54,6 @@ fn external_context_pollution_items_include_custom_tools_and_tool_search() {
             execution: "client".to_string(),
             tools: Vec::new(),
         },
-        ResponseItem::CustomToolCall {
-            id: None,
-            status: None,
-            call_id: "custom-1".to_string(),
-            name: "mcp__codex_apps__calendar_create_event".to_string(),
-            input: "{}".to_string(),
-        },
-        ResponseItem::CustomToolCallOutput {
-            call_id: "custom-1".to_string(),
-            name: Some("mcp__codex_apps__calendar_create_event".to_string()),
-            output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        },
     ];
 
     assert!(
@@ -76,7 +64,7 @@ fn external_context_pollution_items_include_custom_tools_and_tool_search() {
 }
 
 #[test]
-fn external_context_pollution_items_exclude_local_shell_and_function_calls() {
+fn external_context_pollution_items_exclude_local_tool_calls() {
     let non_polluting_items = vec![
         ResponseItem::LocalShellCall {
             id: None,
@@ -99,6 +87,18 @@ fn external_context_pollution_items_exclude_local_shell_and_function_calls() {
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "custom-1".to_string(),
+            name: "apply_patch".to_string(),
+            input: "*** Begin Patch\n*** End Patch\n".to_string(),
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id: "custom-1".to_string(),
+            name: Some("apply_patch".to_string()),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
         },
         assistant_output_text("plain assistant text"),
