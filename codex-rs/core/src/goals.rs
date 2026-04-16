@@ -466,7 +466,6 @@ pub(crate) fn goal_token_delta_for_usage(usage: &TokenUsage) -> i64 {
     usage
         .non_cached_input()
         .saturating_add(usage.output_tokens.max(0))
-        .saturating_add(usage.reasoning_output_tokens.max(0))
 }
 
 #[cfg(test)]
