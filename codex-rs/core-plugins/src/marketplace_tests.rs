@@ -149,6 +149,50 @@ fn resolve_marketplace_plugin_supports_git_subdir_sources() {
 }
 
 #[test]
+fn resolve_marketplace_plugin_normalizes_relative_git_source_urls_to_marketplace_root() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let remote_repo = repo_root.join("remotes/toolkit.git");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "remote-plugin",
+      "source": {
+        "source": "git-subdir",
+        "url": "./remotes/toolkit.git",
+        "path": "plugins/toolkit"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let resolved = resolve_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "remote-plugin",
+        Some(Product::Codex),
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved.source,
+        MarketplacePluginSource::Git {
+            url: remote_repo.display().to_string(),
+            path: Some("plugins/toolkit".to_string()),
+            ref_name: None,
+            sha: None,
+        }
+    );
+}
+
+#[test]
 fn resolve_marketplace_plugin_supports_string_local_sources() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");

@@ -1128,6 +1128,57 @@ async fn install_plugin_supports_git_subdir_marketplace_sources() {
 }
 
 #[tokio::test]
+async fn install_plugin_supports_relative_git_subdir_marketplace_sources() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("marketplace");
+    let remote_repo = repo_root.join("remote-plugin-repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_plugin(&remote_repo, "plugins/toolkit", "toolkit");
+    init_git_repo(&remote_repo);
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "toolkit",
+      "source": {
+        "source": "git-subdir",
+        "url": "./remote-plugin-repo",
+        "path": "plugins/toolkit"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let result = PluginsManager::new(tmp.path().to_path_buf())
+        .install_plugin(PluginInstallRequest {
+            plugin_name: "toolkit".to_string(),
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.join(".agents/plugins/marketplace.json"),
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap();
+
+    let installed_path = tmp.path().join("plugins/cache/debug/toolkit/local");
+    assert_eq!(
+        result,
+        PluginInstallOutcome {
+            plugin_id: PluginId::new("toolkit".to_string(), "debug".to_string()).unwrap(),
+            plugin_version: "local".to_string(),
+            installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
+            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+        }
+    );
+    assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
+}
+
+#[tokio::test]
 async fn uninstall_plugin_removes_cache_and_config_entry() {
     let tmp = tempfile::tempdir().unwrap();
     write_plugin(
