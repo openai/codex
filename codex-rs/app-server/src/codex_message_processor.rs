@@ -136,6 +136,13 @@ use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadGoal;
+use codex_app_server_protocol::ThreadGoalGetParams;
+use codex_app_server_protocol::ThreadGoalGetResponse;
+use codex_app_server_protocol::ThreadGoalSetParams;
+use codex_app_server_protocol::ThreadGoalSetResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ThreadGoalUpdatedNotification;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
@@ -901,6 +908,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadSetName { request_id, params } => {
                 self.thread_set_name(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadGoalSet { request_id, params } => {
+                self.thread_goal_set(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadGoalGet { request_id, params } => {
+                self.thread_goal_get(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
@@ -2939,6 +2954,235 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn thread_goal_set(&self, request_id: ConnectionRequestId, params: ThreadGoalSetParams) {
+        if !self.config.features.enabled(Feature::GoalMode) {
+            self.send_invalid_request_error(
+                request_id,
+                "goal_mode feature is disabled".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        let thread_id = match parse_thread_id_for_request(params.thread_id.as_str()) {
+            Ok(thread_id) => thread_id,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
+            Ok(state_db) => state_db,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let status = params.status.map(thread_goal_status_to_state);
+
+        let goal = if let Some(objective) = params.objective {
+            let objective = objective.trim();
+            if objective.is_empty() {
+                self.send_invalid_request_error(
+                    request_id,
+                    "goal objective must not be empty".to_string(),
+                )
+                .await;
+                return;
+            }
+            if let Err(message) = validate_goal_budget(params.token_budget.flatten()) {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+            state_db
+                .replace_thread_goal(
+                    thread_id,
+                    objective,
+                    status.unwrap_or(codex_state::ThreadGoalStatus::Active),
+                    params.token_budget.flatten(),
+                )
+                .await
+        } else {
+            if let Some(token_budget) = params.token_budget
+                && let Err(message) = validate_goal_budget(token_budget)
+            {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+            state_db
+                .update_thread_goal(
+                    thread_id,
+                    codex_state::ThreadGoalUpdate {
+                        status,
+                        token_budget: params.token_budget,
+                    },
+                )
+                .await
+                .and_then(|goal| {
+                    goal.ok_or_else(|| {
+                        anyhow::anyhow!("cannot update goal for thread {thread_id}: no goal exists")
+                    })
+                })
+        };
+
+        let goal = match goal {
+            Ok(goal) => goal,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, err.to_string())
+                    .await;
+                return;
+            }
+        };
+        let goal = api_thread_goal_from_state(goal);
+        self.outgoing
+            .send_response(
+                request_id.clone(),
+                ThreadGoalSetResponse { goal: goal.clone() },
+            )
+            .await;
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadGoalUpdated(
+                ThreadGoalUpdatedNotification {
+                    thread_id: thread_id.to_string(),
+                    goal,
+                },
+            ))
+            .await;
+    }
+
+    async fn thread_goal_get(&self, request_id: ConnectionRequestId, params: ThreadGoalGetParams) {
+        if !self.config.features.enabled(Feature::GoalMode) {
+            self.send_invalid_request_error(
+                request_id,
+                "goal_mode feature is disabled".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        let thread_id = match parse_thread_id_for_request(params.thread_id.as_str()) {
+            Ok(thread_id) => thread_id,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let state_db = match self.state_db_for_thread_goal_get(thread_id).await {
+            Ok(state_db) => state_db,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let Some(state_db) = state_db else {
+            self.outgoing
+                .send_response(request_id, ThreadGoalGetResponse { goal: None })
+                .await;
+            return;
+        };
+        let goal = match state_db.get_thread_goal(thread_id).await {
+            Ok(goal) => goal.map(api_thread_goal_from_state),
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to read thread goal: {err}"))
+                    .await;
+                return;
+            }
+        };
+        self.outgoing
+            .send_response(request_id, ThreadGoalGetResponse { goal })
+            .await;
+    }
+
+    async fn state_db_for_thread_goal_get(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<Option<StateDbHandle>, JSONRPCErrorError> {
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            return Ok(thread.state_db());
+        }
+
+        match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(invalid_request(format!("thread not found: {thread_id}")));
+            }
+            Err(err) => {
+                return Err(internal_error(format!(
+                    "failed to locate thread id {thread_id}: {err}"
+                )));
+            }
+        }
+
+        open_state_db_for_direct_thread_lookup(&self.config)
+            .await
+            .map(Some)
+            .ok_or_else(|| internal_error("sqlite state db unavailable for thread goals"))
+    }
+
+    async fn state_db_for_materialized_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<StateDbHandle, JSONRPCErrorError> {
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            if thread.rollout_path().is_none() {
+                return Err(invalid_request(format!(
+                    "ephemeral thread does not support goals: {thread_id}"
+                )));
+            }
+            if let Some(state_db) = thread.state_db() {
+                return Ok(state_db);
+            }
+        } else {
+            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
+            {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err(invalid_request(format!("thread not found: {thread_id}")));
+                }
+                Err(err) => {
+                    return Err(internal_error(format!(
+                        "failed to locate thread id {thread_id}: {err}"
+                    )));
+                }
+            }
+        }
+
+        open_state_db_for_direct_thread_lookup(&self.config)
+            .await
+            .ok_or_else(|| internal_error("sqlite state db unavailable for thread goals"))
+    }
+
+    async fn emit_thread_goal_updated_if_present(&self, thread_id: ThreadId) {
+        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
+            Ok(state_db) => state_db,
+            Err(err) => {
+                warn!(
+                    "failed to open state db before emitting thread goal update for {thread_id}: {}",
+                    err.message
+                );
+                return;
+            }
+        };
+        let goal = match state_db.get_thread_goal(thread_id).await {
+            Ok(Some(goal)) => api_thread_goal_from_state(goal),
+            Ok(None) => return,
+            Err(err) => {
+                warn!(
+                    "failed to read thread goal before emitting resume update for {thread_id}: {err}"
+                );
+                return;
+            }
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadGoalUpdated(
+                ThreadGoalUpdatedNotification {
+                    thread_id: thread_id.to_string(),
+                    goal,
+                },
+            ))
+            .await;
+    }
+
     async fn thread_memory_mode_set(
         &self,
         request_id: ConnectionRequestId,
@@ -4226,6 +4470,9 @@ impl CodexMessageProcessor {
                 }
 
                 self.outgoing.send_response(request_id, response).await;
+                if self.config.features.enabled(Feature::GoalMode) {
+                    self.emit_thread_goal_updated_if_present(thread_id).await;
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4427,6 +4674,10 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request_id, err).await;
+            }
+            if self.config.features.enabled(Feature::GoalMode) {
+                self.emit_thread_goal_updated_if_present(existing_thread_id)
+                    .await;
             }
             return true;
         }
@@ -9131,6 +9382,66 @@ async fn open_state_db_for_direct_thread_lookup(config: &Config) -> Option<State
     StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
         .await
         .ok()
+}
+
+fn invalid_request(message: impl Into<String>) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: INVALID_REQUEST_ERROR_CODE,
+        message: message.into(),
+        data: None,
+    }
+}
+
+fn internal_error(message: impl Into<String>) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: INTERNAL_ERROR_CODE,
+        message: message.into(),
+        data: None,
+    }
+}
+
+fn parse_thread_id_for_request(thread_id: &str) -> Result<ThreadId, JSONRPCErrorError> {
+    ThreadId::from_string(thread_id)
+        .map_err(|err| invalid_request(format!("invalid thread id: {err}")))
+}
+
+fn validate_goal_budget(value: Option<i64>) -> Result<(), String> {
+    if let Some(value) = value
+        && value <= 0
+    {
+        return Err("goal budgets must be positive when provided".to_string());
+    }
+    Ok(())
+}
+
+fn thread_goal_status_to_state(status: ThreadGoalStatus) -> codex_state::ThreadGoalStatus {
+    match status {
+        ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
+        ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,
+        ThreadGoalStatus::BudgetStopped => codex_state::ThreadGoalStatus::BudgetStopped,
+        ThreadGoalStatus::Complete => codex_state::ThreadGoalStatus::Complete,
+    }
+}
+
+fn thread_goal_status_from_state(status: codex_state::ThreadGoalStatus) -> ThreadGoalStatus {
+    match status {
+        codex_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
+        codex_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
+        codex_state::ThreadGoalStatus::BudgetStopped => ThreadGoalStatus::BudgetStopped,
+        codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
+    }
+}
+
+fn api_thread_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
+    ThreadGoal {
+        thread_id: goal.thread_id.to_string(),
+        objective: goal.objective,
+        status: thread_goal_status_from_state(goal.status),
+        token_budget: goal.token_budget,
+        tokens_used: goal.tokens_used,
+        created_at: goal.created_at.timestamp(),
+        updated_at: goal.updated_at.timestamp(),
+    }
 }
 
 fn non_empty_title(metadata: &ThreadMetadata) -> Option<String> {
