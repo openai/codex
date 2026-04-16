@@ -30,12 +30,12 @@ struct RawPluginManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PluginManifest {
-    pub(crate) name: String,
-    pub(crate) version: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) paths: PluginManifestPaths,
-    pub(crate) interface: Option<PluginManifestInterface>,
+pub struct PluginManifest {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub paths: PluginManifestPaths,
+    pub interface: Option<PluginManifestInterface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,7 +114,7 @@ enum RawPluginManifestDefaultPromptEntry {
     Invalid(JsonValue),
 }
 
-pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
+pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
     let manifest_path = plugin_root.join(PLUGIN_MANIFEST_PATH);
     if !manifest_path.is_file() {
         return None;
