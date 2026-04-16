@@ -179,7 +179,7 @@ fn startup_context_blob_is_wrapped_in_tags_and_fits_budget() {
         "workspace tree ".repeat(800),
     );
 
-    let wrapped = format_startup_context_blob(&body, /*budget_tokens*/ 200);
+    let wrapped = format_startup_context_blob(&[body], /*budget_tokens*/ 200);
 
     assert!(wrapped.starts_with("<startup_context>\n"));
     assert!(wrapped.ends_with("\n</startup_context>"));

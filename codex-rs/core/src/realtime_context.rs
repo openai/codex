@@ -108,7 +108,7 @@ pub(crate) async fn build_realtime_startup_context(
         parts.push(section);
     }
 
-    let context = format_startup_context_blob(&parts.join("\n\n"), budget_tokens);
+    let context = format_startup_context_blob(&parts, budget_tokens);
     debug!(
         approx_tokens = approx_token_count(&context),
         bytes = context.len(),
@@ -446,24 +446,58 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
     ))
 }
 
-fn format_startup_context_blob(body: &str, budget_tokens: usize) -> String {
+fn format_startup_context_blob(parts: &[String], budget_tokens: usize) -> String {
     let wrapper = format!("{STARTUP_CONTEXT_OPEN_TAG}\n\n{STARTUP_CONTEXT_CLOSE_TAG}");
-    let mut body_budget = budget_tokens.saturating_sub(approx_token_count(&wrapper));
+    let body_budget = budget_tokens.saturating_sub(approx_token_count(&wrapper));
+    let mut body_parts = Vec::new();
+    let mut used_tokens = 0usize;
 
+    for part in parts {
+        let separator = if !body_parts.is_empty() {
+            "\n\n"
+        } else {
+            Default::default()
+        };
+        let candidate = format!("{separator}{part}");
+        let candidate_tokens = approx_token_count(&candidate);
+
+        if used_tokens + candidate_tokens <= body_budget {
+            body_parts.push(part.clone());
+            used_tokens += candidate_tokens;
+            continue;
+        }
+
+        let remaining_budget = body_budget.saturating_sub(used_tokens);
+        if remaining_budget == 0 {
+            break;
+        }
+
+        let candidate = truncate_startup_context_part_to_budget(&candidate, remaining_budget);
+        if !candidate.is_empty() {
+            body_parts.push(candidate);
+        }
+        break;
+    }
+
+    let body = body_parts.join("\n\n");
+    format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}")
+}
+
+fn truncate_startup_context_part_to_budget(part: &str, budget_tokens: usize) -> String {
+    let mut truncation_budget = budget_tokens;
     loop {
-        let body = truncate_text(body, TruncationPolicy::Tokens(body_budget));
-        let wrapped = format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}");
-        let wrapped_tokens = approx_token_count(&wrapped);
-        if wrapped_tokens <= budget_tokens || body_budget == 0 {
-            return wrapped;
+        let candidate = truncate_text(part, TruncationPolicy::Tokens(truncation_budget));
+        let candidate = candidate.trim().to_string();
+        if approx_token_count(&candidate) <= budget_tokens {
+            return candidate;
         }
 
-        let excess_tokens = wrapped_tokens.saturating_sub(budget_tokens);
-        let next_budget = body_budget.saturating_sub(excess_tokens.max(1));
-        if next_budget == body_budget {
-            return wrapped;
+        let excess_tokens = approx_token_count(&candidate).saturating_sub(budget_tokens);
+        let next_budget = truncation_budget.saturating_sub(excess_tokens.max(1));
+        if next_budget == truncation_budget {
+            return candidate;
         }
-        body_budget = next_budget;
+        truncation_budget = next_budget;
     }
 }
 
