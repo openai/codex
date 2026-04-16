@@ -499,6 +499,117 @@ fn parse_tool_input_schema_resolves_local_ref_objects() {
 }
 
 #[test]
+fn parse_tool_input_schema_merges_local_ref_sibling_constraints() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "start": {
+                "$ref": "#/$defs/date_time_zone",
+                "properties": {
+                    "timeZone": {
+                        "enum": ["UTC"]
+                    },
+                    "calendar": {
+                        "type": "string"
+                    }
+                },
+                "required": ["timeZone", "calendar"]
+            }
+        },
+        "$defs": {
+            "date_time_zone": {
+                "type": "object",
+                "properties": {
+                    "dateTime": { "type": "string" },
+                    "timeZone": { "type": "string" }
+                },
+                "required": ["dateTime"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "start".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([
+                        (
+                            "calendar".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                        (
+                            "dateTime".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                        (
+                            "timeZone".to_string(),
+                            JsonSchema::string_enum(
+                                vec![serde_json::json!("UTC")],
+                                /*description*/ None,
+                            ),
+                        ),
+                    ]),
+                    Some(vec![
+                        "dateTime".to_string(),
+                        "timeZone".to_string(),
+                        "calendar".to_string(),
+                    ]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_handles_cyclic_local_refs_without_recursing_forever() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "node": { "$ref": "#/$defs/node" }
+        },
+        "$defs": {
+            "node": {
+                "type": "object",
+                "properties": {
+                    "next": { "$ref": "#/$defs/node" }
+                },
+                "required": ["next"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "node".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([(
+                        "next".to_string(),
+                        JsonSchema::object(
+                            BTreeMap::new(),
+                            /*required*/ None,
+                            /*additional_properties*/ None,
+                        ),
+                    )]),
+                    Some(vec!["next".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_unwraps_single_variant_all_of_objects() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",

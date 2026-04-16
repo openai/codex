@@ -149,7 +149,7 @@ impl From<JsonSchema> for AdditionalProperties {
 pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
     let root_schema = input_schema.clone();
     let mut input_schema = root_schema.clone();
-    sanitize_json_schema(&mut input_schema, &root_schema);
+    sanitize_json_schema(&mut input_schema, &root_schema, &mut Vec::new());
     let schema: JsonSchema = serde_json::from_value(input_schema)?;
     if matches!(
         schema.schema_type,
@@ -169,7 +169,11 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 /// - Collapses `const` into single-value `enum`.
 /// - Fills required child fields for object/array schema types, including
 ///   nullable unions, with permissive defaults when absent.
-fn sanitize_json_schema(value: &mut JsonValue, root_schema: &JsonValue) {
+fn sanitize_json_schema(
+    value: &mut JsonValue,
+    root_schema: &JsonValue,
+    active_refs: &mut Vec<String>,
+) {
     match value {
         JsonValue::Bool(_) => {
             // JSON Schema boolean form: true/false. Coerce to an accept-all string.
@@ -177,19 +181,35 @@ fn sanitize_json_schema(value: &mut JsonValue, root_schema: &JsonValue) {
         }
         JsonValue::Array(values) => {
             for value in values {
-                sanitize_json_schema(value, root_schema);
+                sanitize_json_schema(value, root_schema, active_refs);
             }
         }
         JsonValue::Object(map) => {
+            let active_ref_depth = active_refs.len();
+            if let Some(pointer) = map
+                .get("$ref")
+                .and_then(JsonValue::as_str)
+                .and_then(|reference| reference.strip_prefix('#'))
+            {
+                if active_refs.iter().any(|active_ref| active_ref == pointer) {
+                    *value = cyclic_reference_fallback(map, root_schema.pointer(pointer));
+                    sanitize_json_schema(value, root_schema, active_refs);
+                    return;
+                }
+
+                active_refs.push(pointer.to_string());
+            }
+
             if let Some(replacement) = resolve_json_schema_reference(map, root_schema) {
                 *value = replacement;
-                sanitize_json_schema(value, root_schema);
+                sanitize_json_schema(value, root_schema, active_refs);
+                active_refs.pop();
                 return;
             }
 
             if let Some(replacement) = unwrap_single_variant_combiner(map) {
                 *value = replacement;
-                sanitize_json_schema(value, root_schema);
+                sanitize_json_schema(value, root_schema, active_refs);
                 return;
             }
 
@@ -197,22 +217,22 @@ fn sanitize_json_schema(value: &mut JsonValue, root_schema: &JsonValue) {
                 && let Some(properties_map) = properties.as_object_mut()
             {
                 for value in properties_map.values_mut() {
-                    sanitize_json_schema(value, root_schema);
+                    sanitize_json_schema(value, root_schema, active_refs);
                 }
             }
             if let Some(items) = map.get_mut("items") {
-                sanitize_json_schema(items, root_schema);
+                sanitize_json_schema(items, root_schema, active_refs);
             }
             if let Some(additional_properties) = map.get_mut("additionalProperties")
                 && !matches!(additional_properties, JsonValue::Bool(_))
             {
-                sanitize_json_schema(additional_properties, root_schema);
+                sanitize_json_schema(additional_properties, root_schema, active_refs);
             }
             if let Some(value) = map.get_mut("prefixItems") {
-                sanitize_json_schema(value, root_schema);
+                sanitize_json_schema(value, root_schema, active_refs);
             }
             if let Some(value) = map.get_mut("anyOf") {
-                sanitize_json_schema(value, root_schema);
+                sanitize_json_schema(value, root_schema, active_refs);
             }
 
             if let Some(const_value) = map.remove("const") {
@@ -249,6 +269,8 @@ fn sanitize_json_schema(value: &mut JsonValue, root_schema: &JsonValue) {
 
             write_schema_types(map, &schema_types);
             ensure_default_children_for_schema_types(map, &schema_types);
+
+            active_refs.truncate(active_ref_depth);
         }
         _ => {}
     }
@@ -262,13 +284,208 @@ fn resolve_json_schema_reference(
     let pointer = reference.strip_prefix('#')?;
     let mut replacement = root_schema.pointer(pointer)?.clone();
     if let JsonValue::Object(replacement_map) = &mut replacement {
-        for (key, value) in map {
-            if key != "$ref" {
-                replacement_map.insert(key.clone(), value.clone());
+        merge_json_schema_objects(replacement_map, map);
+    }
+    Some(replacement)
+}
+
+fn cyclic_reference_fallback(
+    map: &serde_json::Map<String, JsonValue>,
+    reference_target: Option<&JsonValue>,
+) -> JsonValue {
+    let mut fallback = reference_target
+        .and_then(cyclic_reference_target_fallback)
+        .unwrap_or_else(|| json!({ "type": "string" }));
+
+    if let JsonValue::Object(fallback_map) = &mut fallback {
+        merge_json_schema_objects(fallback_map, map);
+        fallback_map.remove("$ref");
+    }
+
+    fallback
+}
+
+fn cyclic_reference_target_fallback(reference_target: &JsonValue) -> Option<JsonValue> {
+    let target_map = reference_target.as_object()?;
+    let schema_types = normalized_schema_types(target_map);
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Object)
+        || target_map.contains_key("properties")
+        || target_map.contains_key("required")
+        || target_map.contains_key("additionalProperties")
+    {
+        return Some(json!({ "type": "object", "properties": {} }));
+    }
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Array)
+        || target_map.contains_key("items")
+        || target_map.contains_key("prefixItems")
+    {
+        return Some(json!({ "type": "array", "items": { "type": "string" } }));
+    }
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Number) {
+        return Some(json!({ "type": "number" }));
+    }
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Integer) {
+        return Some(json!({ "type": "integer" }));
+    }
+
+    if schema_types.contains(&JsonSchemaPrimitiveType::Boolean) {
+        return Some(json!({ "type": "boolean" }));
+    }
+
+    Some(json!({ "type": "string" }))
+}
+
+fn merge_json_schema_objects(
+    base: &mut serde_json::Map<String, JsonValue>,
+    overlay: &serde_json::Map<String, JsonValue>,
+) {
+    for (key, overlay_value) in overlay {
+        if key == "$ref" {
+            continue;
+        }
+
+        let Some(base_value) = base.get_mut(key) else {
+            base.insert(key.clone(), overlay_value.clone());
+            continue;
+        };
+
+        if base_value == overlay_value {
+            continue;
+        }
+
+        match key.as_str() {
+            "required" => merge_required_arrays(base_value, overlay_value),
+            "properties" => merge_property_maps(base_value, overlay_value),
+            "type" => merge_schema_types(base_value, overlay_value),
+            "additionalProperties" => {
+                if let Some(merged_value) =
+                    merge_additional_properties(base_value.clone(), overlay_value.clone())
+                {
+                    *base_value = merged_value;
+                }
+            }
+            "minimum" | "exclusiveMinimum" => merge_numeric_bound(base_value, overlay_value, true),
+            "maximum" | "exclusiveMaximum" => merge_numeric_bound(base_value, overlay_value, false),
+            _ => {
+                if let (Some(base_map), Some(overlay_map)) =
+                    (base_value.as_object_mut(), overlay_value.as_object())
+                {
+                    merge_json_schema_objects(base_map, overlay_map);
+                }
             }
         }
     }
-    Some(replacement)
+}
+
+fn merge_required_arrays(base_value: &mut JsonValue, overlay_value: &JsonValue) {
+    let Some(base_array) = base_value.as_array_mut() else {
+        return;
+    };
+    let Some(overlay_array) = overlay_value.as_array() else {
+        return;
+    };
+
+    for required_value in overlay_array {
+        if !base_array.contains(required_value) {
+            base_array.push(required_value.clone());
+        }
+    }
+}
+
+fn merge_property_maps(base_value: &mut JsonValue, overlay_value: &JsonValue) {
+    let Some(base_map) = base_value.as_object_mut() else {
+        return;
+    };
+    let Some(overlay_map) = overlay_value.as_object() else {
+        return;
+    };
+
+    for (property_name, overlay_property) in overlay_map {
+        let Some(base_property) = base_map.get_mut(property_name) else {
+            base_map.insert(property_name.clone(), overlay_property.clone());
+            continue;
+        };
+
+        if let (Some(base_property_map), Some(overlay_property_map)) =
+            (base_property.as_object_mut(), overlay_property.as_object())
+        {
+            merge_json_schema_objects(base_property_map, overlay_property_map);
+        }
+    }
+}
+
+fn merge_schema_types(base_value: &mut JsonValue, overlay_value: &JsonValue) {
+    let base_types = json_schema_type_names(base_value);
+    let overlay_types = json_schema_type_names(overlay_value);
+    if base_types.is_empty() || overlay_types.is_empty() {
+        return;
+    }
+
+    let merged_types: Vec<String> = base_types
+        .into_iter()
+        .filter(|base_type| overlay_types.contains(base_type))
+        .collect();
+    if merged_types.is_empty() {
+        return;
+    }
+
+    *base_value = match merged_types.as_slice() {
+        [schema_type] => JsonValue::String(schema_type.clone()),
+        _ => JsonValue::Array(
+            merged_types
+                .into_iter()
+                .map(JsonValue::String)
+                .collect::<Vec<_>>(),
+        ),
+    };
+}
+
+fn json_schema_type_names(value: &JsonValue) -> Vec<String> {
+    match value {
+        JsonValue::String(schema_type) => vec![schema_type.clone()],
+        JsonValue::Array(values) => values
+            .iter()
+            .filter_map(JsonValue::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn merge_additional_properties(
+    base_value: JsonValue,
+    overlay_value: JsonValue,
+) -> Option<JsonValue> {
+    match (base_value, overlay_value) {
+        (JsonValue::Bool(false), _) | (_, JsonValue::Bool(false)) => Some(JsonValue::Bool(false)),
+        (JsonValue::Bool(true), other) | (other, JsonValue::Bool(true)) => Some(other),
+        (JsonValue::Object(mut base_map), JsonValue::Object(overlay_map)) => {
+            merge_json_schema_objects(&mut base_map, &overlay_map);
+            Some(JsonValue::Object(base_map))
+        }
+        (base_value, overlay_value) if base_value == overlay_value => Some(base_value),
+        _ => None,
+    }
+}
+
+fn merge_numeric_bound(base_value: &mut JsonValue, overlay_value: &JsonValue, take_max: bool) {
+    let (Some(base_number), Some(overlay_number)) = (base_value.as_f64(), overlay_value.as_f64())
+    else {
+        return;
+    };
+
+    let merged_number = if take_max {
+        base_number.max(overlay_number)
+    } else {
+        base_number.min(overlay_number)
+    };
+    if let Some(number) = serde_json::Number::from_f64(merged_number) {
+        *base_value = JsonValue::Number(number);
+    }
 }
 
 fn unwrap_single_variant_combiner(map: &serde_json::Map<String, JsonValue>) -> Option<JsonValue> {
