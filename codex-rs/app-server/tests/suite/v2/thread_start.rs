@@ -1,7 +1,6 @@
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
-use app_test_support::PathBufExt;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
@@ -14,6 +13,7 @@ use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadEnvironmentParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -21,7 +21,6 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
-use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::ServiceTier;
@@ -48,7 +47,6 @@ use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
-const CODEX_EXEC_SERVER_CWD_ENV_VAR: &str = "CODEX_EXEC_SERVER_CWD";
 
 #[tokio::test]
 async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
@@ -183,7 +181,10 @@ async fn thread_start_accepts_explicit_local_environment_when_default_is_remote(
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            environment_ids: Some(vec!["local".to_string()]),
+            environments: Some(vec![ThreadEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd: None,
+            }]),
             ..Default::default()
         })
         .await?;
@@ -200,66 +201,14 @@ async fn thread_start_accepts_explicit_local_environment_when_default_is_remote(
 }
 
 #[tokio::test]
-async fn thread_start_uses_remote_default_cwd_when_request_omits_cwd() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-
-    let codex_home = TempDir::new()?;
-    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
-
-    let remote_default_cwd = TempDir::new()?;
-    let remote_default_cwd = remote_default_cwd.path().to_string_lossy().into_owned();
-
-    let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
-        &[
-            (CODEX_EXEC_SERVER_URL_ENV_VAR, Some("ws://127.0.0.1:1")),
-            (
-                CODEX_EXEC_SERVER_CWD_ENV_VAR,
-                Some(remote_default_cwd.as_str()),
-            ),
-        ],
-    )
-    .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let req_id = mcp
-        .send_thread_start_request(ThreadStartParams::default())
-        .await?;
-
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
-
-    assert_eq!(thread.cwd.as_path(), Path::new(&remote_default_cwd));
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_start_explicit_cwd_overrides_remote_default_cwd() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-
-    let codex_home = TempDir::new()?;
-    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
-
-    let remote_default_cwd = TempDir::new()?;
-    let remote_default_cwd = remote_default_cwd.path().to_string_lossy().into_owned();
+async fn thread_start_uses_explicit_cwd() -> Result<()> {
     let requested_cwd = TempDir::new()?;
     let requested_cwd = requested_cwd.path().to_string_lossy().into_owned();
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new_with_env(
-        codex_home.path(),
-        &[
-            (CODEX_EXEC_SERVER_URL_ENV_VAR, Some("ws://127.0.0.1:1")),
-            (
-                CODEX_EXEC_SERVER_CWD_ENV_VAR,
-                Some(remote_default_cwd.as_str()),
-            ),
-        ],
-    )
-    .await?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -292,7 +241,10 @@ async fn thread_start_rejects_explicit_remote_environment_when_not_configured() 
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            environment_ids: Some(vec!["remote".to_string()]),
+            environments: Some(vec![ThreadEnvironmentParams {
+                environment_id: "remote".to_string(),
+                cwd: None,
+            }]),
             ..Default::default()
         })
         .await?;
@@ -306,7 +258,7 @@ async fn thread_start_rejects_explicit_remote_environment_when_not_configured() 
     assert!(
         err.error
             .message
-            .contains("remote environment is not configured"),
+            .contains("unknown environment id: remote"),
         "unexpected error message: {}",
         err.error.message
     );
@@ -329,7 +281,10 @@ async fn thread_start_rejects_explicit_environment_when_disabled() -> Result<()>
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            environment_ids: Some(vec!["local".to_string()]),
+            environments: Some(vec![ThreadEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd: None,
+            }]),
             ..Default::default()
         })
         .await?;
@@ -903,11 +858,10 @@ model_reasoning_effort = "high"
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let workspace_abs = workspace.path().to_path_buf().abs();
-    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &workspace_abs)
+    let trusted_root = resolve_root_git_project_for_trust(workspace.path())
         .await
-        .unwrap_or(workspace_abs);
-    assert!(config_toml.contains(&persisted_trust_path(trusted_root.as_path())));
+        .unwrap_or_else(|| workspace.path().to_path_buf());
+    assert!(config_toml.contains(&persisted_trust_path(&trusted_root)));
     assert!(config_toml.contains("trust_level = \"trusted\""));
 
     Ok(())
@@ -942,11 +896,10 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
     .await??;
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let nested_abs = nested.abs();
-    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested_abs)
+    let trusted_root = resolve_root_git_project_for_trust(&nested)
         .await
         .expect("git root should resolve");
-    assert!(config_toml.contains(&persisted_trust_path(trusted_root.as_path())));
+    assert!(config_toml.contains(&persisted_trust_path(&trusted_root)));
     assert!(!config_toml.contains(&persisted_trust_path(&nested)));
 
     Ok(())

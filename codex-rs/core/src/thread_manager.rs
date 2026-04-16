@@ -41,6 +41,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
@@ -489,7 +490,6 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             /*environment_id*/ None,
-            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -503,7 +503,6 @@ impl ThreadManager {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         environment_id: Option<String>,
-        requested_cwd: Option<PathBuf>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
@@ -516,7 +515,6 @@ impl ThreadManager {
             parent_trace,
             /*user_shell_override*/ None,
             environment_id,
-            requested_cwd,
         ))
         .await
     }
@@ -558,7 +556,6 @@ impl ThreadManager {
             parent_trace,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
-            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -579,7 +576,6 @@ impl ThreadManager {
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
             /*environment_id*/ None,
-            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -603,7 +599,6 @@ impl ThreadManager {
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
             /*environment_id*/ None,
-            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -713,7 +708,6 @@ impl ThreadManager {
             parent_trace,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
-            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -816,7 +810,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
-            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -845,7 +838,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
-            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -875,7 +867,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
-            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -894,7 +885,6 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
         environment_id: Option<String>,
-        requested_cwd: Option<PathBuf>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -910,9 +900,26 @@ impl ThreadManagerState {
             parent_trace,
             user_shell_override,
             environment_id,
-            requested_cwd,
         ))
         .await
+    }
+
+    async fn inherited_environment_manager_for_source(
+        &self,
+        session_source: &SessionSource,
+    ) -> Arc<EnvironmentManager> {
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = session_source
+        else {
+            return Arc::clone(&self.environment_manager);
+        };
+        let Ok(parent_thread) = self.get_thread(*parent_thread_id).await else {
+            return Arc::clone(&self.environment_manager);
+        };
+        Arc::new(EnvironmentManager::from_environment(
+            parent_thread.selected_environment().as_deref(),
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -931,13 +938,19 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
         environment_id: Option<String>,
-        requested_cwd: Option<PathBuf>,
     ) -> CodexResult<NewThread> {
-        let environment = self
-            .environment_manager
+        let environment_manager = if environment_id.is_some() {
+            Arc::clone(&self.environment_manager)
+        } else {
+            self.inherited_environment_manager_for_source(&session_source)
+                .await
+        };
+        let environment = environment_manager
             .environment(environment_id.as_deref())
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let selected_environment_manager =
+            Arc::new(EnvironmentManager::from_environment(environment.as_deref()));
         let watch_registration = match environment.as_ref() {
             Some(environment) if !environment.is_remote() => {
                 self.skills_watcher
@@ -957,9 +970,7 @@ impl ThreadManagerState {
             config,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
-            environment_manager: Arc::clone(&self.environment_manager),
-            environment_id,
-            requested_cwd,
+            environment_manager: selected_environment_manager,
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
@@ -978,7 +989,6 @@ impl ThreadManagerState {
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
-            .await
     }
 
     async fn finalize_thread_spawn(

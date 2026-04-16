@@ -3,6 +3,8 @@ use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
@@ -22,7 +24,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -145,15 +146,16 @@ impl CodexThread {
         self.codex.session.total_token_usage().await
     }
 
-    /// Returns the complete token usage snapshot currently cached for this thread.
-    ///
-    /// This accessor is intentionally narrower than direct session access: it lets
-    /// app-server lifecycle paths replay restored usage after resume or fork without
-    /// exposing broader session mutation authority. A caller that only reads
-    /// `total_token_usage` would drop last-turn usage and make the v2
-    /// `thread/tokenUsage/updated` payload incomplete.
-    pub async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
-        self.codex.session.token_usage_info().await
+    pub(crate) fn selected_environment(&self) -> Option<std::sync::Arc<Environment>> {
+        self.codex.session.services.environment.clone()
+    }
+
+    pub(crate) fn environment_manager(&self) -> std::sync::Arc<EnvironmentManager> {
+        self.codex.session.services.environment_manager.clone()
+    }
+
+    pub(crate) async fn environments(&self) -> Vec<crate::codex::SessionEnvironment> {
+        self.codex.environments().await
     }
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.
