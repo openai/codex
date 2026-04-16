@@ -26,8 +26,8 @@ fn github_plugin_details() -> MigrationDetails {
     }
 }
 
-#[test]
-fn detect_home_lists_config_skills_and_agents_md() {
+#[tokio::test]
+async fn detect_home_lists_config_skills_and_agents_md() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
@@ -47,6 +47,7 @@ fn detect_home_lists_config_skills_and_agents_md() {
             include_home: true,
             cwds: None,
         })
+        .await
         .expect("detect");
 
     let expected = vec![
@@ -85,8 +86,8 @@ fn detect_home_lists_config_skills_and_agents_md() {
     assert_eq!(items, expected);
 }
 
-#[test]
-fn detect_repo_lists_agents_md_for_each_cwd() {
+#[tokio::test]
+async fn detect_repo_lists_agents_md_for_each_cwd() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
     let nested = repo_root.join("nested").join("child");
@@ -99,6 +100,7 @@ fn detect_repo_lists_agents_md_for_each_cwd() {
             include_home: false,
             cwds: Some(vec![nested, repo_root.clone()]),
         })
+        .await
         .expect("detect");
 
     let expected = vec![
@@ -217,8 +219,8 @@ async fn import_home_skips_empty_config_migration() {
     assert!(!codex_home.join("config.toml").exists());
 }
 
-#[test]
-fn detect_home_skips_config_when_target_already_has_supported_fields() {
+#[tokio::test]
+async fn detect_home_skips_config_when_target_already_has_supported_fields() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::create_dir_all(&codex_home).expect("create codex home");
@@ -246,13 +248,14 @@ fn detect_home_skips_config_when_target_already_has_supported_fields() {
             include_home: true,
             cwds: None,
         })
+        .await
         .expect("detect");
 
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
-#[test]
-fn detect_home_skips_skills_when_all_skill_directories_exist() {
+#[tokio::test]
+async fn detect_home_skips_skills_when_all_skill_directories_exist() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
@@ -266,6 +269,7 @@ fn detect_home_skips_skills_when_all_skill_directories_exist() {
             include_home: true,
             cwds: None,
         })
+        .await
         .expect("detect");
 
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
@@ -343,8 +347,8 @@ async fn import_repo_agents_md_overwrites_empty_targets() {
     );
 }
 
-#[test]
-fn detect_repo_prefers_non_empty_external_agent_agents_source() {
+#[tokio::test]
+async fn detect_repo_prefers_non_empty_external_agent_agents_source() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).expect("create git");
@@ -361,6 +365,7 @@ fn detect_repo_prefers_non_empty_external_agent_agents_source() {
             include_home: false,
             cwds: Some(vec![repo_root.clone()]),
         })
+        .await
         .expect("detect");
 
     assert_eq!(
@@ -418,8 +423,8 @@ fn migration_metric_tags_for_skills_include_skills_count() {
     );
 }
 
-#[test]
-fn detect_home_lists_enabled_plugins_from_settings() {
+#[tokio::test]
+async fn detect_home_lists_enabled_plugins_from_settings() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::write(
@@ -444,6 +449,7 @@ fn detect_home_lists_enabled_plugins_from_settings() {
             include_home: true,
             cwds: None,
         })
+        .await
         .expect("detect");
 
     assert_eq!(
@@ -465,8 +471,8 @@ fn detect_home_lists_enabled_plugins_from_settings() {
     );
 }
 
-#[test]
-fn detect_repo_skips_plugins_that_are_already_configured_in_codex() {
+#[tokio::test]
+async fn detect_repo_skips_plugins_that_are_already_configured_in_codex() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(".claude");
     let codex_home = root.path().join(".codex");
@@ -503,6 +509,7 @@ enabled = true
             include_home: false,
             cwds: Some(vec![repo_root.clone()]),
         })
+        .await
         .expect("detect");
 
     assert_eq!(
@@ -524,8 +531,8 @@ enabled = true
     );
 }
 
-#[test]
-fn detect_repo_skips_plugins_that_are_disabled_in_codex() {
+#[tokio::test]
+async fn detect_repo_skips_plugins_that_are_disabled_in_codex() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(".claude");
     let codex_home = root.path().join(".codex");
@@ -561,13 +568,14 @@ enabled = false
             include_home: false,
             cwds: Some(vec![repo_root]),
         })
+        .await
         .expect("detect");
 
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
-#[test]
-fn detect_repo_skips_plugins_without_explicit_enabled_in_codex() {
+#[tokio::test]
+async fn detect_repo_skips_plugins_without_explicit_enabled_in_codex() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(".claude");
     let codex_home = root.path().join(".codex");
@@ -602,6 +610,7 @@ fn detect_repo_skips_plugins_without_explicit_enabled_in_codex() {
             include_home: false,
             cwds: Some(vec![repo_root]),
         })
+        .await
         .expect("detect");
 
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
@@ -620,8 +629,8 @@ async fn import_plugins_requires_details() {
     assert_eq!(err.to_string(), "plugins migration item is missing details");
 }
 
-#[test]
-fn detect_repo_does_not_skip_plugins_only_configured_in_project_codex() {
+#[tokio::test]
+async fn detect_repo_does_not_skip_plugins_only_configured_in_project_codex() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(".claude");
     let codex_home = root.path().join(".codex");
@@ -658,6 +667,7 @@ enabled = true
             include_home: false,
             cwds: Some(vec![repo_root.clone()]),
         })
+        .await
         .expect("detect");
 
     assert_eq!(
@@ -679,8 +689,8 @@ enabled = true
     );
 }
 
-#[test]
-fn detect_home_skips_plugins_without_marketplace_source() {
+#[tokio::test]
+async fn detect_home_skips_plugins_without_marketplace_source() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::write(
@@ -698,13 +708,14 @@ fn detect_home_skips_plugins_without_marketplace_source() {
             include_home: true,
             cwds: None,
         })
+        .await
         .expect("detect");
 
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
-#[test]
-fn detect_home_skips_plugins_with_invalid_marketplace_source() {
+#[tokio::test]
+async fn detect_home_skips_plugins_with_invalid_marketplace_source() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::write(
@@ -727,13 +738,14 @@ fn detect_home_skips_plugins_with_invalid_marketplace_source() {
             include_home: true,
             cwds: None,
         })
+        .await
         .expect("detect");
 
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
-#[test]
-fn detect_repo_filters_plugins_against_installed_marketplace() {
+#[tokio::test]
+async fn detect_repo_filters_plugins_against_installed_marketplace() {
     let root = TempDir::new().expect("create tempdir");
     let external_agent_home = root.path().join(".claude");
     let codex_home = root.path().join(".codex");
@@ -835,6 +847,7 @@ source = "owner/debug-marketplace"
             include_home: false,
             cwds: Some(vec![repo_root.clone()]),
         })
+        .await
         .expect("detect");
 
     assert_eq!(

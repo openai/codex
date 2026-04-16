@@ -1,15 +1,14 @@
+use crate::config::Config;
+use crate::config::ConfigBuilder;
 use crate::plugins::MarketplaceAddRequest;
 use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::PluginId;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::PluginsManager;
 use crate::plugins::add_marketplace;
+use crate::plugins::configured_plugins_from_stack;
 use crate::plugins::find_marketplace_manifest_path;
-use crate::plugins::load_marketplace;
-use crate::plugins::marketplace_install_root;
 use crate::plugins::parse_marketplace_source;
-use crate::plugins::resolve_configured_marketplace_root;
-use crate::plugins::validate_plugin_segment;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -91,20 +90,21 @@ impl ExternalAgentConfigService {
         }
     }
 
-    pub fn detect(
+    pub async fn detect(
         &self,
         params: ExternalAgentConfigDetectOptions,
     ) -> io::Result<Vec<ExternalAgentConfigMigrationItem>> {
         let mut items = Vec::new();
         if params.include_home {
-            self.detect_migrations(/*repo_root*/ None, &mut items)?;
+            self.detect_migrations(/*repo_root*/ None, &mut items)
+                .await?;
         }
 
         for cwd in params.cwds.as_deref().unwrap_or(&[]) {
             let Some(repo_root) = find_repo_root(Some(cwd))? else {
                 continue;
             };
-            self.detect_migrations(Some(&repo_root), &mut items)?;
+            self.detect_migrations(Some(&repo_root), &mut items).await?;
         }
 
         Ok(items)
@@ -165,14 +165,22 @@ impl ExternalAgentConfigService {
         Ok(())
     }
 
-    fn detect_migrations(
+    async fn detect_migrations(
         &self,
         repo_root: Option<&Path>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<()> {
-        let configured_plugin_ids = configured_plugin_ids(&self.codex_home)?;
-        let configured_marketplace_plugins = configured_marketplace_plugins(&self.codex_home)?;
         let cwd = repo_root.map(Path::to_path_buf);
+        let config = ConfigBuilder::default()
+            .codex_home(self.codex_home.clone())
+            .fallback_cwd(Some(self.codex_home.clone()))
+            .build()
+            .await?;
+        let configured_plugin_ids = configured_plugins_from_stack(&config.config_layer_stack)
+            .into_keys()
+            .collect::<HashSet<_>>();
+        let configured_marketplace_plugins =
+            configured_marketplace_plugins(&config, &PluginsManager::new(self.codex_home.clone()))?;
         let source_settings = repo_root.map_or_else(
             || self.external_agent_home.join("settings.json"),
             |repo_root| repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
@@ -622,94 +630,34 @@ fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
         .collect()
 }
 
-fn configured_plugin_ids(codex_home: &Path) -> io::Result<HashSet<String>> {
-    let config_path = codex_home.join("config.toml");
-    if !config_path.is_file() {
-        return Ok(HashSet::new());
-    }
-
-    let raw_config = fs::read_to_string(&config_path)?;
-    if raw_config.trim().is_empty() {
-        return Ok(HashSet::new());
-    }
-
-    let config = toml::from_str::<TomlValue>(&raw_config)
-        .map_err(|err| invalid_data_error(format!("invalid config.toml: {err}")))?;
-    let Some(plugins) = config.get("plugins").and_then(TomlValue::as_table) else {
-        return Ok(HashSet::new());
-    };
-
-    Ok(plugins.keys().cloned().collect())
-}
-
 fn configured_marketplace_plugins(
-    codex_home: &Path,
+    config: &Config,
+    plugins_manager: &PluginsManager,
 ) -> io::Result<BTreeMap<String, HashSet<String>>> {
-    let default_install_root = marketplace_install_root(codex_home);
-    let mut marketplace_roots = BTreeMap::new();
-    let config_path = codex_home.join("config.toml");
-    if !config_path.is_file() {
-        return Ok(BTreeMap::new());
-    }
-
-    let raw_config = fs::read_to_string(&config_path)?;
-    if raw_config.trim().is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    let config = toml::from_str::<TomlValue>(&raw_config)
-        .map_err(|err| invalid_data_error(format!("invalid config.toml: {err}")))?;
-    let Some(marketplaces) = config.get("marketplaces").and_then(TomlValue::as_table) else {
-        return Ok(BTreeMap::new());
-    };
-
-    for (marketplace_name, marketplace) in marketplaces {
-        if validate_plugin_segment(marketplace_name, "marketplace name").is_err()
-            || !marketplace.is_table()
-        {
-            continue;
-        }
-        let Some(root) = resolve_configured_marketplace_root(
-            marketplace_name,
-            marketplace,
-            &default_install_root,
-        ) else {
-            continue;
-        };
-        let root = if root.is_relative() {
-            config_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(root)
-        } else {
-            root
-        };
-        marketplace_roots.insert(marketplace_name.clone(), root);
-    }
-
+    let marketplaces = plugins_manager
+        .list_marketplaces_for_config(config, &[])
+        .map_err(|err| {
+            invalid_data_error(format!("failed to list configured marketplaces: {err}"))
+        })?;
     let mut marketplace_plugins = BTreeMap::new();
-    for (marketplace_name, root) in marketplace_roots {
-        let Some(manifest_path) = find_marketplace_manifest_path(&root) else {
-            continue;
-        };
-        let Ok(marketplace) = load_marketplace(&manifest_path) else {
-            continue;
-        };
-        let plugins =
-            marketplace
-                .plugins
-                .into_iter()
-                .filter(|plugin| {
-                    plugin.policy.installation != MarketplacePluginInstallPolicy::NotAvailable
-                        && plugin.policy.products.as_deref().is_none_or(|products| {
-                            Product::Codex.matches_product_restriction(products)
-                        })
-                })
-                .map(|plugin| plugin.name)
-                .collect::<HashSet<_>>();
-        marketplace_plugins.insert(marketplace_name, plugins);
+    for marketplace in marketplaces.marketplaces {
+        let plugins = marketplace
+            .plugins
+            .into_iter()
+            .filter(|plugin| {
+                plugin.policy.installation != MarketplacePluginInstallPolicy::NotAvailable
+            })
+            .filter(|plugin| {
+                plugin
+                    .policy
+                    .products
+                    .as_deref()
+                    .is_none_or(|products| Product::Codex.matches_product_restriction(products))
+            })
+            .map(|plugin| plugin.name)
+            .collect::<HashSet<_>>();
+        marketplace_plugins.insert(marketplace.name, plugins);
     }
-
     Ok(marketplace_plugins)
 }
 
