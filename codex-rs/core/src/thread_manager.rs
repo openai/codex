@@ -489,7 +489,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
-            /*environment_ids*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -502,7 +502,7 @@ impl ThreadManager {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
-        environment_ids: Option<Vec<String>>,
+        environments: Option<Vec<codex_protocol::protocol::TurnEnvironment>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
@@ -514,7 +514,7 @@ impl ThreadManager {
             metrics_service_name,
             parent_trace,
             /*user_shell_override*/ None,
-            environment_ids,
+            environments,
         ))
         .await
     }
@@ -555,7 +555,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             /*user_shell_override*/ None,
-            /*environment_ids*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -575,7 +575,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
-            /*environment_ids*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -598,7 +598,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
-            /*environment_ids*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -707,7 +707,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             /*user_shell_override*/ None,
-            /*environment_ids*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -809,7 +809,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
-            /*environment_ids*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -837,7 +837,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
-            /*environment_ids*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -866,7 +866,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
-            /*environment_ids*/ None,
+            /*environments*/ None,
         ))
         .await
     }
@@ -884,7 +884,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
-        environment_ids: Option<Vec<String>>,
+        environments: Option<Vec<codex_protocol::protocol::TurnEnvironment>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -899,7 +899,7 @@ impl ThreadManagerState {
             /*inherited_exec_policy*/ None,
             parent_trace,
             user_shell_override,
-            environment_ids,
+            environments,
         ))
         .await
     }
@@ -920,6 +920,35 @@ impl ThreadManagerState {
         parent_thread.environment_manager()
     }
 
+    async fn inherited_environments_for_source(
+        &self,
+        session_source: &SessionSource,
+    ) -> Option<Vec<codex_protocol::protocol::TurnEnvironment>> {
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = session_source
+        else {
+            return None;
+        };
+        let Ok(parent_thread) = self.get_thread(*parent_thread_id).await else {
+            return None;
+        };
+        let environments = parent_thread.environments().await;
+        if environments.is_empty() {
+            None
+        } else {
+            Some(
+                environments
+                    .into_iter()
+                    .map(|environment| codex_protocol::protocol::TurnEnvironment {
+                        environment_id: environment.environment_id,
+                        cwd: environment.cwd.map(Into::into),
+                    })
+                    .collect(),
+            )
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread_with_source(
         &self,
@@ -935,26 +964,37 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
-        environment_ids: Option<Vec<String>>,
+        environments: Option<Vec<codex_protocol::protocol::TurnEnvironment>>,
     ) -> CodexResult<NewThread> {
-        let environment_manager = if environment_ids
+        let environment_manager = if environments
             .as_ref()
-            .is_some_and(|environment_ids| !environment_ids.is_empty())
+            .is_some_and(|environments| !environments.is_empty())
         {
             Arc::clone(&self.environment_manager)
         } else {
             self.inherited_environment_manager_for_source(&session_source)
                 .await
         };
-        let effective_environment_ids = environment_ids
-            .filter(|environment_ids| !environment_ids.is_empty())
+        let effective_environments = environments
+            .filter(|environments| !environments.is_empty())
+            .or_else(|| {
+                self.inherited_environments_for_source(&session_source)
+                    .await
+            })
             .unwrap_or_else(|| {
                 environment_manager
                     .default_environment_id()
-                    .map(|environment_id| vec![environment_id.to_string()])
+                    .map(|environment_id| {
+                        vec![codex_protocol::protocol::TurnEnvironment {
+                            environment_id: environment_id.to_string(),
+                            cwd: None,
+                        }]
+                    })
                     .unwrap_or_default()
             });
-        let selected_environment_id = effective_environment_ids.first().cloned();
+        let selected_environment_id = effective_environments
+            .first()
+            .map(|environment| environment.environment_id.clone());
         let selected_environment_manager = Arc::new(
             environment_manager.with_default_environment_id(selected_environment_id.clone()),
         );
@@ -997,7 +1037,7 @@ impl ThreadManagerState {
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),
-            environment_ids: effective_environment_ids,
+            environments: effective_environments,
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)

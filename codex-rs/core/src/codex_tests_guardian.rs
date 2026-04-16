@@ -456,7 +456,10 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         user_shell_override: None,
         parent_trace: None,
         analytics_events_client: None,
-        environment_ids: vec!["local".to_string()],
+        environments: vec![codex_protocol::protocol::TurnEnvironment {
+            environment_id: "local".to_string(),
+            cwd: None,
+        }],
     })
     .await
     .expect("spawn guardian subagent");

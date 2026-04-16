@@ -2722,11 +2722,11 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
-    /// Optional ordered environment ids to use for this thread. For now only
-    /// the first id is used. When omitted or empty, the default environment is
+    /// Optional ordered environments to use for this thread. For now only the
+    /// first entry is used. When omitted or empty, the default environment is
     /// used.
     #[ts(optional = nullable)]
-    pub environment_ids: Option<Vec<String>>,
+    pub environments: Option<Vec<ThreadEnvironmentParams>>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -2745,6 +2745,15 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadEnvironmentParams {
+    pub environment_id: String,
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]

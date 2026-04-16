@@ -94,10 +94,13 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_trace: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
-        environment_ids: parent_ctx
+        environments: parent_ctx
             .environments
             .iter()
-            .map(|environment| environment.environment_id.clone())
+            .map(|environment| codex_protocol::protocol::TurnEnvironment {
+                environment_id: environment.environment_id.clone(),
+                cwd: environment.cwd.as_ref().map(|cwd| cwd.to_path_buf()),
+            })
             .collect(),
     }))
     .await?;
