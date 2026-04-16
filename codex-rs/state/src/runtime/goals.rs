@@ -152,6 +152,34 @@ WHERE thread_id = ?
         self.get_thread_goal(thread_id).await
     }
 
+    pub async fn pause_active_thread_goal(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<crate::ThreadGoal>> {
+        let now_ms = datetime_to_epoch_millis(Utc::now());
+        let result = sqlx::query(
+            r#"
+UPDATE thread_goals
+SET
+    status = ?,
+    updated_at_ms = ?
+WHERE thread_id = ?
+  AND status = 'active'
+            "#,
+        )
+        .bind(crate::ThreadGoalStatus::Paused.as_str())
+        .bind(now_ms)
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        self.get_thread_goal(thread_id).await
+    }
+
     pub async fn account_thread_goal_usage(
         &self,
         thread_id: ThreadId,
@@ -316,6 +344,57 @@ mod tests {
             .expect("goal should exist");
         assert_eq!(crate::ThreadGoalStatus::Paused, goal.status);
         assert_eq!(Some(200_000), goal.token_budget);
+    }
+
+    #[tokio::test]
+    async fn pause_active_thread_goal_does_not_clobber_terminal_status() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        let goal = runtime
+            .replace_thread_goal(
+                thread_id,
+                "optimize the benchmark",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(100_000),
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let paused = runtime
+            .pause_active_thread_goal(thread_id)
+            .await
+            .expect("active pause should succeed")
+            .expect("active goal should be paused");
+        let expected = crate::ThreadGoal {
+            status: crate::ThreadGoalStatus::Paused,
+            updated_at: paused.updated_at,
+            ..goal
+        };
+        assert_eq!(expected, paused);
+
+        let complete = runtime
+            .update_thread_goal(
+                thread_id,
+                ThreadGoalUpdate {
+                    status: Some(crate::ThreadGoalStatus::Complete),
+                    token_budget: None,
+                },
+            )
+            .await
+            .expect("goal update should succeed")
+            .expect("goal should exist");
+        let pause_result = runtime
+            .pause_active_thread_goal(thread_id)
+            .await
+            .expect("terminal pause attempt should succeed");
+        assert_eq!(None, pause_result);
+        assert_eq!(
+            Some(complete),
+            runtime
+                .get_thread_goal(thread_id)
+                .await
+                .expect("goal read should succeed")
+        );
     }
 
     #[tokio::test]

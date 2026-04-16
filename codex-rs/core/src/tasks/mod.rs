@@ -414,12 +414,6 @@ impl Session {
     pub(crate) async fn abort_all_tasks_without_restart(self: &Arc<Self>, reason: TurnAbortReason) {
         let active_turn = self.take_active_turn().await;
 
-        if reason == TurnAbortReason::Interrupted
-            && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
-        {
-            warn!("failed to pause active thread goal after interrupt: {err}");
-        }
-
         if let Some(mut active_turn) = active_turn {
             for task in active_turn.drain_tasks() {
                 self.handle_task_abort(task, reason.clone()).await;
@@ -427,6 +421,12 @@ impl Session {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
+        }
+
+        if reason == TurnAbortReason::Interrupted
+            && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
+        {
+            warn!("failed to pause active thread goal after interrupt: {err}");
         }
     }
 

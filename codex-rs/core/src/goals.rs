@@ -284,20 +284,8 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
-        let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
-            return Ok(());
-        };
-        if goal.status != codex_state::ThreadGoalStatus::Active {
-            return Ok(());
-        }
         let Some(goal) = state_db
-            .update_thread_goal(
-                self.conversation_id,
-                codex_state::ThreadGoalUpdate {
-                    status: Some(codex_state::ThreadGoalStatus::Paused),
-                    token_budget: None,
-                },
-            )
+            .pause_active_thread_goal(self.conversation_id)
             .await?
         else {
             return Ok(());
