@@ -766,6 +766,117 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
 }
 
 #[tokio::test]
+async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> anyhow::Result<()> {
+    #[derive(Default)]
+    struct ProbeToolRuntime {
+        enforce_managed_network: Vec<bool>,
+    }
+
+    impl crate::tools::sandboxing::Approvable<()> for ProbeToolRuntime {
+        type ApprovalKey = String;
+
+        fn approval_keys(&self, _req: &()) -> Vec<Self::ApprovalKey> {
+            vec!["probe".to_string()]
+        }
+
+        fn start_approval_async<'a>(
+            &'a mut self,
+            _req: &'a (),
+            _ctx: crate::tools::sandboxing::ApprovalCtx<'a>,
+        ) -> futures::future::BoxFuture<'a, ReviewDecision> {
+            Box::pin(async { ReviewDecision::Approved })
+        }
+    }
+
+    impl crate::tools::sandboxing::Sandboxable for ProbeToolRuntime {
+        fn sandbox_preference(&self) -> codex_sandboxing::SandboxablePreference {
+            codex_sandboxing::SandboxablePreference::Auto
+        }
+    }
+
+    impl crate::tools::sandboxing::ToolRuntime<(), ()> for ProbeToolRuntime {
+        async fn run(
+            &mut self,
+            _req: &(),
+            attempt: &crate::tools::sandboxing::SandboxAttempt<'_>,
+            _ctx: &crate::tools::sandboxing::ToolCtx,
+        ) -> Result<(), crate::tools::sandboxing::ToolError> {
+            self.enforce_managed_network
+                .push(attempt.enforce_managed_network);
+            Ok(())
+        }
+    }
+
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &SandboxPolicy::DangerFullAccess,
+    )?;
+
+    let session = make_session_with_config(move |config| {
+        config.permissions.sandbox_policy =
+            codex_config::Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        config.permissions.network = Some(network_spec);
+
+        let layers = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut requirements = config.config_layer_stack.requirements().clone();
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
+                enabled: Some(true),
+                ..Default::default()
+            },
+            RequirementSource::CloudRequirements,
+        ));
+        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        requirements_toml.network = Some(crate::config_loader::NetworkRequirementsToml {
+            enabled: Some(true),
+            ..Default::default()
+        });
+        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+            .expect("rebuild config layer stack with network requirements");
+    })
+    .await?;
+
+    let turn = session.new_default_turn().await;
+    assert!(turn.network.is_none());
+
+    let mut orchestrator = crate::tools::orchestrator::ToolOrchestrator::new();
+    let mut tool = ProbeToolRuntime::default();
+    let tool_ctx = crate::tools::sandboxing::ToolCtx {
+        session: Arc::clone(&session),
+        turn: Arc::clone(&turn),
+        call_id: "probe-call".to_string(),
+        tool_name: "probe".to_string(),
+    };
+
+    orchestrator
+        .run(
+            &mut tool,
+            &(),
+            &tool_ctx,
+            turn.as_ref(),
+            AskForApproval::Never,
+        )
+        .await
+        .expect("probe runtime should succeed");
+
+    assert_eq!(tool.enforce_managed_network, vec![false]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> anyhow::Result<()> {
     let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(

@@ -59,6 +59,7 @@ pub use codex_mcp::SandboxState;
 mod mcp_openai_file;
 mod mcp_tool_call;
 mod memories;
+pub use memories::clear_memory_roots_contents;
 pub(crate) mod mention_syntax;
 pub(crate) mod message_history;
 pub(crate) mod utils;
