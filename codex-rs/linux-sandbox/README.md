@@ -7,7 +7,7 @@ This crate is responsible for producing:
   - the `codex-exec` CLI can check if its arg0 is `codex-linux-sandbox` and, if so, execute as if it were `codex-linux-sandbox`
   - this should also be true of the `codex` multitool CLI
 
-On Linux, the bubblewrap pipeline prefers the first `bwrap` found on `PATH`
+On Linux, Codex prefers the first `bwrap` found on `PATH`
 outside the current working directory whenever it is available. If `bwrap` is
 present but too old to support
 `--argv0`, the helper keeps using system bubblewrap and switches to a
@@ -23,7 +23,7 @@ commands that would enter the bubblewrap path.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
-- Bubblewrap is the default filesystem sandbox pipeline.
+- Bubblewrap is the default filesystem sandbox.
 - If `bwrap` is present on `PATH` outside the current working directory, the
   helper uses it.
 - If `bwrap` is present but too old to support `--argv0`, the helper uses a
@@ -46,14 +46,14 @@ commands that would enter the bubblewrap path.
 - Split-only filesystem policies that do not round-trip through the legacy
   `SandboxPolicy` model stay on bubblewrap so nested read-only or denied
   carveouts are preserved.
-- When the default bubblewrap pipeline is active, the helper applies `PR_SET_NO_NEW_PRIVS` and a
+- When bubblewrap is active, the helper applies `PR_SET_NO_NEW_PRIVS` and a
   seccomp network filter in-process.
-- When the default bubblewrap pipeline is active, the filesystem is read-only by default via `--ro-bind / /`.
-- When the default bubblewrap pipeline is active, writable roots are layered with `--bind <root> <root>`.
-- When the default bubblewrap pipeline is active, protected subpaths under writable roots (for
+- When bubblewrap is active, the filesystem is read-only by default via `--ro-bind / /`.
+- When bubblewrap is active, writable roots are layered with `--bind <root> <root>`.
+- When bubblewrap is active, protected subpaths under writable roots (for
   example `.git`,
   resolved `gitdir:`, and `.codex`) are re-applied as read-only via `--ro-bind`.
-- When the default bubblewrap pipeline is active, overlapping split-policy
+- When bubblewrap is active, overlapping split-policy
   entries are applied in path-specificity order so narrower writable children
   can reopen broader read-only or denied parents while narrower denied subpaths
   still win. For example, `/repo = write`, `/repo/a = none`, `/repo/a/b = write`
@@ -68,19 +68,19 @@ commands that would enter the bubblewrap path.
   Failure:  any other rg failure aborts sandbox construction
   ```
 
-- When the default bubblewrap pipeline is active, symlink-in-path and non-existent protected paths inside
+- When bubblewrap is active, symlink-in-path and non-existent protected paths inside
   writable roots are blocked by mounting `/dev/null` on the symlink or first
   missing component.
-- When the default bubblewrap pipeline is active, the helper explicitly isolates the user namespace via
+- When bubblewrap is active, the helper explicitly isolates the user namespace via
   `--unshare-user` and the PID namespace via `--unshare-pid`.
-- When the default bubblewrap pipeline is active and network is restricted without proxy routing, the helper also
+- When bubblewrap is active and network is restricted without proxy routing, the helper also
   isolates the network namespace via `--unshare-net`.
 - In managed proxy mode, the helper uses `--unshare-net` plus an internal
   TCP->UDS->TCP routing bridge so tool traffic reaches only configured proxy
   endpoints.
 - In managed proxy mode, after the bridge is live, seccomp blocks new
   AF_UNIX/socketpair creation for the user command.
-- When the default bubblewrap pipeline is active, it mounts a fresh `/proc` via `--proc /proc` by default, but
+- When bubblewrap is active, it mounts a fresh `/proc` via `--proc /proc` by default, but
   you can skip this in restrictive container environments with `--no-proc`.
 
 **Notes**
