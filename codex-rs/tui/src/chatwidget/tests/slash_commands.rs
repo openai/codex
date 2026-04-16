@@ -357,6 +357,100 @@ async fn interrupted_goal_slash_command_restores_original_command_to_composer() 
 }
 
 #[tokio::test]
+async fn committed_pending_goal_slash_command_renders_original_command() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    let command = "/goal write a cat poem";
+
+    submit_composer_text(&mut chat, command);
+
+    let submitted_items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+            items
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    };
+    assert_eq!(next_add_to_history_op(&mut op_rx), command);
+
+    complete_user_message_for_inputs(&mut chat, "user-goal", submitted_items);
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains(command),
+        "expected transcript to render original command, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("Set the current thread goal"),
+        "transcript should not render the internal parser prompt: {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn interrupted_goal_slash_command_resubmit_records_original_command_in_history() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    let command = "/goal write a cat poem";
+
+    submit_composer_text(&mut chat, command);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut op_rx), command);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    next_interrupt_op(&mut op_rx);
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "resubmitted model input should remain goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected resubmitted user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut op_rx), command);
+}
+
+#[tokio::test]
 async fn usage_error_slash_command_is_available_from_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);

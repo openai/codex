@@ -1314,6 +1314,63 @@ fn user_message_preview_text(
     }
 }
 
+fn user_message_event_for_display(
+    message: UserMessage,
+    history_record: &UserMessageHistoryRecord,
+) -> UserMessageEvent {
+    let message = user_message_for_restore(message, history_record);
+    UserMessageEvent {
+        message: message.text,
+        images: Some(message.remote_image_urls),
+        local_images: message
+            .local_images
+            .into_iter()
+            .map(|image| image.path)
+            .collect(),
+        text_elements: message.text_elements,
+    }
+}
+
+fn merge_user_messages_with_history_record(
+    messages: Vec<(UserMessage, UserMessageHistoryRecord)>,
+) -> (UserMessage, UserMessageHistoryRecord) {
+    let history_record = if messages
+        .iter()
+        .all(|(_, record)| *record == UserMessageHistoryRecord::UserMessageText)
+    {
+        UserMessageHistoryRecord::UserMessageText
+    } else {
+        let history_text = messages
+            .iter()
+            .filter_map(|(message, record)| match record {
+                UserMessageHistoryRecord::Override(history_text) if !history_text.is_empty() => {
+                    Some(history_text.clone())
+                }
+                UserMessageHistoryRecord::Override(_) if message.text.is_empty() => None,
+                UserMessageHistoryRecord::Override(_)
+                | UserMessageHistoryRecord::UserMessageText => {
+                    let encoded_mentions = message
+                        .mention_bindings
+                        .iter()
+                        .map(|binding| LinkedMention {
+                            mention: binding.mention.clone(),
+                            path: binding.path.clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    Some(encode_history_mentions(&message.text, &encoded_mentions))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        UserMessageHistoryRecord::Override(history_text)
+    };
+    let messages = messages
+        .into_iter()
+        .map(|(message, _)| message)
+        .collect::<Vec<_>>();
+    (merge_user_messages(messages), history_record)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReplayKind {
     ResumeInitialMessages,
@@ -2598,40 +2655,12 @@ impl ChatWidget {
                 rejected_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,
             );
-            let history_record = if history_records
-                .iter()
-                .all(|record| *record == UserMessageHistoryRecord::UserMessageText)
-            {
-                UserMessageHistoryRecord::UserMessageText
-            } else {
-                let history_text = rejected_messages
-                    .iter()
-                    .zip(history_records.iter())
-                    .filter_map(|(message, record)| match record {
-                        UserMessageHistoryRecord::Override(history_text)
-                            if !history_text.is_empty() =>
-                        {
-                            Some(history_text.clone())
-                        }
-                        UserMessageHistoryRecord::Override(_) if message.text.is_empty() => None,
-                        UserMessageHistoryRecord::Override(_)
-                        | UserMessageHistoryRecord::UserMessageText => {
-                            let encoded_mentions = message
-                                .mention_bindings
-                                .iter()
-                                .map(|binding| LinkedMention {
-                                    mention: binding.mention.clone(),
-                                    path: binding.path.clone(),
-                                })
-                                .collect::<Vec<_>>();
-                            Some(encode_history_mentions(&message.text, &encoded_mentions))
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                UserMessageHistoryRecord::Override(history_text)
-            };
-            Some((merge_user_messages(rejected_messages), history_record))
+            Some(merge_user_messages_with_history_record(
+                rejected_messages
+                    .into_iter()
+                    .zip(history_records)
+                    .collect::<Vec<_>>(),
+            ))
         }
     }
 
@@ -3280,13 +3309,15 @@ impl ChatWidget {
         // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
         // still tracked here must be restored locally instead of waiting for a later commit.
         if send_pending_steers_immediately {
-            let pending_steers: Vec<UserMessage> = self
+            let pending_steers = self
                 .pending_steers
                 .drain(..)
-                .map(|pending| pending.user_message)
-                .collect();
+                .map(|pending| (pending.user_message, pending.history_record))
+                .collect::<Vec<_>>();
             if !pending_steers.is_empty() {
-                self.submit_user_message(merge_user_messages(pending_steers));
+                let (user_message, history_record) =
+                    merge_user_messages_with_history_record(pending_steers);
+                self.submit_user_message_with_history_record(user_message, history_record);
             } else if let Some(combined) = self.drain_pending_messages_for_restore() {
                 self.restore_user_message_to_composer(combined);
             }
@@ -5979,17 +6010,10 @@ impl ChatWidget {
                     {
                         if let Some(pending) = self.pending_steers.pop_front() {
                             self.refresh_pending_input_preview();
-                            let pending_event = UserMessageEvent {
-                                message: pending.user_message.text,
-                                images: Some(pending.user_message.remote_image_urls),
-                                local_images: pending
-                                    .user_message
-                                    .local_images
-                                    .into_iter()
-                                    .map(|image| image.path)
-                                    .collect(),
-                                text_elements: pending.user_message.text_elements,
-                            };
+                            let pending_event = user_message_event_for_display(
+                                pending.user_message,
+                                &pending.history_record,
+                            );
                             self.on_user_message_event(pending_event);
                         } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
                         {
@@ -7145,17 +7169,10 @@ impl ChatWidget {
                     {
                         if let Some(pending) = self.pending_steers.pop_front() {
                             self.refresh_pending_input_preview();
-                            let pending_event = UserMessageEvent {
-                                message: pending.user_message.text,
-                                images: Some(pending.user_message.remote_image_urls),
-                                local_images: pending
-                                    .user_message
-                                    .local_images
-                                    .into_iter()
-                                    .map(|image| image.path)
-                                    .collect(),
-                                text_elements: pending.user_message.text_elements,
-                            };
+                            let pending_event = user_message_event_for_display(
+                                pending.user_message,
+                                &pending.history_record,
+                            );
                             self.on_user_message_event(pending_event);
                         } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
                         {
