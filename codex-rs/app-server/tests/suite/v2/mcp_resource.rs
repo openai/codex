@@ -209,12 +209,9 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
         Ok(result) => anyhow::bail!("expected thread-not-found error, got response: {result:?}"),
         Err(error) => error,
     };
-    let error_debug = format!("{error:?}");
-    let message = error.message;
-
     assert!(
-        message.contains("thread not found"),
-        "expected thread-not-found error, got: {error_debug}"
+        error.message.contains("thread not found"),
+        "expected thread-not-found error, got: {error:?}"
     );
 
     Ok(())
