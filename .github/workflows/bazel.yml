@@ -91,16 +91,19 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            mapfile -t bazel_cross_warmup_targets < <(
+              bazel query 'tests(//codex-rs/...) except rdeps(tests(//codex-rs/...), @v8_targets//:rusty_v8_archive_for_target)'
+            )
+
             set +e
             ./.github/scripts/run-bazel-ci.sh \
               --ci-config=ci-windows-cross-build \
               -- \
               build \
-              --keep_going \
               --build_tests_only \
               "${bazel_common_args[@]}" \
               -- \
-              "${bazel_targets[@]}"
+              "${bazel_cross_warmup_targets[@]}"
             cross_build_status=$?
             set -e
 
