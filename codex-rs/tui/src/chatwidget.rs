@@ -363,6 +363,8 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod goal_status;
+use self::goal_status::GoalStatusState;
+#[cfg(test)]
 use self::goal_status::goal_status_indicator_from_app_goal;
 mod interrupts;
 use self::interrupts::InterruptManager;
@@ -991,6 +993,8 @@ pub(crate) struct ChatWidget {
     status_line_branch_lookup_complete: bool,
     // Current thread-goal status shown in the status line when plan mode is inactive.
     current_goal_status_indicator: Option<GoalStatusIndicator>,
+    current_goal_status: Option<GoalStatusState>,
+    goal_status_active_turn_started_at: Option<Instant>,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
@@ -2087,6 +2091,8 @@ impl ChatWidget {
         self.last_turn_id = None;
         self.thread_name = event.thread_name.clone();
         self.current_goal_status_indicator = None;
+        self.current_goal_status = None;
+        self.goal_status_active_turn_started_at = None;
         self.update_collaboration_mode_indicator();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
@@ -2433,6 +2439,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.goal_status_active_turn_started_at = Some(Instant::now());
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
         self.saw_copy_source_this_turn = false;
@@ -2526,6 +2533,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
+        self.goal_status_active_turn_started_at = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
@@ -2972,6 +2980,7 @@ impl ChatWidget {
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
+        self.goal_status_active_turn_started_at = None;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
@@ -3449,6 +3458,8 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.goal_status_active_turn_started_at =
+                self.agent_turn_running.then_some(Instant::now());
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             if let Some(composer) = input_state.composer {
@@ -3510,6 +3521,7 @@ impl ChatWidget {
             );
         } else {
             self.agent_turn_running = false;
+            self.goal_status_active_turn_started_at = None;
             self.pending_steers.clear();
             self.rejected_steers_queue.clear();
             self.rejected_steer_history_records.clear();
@@ -4478,6 +4490,7 @@ impl ChatWidget {
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();
+        self.refresh_goal_status_indicator_for_time_tick();
         if self.should_animate_terminal_title_spinner() {
             self.refresh_terminal_title();
         }
@@ -5174,6 +5187,8 @@ impl ChatWidget {
             status_line_branch_pending: false,
             status_line_branch_lookup_complete: false,
             current_goal_status_indicator: None,
+            current_goal_status: None,
+            goal_status_active_turn_started_at: None,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
@@ -9490,6 +9505,8 @@ impl ChatWidget {
             self.sync_goal_command_enabled();
             if !enabled {
                 self.current_goal_status_indicator = None;
+                self.current_goal_status = None;
+                self.goal_status_active_turn_started_at = None;
                 self.update_collaboration_mode_indicator();
             }
         }
@@ -9913,19 +9930,40 @@ impl ChatWidget {
 
     fn update_collaboration_mode_indicator(&mut self) {
         let indicator = self.collaboration_mode_indicator();
-        let goal_indicator =
-            if indicator.is_none() && self.config.features.enabled(Feature::GoalMode) {
-                self.current_goal_status_indicator.clone()
-            } else {
-                None
-            };
+        let goal_indicator = if indicator.is_none() {
+            self.goal_status_indicator(Instant::now())
+        } else {
+            None
+        };
+        self.current_goal_status_indicator = goal_indicator.clone();
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
         self.bottom_pane.set_goal_status_indicator(goal_indicator);
+    }
+
+    fn refresh_goal_status_indicator_for_time_tick(&mut self) {
+        if self.collaboration_mode_indicator().is_some() {
+            return;
+        }
+        let goal_indicator = self.goal_status_indicator(Instant::now());
+        if goal_indicator != self.current_goal_status_indicator {
+            self.current_goal_status_indicator = goal_indicator.clone();
+            self.bottom_pane.set_goal_status_indicator(goal_indicator);
+        }
+    }
+
+    fn goal_status_indicator(&self, now: Instant) -> Option<GoalStatusIndicator> {
+        if !self.config.features.enabled(Feature::GoalMode) {
+            return None;
+        }
+        self.current_goal_status
+            .as_ref()
+            .and_then(|state| state.indicator(now, self.goal_status_active_turn_started_at))
     }
 
     fn on_thread_goal_updated(&mut self, goal: AppThreadGoal) {
         if !self.config.features.enabled(Feature::GoalMode) {
             self.current_goal_status_indicator = None;
+            self.current_goal_status = None;
             self.update_collaboration_mode_indicator();
             return;
         }
@@ -9935,7 +9973,7 @@ impl ChatWidget {
         {
             self.budget_limited_turn_ids.insert(turn_id.clone());
         }
-        self.current_goal_status_indicator = goal_status_indicator_from_app_goal(&goal);
+        self.current_goal_status = Some(GoalStatusState::new(goal, Instant::now()));
         self.update_collaboration_mode_indicator();
     }
 

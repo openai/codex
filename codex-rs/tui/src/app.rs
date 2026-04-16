@@ -3505,19 +3505,27 @@ impl App {
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
         );
-        if let Err(err) = self.shutdown_current_thread(app_server).await {
-            self.chat_widget
-                .add_error_message(format!("Failed to stop current thread: {err}"));
-            return;
-        }
-        let tracked_thread_ids: Vec<ThreadId> =
-            self.thread_event_channels.keys().copied().collect();
-        for thread_id in tracked_thread_ids {
-            if let Err(err) = Self::unsubscribe_thread_with_timeout(app_server, thread_id).await {
+        let current_thread_id = self.chat_widget.thread_id();
+        let tracked_thread_ids: Vec<ThreadId> = self
+            .thread_event_channels
+            .keys()
+            .copied()
+            .filter(|thread_id| Some(*thread_id) != current_thread_id)
+            .collect();
+        for thread_id in &tracked_thread_ids {
+            if let Err(err) = Self::unsubscribe_thread_with_timeout(app_server, *thread_id).await {
                 self.chat_widget
                     .add_error_message(format!("Failed to stop thread {thread_id}: {err}"));
                 return;
             }
+        }
+        for thread_id in tracked_thread_ids {
+            self.abort_thread_event_listener(thread_id);
+        }
+        if let Err(err) = self.shutdown_current_thread(app_server).await {
+            self.chat_widget
+                .add_error_message(format!("Failed to stop current thread: {err}"));
+            return;
         }
         self.config = config.clone();
         match app_server

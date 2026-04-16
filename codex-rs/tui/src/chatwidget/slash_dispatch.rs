@@ -498,17 +498,30 @@ impl ChatWidget {
                 if !self.config.features.enabled(Feature::GoalMode) {
                     return;
                 }
-                let Some((prepared_args, _prepared_elements)) = self
+                let Some((prepared_args, prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
                 else {
                     return;
                 };
-                let prompt = format!(
-                    "Set the current thread goal to the following long-running objective, extracting any explicit token budget from it, then continue working toward it:\n\n{prepared_args}"
+                let prompt_prefix = "Set the current thread goal to the following long-running objective, extracting any explicit token budget from it, then continue working toward it:\n\n";
+                let mut prompt = String::from(prompt_prefix);
+                let mut prompt_elements = Vec::new();
+                append_text_with_rebased_elements(
+                    &mut prompt,
+                    &mut prompt_elements,
+                    &prepared_args,
+                    prepared_elements,
                 );
+                let user_message = UserMessage {
+                    text: prompt,
+                    local_images: Vec::new(),
+                    remote_image_urls: Vec::new(),
+                    text_elements: prompt_elements,
+                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
+                };
                 self.submit_user_message_with_history_record(
-                    prompt.into(),
+                    user_message,
                     UserMessageHistoryRecord::Override(format!("/goal {prepared_args}")),
                 );
                 self.bottom_pane.drain_pending_submission_state();
