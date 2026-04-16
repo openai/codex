@@ -212,6 +212,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::append_thread_name;
+use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -616,17 +617,9 @@ pub(crate) struct CodexMessageProcessorArgs {
 
 impl CodexMessageProcessor {
     async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
-        let mut paths: Vec<AbsolutePathBuf> =
-            config.user_instructions_path.iter().cloned().collect();
-        match codex_core::discover_project_doc_paths(config, LOCAL_FS.as_ref()).await {
-            Ok(project_doc_paths) => {
-                paths.extend(project_doc_paths);
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to discover project docs for thread response");
-            }
-        }
-        paths
+        codex_core::AgentsMdManager::new(config)
+            .instruction_sources(LOCAL_FS.as_ref())
+            .await
     }
 
     pub(crate) fn handle_config_mutation(&self) {
@@ -3080,48 +3073,12 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let memory_root = self.config.codex_home.join("memories");
-        let memory_extensions_root = self.config.codex_home.join("memories_extensions");
-        let clear_memory_root_result: std::io::Result<()> = async {
-            for directory in [memory_root.as_path(), memory_extensions_root.as_path()] {
-                match tokio::fs::symlink_metadata(directory).await {
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!(
-                                "refusing to clear symlinked memory root {}",
-                                directory.display()
-                            ),
-                        ));
-                    }
-                    Ok(_) => {}
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(err) => return Err(err),
-                }
-
-                tokio::fs::create_dir_all(directory).await?;
-                let mut entries = tokio::fs::read_dir(directory).await?;
-                while let Some(entry) = entries.next_entry().await? {
-                    let path = entry.path();
-                    let file_type = entry.file_type().await?;
-                    if file_type.is_dir() {
-                        tokio::fs::remove_dir_all(path).await?;
-                    } else {
-                        tokio::fs::remove_file(path).await?;
-                    }
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        if let Err(err) = clear_memory_root_result {
+        if let Err(err) = clear_memory_roots_contents(&self.config.codex_home).await {
             self.send_internal_error(
                 request_id,
                 format!(
-                    "failed to clear memory directory {}: {err}",
-                    memory_root.display()
+                    "failed to clear memory directories under {}: {err}",
+                    self.config.codex_home.display()
                 ),
             )
             .await;
@@ -6213,7 +6170,7 @@ impl CodexMessageProcessor {
             force_remote_sync,
         } = params;
         let roots = cwds.unwrap_or_default();
-        plugins_manager.maybe_start_non_curated_plugin_cache_refresh_for_roots(&roots);
+        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
 
         let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,

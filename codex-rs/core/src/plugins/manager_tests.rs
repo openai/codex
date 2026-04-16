@@ -15,6 +15,8 @@ use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
+use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
@@ -199,6 +201,7 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                         http_headers: None,
                         env_http_headers: None,
                     },
+                    experimental_environment: None,
                     enabled: true,
                     required: false,
                     supports_parallel_tool_calls: false,
@@ -535,6 +538,7 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
                     http_headers: None,
                     env_http_headers: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -644,6 +648,7 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                     http_headers: None,
                     env_http_headers: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -801,6 +806,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
             http_headers: None,
             env_http_headers: None,
         },
+        experimental_environment: None,
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
@@ -2750,6 +2756,68 @@ enabled = true
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
         )
         .expect("cache refresh should be a no-op when configured plugins are current")
+    );
+}
+
+#[test]
+fn refresh_non_curated_plugin_cache_force_reinstalls_current_local_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_plugin(&repo_root, "sample-plugin", "sample-plugin");
+    fs::write(repo_root.join("sample-plugin/skills/SKILL.md"), "new skill").unwrap();
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./sample-plugin"
+      }
+    }
+  ]
+}"#,
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/local",
+        "sample-plugin",
+    );
+    fs::write(
+        tmp.path()
+            .join("plugins/cache/debug/sample-plugin/local/skills/SKILL.md"),
+        "old skill",
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."sample-plugin@debug"]
+enabled = true
+"#,
+    );
+
+    assert!(
+        refresh_non_curated_plugin_cache_force_reinstall(
+            tmp.path(),
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+        )
+        .expect("cache refresh should reinstall unchanged local version")
+    );
+
+    assert_eq!(
+        fs::read_to_string(
+            tmp.path()
+                .join("plugins/cache/debug/sample-plugin/local/skills/SKILL.md")
+        )
+        .unwrap(),
+        "new skill"
     );
 }
 
