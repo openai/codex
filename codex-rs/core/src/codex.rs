@@ -41,6 +41,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
@@ -1340,6 +1341,10 @@ impl Session {
         }
     }
 
+    fn managed_network_proxy_active_for_sandbox_policy(sandbox_policy: &SandboxPolicy) -> bool {
+        !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -2006,10 +2011,15 @@ impl Session {
                 .await;
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
+        let managed_network_requirements_configured = config
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some();
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
-        let network_policy_decider_session = if managed_network_requirements_enabled {
+        let network_policy_decider_session = if managed_network_requirements_configured {
             config
                 .permissions
                 .network
@@ -2018,7 +2028,7 @@ impl Session {
         } else {
             None
         };
-        let blocked_request_observer = if managed_network_requirements_enabled {
+        let blocked_request_observer = if managed_network_requirements_configured {
             config
                 .permissions
                 .network
@@ -2045,7 +2055,7 @@ impl Session {
                     config.permissions.sandbox_policy.get(),
                     network_policy_decider.as_ref().map(Arc::clone),
                     blocked_request_observer.as_ref().map(Arc::clone),
-                    managed_network_requirements_enabled,
+                    managed_network_requirements_configured,
                     network_proxy_audit_metadata,
                 )
                 .instrument(info_span!(
@@ -2202,7 +2212,11 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
-                network_proxy: session_network_proxy,
+                network_proxy: session_network_proxy.filter(|_| {
+                    Self::managed_network_proxy_active_for_sandbox_policy(
+                        session_configuration.sandbox_policy.get(),
+                    )
+                }),
                 rollout_path,
             }),
         })
@@ -2736,7 +2750,12 @@ impl Session {
             self.services
                 .network_proxy
                 .as_ref()
-                .map(StartedNetworkProxy::proxy),
+                .and_then(|started_proxy| {
+                    Self::managed_network_proxy_active_for_sandbox_policy(
+                        session_configuration.sandbox_policy.get(),
+                    )
+                    .then(|| started_proxy.proxy())
+                }),
             self.services.environment.clone(),
             sub_id,
             Arc::clone(&self.js_repl),
@@ -4946,6 +4965,8 @@ mod handlers {
     use crate::config_loader::load_config_layers_state;
     use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
     use crate::realtime_context::truncate_realtime_text_to_token_budget;
+    use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
+    use crate::realtime_conversation::prefix_realtime_v2_text;
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -5166,6 +5187,11 @@ mod handlers {
         if text.is_empty() {
             return;
         }
+        let text = if sess.conversation.is_running_v2().await {
+            prefix_realtime_v2_text(text, REALTIME_USER_TEXT_PREFIX)
+        } else {
+            text
+        };
         let text = truncate_realtime_text_to_token_budget(&text, REALTIME_TURN_TOKEN_BUDGET);
         if text.is_empty() {
             return;
@@ -5544,15 +5570,15 @@ mod handlers {
             errors.push("state db unavailable; memory rows were not cleared".to_string());
         }
 
-        let memory_root = crate::memories::memory_root(&config.codex_home);
-        if let Err(err) = crate::memories::clear_memory_root_contents(&memory_root).await {
+        if let Err(err) = crate::memories::clear_memory_roots_contents(&config.codex_home).await {
             errors.push(format!(
-                "failed clearing memory directory {}: {err}",
-                memory_root.display()
+                "failed clearing memory directories under {}: {err}",
+                config.codex_home.display()
             ));
         }
 
         if errors.is_empty() {
+            let memory_root = crate::memories::memory_root(&config.codex_home);
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Warning(WarningEvent {
@@ -7807,8 +7833,15 @@ async fn drain_in_flight(
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
-                sess.record_conversation_items(&turn_context, &[response_input.into()])
+                let response_item = response_input.into();
+                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
                     .await;
+                mark_thread_memory_mode_polluted_if_external_context(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &response_item,
+                )
+                .await;
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));

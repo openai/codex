@@ -186,6 +186,7 @@ use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -211,6 +212,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::append_thread_name;
+use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -232,22 +234,23 @@ use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
 use codex_core::plugins::MarketplaceAddError;
-use codex_core::plugins::MarketplaceError;
-use codex_core::plugins::MarketplacePluginSource;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::add_marketplace as add_marketplace_to_codex_home;
-use codex_core::plugins::load_plugin_apps;
-use codex_core::plugins::load_plugin_mcp_servers;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
+use codex_core_plugins::loader::load_plugin_apps;
+use codex_core_plugins::loader::load_plugin_mcp_servers;
+use codex_core_plugins::manifest::PluginManifestInterface;
+use codex_core_plugins::marketplace::MarketplaceError;
+use codex_core_plugins::marketplace::MarketplacePluginSource;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -2434,6 +2437,7 @@ impl CodexMessageProcessor {
                 ))
         {
             let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
+                .await
                 .unwrap_or_else(|| config.cwd.to_path_buf());
             let cli_overrides_with_trust;
             let cli_overrides_for_reload = if let Err(err) =
@@ -3069,48 +3073,12 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let memory_root = self.config.codex_home.join("memories");
-        let memory_extensions_root = self.config.codex_home.join("memories_extensions");
-        let clear_memory_root_result: std::io::Result<()> = async {
-            for directory in [memory_root.as_path(), memory_extensions_root.as_path()] {
-                match tokio::fs::symlink_metadata(directory).await {
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!(
-                                "refusing to clear symlinked memory root {}",
-                                directory.display()
-                            ),
-                        ));
-                    }
-                    Ok(_) => {}
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(err) => return Err(err),
-                }
-
-                tokio::fs::create_dir_all(directory).await?;
-                let mut entries = tokio::fs::read_dir(directory).await?;
-                while let Some(entry) = entries.next_entry().await? {
-                    let path = entry.path();
-                    let file_type = entry.file_type().await?;
-                    if file_type.is_dir() {
-                        tokio::fs::remove_dir_all(path).await?;
-                    } else {
-                        tokio::fs::remove_file(path).await?;
-                    }
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        if let Err(err) = clear_memory_root_result {
+        if let Err(err) = clear_memory_roots_contents(&self.config.codex_home).await {
             self.send_internal_error(
                 request_id,
                 format!(
-                    "failed to clear memory directory {}: {err}",
-                    memory_root.display()
+                    "failed to clear memory directories under {}: {err}",
+                    self.config.codex_home.display()
                 ),
             )
             .await;
@@ -7549,9 +7517,12 @@ impl CodexMessageProcessor {
 
     async fn turn_interrupt(&self, request_id: ConnectionRequestId, params: TurnInterruptParams) {
         let TurnInterruptParams { thread_id, turn_id } = params;
-        self.outgoing
-            .record_request_turn_id(&request_id, &turn_id)
-            .await;
+        let is_startup_interrupt = turn_id.is_empty();
+        if !is_startup_interrupt {
+            self.outgoing
+                .record_request_turn_id(&request_id, &turn_id)
+                .await;
+        }
 
         let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
@@ -7561,21 +7532,48 @@ impl CodexMessageProcessor {
             }
         };
 
-        let request = request_id.clone();
-
-        // Record the pending interrupt so we can reply when TurnAborted arrives.
-        {
+        // Record turn interrupts so we can reply when TurnAborted arrives. Startup
+        // interrupts do not have a turn and are acknowledged after submission.
+        if !is_startup_interrupt {
             let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
             let mut thread_state = thread_state.lock().await;
             thread_state
                 .pending_interrupts
-                .push((request, ApiVersion::V2));
+                .push((request_id.clone(), ApiVersion::V2));
         }
 
-        // Submit the interrupt; we'll respond upon TurnAborted.
-        let _ = self
+        // Submit the interrupt. Turn interrupts respond upon TurnAborted; startup
+        // interrupts respond here because startup cancellation has no turn event.
+        let submit_result = self
             .submit_core_op(&request_id, thread.as_ref(), Op::Interrupt)
             .await;
+        match submit_result {
+            Ok(_) if is_startup_interrupt => {
+                self.outgoing
+                    .send_response(request_id, TurnInterruptResponse {})
+                    .await;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                if !is_startup_interrupt {
+                    let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
+                    let mut thread_state = thread_state.lock().await;
+                    thread_state
+                        .pending_interrupts
+                        .retain(|(pending_request_id, _)| pending_request_id != &request_id);
+                }
+                let interrupt_target = if is_startup_interrupt {
+                    "startup"
+                } else {
+                    "turn"
+                };
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to interrupt {interrupt_target}: {err}"),
+                )
+                .await;
+            }
+        }
     }
 
     async fn ensure_conversation_listener(
@@ -8825,9 +8823,7 @@ fn plugin_skills_to_info(
         .collect()
 }
 
-fn plugin_interface_to_info(
-    interface: codex_core::plugins::PluginManifestInterface,
-) -> PluginInterface {
+fn plugin_interface_to_info(interface: PluginManifestInterface) -> PluginInterface {
     PluginInterface {
         display_name: interface.display_name,
         short_description: interface.short_description,

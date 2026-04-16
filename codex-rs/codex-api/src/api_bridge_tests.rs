@@ -136,6 +136,7 @@ fn core_auth_provider_reports_when_auth_header_will_attach() {
     let auth = CoreAuthProvider {
         token: Some("access-token".to_string()),
         account_id: None,
+        is_fedramp_account: false,
     };
 
     assert!(auth.auth_header_attached());
@@ -160,5 +161,24 @@ fn core_auth_provider_adds_auth_headers() {
             .get("ChatGPT-Account-ID")
             .and_then(|value| value.to_str().ok()),
         Some("workspace-123")
+    );
+}
+
+#[test]
+fn core_auth_provider_adds_fedramp_routing_header_for_fedramp_accounts() {
+    let auth = CoreAuthProvider {
+        token: Some("access-token".to_string()),
+        account_id: Some("workspace-123".to_string()),
+        is_fedramp_account: true,
+    };
+    let mut headers = HeaderMap::new();
+
+    crate::AuthProvider::add_auth_headers(&auth, &mut headers);
+
+    assert_eq!(
+        headers
+            .get("X-OpenAI-Fedramp")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
     );
 }

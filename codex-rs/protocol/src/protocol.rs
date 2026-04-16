@@ -1223,11 +1223,15 @@ impl SandboxPolicy {
 
                 // Include /tmp on Unix unless explicitly excluded.
                 if cfg!(unix) && !exclude_slash_tmp {
-                    #[allow(clippy::expect_used)]
-                    let slash_tmp =
-                        AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
-                    if slash_tmp.as_path().is_dir() {
-                        roots.push(slash_tmp);
+                    match AbsolutePathBuf::from_absolute_path("/tmp") {
+                        Ok(slash_tmp) => {
+                            if slash_tmp.as_path().is_dir() {
+                                roots.push(slash_tmp);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Ignoring invalid /tmp for sandbox writable root: {e}");
+                        }
                     }
                 }
 
@@ -2362,6 +2366,9 @@ pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_resource_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -2369,6 +2376,9 @@ pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
     pub invocation: McpInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_resource_uri: Option<String>,
     #[ts(type = "string")]
     pub duration: Duration,
     /// Result of the tool call. Note this could be an error.

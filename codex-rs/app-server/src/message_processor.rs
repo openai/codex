@@ -725,8 +725,6 @@ impl MessageProcessor {
         session: Arc<ConnectionSessionState>,
         request_context: RequestContext,
     ) {
-        let connection_id = connection_request_id.connection_id;
-
         if !session.initialized() {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -748,6 +746,7 @@ impl MessageProcessor {
             self.outgoing.send_error(connection_request_id, error).await;
             return;
         }
+        let connection_id = connection_request_id.connection_id;
         if self.config.features.enabled(Feature::GeneralAnalytics)
             && let ClientRequest::TurnStart { request_id, .. }
             | ClientRequest::TurnSteer { request_id, .. } = &codex_request
