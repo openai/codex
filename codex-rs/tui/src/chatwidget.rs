@@ -1328,6 +1328,7 @@ fn hook_run_summary_from_notification(
         execution_mode: run.execution_mode.to_core(),
         scope: run.scope.to_core(),
         source_path: run.source_path,
+        source: run.source.to_core(),
         display_order: run.display_order,
         status: run.status.to_core(),
         status_message: run.status_message,

@@ -1,6 +1,5 @@
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
-use crate::facts::CodexHookSource;
 use crate::facts::HookRunFact;
 use crate::facts::InvocationType;
 use crate::facts::PluginState;
@@ -18,6 +17,7 @@ use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxPermissions;
 use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Serialize;
 
@@ -310,7 +310,7 @@ pub(crate) struct CodexHookRunMetadata {
     pub(crate) turn_id: Option<String>,
     pub(crate) model_slug: Option<String>,
     pub(crate) hook_name: Option<String>,
-    pub(crate) hook_source: Option<CodexHookSource>,
+    pub(crate) hook_source: Option<&'static str>,
     pub(crate) status: Option<HookRunStatus>,
 }
 
@@ -558,8 +558,21 @@ pub(crate) fn codex_hook_run_metadata(
         turn_id: Some(tracking.turn_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
         hook_name: Some(hook.event_name.analytics_name().to_owned()),
-        hook_source: Some(hook.hook_source),
+        hook_source: Some(analytics_hook_source(hook.hook_source)),
         status: Some(analytics_hook_status(hook.status)),
+    }
+}
+
+fn analytics_hook_source(source: HookSource) -> &'static str {
+    match source {
+        HookSource::System => "system",
+        HookSource::User => "user",
+        HookSource::Project => "project",
+        HookSource::Mdm => "mdm",
+        HookSource::SessionFlags => "session_flags",
+        HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
+        HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
+        HookSource::Unknown => "unknown",
     }
 }
 

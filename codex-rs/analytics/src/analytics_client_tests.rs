@@ -23,7 +23,6 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
-use crate::facts::CodexHookSource;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -88,6 +87,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -1302,7 +1302,7 @@ fn hook_run_event_serializes_expected_shape() {
             &tracking,
             HookRunFact {
                 event_name: HookEventName::PreToolUse,
-                hook_source: CodexHookSource::User,
+                hook_source: HookSource::User,
                 status: HookRunStatus::Completed,
             },
         ),
@@ -1338,7 +1338,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         &tracking,
         HookRunFact {
             event_name: HookEventName::SessionStart,
-            hook_source: CodexHookSource::System,
+            hook_source: HookSource::System,
             status: HookRunStatus::Completed,
         },
     ))
@@ -1347,7 +1347,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         &tracking,
         HookRunFact {
             event_name: HookEventName::Stop,
-            hook_source: CodexHookSource::Project,
+            hook_source: HookSource::Project,
             status: HookRunStatus::Blocked,
         },
     ))
@@ -1356,7 +1356,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
         &tracking,
         HookRunFact {
             event_name: HookEventName::UserPromptSubmit,
-            hook_source: CodexHookSource::Unknown,
+            hook_source: HookSource::Unknown,
             status: HookRunStatus::Failed,
         },
     ))
@@ -1382,7 +1382,7 @@ fn hook_run_metadata_maps_stopped_status() {
         &tracking,
         HookRunFact {
             event_name: HookEventName::Stop,
-            hook_source: CodexHookSource::User,
+            hook_source: HookSource::User,
             status: HookRunStatus::Stopped,
         },
     ))
@@ -1484,7 +1484,7 @@ async fn reducer_ingests_hook_run_fact() {
                 },
                 hook: HookRunFact {
                     event_name: HookEventName::PostToolUse,
-                    hook_source: CodexHookSource::Unknown,
+                    hook_source: HookSource::Unknown,
                     status: HookRunStatus::Failed,
                 },
             })),
