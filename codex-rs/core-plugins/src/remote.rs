@@ -1,4 +1,3 @@
-use crate::config::Config;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_protocol::protocol::Product;
@@ -11,12 +10,17 @@ const REMOTE_PLUGIN_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_FEATURED_PLUGIN_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_PLUGIN_MUTATION_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePluginServiceConfig {
+    pub chatgpt_base_url: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct RemotePluginStatusSummary {
-    pub(crate) name: String,
+pub struct RemotePluginStatusSummary {
+    pub name: String,
     #[serde(default = "default_remote_marketplace_name")]
-    pub(crate) marketplace_name: String,
-    pub(crate) enabled: bool,
+    pub marketplace_name: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -116,8 +120,8 @@ pub enum RemotePluginFetchError {
     },
 }
 
-pub(crate) async fn fetch_remote_plugin_status(
-    config: &Config,
+pub async fn fetch_remote_plugin_status(
+    config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
 ) -> Result<Vec<RemotePluginStatusSummary>, RemotePluginFetchError> {
     let Some(auth) = auth else {
@@ -161,7 +165,7 @@ pub(crate) async fn fetch_remote_plugin_status(
 }
 
 pub async fn fetch_remote_featured_plugin_ids(
-    config: &Config,
+    config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     product: Option<Product>,
 ) -> Result<Vec<String>, RemotePluginFetchError> {
@@ -205,8 +209,8 @@ pub async fn fetch_remote_featured_plugin_ids(
     })
 }
 
-pub(crate) async fn enable_remote_plugin(
-    config: &Config,
+pub async fn enable_remote_plugin(
+    config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     plugin_id: &str,
 ) -> Result<(), RemotePluginMutationError> {
@@ -214,8 +218,8 @@ pub(crate) async fn enable_remote_plugin(
     Ok(())
 }
 
-pub(crate) async fn uninstall_remote_plugin(
-    config: &Config,
+pub async fn uninstall_remote_plugin(
+    config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     plugin_id: &str,
 ) -> Result<(), RemotePluginMutationError> {
@@ -238,7 +242,7 @@ fn default_remote_marketplace_name() -> String {
 }
 
 async fn post_remote_plugin_mutation(
-    config: &Config,
+    config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
     plugin_id: &str,
     action: &str,
@@ -294,7 +298,7 @@ async fn post_remote_plugin_mutation(
 }
 
 fn remote_plugin_mutation_url(
-    config: &Config,
+    config: &RemotePluginServiceConfig,
     plugin_id: &str,
     action: &str,
 ) -> Result<String, RemotePluginMutationError> {

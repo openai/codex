@@ -1,10 +1,10 @@
 use crate::config::Config;
+use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
 
-use super::marketplace::find_marketplace_manifest_path;
 use super::validate_plugin_segment;
 
 pub const INSTALLED_MARKETPLACES_DIR: &str = ".tmp/marketplaces";
