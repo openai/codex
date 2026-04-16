@@ -6,6 +6,7 @@ use super::ChatWidget;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionRowDisplay;
 use crate::bottom_pane::SelectionViewParams;
 use crate::history_cell;
 use crate::onboarding::mark_url_hyperlink;
@@ -31,8 +32,10 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use unicode_width::UnicodeWidthStr;
 
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
+const PLUGIN_ROW_PREFIX_WIDTH: usize = 2;
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -756,6 +759,12 @@ impl ChatWidget {
             .map(|(_, plugin, _)| plugin_status_label(plugin).chars().count())
             .max()
             .unwrap_or(0);
+        let name_column_width = plugin_entries
+            .iter()
+            .map(|(_, _, display_name)| {
+                PLUGIN_ROW_PREFIX_WIDTH + UnicodeWidthStr::width(display_name.as_str())
+            })
+            .max();
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for (marketplace, plugin, display_name) in plugin_entries {
@@ -815,6 +824,8 @@ impl ChatWidget {
             is_searchable: true,
             search_placeholder: Some("Type to search plugins".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
+            row_display: SelectionRowDisplay::SingleLine,
+            name_column_width,
             ..Default::default()
         }
     }
