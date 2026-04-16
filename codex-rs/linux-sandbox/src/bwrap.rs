@@ -923,7 +923,7 @@ mod tests {
 
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
-            path: FileSystemPath::Pattern { pattern },
+            path: FileSystemPath::GlobPattern { pattern },
             access: FileSystemAccessMode::None,
         }
     }
