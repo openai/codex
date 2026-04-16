@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -42,6 +43,7 @@ use unicode_width::UnicodeWidthStr;
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
 const ALL_PLUGINS_TAB_ID: &str = "all-plugins";
 const INSTALLED_PLUGINS_TAB_ID: &str = "installed-plugins";
+const MARKETPLACE_TAB_ID_PREFIX: &str = "marketplace:";
 const OPENAI_CURATED_TAB_ID: &str = "marketplace:openai-curated";
 const ADD_MARKETPLACE_TAB_ID: &str = "add-marketplace";
 const PLUGIN_MENU_ROW_PREFIX_WIDTH: usize = 6;
@@ -185,6 +187,14 @@ impl ChatWidget {
         match result {
             Ok(response) => {
                 self.plugins_fetch_state.cache_cwd = Some(cwd);
+                let active_tab_id = self
+                    .plugins_active_tab_id
+                    .as_deref()
+                    .and_then(|tab_id| {
+                        marketplace_tab_id_matching_saved_id(tab_id, &response.marketplaces)
+                    })
+                    .or_else(|| self.plugins_active_tab_id.clone());
+                self.plugins_active_tab_id = active_tab_id;
                 self.plugins_cache = PluginsCacheState::Ready(response.clone());
                 if !auth_flow_active {
                     self.refresh_plugins_popup_if_open(&response);
@@ -1398,7 +1408,32 @@ fn marketplace_tab_id(marketplace: &PluginMarketplaceEntry) -> String {
 }
 
 fn marketplace_tab_id_from_path(path: &AbsolutePathBuf) -> String {
-    format!("marketplace:{}", path.display())
+    format!("{MARKETPLACE_TAB_ID_PREFIX}{}", path.display())
+}
+
+fn marketplace_tab_id_matching_saved_id(
+    saved_tab_id: &str,
+    marketplaces: &[PluginMarketplaceEntry],
+) -> Option<String> {
+    if let Some(tab_id) = marketplaces.iter().find_map(|marketplace| {
+        let tab_id = marketplace_tab_id(marketplace);
+        (tab_id == saved_tab_id).then_some(tab_id)
+    }) {
+        return Some(tab_id);
+    }
+
+    let root = saved_tab_id.strip_prefix(MARKETPLACE_TAB_ID_PREFIX)?;
+    if root.is_empty() {
+        return None;
+    }
+    let root = Path::new(root);
+    marketplaces.iter().find_map(|marketplace| {
+        marketplace
+            .path
+            .as_path()
+            .starts_with(root)
+            .then(|| marketplace_tab_id(marketplace))
+    })
 }
 
 fn disambiguate_duplicate_tab_labels(labels: Vec<String>) -> Vec<String> {

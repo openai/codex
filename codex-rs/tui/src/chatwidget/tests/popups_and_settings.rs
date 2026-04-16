@@ -280,7 +280,9 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let cwd = chat.config.cwd.to_path_buf();
-    let marketplace_path = plugins_test_absolute_path("marketplaces/debug");
+    let marketplace_root = plugins_test_absolute_path("marketplaces/debug");
+    let marketplace_path =
+        plugins_test_absolute_path("marketplaces/debug/.agents/plugins/marketplace.json");
     render_loaded_plugins_popup(
         &mut chat,
         plugins_test_response(vec![plugins_test_curated_marketplace(Vec::new())]),
@@ -291,7 +293,7 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
         "owner/repo".to_string(),
         Ok(MarketplaceAddResponse {
             marketplace_name: "debug".to_string(),
-            installed_root: marketplace_path.clone(),
+            installed_root: marketplace_root,
             already_added: false,
         }),
     );
