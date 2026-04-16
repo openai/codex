@@ -209,8 +209,7 @@ use crate::legacy_core::plugins::PluginCapabilitySummary;
 use crate::legacy_core::skills::model::SkillMetadata;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use codex_chatgpt::connectors;
-use codex_chatgpt::connectors::AppInfo;
+use codex_app_server_protocol::AppInfo;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -522,6 +521,7 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+        self.sync_popups();
     }
 
     pub fn set_plugin_mentions(&mut self, plugins: Option<Vec<PluginCapabilitySummary>>) {
@@ -3416,9 +3416,9 @@ impl ChatComposer {
                 if !connector.is_accessible || !connector.is_enabled {
                     continue;
                 }
-                let display_name = connectors::connector_display_label(connector);
+                let display_name = codex_connectors::metadata::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
-                let slug = crate::legacy_core::connectors::connector_mention_slug(connector);
+                let slug = codex_connectors::metadata::connector_mention_slug(connector);
                 let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
                 let connector_id = connector.id.as_str();
                 mentions.push(MentionItem {
@@ -5051,6 +5051,42 @@ mod tests {
             .expect("expected plugin mention to be selected");
         assert_eq!(mention.insert_text, "$sample".to_string());
         assert_eq!(mention.path, Some("plugin://sample@test".to_string()));
+    }
+
+    #[test]
+    fn set_skill_mentions_refreshes_open_mention_popup() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        let skill_path = test_path_buf("/tmp/skill/SKILL.md").abs();
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "codex".to_string(),
+            description: "Primary personal Codex repo skill.".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: skill_path.clone(),
+            scope: codex_protocol::protocol::SkillScope::User,
+        }]));
+
+        let ActivePopup::Skill(popup) = &composer.active_popup else {
+            panic!("expected mention popup to open after skills update");
+        };
+        let mention = popup
+            .selected_mention()
+            .expect("expected skill mention to be selected");
+        assert_eq!(mention.insert_text, "$codex".to_string());
+        assert_eq!(mention.path, Some(skill_path.display().to_string()));
     }
 
     #[test]

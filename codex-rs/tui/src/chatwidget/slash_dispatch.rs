@@ -92,10 +92,10 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
-                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
+                let init_target = self.config.cwd.join(DEFAULT_AGENTS_MD_FILENAME);
                 if init_target.exists() {
                     let message = format!(
-                        "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
+                        "{DEFAULT_AGENTS_MD_FILENAME} already exists here. Skipping /init to avoid overwriting it."
                     );
                     self.add_info_message(message, /*hint*/ None);
                     return;
@@ -227,6 +227,9 @@ impl ChatWidget {
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
+            }
+            SlashCommand::Memories => {
+                self.open_memories_popup();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();

@@ -252,6 +252,16 @@ pub struct WatchRegistration {
     watched_paths: Vec<WatchPath>,
 }
 
+impl Default for WatchRegistration {
+    fn default() -> Self {
+        Self {
+            file_watcher: std::sync::Weak::new(),
+            subscriber_id: 0,
+            watched_paths: Vec::new(),
+        }
+    }
+}
+
 impl Drop for WatchRegistration {
     fn drop(&mut self) {
         if let Some(file_watcher) = self.file_watcher.upgrade() {

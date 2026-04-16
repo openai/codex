@@ -488,6 +488,9 @@
             "steer": {
               "type": "boolean"
             },
+            "telepathy": {
+              "type": "boolean"
+            },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
@@ -498,6 +501,9 @@
               "type": "boolean"
             },
             "tui_app_server": {
+              "type": "boolean"
+            },
+            "unavailable_dummy_tools": {
               "type": "boolean"
             },
             "undo": {
@@ -522,6 +528,9 @@
               "type": "boolean"
             },
             "web_search_request": {
+              "type": "boolean"
+            },
+            "workspace_dependencies": {
               "type": "boolean"
             }
           },
@@ -783,6 +792,11 @@
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
+        "last_revision": {
+          "default": null,
+          "description": "Git revision Codex last successfully activated for this marketplace.",
+          "type": "string"
+        },
         "last_updated": {
           "default": null,
           "description": "Last time Codex successfully added or refreshed this marketplace.",
@@ -820,7 +834,8 @@
     },
     "MarketplaceSourceType": {
       "enum": [
-        "git"
+        "git",
+        "local"
       ],
       "type": "string"
     },
@@ -858,7 +873,8 @@
         "max_raw_memories_for_consolidation": {
           "description": "Maximum number of recent raw memories retained for global consolidation.",
           "format": "uint",
-          "minimum": 0.0,
+          "maximum": 4096.0,
+          "minimum": 1.0,
           "type": "integer"
         },
         "max_rollout_age_days": {
@@ -869,7 +885,8 @@
         "max_rollouts_per_startup": {
           "description": "Maximum number of rollout candidates processed per pass.",
           "format": "uint",
-          "minimum": 0.0,
+          "maximum": 128.0,
+          "minimum": 1.0,
           "type": "integer"
         },
         "max_unused_days": {
@@ -1473,6 +1490,14 @@
           "default": null,
           "type": "string"
         },
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "default": null
+        },
         "disabled_tools": {
           "default": null,
           "items": {
@@ -1511,6 +1536,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "experimental_environment": {
+          "default": null,
+          "type": "string"
         },
         "http_headers": {
           "additionalProperties": {
@@ -2368,6 +2397,9 @@
         "steer": {
           "type": "boolean"
         },
+        "telepathy": {
+          "type": "boolean"
+        },
         "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
@@ -2378,6 +2410,9 @@
           "type": "boolean"
         },
         "tui_app_server": {
+          "type": "boolean"
+        },
+        "unavailable_dummy_tools": {
           "type": "boolean"
         },
         "undo": {
@@ -2402,6 +2437,9 @@
           "type": "boolean"
         },
         "web_search_request": {
+          "type": "boolean"
+        },
+        "workspace_dependencies": {
           "type": "boolean"
         }
       },

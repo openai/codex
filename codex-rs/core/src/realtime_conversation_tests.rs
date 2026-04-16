@@ -1,6 +1,7 @@
 use super::RealtimeHandoffState;
 use super::RealtimeSessionKind;
 use super::realtime_text_from_handoff_request;
+use super::wrap_realtime_delegation_input;
 use async_channel::bounded;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeTranscriptEntry;
@@ -52,6 +53,22 @@ fn ignores_empty_handoff_request_input_transcript() {
         active_transcript: vec![],
     };
     assert_eq!(realtime_text_from_handoff_request(&handoff), None);
+}
+
+#[test]
+fn wraps_realtime_delegation_input() {
+    assert_eq!(
+        wrap_realtime_delegation_input("hello"),
+        "<realtime_delegation>\n  <input>hello</input>\n</realtime_delegation>"
+    );
+}
+
+#[test]
+fn wraps_realtime_delegation_input_with_xml_escaping() {
+    assert_eq!(
+        wrap_realtime_delegation_input("use a < b && c > d"),
+        "<realtime_delegation>\n  <input>use a &lt; b &amp;&amp; c &gt; d</input>\n</realtime_delegation>"
+    );
 }
 
 #[tokio::test]

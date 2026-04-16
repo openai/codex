@@ -1,3 +1,4 @@
+use crate::agents_md::AgentsMdManager;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::CloudRequirementsLoader;
@@ -15,8 +16,6 @@ use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
-use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -121,7 +120,7 @@ pub use codex_git_utils::GhostSnapshotConfig;
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
-pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
@@ -170,13 +169,14 @@ fn resolve_mcp_oauth_credentials_store_mode(
 }
 
 #[cfg(test)]
-pub(crate) fn test_config() -> Config {
+pub(crate) async fn test_config() -> Config {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
         AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("temp dir should resolve"),
     )
+    .await
     .expect("load default test config")
 }
 
@@ -271,9 +271,6 @@ pub struct Config {
 
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
-
-    /// Path to the global AGENTS file loaded into `user_instructions`.
-    pub user_instructions_path: Option<PathBuf>,
 
     /// Base instructions override.
     pub base_instructions: Option<String>,
@@ -735,6 +732,7 @@ impl ConfigBuilder {
             codex_home,
             config_layer_stack,
         )
+        .await
     }
 
     #[cfg(test)]
@@ -756,8 +754,11 @@ impl Config {
         }
     }
 
-    pub fn to_mcp_config(&self, plugins_manager: &crate::plugins::PluginsManager) -> McpConfig {
-        let loaded_plugins = plugins_manager.plugins_for_config(self);
+    pub async fn to_mcp_config(
+        &self,
+        plugins_manager: &crate::plugins::PluginsManager,
+    ) -> McpConfig {
+        let loaded_plugins = plugins_manager.plugins_for_config(self).await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
             configured_mcp_servers.entry(name).or_insert(plugin_server);
@@ -792,7 +793,7 @@ impl Config {
     }
 
     /// Load a default configuration when user config files are invalid.
-    pub fn load_default_with_cli_overrides(
+    pub async fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
@@ -800,11 +801,12 @@ impl Config {
             codex_home.to_path_buf(),
             cli_overrides,
         )
+        .await
     }
 
     /// Load a default configuration for a specific Codex home without reading
     /// user, project, or system config layers.
-    pub fn load_default_with_cli_overrides_for_codex_home(
+    pub async fn load_default_with_cli_overrides_for_codex_home(
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
@@ -824,6 +826,7 @@ impl Config {
             codex_home,
             ConfigLayerStack::default(),
         )
+        .await
     }
 
     /// This is a secondary way of creating [Config], which is appropriate when
@@ -1442,22 +1445,24 @@ pub(crate) fn resolve_web_search_mode_for_turn(
 
 impl Config {
     #[cfg(test)]
-    fn load_from_base_config_with_overrides(
+    async fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: AbsolutePathBuf,
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
+        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack).await
     }
 
-    pub(crate) fn load_config_with_layer_stack(
+    pub(crate) async fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        // Keep the large config-construction future off small test thread stacks.
+        Box::pin(async move {
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
@@ -1474,10 +1479,8 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let (user_instructions, user_instructions_path) =
-            Self::load_instructions(Some(&codex_home))
-                .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
-                .unwrap_or((None, None));
+        let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
+            .map(|loaded| loaded.contents);
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -1576,6 +1579,7 @@ impl Config {
             .collect();
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
+            .await
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
@@ -1607,7 +1611,6 @@ impl Config {
         };
         let memories_root = memory_root(&codex_home);
         std::fs::create_dir_all(&memories_root)?;
-        let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
         if !additional_writable_roots
             .iter()
             .any(|existing| existing == &memories_root)
@@ -1645,6 +1648,7 @@ impl Config {
                 compile_permission_profile(
                     permissions,
                     default_permissions,
+                    resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut sandbox_policy = file_system_sandbox_policy
@@ -1666,13 +1670,15 @@ impl Config {
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
-            let mut sandbox_policy = cfg.derive_sandbox_policy(
-                sandbox_mode,
-                config_profile.sandbox_mode,
-                windows_sandbox_level,
-                resolved_cwd.as_path(),
-                Some(&constrained_sandbox_policy),
-            );
+            let mut sandbox_policy = cfg
+                .derive_sandbox_policy(
+                    sandbox_mode,
+                    config_profile.sandbox_mode,
+                    windows_sandbox_level,
+                    resolved_cwd.as_path(),
+                    Some(&constrained_sandbox_policy),
+                )
+                .await;
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
                 for path in &additional_writable_roots {
                     if !writable_roots.iter().any(|existing| existing == path) {
@@ -2028,9 +2034,10 @@ impl Config {
             if effective_sandbox_policy == original_sandbox_policy {
                 file_system_sandbox_policy
             } else {
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
                     &effective_sandbox_policy,
                     resolved_cwd.as_path(),
+                    &file_system_sandbox_policy,
                 )
             };
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
@@ -2066,7 +2073,6 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,
-            user_instructions_path,
             base_instructions,
             personality,
             developer_instructions,
@@ -2091,7 +2097,7 @@ impl Config {
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
-            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
+            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
                 .unwrap_or_default()
@@ -2239,24 +2245,8 @@ impl Config {
             },
         };
         Ok(config)
-    }
-
-    fn load_instructions(codex_dir: Option<&Path>) -> Option<LoadedUserInstructions> {
-        let base = codex_dir?;
-        for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
-            let mut path = base.to_path_buf();
-            path.push(candidate);
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                let trimmed = contents.trim();
-                if !trimmed.is_empty() {
-                    return Some(LoadedUserInstructions {
-                        contents: trimmed.to_string(),
-                        path,
-                    });
-                }
-            }
-        }
-        None
+        })
+        .await
     }
 
     /// If `path` is `Some`, attempts to read the file at the given path and
@@ -2315,7 +2305,11 @@ impl Config {
     }
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
-        self.config_layer_stack
+        !matches!(
+            self.permissions.sandbox_policy.get(),
+            SandboxPolicy::DangerFullAccess
+        ) && self
+            .config_layer_stack
             .requirements_toml()
             .network
             .is_some()
@@ -2324,11 +2318,6 @@ impl Config {
     pub fn bundled_skills_enabled(&self) -> bool {
         crate::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
-}
-
-struct LoadedUserInstructions {
-    contents: String,
-    path: PathBuf,
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {

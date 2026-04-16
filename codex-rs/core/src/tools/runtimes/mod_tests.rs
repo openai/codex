@@ -1,6 +1,9 @@
 use super::*;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathBufExt;
+use core_test_support::PathExt;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use std::process::Command;
@@ -11,8 +14,8 @@ use tokio::sync::watch;
 fn shell_with_snapshot(
     shell_type: ShellType,
     shell_path: &str,
-    snapshot_path: PathBuf,
-    snapshot_cwd: PathBuf,
+    snapshot_path: AbsolutePathBuf,
+    snapshot_cwd: AbsolutePathBuf,
 ) -> Shell {
     let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
         path: snapshot_path,
@@ -33,8 +36,8 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
     let session_shell = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -45,7 +48,7 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -64,8 +67,8 @@ fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
     let session_shell = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -76,7 +79,7 @@ fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -92,8 +95,8 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/zsh".to_string(),
@@ -104,7 +107,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -123,8 +126,8 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
     let session_shell = shell_with_snapshot(
         ShellType::Sh,
         "/bin/sh",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -135,7 +138,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -154,8 +157,8 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
     let session_shell = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -168,7 +171,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -188,8 +191,12 @@ fn maybe_wrap_shell_lc_with_snapshot_skips_when_cwd_mismatch() {
     let command_cwd = dir.path().join("worktree-b");
     std::fs::create_dir_all(&snapshot_cwd).expect("create snapshot cwd");
     std::fs::create_dir_all(&command_cwd).expect("create command cwd");
-    let session_shell =
-        shell_with_snapshot(ShellType::Zsh, "/bin/zsh", snapshot_path, snapshot_cwd);
+    let session_shell = shell_with_snapshot(
+        ShellType::Zsh,
+        "/bin/zsh",
+        snapshot_path.abs(),
+        snapshot_cwd.abs(),
+    );
     let command = vec![
         "/bin/bash".to_string(),
         "-lc".to_string(),
@@ -199,7 +206,7 @@ fn maybe_wrap_shell_lc_with_snapshot_skips_when_cwd_mismatch() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        &command_cwd,
+        &command_cwd.abs(),
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -215,8 +222,8 @@ fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
     let session_shell = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -228,7 +235,7 @@ fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        &command_cwd,
+        &command_cwd.abs(),
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -251,8 +258,8 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_explicit_override_precedence() {
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -264,7 +271,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_explicit_override_precedence() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &explicit_env_overrides,
         &HashMap::from([("TEST_ENV_SNAPSHOT".to_string(), "worktree".to_string())]),
     );
@@ -293,8 +300,8 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -304,7 +311,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_codex_thread_id_from_env() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &HashMap::new(),
         &HashMap::from([("CODEX_THREAD_ID".to_string(), "nested-thread".to_string())]),
     );
@@ -330,8 +337,8 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -341,7 +348,7 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &HashMap::new(),
         &HashMap::new(),
     );
@@ -366,8 +373,8 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -378,7 +385,7 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &explicit_env_overrides,
         &HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]),
     );
@@ -404,8 +411,8 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
         "/bin/bash".to_string(),
@@ -419,7 +426,7 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &explicit_env_overrides,
         &HashMap::from([(
             "OPENAI_API_KEY".to_string(),
@@ -452,8 +459,8 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
-        snapshot_path,
-        dir.path().to_path_buf(),
+        snapshot_path.abs(),
+        dir.path().abs(),
     );
     let command = vec![
             "/bin/bash".to_string(),
@@ -467,7 +474,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
     let rewritten = maybe_wrap_shell_lc_with_snapshot(
         &command,
         &session_shell,
-        dir.path(),
+        &dir.path().abs(),
         &explicit_env_overrides,
         &HashMap::new(),
     );

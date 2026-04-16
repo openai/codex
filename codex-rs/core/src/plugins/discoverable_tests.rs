@@ -21,7 +21,9 @@ async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plug
     write_plugins_feature_config(codex_home.path());
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -51,7 +53,9 @@ plugins = false
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
@@ -71,7 +75,9 @@ async fn list_tool_suggest_discoverable_plugins_normalizes_description() {
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -106,7 +112,9 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
         .expect("plugin should install");
 
     let refreshed_config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&refreshed_config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&refreshed_config)
+        .await
+        .unwrap();
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
@@ -127,7 +135,9 @@ discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
     );
 
     let config = load_plugins_config(codex_home.path()).await;
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(
         discoverable_plugins,
@@ -182,20 +192,27 @@ async fn list_tool_suggest_discoverable_plugins_does_not_reload_marketplace_per_
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config).unwrap();
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
 
     assert_eq!(discoverable_plugins.len(), 1);
     assert_eq!(discoverable_plugins[0].id, "slack@openai-curated");
 
-    let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
+    let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone())
+        .expect("utf8 logs")
+        .replace('\\', "/");
     assert_eq!(logs.matches("ignoring interface.defaultPrompt").count(), 2);
+    let normalized_logs = logs.replace('\\', "/");
     assert_eq!(
-        logs.matches("build-ios-apps/.codex-plugin/plugin.json")
+        normalized_logs
+            .matches("build-ios-apps/.codex-plugin/plugin.json")
             .count(),
         1
     );
     assert_eq!(
-        logs.matches("life-science-research/.codex-plugin/plugin.json")
+        normalized_logs
+            .matches("life-science-research/.codex-plugin/plugin.json")
             .count(),
         1
     );

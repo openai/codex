@@ -35,6 +35,7 @@ pub(crate) struct SessionState {
     granted_permissions: Option<PermissionProfile>,
     next_prefix_compact_generation: u64,
     prefix_compact: PrefixCompactState,
+    next_turn_is_first: bool,
 }
 
 impl SessionState {
@@ -55,6 +56,7 @@ impl SessionState {
             granted_permissions: None,
             next_prefix_compact_generation: 0,
             prefix_compact: PrefixCompactState::Idle,
+            next_turn_is_first: true,
         }
     }
 
@@ -75,6 +77,16 @@ impl SessionState {
         previous_turn_settings: Option<PreviousTurnSettings>,
     ) {
         self.previous_turn_settings = previous_turn_settings;
+    }
+
+    pub(crate) fn set_next_turn_is_first(&mut self, value: bool) {
+        self.next_turn_is_first = value;
+    }
+
+    pub(crate) fn take_next_turn_is_first(&mut self) -> bool {
+        let is_first_turn = self.next_turn_is_first;
+        self.next_turn_is_first = false;
+        is_first_turn
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {

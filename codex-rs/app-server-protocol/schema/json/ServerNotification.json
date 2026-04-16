@@ -608,7 +608,7 @@
               "type": "string"
             },
             "path": {
-              "type": "string"
+              "$ref": "#/definitions/AbsolutePathBuf"
             },
             "type": {
               "enum": [
@@ -1197,7 +1197,7 @@
               "type": "string"
             },
             "cwd": {
-              "type": "string"
+              "$ref": "#/definitions/AbsolutePathBuf"
             },
             "source": {
               "$ref": "#/definitions/GuardianCommandSource"
@@ -1228,7 +1228,7 @@
               "type": "array"
             },
             "cwd": {
-              "type": "string"
+              "$ref": "#/definitions/AbsolutePathBuf"
             },
             "program": {
               "type": "string"
@@ -1257,11 +1257,11 @@
         {
           "properties": {
             "cwd": {
-              "type": "string"
+              "$ref": "#/definitions/AbsolutePathBuf"
             },
             "files": {
               "items": {
-                "type": "string"
+                "$ref": "#/definitions/AbsolutePathBuf"
               },
               "type": "array"
             },
@@ -1535,7 +1535,7 @@
           "$ref": "#/definitions/HookScope"
         },
         "sourcePath": {
-          "type": "string"
+          "$ref": "#/definitions/AbsolutePathBuf"
         },
         "startedAt": {
           "format": "int64",
@@ -2478,8 +2478,12 @@
           "type": "integer"
         },
         "cwd": {
-          "description": "Working directory captured for the thread.",
-          "type": "string"
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Working directory captured for the thread."
         },
         "ephemeral": {
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
@@ -2786,8 +2790,12 @@
               "type": "array"
             },
             "cwd": {
-              "description": "The command's working directory.",
-              "type": "string"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AbsolutePathBuf"
+                }
+              ],
+              "description": "The command's working directory."
             },
             "durationMs": {
               "description": "The duration of the command execution in milliseconds.",
@@ -2899,6 +2907,12 @@
             },
             "id": {
               "type": "string"
+            },
+            "mcpAppResourceUri": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "result": {
               "anyOf": [
@@ -3116,7 +3130,7 @@
               "type": "string"
             },
             "path": {
-              "type": "string"
+              "$ref": "#/definitions/AbsolutePathBuf"
             },
             "type": {
               "enum": [
@@ -3149,9 +3163,13 @@
               ]
             },
             "savedPath": {
-              "type": [
-                "string",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AbsolutePathBuf"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "status": {
@@ -3411,13 +3429,35 @@
       ],
       "type": "object"
     },
-    "ThreadRealtimeTranscriptUpdatedNotification": {
+    "ThreadRealtimeTranscriptDeltaNotification": {
       "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
+      "properties": {
+        "delta": {
+          "description": "Live transcript delta from the realtime event.",
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta",
+        "role",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeTranscriptDoneNotification": {
+      "description": "EXPERIMENTAL - final transcript text emitted when realtime completes a transcript part.",
       "properties": {
         "role": {
           "type": "string"
         },
         "text": {
+          "description": "Final complete text for the transcript part.",
           "type": "string"
         },
         "threadId": {
@@ -4976,20 +5016,40 @@
       "properties": {
         "method": {
           "enum": [
-            "thread/realtime/transcriptUpdated"
+            "thread/realtime/transcript/delta"
           ],
-          "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
+          "title": "Thread/realtime/transcript/deltaNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ThreadRealtimeTranscriptUpdatedNotification"
+          "$ref": "#/definitions/ThreadRealtimeTranscriptDeltaNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Thread/realtime/transcriptUpdatedNotification",
+      "title": "Thread/realtime/transcript/deltaNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/transcript/done"
+          ],
+          "title": "Thread/realtime/transcript/doneNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeTranscriptDoneNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/transcript/doneNotification",
       "type": "object"
     },
     {
