@@ -8,6 +8,7 @@ use super::create_seatbelt_command_args_for_legacy_policy;
 use super::dynamic_network_policy;
 use super::macos_dir_params;
 use super::normalize_path_for_sandbox;
+use super::seatbelt_regex_for_unreadable_glob;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
 use codex_network_proxy::ConfigReloader;
@@ -255,6 +256,41 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         ),
         "expected read carveout parameter in args: {args:#?}"
     );
+}
+
+#[test]
+fn unreadable_globstar_slash_matches_zero_or_more_directories() {
+    let regex =
+        seatbelt_regex_for_unreadable_glob("/tmp/repo/**/*.env").expect("glob should compile");
+    let regex = regex_lite::Regex::new(&regex).expect("regex should compile");
+
+    assert!(regex.is_match("/tmp/repo/.env"));
+    assert!(regex.is_match("/tmp/repo/app/.env"));
+    assert!(regex.is_match("/tmp/repo/app/config.env"));
+    assert!(!regex.is_match("/tmp/repo/app/config.toml"));
+}
+
+#[test]
+fn unreadable_globs_use_git_style_component_matching() {
+    let regex = seatbelt_regex_for_unreadable_glob("/tmp/repo/*/file[0-9]?.txt")
+        .expect("glob should compile");
+    let regex = regex_lite::Regex::new(&regex).expect("regex should compile");
+
+    assert!(regex.is_match("/tmp/repo/app/file42.txt"));
+    assert!(!regex.is_match("/tmp/repo/app/nested/file42.txt"));
+    assert!(!regex.is_match("/tmp/repo/app/file4.txt"));
+    assert!(!regex.is_match("/tmp/repo/app/fileab.txt"));
+}
+
+#[test]
+fn unreadable_globs_treat_unclosed_character_classes_as_literals() {
+    let regex =
+        seatbelt_regex_for_unreadable_glob("/tmp/repo/[*.env").expect("glob should compile");
+    let regex = regex_lite::Regex::new(&regex).expect("regex should compile");
+
+    assert!(regex.is_match("/tmp/repo/[local.env"));
+    assert!(regex.is_match("/tmp/repo/[.env"));
+    assert!(!regex.is_match("/tmp/repo/local.env"));
 }
 
 #[test]
@@ -1179,6 +1215,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
 (allow file-write*
 (require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
+
 "#,
     );
 

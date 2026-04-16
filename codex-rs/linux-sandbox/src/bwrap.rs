@@ -9,16 +9,22 @@
 //! The overall Linux sandbox is composed of:
 //! - seccomp + `PR_SET_NO_NEW_PRIVS` applied in-process, and
 //! - bubblewrap used to construct the filesystem view before exec.
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::fs::File;
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
+use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Linux "platform defaults" that keep common system binaries and dynamic
@@ -37,6 +43,8 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/run/current-system/sw",
 ];
 
+const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
+
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BwrapOptions {
@@ -47,6 +55,11 @@ pub(crate) struct BwrapOptions {
     pub mount_proc: bool,
     /// How networking should be configured inside the bubblewrap sandbox.
     pub network_mode: BwrapNetworkMode,
+    /// Optional maximum depth for expanding unreadable glob patterns with ripgrep.
+    ///
+    /// Keep this uncapped by default so existing nested deny-read matches are
+    /// masked before the sandboxed command starts.
+    pub unreadable_glob_scan_max_depth: Option<usize>,
 }
 
 impl Default for BwrapOptions {
@@ -54,6 +67,7 @@ impl Default for BwrapOptions {
         Self {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            unreadable_glob_scan_max_depth: None,
         }
     }
 }
@@ -99,7 +113,9 @@ pub(crate) fn create_bwrap_command_args(
     command_cwd: &Path,
     options: BwrapOptions,
 ) -> Result<BwrapArgs> {
-    if file_system_sandbox_policy.has_full_disk_write_access() {
+    let unreadable_globs =
+        file_system_sandbox_policy.get_unreadable_globs_with_cwd(sandbox_policy_cwd);
+    if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
             Ok(BwrapArgs {
                 args: command,
@@ -157,7 +173,11 @@ fn create_bwrap_flags(
     let BwrapArgs {
         args: filesystem_args,
         preserved_files,
-    } = create_filesystem_args(file_system_sandbox_policy, sandbox_policy_cwd)?;
+    } = create_filesystem_args(
+        file_system_sandbox_policy,
+        sandbox_policy_cwd,
+        options.unreadable_glob_scan_max_depth,
+    )?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
@@ -210,16 +230,41 @@ fn create_bwrap_flags(
 fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
+    unreadable_glob_scan_max_depth: Option<usize>,
 ) -> Result<BwrapArgs> {
+    let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
     // Bubblewrap requires bind mount targets to exist. Skip missing writable
     // roots so mixed-platform configs can keep harmless paths for other
     // environments without breaking Linux command startup.
-    let writable_roots = file_system_sandbox_policy
+    let mut writable_roots = file_system_sandbox_policy
         .get_writable_roots_with_cwd(cwd)
         .into_iter()
         .filter(|writable_root| writable_root.root.as_path().exists())
         .collect::<Vec<_>>();
-    let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
+    if writable_roots.is_empty()
+        && file_system_sandbox_policy.has_full_disk_write_access()
+        && !unreadable_globs.is_empty()
+    {
+        writable_roots.push(WritableRoot {
+            root: AbsolutePathBuf::from_absolute_path("/")?,
+            read_only_subpaths: Vec::new(),
+        });
+    }
+    let mut unreadable_roots = file_system_sandbox_policy
+        .get_unreadable_roots_with_cwd(cwd)
+        .into_iter()
+        .map(AbsolutePathBuf::into_path_buf)
+        .collect::<Vec<_>>();
+    // Bubblewrap can only mask concrete paths. Expand unreadable glob patterns
+    // to the existing matches we can see before constructing the mount overlay;
+    // core tool helpers still evaluate the original patterns directly at read time.
+    unreadable_roots.extend(expand_unreadable_globs_with_ripgrep(
+        &unreadable_globs,
+        cwd,
+        unreadable_glob_scan_max_depth,
+    )?);
+    unreadable_roots.sort();
+    unreadable_roots.dedup();
 
     let mut args = if file_system_sandbox_policy.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
@@ -303,10 +348,7 @@ fn create_filesystem_args(
             allowed_write_paths.push(target);
         }
     }
-    let unreadable_paths: HashSet<PathBuf> = unreadable_roots
-        .iter()
-        .map(|path| path.as_path().to_path_buf())
-        .collect();
+    let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
     let mut sorted_writable_roots = writable_roots;
     sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
     // Mask only the unreadable ancestors that sit outside every writable root.
@@ -323,7 +365,7 @@ fn create_filesystem_args(
                     .iter()
                     .any(|root| root.starts_with(unreadable_root))
         })
-        .map(|path| path.as_path().to_path_buf())
+        .cloned()
         .collect();
     unreadable_ancestors_of_writable_roots.sort_by_key(|path| path_depth(path));
 
@@ -343,7 +385,7 @@ fn create_filesystem_args(
         // target parents before binding the narrower writable descendant.
         if let Some(masking_root) = unreadable_roots
             .iter()
-            .map(AbsolutePathBuf::as_path)
+            .map(PathBuf::as_path)
             .filter(|unreadable_root| root.starts_with(unreadable_root))
             .max_by_key(|unreadable_root| path_depth(unreadable_root))
         {
@@ -370,8 +412,8 @@ fn create_filesystem_args(
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
-            .filter(|path| path.as_path().starts_with(root))
-            .map(|path| path.as_path().to_path_buf())
+            .filter(|path| path.starts_with(root))
+            .cloned()
             .collect();
         if let Some(target) = &symlink_target {
             nested_unreadable_roots =
@@ -396,7 +438,7 @@ fn create_filesystem_args(
                 .iter()
                 .any(|root| unreadable_root.starts_with(root) || root.starts_with(unreadable_root))
         })
-        .map(|path| path.as_path().to_path_buf())
+        .cloned()
         .collect();
     rootless_unreadable_roots.sort_by_key(|path| path_depth(path));
     for unreadable_root in rootless_unreadable_roots {
@@ -414,6 +456,169 @@ fn create_filesystem_args(
     })
 }
 
+fn expand_unreadable_globs_with_ripgrep(
+    patterns: &[String],
+    cwd: &Path,
+    max_depth: Option<usize>,
+) -> Result<Vec<PathBuf>> {
+    if patterns.is_empty() || max_depth == Some(0) {
+        return Ok(Vec::new());
+    }
+
+    // Group each pattern by the static path prefix before its first glob
+    // metacharacter. That keeps scans narrow, avoids searching from `/`, and
+    // lets one `rg --files` call handle all patterns under the same root.
+    let mut patterns_by_search_root: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    for pattern in patterns {
+        if let Some((search_root, glob)) = split_pattern_for_ripgrep(pattern, cwd)
+            && search_root.is_dir()
+        {
+            patterns_by_search_root
+                .entry(search_root)
+                .or_default()
+                .push(glob);
+        }
+    }
+
+    // Record both the logical match and any canonical symlink target. The bwrap
+    // overlay needs the resolved target to prevent a readable symlink path from
+    // bypassing an unreadable glob match.
+    let mut expanded_paths = BTreeSet::new();
+    for (search_root, globs) in patterns_by_search_root {
+        for path in ripgrep_files(&search_root, &globs, max_depth)? {
+            let normalized = AbsolutePathBuf::from_absolute_path(&path)
+                .map(AbsolutePathBuf::into_path_buf)
+                .unwrap_or(path);
+            if let Some(target) = canonical_target_if_symlinked_path(&normalized) {
+                expanded_paths.insert(target);
+            }
+            expanded_paths.insert(normalized);
+            if expanded_paths.len() > MAX_UNREADABLE_GLOB_MATCHES {
+                return Err(CodexErr::Fatal(format!(
+                    "unreadable glob expansion for {} matched more than {MAX_UNREADABLE_GLOB_MATCHES} paths",
+                    search_root.display()
+                )));
+            }
+        }
+    }
+
+    Ok(expanded_paths.into_iter().collect())
+}
+
+fn split_pattern_for_ripgrep(pattern: &str, cwd: &Path) -> Option<(PathBuf, String)> {
+    // Resolve relative patterns once, then split at the first glob
+    // metacharacter. The prefix becomes the search root and the suffix stays as
+    // the ripgrep glob. Root-level glob scans are intentionally skipped because
+    // they are too broad for startup-time sandbox construction.
+    let absolute_pattern = AbsolutePathBuf::resolve_path_against_base(pattern, cwd);
+    let pattern = absolute_pattern.to_string_lossy();
+    let first_glob_index = pattern
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '*' | '?' | '[' | ']').then_some(index))?;
+    let static_prefix = &pattern[..first_glob_index];
+    if static_prefix.is_empty() || static_prefix == "/" {
+        return None;
+    }
+    let search_root_end = if static_prefix.ends_with('/') {
+        static_prefix.len() - 1
+    } else {
+        static_prefix.rfind('/').unwrap_or(0)
+    };
+    let search_root = if search_root_end == 0 {
+        PathBuf::from("/")
+    } else {
+        PathBuf::from(&pattern[..search_root_end])
+    };
+    let glob = escape_unclosed_glob_classes(&pattern[search_root_end + 1..]);
+    (!glob.is_empty()).then_some((search_root, glob))
+}
+
+fn escape_unclosed_glob_classes(glob: &str) -> String {
+    // The filesystem policy accepts an unclosed `[` as a literal. Ripgrep treats
+    // that as invalid glob syntax, so escape only the unclosed class opener.
+    let mut escaped = String::with_capacity(glob.len());
+    let mut chars = glob.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch != '[' {
+            escaped.push(ch);
+            continue;
+        }
+
+        let mut class = String::new();
+        let mut closed = false;
+        for class_ch in chars.by_ref() {
+            if class_ch == ']' {
+                closed = true;
+                break;
+            }
+            class.push(class_ch);
+        }
+
+        if closed {
+            escaped.push('[');
+            escaped.push_str(&class);
+            escaped.push(']');
+        } else {
+            escaped.push_str(r"\[");
+            escaped.push_str(&class);
+        }
+    }
+
+    escaped
+}
+
+fn ripgrep_files(
+    search_root: &Path,
+    globs: &[String],
+    max_depth: Option<usize>,
+) -> Result<Vec<PathBuf>> {
+    // Use `rg --files` rather than shell expansion so dotfiles and ignored files
+    // are still considered. A status 1 with no stderr is ripgrep's "no matches"
+    // case, not a sandbox construction error.
+    let mut command = Command::new("rg");
+    command
+        .arg("--files")
+        .arg("--hidden")
+        .arg("--no-ignore")
+        .arg("--null");
+    if let Some(max_depth) = max_depth {
+        command.arg("--max-depth").arg(max_depth.to_string());
+    }
+    for glob in globs {
+        command.arg("--glob").arg(glob);
+    }
+    command.arg("--").arg(search_root);
+
+    let output = command.output()?;
+    if !output.status.success() {
+        if output.status.code() == Some(1) && output.stderr.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CodexErr::Fatal(format!(
+            "ripgrep unreadable glob scan failed for {}: {stderr}",
+            search_root.display()
+        )));
+    }
+
+    let paths = output
+        .stdout
+        .split(|byte| *byte == b'\0')
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            let path = PathBuf::from(OsString::from_vec(path.to_vec()));
+            if path.is_absolute() {
+                path
+            } else {
+                search_root.join(path)
+            }
+        })
+        .collect();
+    Ok(paths)
+}
+
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
@@ -423,6 +628,9 @@ fn path_depth(path: &Path) -> usize {
 }
 
 fn canonical_target_if_symlinked_path(path: &Path) -> Option<PathBuf> {
+    // Return the fully resolved target only when some path component is a
+    // symlink. Callers use this to bind/mask the real filesystem location while
+    // leaving ordinary paths in their logical form.
     let mut current = PathBuf::new();
     for component in path.components() {
         use std::path::Component;
@@ -625,6 +833,9 @@ fn canonical_target_for_symlink_in_path(
     target_path: &Path,
     allowed_write_paths: &[PathBuf],
 ) -> Option<PathBuf> {
+    // Only follow symlinks that are themselves under writable roots. Those are
+    // the symlinks a sandboxed process can mutate, so resolving them closes the
+    // practical bypass without canonicalizing every read-only mount target.
     let mut current = PathBuf::new();
 
     for component in target_path.components() {
@@ -703,6 +914,26 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
+    const NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH: Option<usize> = None;
+
+    #[test]
+    fn default_unreadable_glob_scan_has_no_depth_cap() {
+        assert_eq!(BwrapOptions::default().unreadable_glob_scan_max_depth, None);
+    }
+
+    fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Pattern { pattern },
+            access: FileSystemAccessMode::None,
+        }
+    }
+
+    fn default_policy_with_unreadable_glob(pattern: String) -> FileSystemSandboxPolicy {
+        let mut policy = FileSystemSandboxPolicy::default();
+        policy.entries.push(unreadable_glob_entry(pattern));
+        policy
+    }
+
     #[test]
     fn full_disk_write_full_network_returns_unwrapped_command() {
         let command = vec!["/bin/true".to_string()];
@@ -714,6 +945,7 @@ mod tests {
             BwrapOptions {
                 mount_proc: true,
                 network_mode: BwrapNetworkMode::FullAccess,
+                ..Default::default()
             },
         )
         .expect("create bwrap args");
@@ -732,6 +964,7 @@ mod tests {
             BwrapOptions {
                 mount_proc: true,
                 network_mode: BwrapNetworkMode::ProxyOnly,
+                ..Default::default()
             },
         )
         .expect("create bwrap args");
@@ -753,6 +986,39 @@ mod tests {
                 "/bin/true".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn full_disk_write_with_unreadable_glob_still_wraps_and_masks_match() {
+        if !ripgrep_available() {
+            return;
+        }
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let root_env = temp_dir.path().join(".env");
+        std::fs::write(&root_env, "secret").expect("write env");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            unreadable_glob_entry(format!("{}/**/*.env", temp_dir.path().display())),
+        ]);
+        let command = vec!["/bin/true".to_string()];
+
+        let args = create_bwrap_command_args(
+            command.clone(),
+            &policy,
+            temp_dir.path(),
+            temp_dir.path(),
+            BwrapOptions::default(),
+        )
+        .expect("create bwrap args");
+
+        assert_ne!(args.args, command);
+        assert_file_masked(&args.args, &root_env);
     }
 
     #[cfg(unix)]
@@ -859,7 +1125,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
             window == ["--bind", real_root_str.as_str(), real_root_str.as_str()]
@@ -902,7 +1170,9 @@ mod tests {
             access: FileSystemAccessMode::Write,
         }]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
             window
@@ -940,7 +1210,9 @@ mod tests {
             access: FileSystemAccessMode::Write,
         }]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
             window
@@ -983,7 +1255,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
 
         assert!(args.args.windows(6).any(|window| {
             window
@@ -1022,8 +1296,12 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
-            .expect("filesystem args");
+        let args = create_filesystem_args(
+            &FileSystemSandboxPolicy::from(&policy),
+            temp_dir.path(),
+            NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
+        )
+        .expect("filesystem args");
         let existing_root = path_to_string(&existing_root);
         let missing_root = path_to_string(&missing_root);
 
@@ -1052,6 +1330,7 @@ mod tests {
         let args = create_filesystem_args(
             &FileSystemSandboxPolicy::from(&sandbox_policy),
             Path::new("/"),
+            NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
         )
         .expect("bwrap fs args");
         assert_eq!(
@@ -1100,8 +1379,12 @@ mod tests {
             network_access: false,
         };
 
-        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
-            .expect("filesystem args");
+        let args = create_filesystem_args(
+            &FileSystemSandboxPolicy::from(&policy),
+            temp_dir.path(),
+            NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
+        )
+        .expect("filesystem args");
 
         assert_eq!(args.args[0..4], ["--tmpfs", "/", "--dev", "/dev"]);
 
@@ -1130,8 +1413,12 @@ mod tests {
         // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable
         // root. Using `"/"` here would intentionally collapse to broad read
         // access, so use a non-root cwd to exercise the restricted path.
-        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
-            .expect("filesystem args");
+        let args = create_filesystem_args(
+            &FileSystemSandboxPolicy::from(&policy),
+            temp_dir.path(),
+            NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
+        )
+        .expect("filesystem args");
 
         assert!(
             args.args
@@ -1171,7 +1458,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
             window
@@ -1248,7 +1537,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
         let docs_str = path_to_string(docs.as_path());
         let docs_public_str = path_to_string(docs_public.as_path());
         let docs_ro_index = args
@@ -1300,7 +1591,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
         let allowed_str = path_to_string(allowed.as_path());
         let blocked_none_index = args
@@ -1367,7 +1660,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
         let allowed_dir_str = path_to_string(allowed_dir.as_path());
         let allowed_file_str = path_to_string(allowed_file.as_path());
@@ -1442,7 +1737,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
         let blocked_none_index = args
             .args
             .windows(4)
@@ -1487,7 +1784,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
 
         assert!(
@@ -1529,7 +1828,9 @@ mod tests {
             },
         ]);
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
         let blocked_file_str = path_to_string(blocked_file.as_path());
 
         assert_eq!(args.preserved_files.len(), 1);
@@ -1539,5 +1840,98 @@ mod tests {
                 && window[2] == "--ro-bind-data"
                 && window[4] == blocked_file_str
         }));
+    }
+
+    #[test]
+    fn unreadable_globs_expand_existing_matches_with_configured_depth() {
+        if !ripgrep_available() {
+            return;
+        }
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let root_env = temp_dir.path().join(".env");
+        let nested_env = temp_dir.path().join("app").join(".env");
+        let too_deep_env = temp_dir.path().join("app").join("deep").join(".env");
+        std::fs::create_dir_all(too_deep_env.parent().expect("parent")).expect("create parent");
+        std::fs::write(temp_dir.path().join(".gitignore"), ".env\n").expect("write gitignore");
+        std::fs::write(&root_env, "secret").expect("write root env");
+        std::fs::write(&nested_env, "secret").expect("write nested env");
+        std::fs::write(&too_deep_env, "secret").expect("write deep env");
+        let policy =
+            default_policy_with_unreadable_glob(format!("{}/**/*.env", temp_dir.path().display()));
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), Some(2)).expect("filesystem args");
+
+        assert_file_masked(&args.args, &root_env);
+        assert_file_masked(&args.args, &nested_env);
+        assert!(
+            !args
+                .args
+                .iter()
+                .any(|arg| arg == &path_to_string(&too_deep_env)),
+            "max depth should keep deeper matches out of bwrap args: {:#?}",
+            args.args
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_globs_add_canonical_targets_for_symlink_matches() {
+        if !ripgrep_available() {
+            return;
+        }
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let real_root = temp_dir.path().join("real");
+        let link_root = temp_dir.path().join("link");
+        let real_secret = real_root.join("secret.env");
+        std::fs::create_dir_all(&real_root).expect("create real root");
+        std::fs::write(&real_secret, "secret").expect("write real secret");
+        std::os::unix::fs::symlink(&real_root, &link_root).expect("create symlink");
+        let policy =
+            default_policy_with_unreadable_glob(format!("{}/**/*.env", link_root.display()));
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), Some(2)).expect("filesystem args");
+
+        assert_file_masked(&args.args, &real_secret);
+    }
+
+    #[test]
+    fn root_prefix_unreadable_globs_are_too_broad_for_linux_expansion() {
+        assert_eq!(
+            split_pattern_for_ripgrep("/**/*.env", Path::new("/tmp")),
+            None
+        );
+    }
+
+    #[test]
+    fn unclosed_character_classes_are_escaped_for_ripgrep() {
+        let (search_root, glob) =
+            split_pattern_for_ripgrep("/tmp/[*.env", Path::new("/")).expect("split pattern");
+
+        assert_eq!(search_root, PathBuf::from("/tmp"));
+        assert_eq!(glob, r"\[*.env");
+    }
+
+    fn ripgrep_available() -> bool {
+        Command::new("rg")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
+    fn assert_file_masked(args: &[String], path: &Path) {
+        let path = path_to_string(path);
+        assert!(
+            args.windows(5).any(|window| {
+                window[0] == "--perms"
+                    && window[1] == "000"
+                    && window[2] == "--ro-bind-data"
+                    && window[4] == path
+            }),
+            "expected file mask for {path}: {args:#?}"
+        );
     }
 }
