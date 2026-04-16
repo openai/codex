@@ -1,6 +1,6 @@
 use super::MarketplaceAddError;
-use crate::plugins::validate_marketplace_root;
 use crate::plugins::validate_plugin_segment;
+use codex_core_plugins::marketplace::validate_marketplace_root;
 use std::path::Path;
 use std::path::PathBuf;
 

@@ -1670,7 +1670,7 @@ mod tests {
             );
             assert_eq!(
                 third_json["item"]["output"],
-                Value::String("\"Agent Final Message\":\n\ndelegated result".to_string())
+                Value::String("delegated result".to_string())
             );
         });
 
