@@ -6239,6 +6239,42 @@ async fn goal_accounting_charges_out_of_band_paused_goal_at_turn_boundary() -> a
     Ok(())
 }
 
+#[tokio::test]
+async fn goal_accounting_charges_out_of_band_activation_at_turn_boundary() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
+        .await;
+    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(1_000),
+        )
+        .await?;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Turn)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert_eq!(70, goal.tokens_used);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parallel_goal_accounting_charges_delta_once() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
@@ -6287,6 +6323,64 @@ async fn parallel_goal_accounting_charges_delta_once() -> anyhow::Result<()> {
         .expect("goal should remain persisted after accounting");
     assert_eq!(40, goal.tokens_used);
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn budget_limited_accounting_aborts_active_turn_before_returning() -> anyhow::Result<()> {
+    let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(10),
+        )
+        .await?;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+
+    let mut saw_budget_limited_update = false;
+    let mut saw_budget_limited_abort = false;
+    while let Ok(event) = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await?
+    {
+        match event.msg {
+            EventMsg::ThreadGoalUpdated(event) => {
+                saw_budget_limited_update =
+                    event.goal.status == codex_protocol::protocol::ThreadGoalStatus::BudgetLimited;
+            }
+            EventMsg::TurnAborted(event) => {
+                saw_budget_limited_abort = event.reason == TurnAbortReason::BudgetLimited;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_budget_limited_update);
+    assert!(saw_budget_limited_abort);
+    assert!(!sess.has_active_turn().await);
 
     Ok(())
 }

@@ -340,6 +340,7 @@ impl Session {
                 turn_context,
                 &state_db,
                 current_token_usage.clone(),
+                boundary,
             )
             .await?
         {
@@ -408,12 +409,11 @@ impl Session {
         )
         .await;
         if status == codex_state::ThreadGoalStatus::BudgetLimited {
-            let session = Arc::clone(self);
-            tokio::spawn(async move {
-                session
-                    .abort_all_tasks_without_goal_accounting(TurnAbortReason::BudgetLimited)
-                    .await;
-            });
+            self.abort_all_tasks_without_goal_accounting_from_current_turn(
+                TurnAbortReason::BudgetLimited,
+                &turn_context.sub_id,
+            )
+            .await;
         }
         Ok(())
     }
@@ -423,6 +423,7 @@ impl Session {
         turn_context: &TurnContext,
         state_db: &StateDbHandle,
         current_token_usage: TokenUsage,
+        boundary: GoalAccountingBoundary,
     ) -> anyhow::Result<bool> {
         let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
             return Ok(false);
@@ -439,15 +440,19 @@ impl Session {
             if tracked_created_at_ms == Some(created_at_ms) {
                 return Ok(false);
             }
-            turn_context
-                .goal_accounting
-                .reset_baseline(current_token_usage)
-                .await;
+            let should_reset_baseline = turn_context.goal_accounting.active_this_turn()
+                || matches!(boundary, GoalAccountingBoundary::Tool);
+            if should_reset_baseline {
+                turn_context
+                    .goal_accounting
+                    .reset_baseline(current_token_usage)
+                    .await;
+            }
             turn_context
                 .goal_accounting
                 .mark_active_goal(created_at_ms)
                 .await;
-            return Ok(true);
+            return Ok(should_reset_baseline);
         }
 
         if turn_context.goal_accounting.active_this_turn()
@@ -634,9 +639,15 @@ Budget:
 - Token budget: {token_budget}
 - Tokens remaining: {remaining_tokens}
 
-Avoid repeating work that is already done. Choose the next concrete action toward the objective. Before deciding that the goal is achieved, thoroughly evaluate the objective against the actual current state: identify the concrete deliverables or success criteria, inspect the relevant files/results/state or run the checks needed to verify them, and compare that evidence to the objective. Do not rely on intent, partial progress, or memory of earlier work as proof of completion.
+Avoid repeating work that is already done. Choose the next concrete action toward the objective.
 
-Only mark the goal achieved when that verification shows the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call set_goal with status "complete" and omit objective so usage accounting is preserved. Report the final elapsed time, and if the achieved goal has a token budget, report the final consumed token budget to the user after set_goal succeeds.
+Before deciding that the goal is achieved, perform a completion audit against the actual current state:
+- Restate the objective as concrete deliverables or success criteria.
+- Inspect the relevant files, command output, test results, PR state, or other real evidence.
+- Compare each deliverable to that evidence and identify any missing, incomplete, or unverified part.
+- Treat uncertainty as not achieved; do more verification or continue the work.
+
+Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when the audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call set_goal with status "complete" and omit objective so usage accounting is preserved. Report the final elapsed time, and if the achieved goal has a token budget, report the final consumed token budget to the user after set_goal succeeds.
 
 If the goal has not been achieved and cannot be achieved within the remaining budget, or the remaining budget is too small for productive continuation, call set_goal with status "budgetLimited" and omit objective. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If the goal is otherwise blocked and cannot continue productively for a non-budget reason, call set_goal with status "paused" and omit objective."#,
         objective = goal.objective,

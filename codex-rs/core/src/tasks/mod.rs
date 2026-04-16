@@ -443,6 +443,27 @@ impl Session {
         self: &Arc<Self>,
         reason: TurnAbortReason,
     ) {
+        self.abort_all_tasks_without_goal_accounting_inner(reason, None)
+            .await;
+    }
+
+    pub(crate) async fn abort_all_tasks_without_goal_accounting_from_current_turn(
+        self: &Arc<Self>,
+        reason: TurnAbortReason,
+        current_turn_id: &str,
+    ) {
+        self.abort_all_tasks_without_goal_accounting_inner(
+            reason,
+            Some(current_turn_id.to_string()),
+        )
+        .await;
+    }
+
+    async fn abort_all_tasks_without_goal_accounting_inner(
+        self: &Arc<Self>,
+        reason: TurnAbortReason,
+        current_turn_id: Option<String>,
+    ) {
         let active_turn = {
             let mut active = self.active_turn.lock().await;
             active.as_mut().map(|active_turn| {
@@ -454,14 +475,23 @@ impl Session {
         };
 
         if let Some((tasks, turn_state)) = active_turn {
+            let mut current_task = None;
             for task in tasks {
-                self.handle_task_abort(task, reason.clone()).await;
+                if current_turn_id.as_deref() == Some(task.turn_context.sub_id.as_str()) {
+                    current_task = Some(task);
+                } else {
+                    self.handle_task_abort(task, reason.clone()).await;
+                }
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             turn_state.lock().await.clear_pending();
             let mut active = self.active_turn.lock().await;
             *active = None;
+            drop(active);
+            if let Some(task) = current_task {
+                self.handle_current_task_abort(task, reason.clone()).await;
+            }
         }
 
         if reason == TurnAbortReason::Interrupted
@@ -688,6 +718,36 @@ impl Session {
                 warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
             }
         }
+
+        let (completed_at, duration_ms) = task
+            .turn_context
+            .turn_timing_state
+            .completed_at_and_duration_ms()
+            .await;
+        let event = EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some(task.turn_context.sub_id.clone()),
+            reason,
+            completed_at,
+            duration_ms,
+        });
+        self.send_event(task.turn_context.as_ref(), event).await;
+    }
+
+    async fn handle_current_task_abort(
+        self: &Arc<Self>,
+        task: RunningTask,
+        reason: TurnAbortReason,
+    ) {
+        let sub_id = task.turn_context.sub_id.clone();
+        if task.cancellation_token.is_cancelled() {
+            return;
+        }
+
+        trace!(task_kind = ?task.kind, sub_id, "aborting current running task");
+        task.cancellation_token.cancel();
+        task.turn_context
+            .turn_metadata_state
+            .cancel_git_enrichment_task();
 
         let (completed_at, duration_ms) = task
             .turn_context
