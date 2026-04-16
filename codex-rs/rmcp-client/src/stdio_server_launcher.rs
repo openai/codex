@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -26,6 +27,10 @@ use codex_utils_pty::process_group::kill_process_group;
 use codex_utils_pty::process_group::terminate_process_group;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use rmcp::service::RoleClient;
+use rmcp::service::RxJsonRpcMessage;
+use rmcp::service::TxJsonRpcMessage;
+use rmcp::transport::Transport;
 use rmcp::transport::child_process::TokioChildProcess;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -38,18 +43,18 @@ use crate::utils::create_env_for_mcp_server;
 
 // General purpose public code.
 
-/// Launches an MCP stdio server and returns the byte transport for rmcp.
+/// Launches an MCP stdio server and returns the transport for rmcp.
 ///
 /// This trait is the boundary between MCP lifecycle code and process placement.
 /// `RmcpClient` owns MCP operations such as `initialize` and `tools/list`; the
-/// launcher owns starting the configured command and producing an rmcp transport
-/// over the server's stdin/stdout bytes.
+/// launcher owns starting the configured command and producing an rmcp
+/// [`Transport`] over the server's stdin/stdout bytes.
 pub trait StdioServerLauncher: private::Sealed + Send + Sync {
     /// Start the configured stdio server and return its rmcp-facing transport.
     fn launch(
         &self,
         command: StdioServerCommand,
-    ) -> BoxFuture<'static, io::Result<LaunchedStdioServer>>;
+    ) -> BoxFuture<'static, io::Result<StdioServerTransport>>;
 }
 
 /// Command-line process shape shared by stdio server launchers.
@@ -62,20 +67,43 @@ pub struct StdioServerCommand {
     cwd: Option<PathBuf>,
 }
 
-/// Opaque stdio server handle produced by a [`StdioServerLauncher`].
+/// Client-side rmcp transport for a launched MCP stdio server.
 ///
-/// `RmcpClient` unwraps this only at the final `rmcp::service::serve_client`
-/// boundary. Keeping the concrete variants private prevents callers from
-/// depending on local-child-process implementation details.
-pub struct LaunchedStdioServer {
-    pub(super) transport: LaunchedStdioServerTransport,
+/// The concrete process placement stays private to this module. `RmcpClient`
+/// only sees the standard rmcp transport abstraction and can pass this value
+/// directly to `rmcp::service::serve_client`.
+pub struct StdioServerTransport {
+    inner: StdioServerTransportInner,
+    _process_group_guard: Option<ProcessGroupGuard>,
 }
 
-pub(super) enum LaunchedStdioServerTransport {
-    Local {
-        transport: TokioChildProcess,
-        process_group_guard: Option<ProcessGroupGuard>,
-    },
+enum StdioServerTransportInner {
+    Local(TokioChildProcess),
+}
+
+impl Transport<RoleClient> for StdioServerTransport {
+    type Error = io::Error;
+
+    fn send(
+        &mut self,
+        item: TxJsonRpcMessage<RoleClient>,
+    ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send + 'static {
+        match &mut self.inner {
+            StdioServerTransportInner::Local(transport) => transport.send(item).boxed(),
+        }
+    }
+
+    fn receive(&mut self) -> impl Future<Output = Option<RxJsonRpcMessage<RoleClient>>> + Send {
+        match &mut self.inner {
+            StdioServerTransportInner::Local(transport) => transport.receive().boxed(),
+        }
+    }
+
+    async fn close(&mut self) -> std::result::Result<(), Self::Error> {
+        match &mut self.inner {
+            StdioServerTransportInner::Local(transport) => transport.close().await,
+        }
+    }
 }
 
 impl StdioServerCommand {
@@ -112,7 +140,7 @@ impl StdioServerLauncher for LocalStdioServerLauncher {
     fn launch(
         &self,
         command: StdioServerCommand,
-    ) -> BoxFuture<'static, io::Result<LaunchedStdioServer>> {
+    ) -> BoxFuture<'static, io::Result<StdioServerTransport>> {
         async move { Self::launch_server(command) }.boxed()
     }
 }
@@ -123,12 +151,12 @@ impl StdioServerLauncher for LocalStdioServerLauncher {
 const PROCESS_GROUP_TERM_GRACE_PERIOD: Duration = Duration::from_secs(2);
 
 #[cfg(unix)]
-pub(super) struct ProcessGroupGuard {
+struct ProcessGroupGuard {
     process_group_id: u32,
 }
 
 #[cfg(not(unix))]
-pub(super) struct ProcessGroupGuard;
+struct ProcessGroupGuard;
 
 mod private {
     pub trait Sealed {}
@@ -137,7 +165,7 @@ mod private {
 impl private::Sealed for LocalStdioServerLauncher {}
 
 impl LocalStdioServerLauncher {
-    fn launch_server(command: StdioServerCommand) -> io::Result<LaunchedStdioServer> {
+    fn launch_server(command: StdioServerCommand) -> io::Result<StdioServerTransport> {
         let StdioServerCommand {
             program,
             args,
@@ -187,11 +215,9 @@ impl LocalStdioServerLauncher {
             });
         }
 
-        Ok(LaunchedStdioServer {
-            transport: LaunchedStdioServerTransport::Local {
-                transport,
-                process_group_guard,
-            },
+        Ok(StdioServerTransport {
+            inner: StdioServerTransportInner::Local(transport),
+            _process_group_guard: process_group_guard,
         })
     }
 }

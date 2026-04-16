@@ -70,11 +70,9 @@ use crate::elicitation_client_service::ElicitationClientService;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
-use crate::stdio_server_launcher::LaunchedStdioServer;
-use crate::stdio_server_launcher::LaunchedStdioServerTransport;
-use crate::stdio_server_launcher::ProcessGroupGuard;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
+use crate::stdio_server_launcher::StdioServerTransport;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -305,7 +303,7 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
 
 enum PendingTransport {
     Stdio {
-        server: LaunchedStdioServer,
+        transport: StdioServerTransport,
     },
     StreamableHttp {
         transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
@@ -321,7 +319,6 @@ enum ClientState {
         transport: Option<PendingTransport>,
     },
     Ready {
-        _process_group_guard: Option<ProcessGroupGuard>,
         service: Arc<RunningService<RoleClient, ElicitationClientService>>,
         oauth: Option<OAuthPersistor>,
     },
@@ -582,7 +579,7 @@ impl RmcpClient {
             }
         };
 
-        let (service, oauth_persistor, process_group_guard) =
+        let (service, oauth_persistor) =
             Self::connect_pending_transport(pending_transport, client_service.clone(), timeout)
                 .await?;
 
@@ -603,7 +600,6 @@ impl RmcpClient {
         {
             let mut guard = self.state.lock().await;
             *guard = ClientState::Ready {
-                _process_group_guard: process_group_guard,
                 service,
                 oauth: oauth_persistor.clone(),
             };
@@ -887,8 +883,8 @@ impl RmcpClient {
     ) -> Result<PendingTransport> {
         match transport_recipe {
             TransportRecipe::Stdio { command, launcher } => {
-                let server = launcher.launch(command.clone()).await?;
-                Ok(PendingTransport::Stdio { server })
+                let transport = launcher.launch(command.clone()).await?;
+                Ok(PendingTransport::Stdio { transport })
             }
             TransportRecipe::StreamableHttp {
                 server_name,
@@ -982,22 +978,14 @@ impl RmcpClient {
     ) -> Result<(
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
-        Option<ProcessGroupGuard>,
     )> {
-        let (transport, oauth_persistor, process_group_guard) = match pending_transport {
-            PendingTransport::Stdio { server } => match server.transport {
-                LaunchedStdioServerTransport::Local {
-                    transport,
-                    process_group_guard,
-                } => (
-                    service::serve_client(client_service, transport).boxed(),
-                    None,
-                    process_group_guard,
-                ),
-            },
-            PendingTransport::StreamableHttp { transport } => (
+        let (transport, oauth_persistor) = match pending_transport {
+            PendingTransport::Stdio { transport } => (
                 service::serve_client(client_service, transport).boxed(),
                 None,
+            ),
+            PendingTransport::StreamableHttp { transport } => (
+                service::serve_client(client_service, transport).boxed(),
                 None,
             ),
             PendingTransport::StreamableHttpWithOAuth {
@@ -1006,7 +994,6 @@ impl RmcpClient {
             } => (
                 service::serve_client(client_service, transport).boxed(),
                 Some(oauth_persistor),
-                None,
             ),
         };
 
@@ -1020,7 +1007,7 @@ impl RmcpClient {
                 .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
         };
 
-        Ok((Arc::new(service), oauth_persistor, process_group_guard))
+        Ok((Arc::new(service), oauth_persistor))
     }
 
     async fn run_service_operation<T, F, Fut>(
@@ -1132,7 +1119,7 @@ impl RmcpClient {
             .clone()
             .ok_or_else(|| anyhow!("MCP client cannot recover before initialize succeeds"))?;
         let pending_transport = Self::create_pending_transport(&self.transport_recipe).await?;
-        let (service, oauth_persistor, process_group_guard) = Self::connect_pending_transport(
+        let (service, oauth_persistor) = Self::connect_pending_transport(
             pending_transport,
             initialize_context.client_service,
             initialize_context.timeout,
@@ -1142,7 +1129,6 @@ impl RmcpClient {
         {
             let mut guard = self.state.lock().await;
             *guard = ClientState::Ready {
-                _process_group_guard: process_group_guard,
                 service,
                 oauth: oauth_persistor.clone(),
             };
