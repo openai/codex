@@ -607,19 +607,16 @@ impl ConfigToml {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
             || profile_sandbox_mode.is_some()
             || self.sandbox_mode.is_some();
-        let active_project = if sandbox_mode_was_explicit {
-            None
-        } else {
-            self.get_active_project(resolved_cwd).await
-        };
         let resolved_sandbox_mode = sandbox_mode_override
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
-            .or_else(|| {
+            .or(if sandbox_mode_was_explicit {
+                None
+            } else {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                active_project.as_ref().and_then(|p| {
+                self.get_active_project(resolved_cwd).await.and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
