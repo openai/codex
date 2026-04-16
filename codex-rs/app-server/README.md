@@ -429,7 +429,7 @@ Experimental: use `memory/reset` to clear local memory artifacts and sqlite-back
 
 ### Example: Set and update a thread goal
 
-Use `thread/goal/set` with an `objective` to create or replace the current goal for a materialized thread. Replacement resets `tokensUsed` and `createdAt`. Omit `objective` to update the existing goal’s status or token budget while preserving usage history. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
+Use `thread/goal/set` with an `objective` to create or replace the current goal for a materialized thread. Replacement resets `tokensUsed`, `timeUsedSeconds`, and `createdAt`. Omit `objective` to update the existing goal’s status or token budget while preserving usage history. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
 
 ```json
 { "method": "thread/goal/set", "id": 27, "params": {
@@ -443,6 +443,7 @@ Use `thread/goal/set` with an `objective` to create or replace the current goal 
     "status": "active",
     "tokenBudget": 200000,
     "tokensUsed": 0,
+    "timeUsedSeconds": 0,
     "createdAt": 1776272400,
     "updatedAt": 1776272400
 } } }
@@ -452,6 +453,7 @@ Use `thread/goal/set` with an `objective` to create or replace the current goal 
     "status": "active",
     "tokenBudget": 200000,
     "tokensUsed": 0,
+    "timeUsedSeconds": 0,
     "createdAt": 1776272400,
     "updatedAt": 1776272400
 } } }
@@ -468,6 +470,7 @@ Use `thread/goal/set` with an `objective` to create or replace the current goal 
     "status": "paused",
     "tokenBudget": 200000,
     "tokensUsed": 10000,
+    "timeUsedSeconds": 60,
     "createdAt": 1776272400,
     "updatedAt": 1776272460
 } } }
