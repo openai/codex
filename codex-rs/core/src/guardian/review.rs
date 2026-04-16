@@ -280,6 +280,7 @@ impl GuardianReviewAnalyticsResult {
             result.guardian_model = Some(metadata.guardian_model);
             result.guardian_reasoning_effort = metadata.guardian_reasoning_effort;
             result.had_prior_review_context = Some(metadata.had_prior_review_context);
+            result.reviewed_action_truncated = metadata.reviewed_action_truncated;
             result.token_usage = metadata.token_usage;
         }
 
