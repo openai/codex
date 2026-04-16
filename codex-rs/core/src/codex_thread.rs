@@ -79,6 +79,13 @@ impl CodexThread {
         self.codex.shutdown_and_wait().await
     }
 
+    pub async fn continue_active_goal_if_idle(&self) {
+        self.codex
+            .session
+            .maybe_start_turn_for_pending_work_or_goal_continuation()
+            .await;
+    }
+
     #[doc(hidden)]
     pub async fn ensure_rollout_materialized(&self) {
         self.codex.session.ensure_rollout_materialized().await;

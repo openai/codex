@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -24,6 +25,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
+use crate::goals::GoalAccountingState;
 use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::parse_turn_item;
@@ -859,6 +861,9 @@ pub(crate) struct Session {
     mailbox: Mailbox,
     mailbox_rx: Mutex<MailboxReceiver>,
     idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    pub(crate) thread_goal_state_db: Mutex<Option<state_db::StateDbHandle>>,
+    pub(crate) thread_goal_may_exist: AtomicBool,
+    pub(crate) thread_goal_cache: Mutex<Option<codex_protocol::protocol::ThreadGoal>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -927,6 +932,7 @@ pub(crate) struct TurnContext {
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
+    pub(crate) goal_accounting: GoalAccountingState,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -1051,6 +1057,7 @@ impl TurnContext {
             turn_metadata_state: self.turn_metadata_state.clone(),
             turn_skills: self.turn_skills.clone(),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
+            goal_accounting: GoalAccountingState::new(),
         }
     }
 
@@ -1679,6 +1686,7 @@ impl Session {
             turn_metadata_state,
             turn_skills: TurnSkillsContext::new(skills_outcome),
             turn_timing_state: Arc::new(TurnTimingState::default()),
+            goal_accounting: GoalAccountingState::new(),
         }
     }
 
@@ -2180,6 +2188,9 @@ impl Session {
             mailbox,
             mailbox_rx: Mutex::new(mailbox_rx),
             idle_pending_input: Mutex::new(Vec::new()),
+            thread_goal_state_db: Mutex::new(None),
+            thread_goal_may_exist: AtomicBool::new(false),
+            thread_goal_cache: Mutex::new(None),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -4410,7 +4421,6 @@ impl Session {
     }
 
     /// Queue response items to be injected into the next active turn created for this session.
-    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
@@ -4422,6 +4432,14 @@ impl Session {
 
     pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
+    }
+
+    pub(crate) async fn clear_queued_response_items_for_next_turn(&self) {
+        self.idle_pending_input.lock().await.clear();
+    }
+
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.active_turn.lock().await.is_some()
     }
 
     pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
@@ -4520,6 +4538,11 @@ impl Session {
         if has_active_turn {
             self.abort_all_tasks(TurnAbortReason::Interrupted).await;
         } else {
+            if self.thread_goal_may_exist()
+                && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
+            {
+                warn!("failed to pause active thread goal after interrupt: {err}");
+            }
             self.cancel_mcp_startup().await;
         }
     }
@@ -6088,6 +6111,7 @@ async fn spawn_review_thread(
         turn_metadata_state,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
+        goal_accounting: GoalAccountingState::new(),
     };
 
     // Seed the child task with the review prompt as the initial user message.

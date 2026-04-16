@@ -12,6 +12,7 @@ use std::time::Instant;
 use futures::future::BoxFuture;
 use tokio::select;
 use tokio::sync::Notify;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
@@ -23,6 +24,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
+use crate::goals::GoalAccountingBoundary;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -252,6 +254,10 @@ impl Session {
             .mark_turn_started(started_at)
             .await;
         let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
+        turn_context
+            .goal_accounting
+            .mark_turn_started(token_usage_at_turn_start.clone())
+            .await;
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
@@ -283,6 +289,7 @@ impl Session {
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
         let task_cancellation_token = cancellation_token.child_token();
+        let (task_start_tx, task_start_rx) = oneshot::channel();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
         let task_span = info_span!(
@@ -294,6 +301,7 @@ impl Session {
         );
         let handle = tokio::spawn(
             async move {
+                let _ = task_start_rx.await;
                 let ctx_for_finish = Arc::clone(&ctx);
                 let last_agent_message = task_for_run
                     .run(
@@ -339,6 +347,8 @@ impl Session {
             _timer: timer,
         };
         turn.add_task(running_task);
+        drop(active);
+        let _ = task_start_tx.send(());
     }
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
@@ -351,6 +361,16 @@ impl Session {
     pub(crate) async fn maybe_start_turn_for_pending_work(self: &Arc<Self>) {
         self.maybe_start_turn_for_pending_work_with_sub_id(uuid::Uuid::new_v4().to_string())
             .await;
+    }
+
+    pub(crate) async fn maybe_start_turn_for_pending_work_or_goal_continuation(self: &Arc<Self>) {
+        self.maybe_start_turn_for_pending_work().await;
+        if self.has_active_turn().await {
+            return;
+        }
+
+        self.queue_goal_continuation_if_active().await;
+        self.maybe_start_turn_for_pending_work().await;
     }
 
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
@@ -384,16 +404,30 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
-        if let Some(mut active_turn) = self.take_active_turn().await {
+        self.abort_all_tasks_without_restart(reason.clone()).await;
+        if reason == TurnAbortReason::Interrupted {
+            self.clear_queued_response_items_for_next_turn().await;
+            self.maybe_start_turn_for_pending_work().await;
+        }
+    }
+
+    pub(crate) async fn abort_all_tasks_without_restart(self: &Arc<Self>, reason: TurnAbortReason) {
+        let active_turn = self.take_active_turn().await;
+
+        if reason == TurnAbortReason::Interrupted
+            && self.thread_goal_may_exist()
+            && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
+        {
+            warn!("failed to pause active thread goal after interrupt: {err}");
+        }
+
+        if let Some(mut active_turn) = active_turn {
             for task in active_turn.drain_tasks() {
                 self.handle_task_abort(task, reason.clone()).await;
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
-        }
-        if reason == TurnAbortReason::Interrupted {
-            self.maybe_start_turn_for_pending_work().await;
         }
     }
 
@@ -543,14 +577,18 @@ impl Session {
         });
         self.send_event(turn_context.as_ref(), event).await;
 
-        if should_clear_active_turn {
-            let session = Arc::clone(self);
-            let _scheduler = tokio::task::spawn_blocking(move || {
-                tokio::runtime::Handle::current().block_on(async move {
-                    session.maybe_start_turn_for_pending_work().await;
-                });
-            });
-        }
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(err) = session
+                .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
+                .await
+            {
+                warn!("failed to account thread goal progress at turn end: {err}");
+            }
+            if should_clear_active_turn {
+                idle_pending_work_scheduler(session).await;
+            }
+        });
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
@@ -629,6 +667,16 @@ impl Session {
         });
         self.send_event(task.turn_context.as_ref(), event).await;
     }
+}
+
+fn idle_pending_work_scheduler(session: Arc<Session>) -> BoxFuture<'static, ()> {
+    // Erase the future type so `on_task_finished` and `start_task` do not recursively depend on
+    // each other's inferred async state machines.
+    Box::pin(async move {
+        session
+            .maybe_start_turn_for_pending_work_or_goal_continuation()
+            .await;
+    })
 }
 
 #[cfg(test)]

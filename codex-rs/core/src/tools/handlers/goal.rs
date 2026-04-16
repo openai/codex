@@ -7,6 +7,7 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::goals::GoalAccountingBoundary;
 use crate::goals::SetGoalRequest;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -22,6 +23,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 pub struct GoalHandler;
 
@@ -107,9 +109,7 @@ impl ToolHandler for GoalHandler {
 
         match tool_name.name.as_str() {
             GET_GOAL_TOOL_NAME => handle_get_goal(session.as_ref()).await,
-            SET_GOAL_TOOL_NAME => {
-                handle_set_goal(session.as_ref(), turn.as_ref(), &arguments).await
-            }
+            SET_GOAL_TOOL_NAME => handle_set_goal(&session, turn.as_ref(), &arguments).await,
             other => Err(FunctionCallError::Fatal(format!(
                 "goal handler received unsupported tool: {other}"
             ))),
@@ -126,11 +126,17 @@ async fn handle_get_goal(session: &Session) -> Result<FunctionToolOutput, Functi
 }
 
 async fn handle_set_goal(
-    session: &Session,
+    session: &Arc<Session>,
     turn_context: &TurnContext,
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: SetGoalArgs = parse_arguments(arguments)?;
+    if args.status == Some(ToolGoalStatus::Complete) {
+        session
+            .account_thread_goal_progress(turn_context, GoalAccountingBoundary::Tool)
+            .await
+            .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+    }
     let goal = session
         .set_thread_goal(
             turn_context,

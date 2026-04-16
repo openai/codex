@@ -40,6 +40,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
 use crate::RolloutRecorderParams;
+use crate::goals::SetGoalRequest;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::state::TaskKind;
@@ -99,9 +100,12 @@ use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
@@ -3087,6 +3091,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        thread_goal_state_db: Mutex::new(None),
+        thread_goal_may_exist: AtomicBool::new(false),
+        thread_goal_cache: Mutex::new(None),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3847,9 +3854,35 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
 ) {
+    make_session_and_context_with_dynamic_tools_config_and_rx(dynamic_tools, |_| {}).await
+}
+
+async fn make_goal_session_and_context_with_rx() -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
+    make_session_and_context_with_dynamic_tools_config_and_rx(Vec::new(), |config| {
+        config
+            .features
+            .enable(Feature::GoalMode)
+            .expect("goal mode should be enableable in tests");
+    })
+    .await
+}
+
+async fn make_session_and_context_with_dynamic_tools_config_and_rx(
+    dynamic_tools: Vec<DynamicToolSpec>,
+    configure_config: impl FnOnce(&mut Config),
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
     let (tx_event, rx_event) = async_channel::unbounded();
     let codex_home = tempfile::tempdir().expect("create temp dir");
-    let config = build_test_config(codex_home.path()).await;
+    let mut config = build_test_config(codex_home.path()).await;
+    configure_config(&mut config);
     let config = Arc::new(config);
     let conversation_id = ThreadId::default();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -4050,6 +4083,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        thread_goal_state_db: Mutex::new(None),
+        thread_goal_may_exist: AtomicBool::new(false),
+        thread_goal_cache: Mutex::new(None),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -5345,6 +5381,546 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
     .await;
 
     assert_eq!(sess.get_pending_input().await, vec![queued_item]);
+}
+
+#[tokio::test]
+async fn interrupt_clears_queued_response_items_for_next_turn() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let queued_item = ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "continue the active goal".to_string(),
+        }],
+    };
+
+    sess.queue_response_items_for_next_turn(vec![queued_item])
+        .await;
+    assert!(sess.has_queued_response_items_for_next_turn().await);
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    assert!(!sess.has_queued_response_items_for_next_turn().await);
+}
+
+#[tokio::test]
+async fn active_goal_continuation_is_not_queued_while_turn_is_active() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    sess.queue_goal_continuation_if_active().await;
+
+    assert!(!sess.has_queued_response_items_for_next_turn().await);
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn interrupt_pauses_active_goal_and_prevents_continuation() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should remain persisted after interrupt");
+    assert_eq!(
+        codex_protocol::protocol::ThreadGoalStatus::Paused,
+        goal.status
+    );
+
+    sess.queue_goal_continuation_if_active().await;
+    assert!(!sess.has_queued_response_items_for_next_turn().await);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_continuation_refreshes_stale_cached_status() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: None,
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::Paused),
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    let state_db = sess
+        .thread_goal_state_db
+        .lock()
+        .await
+        .clone()
+        .expect("goal state DB should be initialized");
+    state_db
+        .update_thread_goal(
+            sess.conversation_id,
+            codex_state::ThreadGoalUpdate {
+                status: Some(codex_state::ThreadGoalStatus::Active),
+                token_budget: None,
+            },
+        )
+        .await?;
+
+    sess.queue_goal_continuation_if_active().await;
+
+    assert!(
+        sess.has_queued_response_items_for_next_turn().await,
+        "goal continuation should use the freshly persisted active status"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn interrupt_without_active_turn_pauses_active_goal() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    sess.interrupt_task().await;
+
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should remain persisted after interrupt");
+    assert_eq!(
+        codex_protocol::protocol::ThreadGoalStatus::Paused,
+        goal.status
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_goal_continuation_waits_for_trigger_turn_mailbox_prompt() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.enqueue_mailbox_communication(InterAgentCommunication::new(
+        AgentPath::try_from("/root/worker").expect("worker path should parse"),
+        AgentPath::root(),
+        Vec::new(),
+        "queued child update".to_string(),
+        /*trigger_turn*/ true,
+    ));
+
+    sess.queue_goal_continuation_if_active().await;
+
+    assert!(
+        !sess.has_queued_response_items_for_next_turn().await,
+        "goal continuation should not be queued ahead of pending trigger-turn mailbox input"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn finished_active_goal_turn_starts_continuation() -> anyhow::Result<()> {
+    let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
+    let (_startup_prewarm_tx, startup_prewarm_rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(async move {
+        let _ = startup_prewarm_rx.await;
+        Ok(test_model_client_session())
+    });
+    sess.set_session_startup_prewarm(
+        crate::session_startup_prewarm::SessionStartupPrewarmHandle::new(
+            handle,
+            std::time::Instant::now(),
+            crate::client::WEBSOCKET_CONNECT_TIMEOUT,
+        ),
+    )
+    .await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    while rx.try_recv().is_ok() {}
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
+
+    let mut saw_original_turn_complete = false;
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let event = rx.recv().await.expect("event channel should stay open");
+            match event.msg {
+                EventMsg::TurnComplete(TurnCompleteEvent { turn_id, .. })
+                    if turn_id == tc.sub_id =>
+                {
+                    saw_original_turn_complete = true;
+                }
+                EventMsg::TurnStarted(TurnStartedEvent { turn_id, .. }) if turn_id != tc.sub_id => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("active goal continuation should start after the turn completes");
+    assert!(saw_original_turn_complete);
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::GoalMode)
+            .expect("goal mode should be enableable in tests");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "call-set-goal",
+                    "set_goal",
+                    r#"{"objective":"write a cat poem"}"#,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "Soft paws tap at dawn."),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_function_call("call-complete-goal", "set_goal", r#"{"status":"complete"}"#),
+                ev_completed("resp-3"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-2", "Goal complete."),
+                ev_completed("resp-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "write a cat poem".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    let mut first_turn_id = None;
+    let mut event_trace = Vec::new();
+    let continuation_turn_id_result =
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                let event = test.codex.next_event().await?;
+                match event.msg {
+                    EventMsg::TurnStarted(TurnStartedEvent { turn_id, .. }) => {
+                        event_trace.push(format!("TurnStarted({turn_id})"));
+                        if first_turn_id.is_none() {
+                            first_turn_id = Some(turn_id);
+                        } else {
+                            return anyhow::Ok(turn_id);
+                        }
+                    }
+                    EventMsg::TurnComplete(TurnCompleteEvent { turn_id, .. }) => {
+                        event_trace.push(format!("TurnComplete({turn_id})"));
+                        if Some(&turn_id) != first_turn_id.as_ref() {
+                            return anyhow::Ok(turn_id);
+                        }
+                    }
+                    EventMsg::ThreadGoalUpdated(event) => {
+                        event_trace.push(format!("ThreadGoalUpdated({:?})", event.goal.status));
+                    }
+                    EventMsg::AgentMessageDelta(_) => {
+                        event_trace.push("AgentMessageDelta".to_string());
+                    }
+                    other => {
+                        event_trace.push(format!("{:?}", std::mem::discriminant(&other)));
+                    }
+                }
+            }
+        })
+        .await;
+    let continuation_turn_id = match continuation_turn_id_result {
+        Ok(result) => result?,
+        Err(_) => {
+            let requests = responses.requests();
+            let set_goal_output = requests
+                .get(1)
+                .map(|request| request.function_call_output("call-set-goal"));
+            panic!(
+                "timed out waiting for continuation turn start; events={event_trace:#?}; captured {} response requests; set_goal_output={set_goal_output:#?}",
+                requests.len(),
+            );
+        }
+    };
+
+    let continuation_completed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let event = test.codex.next_event().await?;
+            if let EventMsg::TurnComplete(TurnCompleteEvent { turn_id, .. }) = event.msg
+                && turn_id == continuation_turn_id
+            {
+                return anyhow::Ok(());
+            }
+        }
+    })
+    .await;
+    if continuation_completed.is_err() {
+        let requests = responses.requests();
+        panic!(
+            "timed out waiting for continuation turn completion; captured {} response requests: {:#?}",
+            requests.len(),
+            requests
+                .iter()
+                .map(core_test_support::responses::ResponsesRequest::body_json)
+                .collect::<Vec<_>>()
+        );
+    }
+    continuation_completed??;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_response()
+-> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::GoalMode)
+            .expect("goal mode should be enableable in tests");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "call-set-goal",
+                    "set_goal",
+                    r#"{"objective":"write a report","token_budget":1000}"#,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call("call-complete-goal", "set_goal", r#"{"status":"complete"}"#),
+                ev_completed_with_usage(
+                    "resp-2", /*input_tokens*/ 900, /*cached_input_tokens*/ 400,
+                    /*output_tokens*/ 80, /*reasoning_output_tokens*/ 20,
+                    /*total_tokens*/ 1_000,
+                ),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "Goal complete."),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "write a report".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            let event = test.codex.next_event().await?;
+            if matches!(event.msg, EventMsg::TurnComplete(_)) {
+                return anyhow::Ok(());
+            }
+        }
+    })
+    .await??;
+
+    let complete_output = responses
+        .function_call_output_text("call-complete-goal")
+        .expect("complete tool output should be sent to the model");
+    let complete_output: serde_json::Value = serde_json::from_str(&complete_output)?;
+    assert_eq!(complete_output["goal"]["tokensUsed"], 600);
+    assert_eq!(complete_output["remainingTokens"], 400);
+    assert_eq!(
+        complete_output["completionBudgetReport"],
+        "Goal achieved. Report final budget usage to the user: tokens used: 600 of 1000."
+    );
+
+    let state_db = codex_state::StateRuntime::init(
+        test.config.sqlite_home.clone(),
+        test.config.model_provider_id.clone(),
+    )
+    .await?;
+    let persisted_goal = state_db
+        .get_thread_goal(test.session_configured.session_id)
+        .await?
+        .expect("goal should be persisted");
+    assert_eq!(
+        codex_state::ThreadGoalStatus::Complete,
+        persisted_goal.status
+    );
+    assert_eq!(600, persisted_goal.tokens_used);
+
+    Ok(())
+}
+
+fn ev_completed_with_usage(
+    id: &str,
+    input_tokens: i64,
+    cached_input_tokens: i64,
+    output_tokens: i64,
+    reasoning_output_tokens: i64,
+    total_tokens: i64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "response.completed",
+        "response": {
+            "id": id,
+            "usage": {
+                "input_tokens": input_tokens,
+                "input_tokens_details": {
+                    "cached_tokens": cached_input_tokens,
+                },
+                "output_tokens": output_tokens,
+                "output_tokens_details": {
+                    "reasoning_tokens": reasoning_output_tokens,
+                },
+                "total_tokens": total_tokens,
+            },
+        },
+    })
+}
+
+#[tokio::test]
+async fn set_thread_goal_initializes_state_db_when_session_handle_is_missing() -> anyhow::Result<()>
+{
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    assert!(
+        sess.state_db().is_none(),
+        "test fixture should exercise lazy goal DB initialization"
+    );
+
+    let goal = sess
+        .set_thread_goal(
+            tc.as_ref(),
+            SetGoalRequest {
+                objective: Some("Keep improving the benchmark".to_string()),
+                status: None,
+                token_budget: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(goal.objective, "Keep improving the benchmark");
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let persisted = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should persist through lazily initialized state db");
+    assert_eq!(persisted.objective, "Keep improving the benchmark");
+
+    Ok(())
 }
 
 #[tokio::test]

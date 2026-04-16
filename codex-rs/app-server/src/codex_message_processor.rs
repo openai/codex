@@ -3048,6 +3048,11 @@ impl CodexMessageProcessor {
                 },
             ))
             .await;
+        if self.config.features.enabled(Feature::GoalMode)
+            && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
+        {
+            thread.continue_active_goal_if_idle().await;
+        }
     }
 
     async fn thread_goal_get(&self, request_id: ConnectionRequestId, params: ThreadGoalGetParams) {
@@ -4391,6 +4396,7 @@ impl CodexMessageProcessor {
                 thread,
                 session_configured,
             }) => {
+                let core_thread = Arc::clone(&thread);
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     self.send_internal_error(
@@ -4472,6 +4478,7 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
                 if self.config.features.enabled(Feature::GoalMode) {
                     self.emit_thread_goal_updated_if_present(thread_id).await;
+                    core_thread.continue_active_goal_if_idle().await;
                 }
             }
             Err(err) => {
@@ -4678,6 +4685,7 @@ impl CodexMessageProcessor {
             if self.config.features.enabled(Feature::GoalMode) {
                 self.emit_thread_goal_updated_if_present(existing_thread_id)
                     .await;
+                existing_thread.continue_active_goal_if_idle().await;
             }
             return true;
         }

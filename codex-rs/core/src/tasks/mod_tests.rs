@@ -1,10 +1,12 @@
 use super::emit_turn_network_proxy_metric;
+use crate::goals::goal_token_delta_for_usage;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TokenUsage;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
 use opentelemetry_sdk::metrics::data::AggregatedMetrics;
@@ -34,6 +36,19 @@ fn test_session_telemetry() -> SessionTelemetry {
         SessionSource::Cli,
     )
     .with_metrics_without_metadata_tags(metrics)
+}
+
+#[test]
+fn goal_token_delta_excludes_cached_input_and_includes_reasoning() {
+    let usage = TokenUsage {
+        input_tokens: 900,
+        cached_input_tokens: 400,
+        output_tokens: 80,
+        reasoning_output_tokens: 20,
+        total_tokens: 1_000,
+    };
+
+    assert_eq!(600, goal_token_delta_for_usage(&usage));
 }
 
 fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
