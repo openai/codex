@@ -22,6 +22,8 @@ use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
+use codex_rollout_trace::REDUCED_STATE_FILE_NAME;
+use codex_rollout_trace::replay_bundle;
 use codex_state::StateRuntime;
 use codex_state::state_db_path;
 use codex_tui::AppExitInfo;
@@ -191,6 +193,9 @@ enum DebugSubcommand {
     /// Render the model-visible prompt input list as JSON.
     PromptInput(DebugPromptInputCommand),
 
+    /// Replay a rollout trace bundle and write reduced state JSON.
+    TraceReduce(DebugTraceReduceCommand),
+
     /// Internal: reset local memory state for a fresh start.
     #[clap(hide = true)]
     ClearMemories,
@@ -223,6 +228,17 @@ struct DebugPromptInputCommand {
     /// Optional image(s) to attach to the user prompt.
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     images: Vec<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct DebugTraceReduceCommand {
+    /// Trace bundle directory containing manifest.json and trace.jsonl.
+    #[arg(value_name = "TRACE_BUNDLE")]
+    trace_bundle: PathBuf,
+
+    /// Output path for reduced RolloutTrace JSON. Defaults to TRACE_BUNDLE/state.json.
+    #[arg(long = "output", short = 'o', value_name = "FILE")]
+    output: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -992,6 +1008,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 )
                 .await?;
             }
+            DebugSubcommand::TraceReduce(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug trace-reduce",
+                )?;
+                run_debug_trace_reduce_command(cmd).await?;
+            }
             DebugSubcommand::ClearMemories => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
@@ -1191,6 +1215,19 @@ fn maybe_print_under_development_feature_warning(
         "Under-development features enabled: {feature}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {}.",
         config_path.display()
     );
+}
+
+async fn run_debug_trace_reduce_command(cmd: DebugTraceReduceCommand) -> anyhow::Result<()> {
+    let output = cmd
+        .output
+        .unwrap_or_else(|| cmd.trace_bundle.join(REDUCED_STATE_FILE_NAME));
+
+    let trace = replay_bundle(&cmd.trace_bundle)?;
+    let reduced_json = serde_json::to_vec_pretty(&trace)?;
+    tokio::fs::write(&output, reduced_json).await?;
+    println!("{}", output.display());
+
+    Ok(())
 }
 
 async fn run_debug_prompt_input_command(

@@ -136,6 +136,7 @@ pub use project_doc::LOCAL_PROJECT_DOC_FILENAME;
 pub use project_doc::discover_project_doc_paths;
 pub use project_doc::read_project_docs;
 mod rollout;
+mod rollout_trace;
 pub(crate) mod safety;
 mod session_rollout_init_error;
 pub mod shell;

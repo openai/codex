@@ -300,6 +300,8 @@ use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::rollout::policy::EventPersistenceMode;
+use crate::rollout_trace::RolloutTraceRecorder;
+use crate::rollout_trace::ThreadStartedTraceMetadata;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
@@ -441,6 +443,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    pub(crate) inherited_rollout_trace: Option<RolloutTraceRecorder>,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
@@ -495,6 +498,7 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            inherited_rollout_trace,
             parent_trace: _,
             analytics_events_client,
         } = args;
@@ -691,6 +695,7 @@ impl Codex {
             agent_control,
             environment,
             analytics_events_client,
+            inherited_rollout_trace,
         )
         .await
         .map_err(|e| {
@@ -1702,6 +1707,7 @@ impl Session {
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
+        inherited_rollout_trace: Option<RolloutTraceRecorder>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1838,6 +1844,40 @@ impl Session {
         let rollout_path = rollout_recorder
             .as_ref()
             .map(|rec| rec.rollout_path().to_path_buf());
+        let trace_agent_path = session_configuration
+            .session_source
+            .get_agent_path()
+            .unwrap_or_else(codex_protocol::AgentPath::root);
+        let trace_task_name =
+            (!trace_agent_path.is_root()).then(|| trace_agent_path.name().to_string());
+        let trace_metadata = ThreadStartedTraceMetadata {
+            thread_id: conversation_id.to_string(),
+            agent_path: trace_agent_path.to_string(),
+            task_name: trace_task_name,
+            nickname: session_configuration.session_source.get_nickname(),
+            agent_role: session_configuration.session_source.get_agent_role(),
+            session_source: session_configuration.session_source.clone(),
+            cwd: session_configuration.cwd.to_path_buf(),
+            rollout_path: rollout_path.clone(),
+            model: session_configuration.collaboration_mode.model().to_string(),
+            provider_name: config.model_provider_id.clone(),
+            approval_policy: session_configuration.approval_policy.value().to_string(),
+            sandbox_policy: format!("{:?}", session_configuration.sandbox_policy.get()),
+        };
+        let rollout_trace = if let Some(rollout_trace) = inherited_rollout_trace {
+            rollout_trace.record_thread_started(trace_metadata);
+            Some(rollout_trace)
+        } else if matches!(
+            session_configuration.session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
+            // Spawned child threads are part of their root rollout tree. If
+            // the parent had no trace recorder, do not create an orphan child
+            // bundle that looks like an independent rollout.
+            None
+        } else {
+            RolloutTraceRecorder::maybe_create(conversation_id, trace_metadata)
+        };
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -2117,6 +2157,7 @@ impl Session {
             analytics_events_client,
             hooks,
             rollout: Mutex::new(rollout_recorder),
+            rollout_trace,
             user_shell: Arc::new(default_shell),
             agent_identity_manager: Arc::new(AgentIdentityManager::new(
                 config.as_ref(),
@@ -2892,6 +2933,18 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        if let Some(rollout_trace) = &self.services.rollout_trace {
+            rollout_trace.record_codex_turn_event(
+                self.conversation_id.to_string(),
+                &turn_context.sub_id,
+                &legacy_source,
+            );
+            rollout_trace.record_tool_call_event(
+                self.conversation_id.to_string(),
+                turn_context.sub_id.clone(),
+                &legacy_source,
+            );
+        }
         let event = Event {
             id: turn_context.sub_id.clone(),
             msg,
@@ -2944,13 +2997,19 @@ impl Session {
             return;
         }
 
-        self.forward_child_completion_to_parent(*parent_thread_id, child_agent_path, status)
-            .await;
+        self.forward_child_completion_to_parent(
+            turn_context,
+            *parent_thread_id,
+            child_agent_path,
+            status,
+        )
+        .await;
     }
 
     /// Sends the standard completion envelope from a spawned MultiAgentV2 child to its parent.
     async fn forward_child_completion_to_parent(
         &self,
+        turn_context: &TurnContext,
         parent_thread_id: ThreadId,
         child_agent_path: &codex_protocol::AgentPath,
         status: AgentStatus,
@@ -2968,9 +3027,19 @@ impl Session {
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
-            message,
+            message.clone(),
             /*trigger_turn*/ false,
         );
+        if let Some(rollout_trace) = &self.services.rollout_trace {
+            rollout_trace.record_agent_result_interaction(
+                self.conversation_id.to_string(),
+                turn_context.sub_id.clone(),
+                parent_thread_id.to_string(),
+                child_agent_path.as_str(),
+                &message,
+                &status,
+            );
+        }
         if let Err(err) = self
             .services
             .agent_control
@@ -3009,6 +3078,9 @@ impl Session {
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
+        if let Some(rollout_trace) = &self.services.rollout_trace {
+            rollout_trace.record_protocol_event(&event.msg);
+        }
         self.deliver_event_raw(event).await;
     }
 
@@ -5913,6 +5985,12 @@ mod handlers {
             msg: EventMsg::ShutdownComplete,
         };
         sess.send_event_raw(event).await;
+        if let Some(rollout_trace) = &sess.services.rollout_trace {
+            rollout_trace.record_thread_ended(
+                sess.conversation_id.to_string(),
+                codex_rollout_trace::RolloutStatus::Completed,
+            );
+        }
         true
     }
 
@@ -7876,8 +7954,19 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
+    let inference_trace = sess.services.rollout_trace.as_ref().map_or_else(
+        codex_rollout_trace::InferenceTraceContext::disabled,
+        |trace| {
+            trace.inference_trace_context(
+                sess.conversation_id.to_string(),
+                turn_context.sub_id.clone(),
+                turn_context.model_info.slug.clone(),
+                turn_context.provider.name.clone(),
+            )
+        },
+    );
     let mut stream = client_session
-        .stream(
+        .stream_with_trace(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
@@ -7885,6 +7974,7 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier,
             turn_metadata_header,
+            &inference_trace,
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

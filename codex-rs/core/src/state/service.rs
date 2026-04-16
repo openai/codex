@@ -11,6 +11,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::guardian::GuardianRejection;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
+use crate::rollout_trace::RolloutTraceRecorder;
 use crate::skills_watcher::SkillsWatcher;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -42,6 +43,7 @@ pub(crate) struct SessionServices {
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: Hooks,
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
+    pub(crate) rollout_trace: Option<RolloutTraceRecorder>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) agent_identity_manager: Arc<AgentIdentityManager>,
     pub(crate) shell_snapshot_tx: watch::Sender<Option<Arc<crate::shell_snapshot::ShellSnapshot>>>,

@@ -61,7 +61,7 @@ impl ToolHandler for CodeModeWaitHandler {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
-                let response = exec
+                let wait_response = exec
                     .session
                     .services
                     .code_mode_service
@@ -72,9 +72,28 @@ impl ToolHandler for CodeModeWaitHandler {
                     })
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
-                handle_runtime_response(&exec, response, args.max_tokens, started_at)
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)
+                let response = wait_response.runtime_response();
+                if matches!(&wait_response, codex_code_mode::WaitResponse::Cell(_))
+                    && !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. })
+                    && let Some(trace) = &exec.session.services.rollout_trace
+                {
+                    // Only a live-cell wait can close a CodeCell. A missing
+                    // cell is still an ordinary `wait` tool result, but there
+                    // is no runtime object for the reducer to complete.
+                    trace.record_code_cell_ended(
+                        exec.session.conversation_id.to_string(),
+                        exec.turn.sub_id.clone(),
+                        response,
+                    );
+                }
+                handle_runtime_response(
+                    &exec,
+                    wait_response.into_runtime_response(),
+                    args.max_tokens,
+                    started_at,
+                )
+                .await
+                .map_err(FunctionCallError::RespondToModel)
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{WAIT_TOOL_NAME} expects JSON arguments"

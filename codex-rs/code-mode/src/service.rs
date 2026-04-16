@@ -21,14 +21,26 @@ use crate::runtime::RuntimeEvent;
 use crate::runtime::RuntimeResponse;
 use crate::runtime::TurnMessage;
 use crate::runtime::WaitRequest;
+use crate::runtime::WaitResponse;
 use crate::runtime::spawn_runtime;
+
+/// Nested tool request emitted by one code-mode cell.
+///
+/// Code mode owns the per-cell runtime id. Hosts should preserve it for
+/// provenance/debugging, but should still assign their own runtime tool call id
+/// if their tool-call graph requires globally unique ids.
+pub struct CodeModeToolInvocation {
+    pub cell_id: String,
+    pub runtime_tool_call_id: String,
+    pub tool_name: ToolName,
+    pub input: Option<JsonValue>,
+}
 
 #[async_trait]
 pub trait CodeModeTurnHost: Send + Sync {
     async fn invoke_tool(
         &self,
-        tool_name: ToolName,
-        input: Option<JsonValue>,
+        invocation: CodeModeToolInvocation,
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String>;
 
@@ -76,24 +88,44 @@ impl CodeModeService {
         *self.inner.stored_values.lock().await = values;
     }
 
-    pub async fn execute(&self, request: ExecuteRequest) -> Result<RuntimeResponse, String> {
-        let cell_id = self
-            .inner
+    /// Reserves the runtime cell id for a future `execute` request.
+    ///
+    /// The runtime can issue nested tool calls before the first `execute`
+    /// response is returned. Hosts that need a parent trace object for those
+    /// nested calls should allocate the cell id up front and pass it back on the
+    /// `ExecuteRequest`.
+    pub fn allocate_cell_id(&self) -> String {
+        self.inner
             .next_cell_id
             .fetch_add(1, Ordering::Relaxed)
-            .to_string();
+            .to_string()
+    }
+
+    pub async fn execute(&self, request: ExecuteRequest) -> Result<RuntimeResponse, String> {
+        let cell_id = request
+            .cell_id
+            .clone()
+            .unwrap_or_else(|| self.allocate_cell_id());
+        let mut sessions = self.inner.sessions.lock().await;
+        if sessions.contains_key(&cell_id) {
+            return Err(format!("exec cell {cell_id} already exists"));
+        }
+
+        // Keep the session registry locked through insertion so a caller-owned
+        // cell id cannot race with another execute and replace a live runtime.
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (runtime_tx, runtime_terminate_handle) = spawn_runtime(request.clone(), event_tx)?;
         let (control_tx, control_rx) = mpsc::unbounded_channel();
         let (response_tx, response_rx) = oneshot::channel();
 
-        self.inner.sessions.lock().await.insert(
+        sessions.insert(
             cell_id.clone(),
             SessionHandle {
                 control_tx: control_tx.clone(),
                 runtime_tx: runtime_tx.clone(),
             },
         );
+        drop(sessions);
 
         tokio::spawn(run_session_control(
             Arc::clone(&self.inner),
@@ -113,7 +145,7 @@ impl CodeModeService {
             .map_err(|_| "exec runtime ended unexpectedly".to_string())
     }
 
-    pub async fn wait(&self, request: WaitRequest) -> Result<RuntimeResponse, String> {
+    pub async fn wait(&self, request: WaitRequest) -> Result<WaitResponse, String> {
         let cell_id = request.cell_id.clone();
         let handle = self
             .inner
@@ -123,7 +155,7 @@ impl CodeModeService {
             .get(&request.cell_id)
             .cloned();
         let Some(handle) = handle else {
-            return Ok(missing_cell_response(cell_id));
+            return Ok(WaitResponse::MissingCell(missing_cell_response(cell_id)));
         };
         let (response_tx, response_rx) = oneshot::channel();
         let control_message = if request.terminate {
@@ -135,11 +167,13 @@ impl CodeModeService {
             }
         };
         if handle.control_tx.send(control_message).is_err() {
-            return Ok(missing_cell_response(cell_id));
+            return Ok(WaitResponse::MissingCell(missing_cell_response(cell_id)));
         }
         match response_rx.await {
-            Ok(response) => Ok(response),
-            Err(_) => Ok(missing_cell_response(request.cell_id)),
+            Ok(response) => Ok(WaitResponse::Cell(response)),
+            Err(_) => Ok(WaitResponse::MissingCell(missing_cell_response(
+                request.cell_id,
+            ))),
         }
     }
 
@@ -181,9 +215,14 @@ impl CodeModeService {
                         let host = Arc::clone(&host);
                         let inner = Arc::clone(&inner);
                         tokio::spawn(async move {
-                            let response = host
-                                .invoke_tool(name, input, CancellationToken::new())
-                                .await;
+                            let invocation = CodeModeToolInvocation {
+                                cell_id: cell_id.clone(),
+                                runtime_tool_call_id: id.clone(),
+                                tool_name: name,
+                                input,
+                            };
+                            let response =
+                                host.invoke_tool(invocation, CancellationToken::new()).await;
                             let runtime_tx = inner
                                 .sessions
                                 .lock()
@@ -482,6 +521,8 @@ mod tests {
     use super::RuntimeResponse;
     use super::SessionControlCommand;
     use super::SessionControlContext;
+    use super::WaitRequest;
+    use super::WaitResponse;
     use super::run_session_control;
     use crate::FunctionCallOutputContentItem;
     use crate::runtime::ExecuteRequest;
@@ -490,6 +531,7 @@ mod tests {
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
+            cell_id: None,
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),
@@ -829,6 +871,30 @@ image({
                     "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block".to_string(),
                 ),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_reports_missing_cell_separately_from_runtime_results() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .wait(WaitRequest {
+                cell_id: "missing".to_string(),
+                yield_time_ms: 1,
+                terminate: false,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            WaitResponse::MissingCell(RuntimeResponse::Result {
+                cell_id: "missing".to_string(),
+                content_items: Vec::new(),
+                stored_values: HashMap::new(),
+                error_text: Some("exec cell missing not found".to_string()),
+            })
         );
     }
 

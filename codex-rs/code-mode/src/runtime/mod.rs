@@ -10,6 +10,7 @@ use std::sync::mpsc as std_mpsc;
 use std::thread;
 
 use codex_protocol::ToolName;
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 
@@ -25,6 +26,12 @@ const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
 #[derive(Clone, Debug)]
 pub struct ExecuteRequest {
+    /// Runtime cell id to use for this execution.
+    ///
+    /// Hosts that need to trace work before JavaScript starts can allocate an id
+    /// first and pass it here. `None` keeps the service-owned allocation path
+    /// for callers that only need the id once a runtime response is returned.
+    pub cell_id: Option<String>,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
@@ -41,6 +48,33 @@ pub struct WaitRequest {
 }
 
 #[derive(Debug, PartialEq)]
+pub enum WaitResponse {
+    /// The requested cell was live when the wait command was accepted.
+    ///
+    /// Non-yielding responses from this variant are terminal lifecycle points
+    /// for the matching code cell.
+    Cell(RuntimeResponse),
+    /// The requested cell was not live, so the response is only the result of
+    /// the `wait` tool call. It must not be treated as a code-cell lifecycle
+    /// event because there is no cell to complete.
+    MissingCell(RuntimeResponse),
+}
+
+impl WaitResponse {
+    pub fn into_runtime_response(self) -> RuntimeResponse {
+        match self {
+            WaitResponse::Cell(response) | WaitResponse::MissingCell(response) => response,
+        }
+    }
+
+    pub fn runtime_response(&self) -> &RuntimeResponse {
+        match self {
+            WaitResponse::Cell(response) | WaitResponse::MissingCell(response) => response,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize)]
 pub enum RuntimeResponse {
     Yielded {
         cell_id: String,
@@ -331,6 +365,7 @@ mod tests {
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
+            cell_id: None,
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),
