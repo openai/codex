@@ -75,7 +75,8 @@ impl TraceReducer {
                 .inference_calls
                 .values()
                 .find(|inference| {
-                    inference.upstream_request_id.as_deref() == Some(previous_response_id)
+                    inference.thread_id == thread_id
+                        && inference.upstream_request_id.as_deref() == Some(previous_response_id)
                 })
                 .map(|inference| {
                     let mut ids = inference.request_item_ids.clone();
