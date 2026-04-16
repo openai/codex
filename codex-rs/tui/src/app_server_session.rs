@@ -481,6 +481,10 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn startup_interrupt(&mut self, thread_id: ThreadId) -> Result<()> {
+        self.turn_interrupt(thread_id, String::new()).await
+    }
+
     pub(crate) async fn turn_steer(
         &mut self,
         thread_id: ThreadId,
