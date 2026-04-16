@@ -76,7 +76,7 @@ The system owns usage fields, so this tool cannot set them directly."#
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, None, Some(false.into())),
+        parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
         output_schema: None,
     })
 }
