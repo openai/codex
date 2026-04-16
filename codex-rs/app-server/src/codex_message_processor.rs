@@ -2275,13 +2275,6 @@ impl CodexMessageProcessor {
             environment_ids,
             persist_extended_history,
         } = params;
-        // TODO(starr): Plumb environment ids as a list through core/session
-        // state instead of collapsing to the first id at the app-server
-        // boundary.
-        let environment_id = environment_ids
-            .as_ref()
-            .and_then(|environment_ids| environment_ids.first())
-            .cloned();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2327,7 +2320,7 @@ impl CodexMessageProcessor {
                 service_name,
                 experimental_raw_events,
                 request_trace,
-                environment_id,
+                environment_ids,
             )
             .await;
         };
@@ -2404,7 +2397,7 @@ impl CodexMessageProcessor {
         service_name: Option<String>,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
-        environment_id: Option<String>,
+        environment_ids: Option<Vec<String>>,
     ) {
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = match derive_config_from_params(
@@ -2553,7 +2546,7 @@ impl CodexMessageProcessor {
                 persist_extended_history,
                 service_name,
                 request_trace,
-                environment_id,
+                environment_ids,
             )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
@@ -6826,24 +6819,55 @@ impl CodexMessageProcessor {
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
         });
+        let TurnStartParams {
+            thread_id: _,
+            input,
+            environments,
+            responsesapi_client_metadata,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox_policy,
+            model,
+            service_tier,
+            effort,
+            summary,
+            personality,
+            output_schema,
+            collaboration_mode: _,
+        } = params;
+        let environments = environments.map(|environments| {
+            environments
+                .into_iter()
+                .enumerate()
+                .map(
+                    |(index, environment)| codex_protocol::protocol::TurnEnvironment {
+                        environment_id: environment.environment_id,
+                        cwd: if index == 0 {
+                            environment.cwd.or_else(|| cwd.clone())
+                        } else {
+                            environment.cwd
+                        },
+                    },
+                )
+                .collect::<Vec<_>>()
+        });
 
         // Map v2 input items to core input items.
-        let mapped_items: Vec<CoreInputItem> = params
-            .input
-            .into_iter()
-            .map(V2UserInput::into_core)
-            .collect();
+        let mapped_items: Vec<CoreInputItem> =
+            input.into_iter().map(V2UserInput::into_core).collect();
 
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.approvals_reviewer.is_some()
-            || params.sandbox_policy.is_some()
-            || params.model.is_some()
-            || params.service_tier.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
+        let has_any_overrides = environments.is_some()
+            || cwd.is_some()
+            || approval_policy.is_some()
+            || approvals_reviewer.is_some()
+            || sandbox_policy.is_some()
+            || model.is_some()
+            || service_tier.is_some()
+            || effort.is_some()
+            || summary.is_some()
             || collaboration_mode.is_some()
-            || params.personality.is_some();
+            || personality.is_some();
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
@@ -6852,19 +6876,19 @@ impl CodexMessageProcessor {
                     &request_id,
                     thread.as_ref(),
                     Op::OverrideTurnContext {
-                        cwd: params.cwd,
-                        approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                        approvals_reviewer: params
-                            .approvals_reviewer
+                        environments,
+                        cwd,
+                        approval_policy: approval_policy.map(AskForApproval::to_core),
+                        approvals_reviewer: approvals_reviewer
                             .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
-                        sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
+                        sandbox_policy: sandbox_policy.map(|p| p.to_core()),
                         windows_sandbox_level: None,
-                        model: params.model,
-                        effort: params.effort.map(Some),
-                        summary: params.summary,
-                        service_tier: params.service_tier,
+                        model,
+                        effort: effort.map(Some),
+                        summary,
+                        service_tier,
                         collaboration_mode,
-                        personality: params.personality,
+                        personality,
                     },
                 )
                 .await;
@@ -6877,8 +6901,8 @@ impl CodexMessageProcessor {
                 thread.as_ref(),
                 Op::UserInput {
                     items: mapped_items,
-                    final_output_json_schema: params.output_schema,
-                    responsesapi_client_metadata: params.responsesapi_client_metadata,
+                    final_output_json_schema: output_schema,
+                    responsesapi_client_metadata,
                 },
             )
             .await;
