@@ -156,6 +156,33 @@ impl Respond for PrefixRaceCompactResponder {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ModeAwareCompactResponder {
+    requests: StdArc<StdMutex<Vec<serde_json::Value>>>,
+}
+
+impl Respond for ModeAwareCompactResponder {
+    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
+        let body = request
+            .body_json::<serde_json::Value>()
+            .expect("compact request body should be JSON");
+        let prefix_mode = body.get("mode").and_then(serde_json::Value::as_str) == Some("prefix");
+        self.requests
+            .lock()
+            .expect("request lock poisoned")
+            .push(body);
+
+        let summary = if prefix_mode {
+            "PREFIX_SUMMARY"
+        } else {
+            "NORMAL_FALLBACK_SUMMARY"
+        };
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_json(json!({ "output": compacted_summary_only_output(summary) }))
+    }
+}
+
 fn remote_realtime_test_codex_builder(
     realtime_server: &responses::WebSocketTestServer,
 ) -> TestCodexBuilder {
@@ -1189,7 +1216,7 @@ async fn prefix_compact_uses_configured_threshold_percent() -> Result<()> {
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.model_context_window = Some(1_000);
+                config.model_context_window = Some(20_000);
                 config.model_auto_compact_token_limit = Some(800);
                 config.prefix_compaction.threshold_percent = Some(90);
                 enable_prefix_compaction(config);
@@ -1265,6 +1292,105 @@ async fn prefix_compact_uses_configured_threshold_percent() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_prefix_snapshot_skips_prefix_compact_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let large_reply = "LARGE_REMOTE_REPLY ".repeat(1_000);
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_context_window = Some(1_000);
+                config.model_auto_compact_token_limit = Some(800);
+                enable_prefix_compaction(config);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("m1", &large_reply),
+                responses::ev_completed_with_tokens("resp-1", /*total_tokens*/ 650),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m2", "SECOND_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-2", /*total_tokens*/ 850),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("m3", "THIRD_REMOTE_REPLY"),
+                responses::ev_completed_with_tokens("resp-3", /*total_tokens*/ 200),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_requests = StdArc::new(StdMutex::new(Vec::new()));
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses/compact$"))
+        .respond_with(ModeAwareCompactResponder {
+            requests: StdArc::clone(&compact_requests),
+        })
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(harness.server())
+        .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "FIRST_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "SECOND_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "THIRD_REMOTE_USER".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let compact_requests = compact_requests
+        .lock()
+        .expect("request lock poisoned")
+        .clone();
+    assert_eq!(compact_requests.len(), 1);
+    assert!(compact_requests[0].get("mode").is_none());
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let third_request_body = requests[2].body_json().to_string();
+    assert!(third_request_body.contains("NORMAL_FALLBACK_SUMMARY"));
+    assert!(!third_request_body.contains("PREFIX_SUMMARY"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1272,7 +1398,7 @@ async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.model_context_window = Some(1_000);
+                config.model_context_window = Some(20_000);
                 config.model_auto_compact_token_limit = Some(800);
                 enable_prefix_compaction(config);
             }),
@@ -1393,7 +1519,7 @@ async fn running_prefix_compact_is_abandoned_when_auto_compact_fires() -> Result
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.model_context_window = Some(1_000);
+                config.model_context_window = Some(20_000);
                 config.model_auto_compact_token_limit = Some(800);
                 enable_prefix_compaction(config);
             }),
@@ -1494,7 +1620,7 @@ async fn running_prefix_compact_started_on_follow_up_boundary_is_abandoned_when_
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
-                config.model_context_window = Some(1_000);
+                config.model_context_window = Some(20_000);
                 config.model_auto_compact_token_limit = Some(800);
                 enable_prefix_compaction(config);
             }),

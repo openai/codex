@@ -81,17 +81,18 @@ pub(crate) async fn run_remote_prefix_compact_task(
     let mut history = ContextManager::new();
     history.replace(base_history);
     let base_instructions = sess.get_base_instructions().await;
-    let deleted_items = trim_function_call_history_to_fit_context_window(
-        &mut history,
-        turn_context.as_ref(),
-        &base_instructions,
-    );
-    if deleted_items > 0 {
+    if let Some(context_window) = turn_context.model_context_window()
+        && let Some(estimated_tokens) =
+            history.estimate_token_count_with_base_instructions(&base_instructions)
+        && estimated_tokens > context_window
+    {
         info!(
             turn_id = %turn_context.sub_id,
-            deleted_items,
-            "trimmed history items before prefix compaction"
+            estimated_tokens,
+            context_window,
+            "prefix compaction snapshot exceeds context window"
         );
+        return Err(CodexErr::ContextWindowExceeded);
     }
 
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
