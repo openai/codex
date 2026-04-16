@@ -2016,9 +2016,10 @@ async fn complete_file_change_item(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let mut state = thread_state.lock().await;
-    state.turn_summary.file_change_started.remove(&item_id);
-    drop(state);
+    {
+        let mut state = thread_state.lock().await;
+        state.turn_summary.file_change_started.remove(&item_id);
+    }
 
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -2087,12 +2088,13 @@ async fn complete_command_execution_item(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let mut state = thread_state.lock().await;
-    let should_emit = state
-        .turn_summary
-        .command_execution_started
-        .remove(&item_id);
-    drop(state);
+    let should_emit = {
+        let mut state = thread_state.lock().await;
+        state
+            .turn_summary
+            .command_execution_started
+            .remove(&item_id)
+    };
     if !should_emit {
         return;
     }
