@@ -137,7 +137,6 @@ common:ci-windows-cross-build --strategy=CopyFile=local
 common:ci-windows-cross-build --strategy=Genrule=local
 common:ci-windows-cross-build --use_target_platform_for_tests=true
 common:ci-windows-cross-build --platforms=//:local_windows
-common:ci-windows-cross-build --host_platform=//:rbe
 common:ci-windows-cross-build --remote_download_toplevel
 common:ci-windows-cross-build --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
 
