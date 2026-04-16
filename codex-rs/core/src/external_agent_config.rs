@@ -289,15 +289,16 @@ impl ExternalAgentConfigService {
                         &config,
                         &PluginsManager::new(self.codex_home.clone()),
                     )?;
-                    self.detect_plugin_migration(
+                    if let Some(item) = self.detect_plugin_migration(
                         source_settings.as_path(),
                         repo_root.unwrap_or(self.external_agent_home.as_path()),
                         cwd.clone(),
-                        Some(settings),
+                        settings,
                         &configured_plugin_ids,
                         &configured_marketplace_plugins,
-                        items,
-                    );
+                    ) {
+                        items.push(item);
+                    }
                 }
                 Err(err) => {
                     tracing::warn!(
@@ -324,33 +325,28 @@ impl ExternalAgentConfigService {
         source_settings: &Path,
         source_root: &Path,
         cwd: Option<PathBuf>,
-        settings: Option<&JsonValue>,
+        settings: &JsonValue,
         configured_plugin_ids: &HashSet<String>,
         configured_marketplace_plugins: &BTreeMap<String, HashSet<String>>,
-        items: &mut Vec<ExternalAgentConfigMigrationItem>,
-    ) {
-        let Some(plugin_details) = settings.and_then(|settings| {
-            extract_plugin_migration_details(
-                settings,
-                source_root,
-                configured_plugin_ids,
-                configured_marketplace_plugins,
-            )
-        }) else {
-            return;
-        };
-
-        items.push(ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: format!("Import enabled plugins from {}", source_settings.display()),
-            cwd,
-            details: Some(plugin_details),
-        });
+    ) -> Option<ExternalAgentConfigMigrationItem> {
+        let plugin_details = extract_plugin_migration_details(
+            settings,
+            source_root,
+            configured_plugin_ids,
+            configured_marketplace_plugins,
+        )?;
         emit_migration_metric(
             EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
             ExternalAgentConfigMigrationItemType::Plugins,
             /*skills_count*/ None,
         );
+
+        Some(ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!("Import enabled plugins from {}", source_settings.display()),
+            cwd,
+            details: Some(plugin_details),
+        })
     }
 
     async fn import_plugins(

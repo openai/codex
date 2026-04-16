@@ -1037,20 +1037,18 @@ async fn import_plugins_supports_external_agent_plugin_marketplace_layout() {
 
     fs::write(
         external_agent_home.join("settings.json"),
-        format!(
-            r#"{{
-              "enabledPlugins": {{
+        serde_json::to_string_pretty(&serde_json::json!({
+            "enabledPlugins": {
                 "cloudflare@my-plugins": true
-              }},
-              "extraKnownMarketplaces": {{
-                "my-plugins": {{
-                  "source": "local",
-                  "path": "{}"
-                }}
-              }}
-            }}"#,
-            marketplace_root.display()
-        ),
+            },
+            "extraKnownMarketplaces": {
+                "my-plugins": {
+                    "source": "local",
+                    "path": marketplace_root
+                }
+            }
+        }))
+        .expect("serialize settings"),
     )
     .expect("write settings");
     fs::write(
