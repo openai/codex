@@ -546,3 +546,7 @@ fn resolve_marketplace_interface(
         None
     }
 }
+
+#[cfg(test)]
+#[path = "marketplace_tests.rs"]
+mod tests;

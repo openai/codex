@@ -1446,6 +1446,7 @@ dependencies = [
  "codex-cloud-requirements",
  "codex-config",
  "codex-core",
+ "codex-core-plugins",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",
