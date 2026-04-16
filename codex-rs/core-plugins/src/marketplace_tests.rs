@@ -53,7 +53,6 @@ fn resolve_marketplace_plugin_finds_repo_marketplace_plugin() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
-        Some(Product::Codex),
     )
     .unwrap();
 
@@ -62,8 +61,16 @@ fn resolve_marketplace_plugin_finds_repo_marketplace_plugin() {
         ResolvedMarketplacePlugin {
             plugin_id: PluginId::new("local-plugin".to_string(), "codex-curated".to_string())
                 .unwrap(),
-            source_path: AbsolutePathBuf::try_from(repo_root.join("plugin-1")).unwrap(),
-            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+            source: MarketplacePluginSource::Local {
+                path: AbsolutePathBuf::try_from(repo_root.join("plugin-1")).unwrap(),
+            },
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: None,
+            },
+            interface: None,
+            manifest: None,
         }
     );
 }
@@ -86,12 +93,7 @@ fn resolve_marketplace_plugin_supports_alternate_layout_and_string_local_source(
 }"#,
     );
 
-    let resolved = resolve_marketplace_plugin(
-        &marketplace_path,
-        "string-source-plugin",
-        Some(Product::Codex),
-    )
-    .unwrap();
+    let resolved = resolve_marketplace_plugin(&marketplace_path, "string-source-plugin").unwrap();
 
     assert_eq!(
         resolved,
@@ -101,9 +103,17 @@ fn resolve_marketplace_plugin_supports_alternate_layout_and_string_local_source(
                 "alternate-marketplace".to_string()
             )
             .unwrap(),
-            source_path: AbsolutePathBuf::try_from(repo_root.join("plugins/string-source-plugin"))
-                .unwrap(),
-            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+            source: MarketplacePluginSource::Local {
+                path: AbsolutePathBuf::try_from(repo_root.join("plugins/string-source-plugin"))
+                    .unwrap(),
+            },
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: None,
+            },
+            interface: None,
+            manifest: None,
         }
     );
 }
@@ -123,7 +133,6 @@ fn resolve_marketplace_plugin_reports_missing_plugin() {
     let err = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "missing",
-        Some(Product::Codex),
     )
     .unwrap_err();
 
@@ -534,13 +543,14 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_marketplace).unwrap(),
         "local-plugin",
-        Some(Product::Codex),
     )
     .unwrap();
 
     assert_eq!(
-        resolved.source_path,
-        AbsolutePathBuf::try_from(repo_root.join("repo-plugin")).unwrap()
+        resolved.source,
+        MarketplacePluginSource::Local {
+            path: AbsolutePathBuf::try_from(repo_root.join("repo-plugin")).unwrap(),
+        }
     );
 }
 
@@ -1066,7 +1076,6 @@ fn resolve_marketplace_plugin_skips_invalid_local_paths() {
     let err = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
-        Some(Product::Codex),
     )
     .unwrap_err();
 
@@ -1097,8 +1106,7 @@ fn resolve_marketplace_plugin_skips_unsupported_sources() {
 }"#,
     );
 
-    let err = resolve_marketplace_plugin(&marketplace_path, "remote-plugin", Some(Product::Codex))
-        .unwrap_err();
+    let err = resolve_marketplace_plugin(&marketplace_path, "remote-plugin").unwrap_err();
 
     assert_eq!(
         err.to_string(),
@@ -1139,13 +1147,14 @@ fn resolve_marketplace_plugin_uses_first_duplicate_entry() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
-        Some(Product::Codex),
     )
     .unwrap();
 
     assert_eq!(
-        resolved.source_path,
-        AbsolutePathBuf::try_from(repo_root.join("first")).unwrap()
+        resolved.source,
+        MarketplacePluginSource::Local {
+            path: AbsolutePathBuf::try_from(repo_root.join("first")).unwrap(),
+        }
     );
 }
 
@@ -1175,7 +1184,7 @@ fn resolve_marketplace_plugin_rejects_disallowed_product() {
     )
     .unwrap();
 
-    let err = resolve_marketplace_plugin(
+    let err = resolve_installable_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "chatgpt-plugin",
         Some(Product::Atlas),
@@ -1215,7 +1224,6 @@ fn resolve_marketplace_plugin_allows_missing_products_field() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "default-plugin",
-        Some(Product::Codex),
     )
     .unwrap();
 
@@ -1248,7 +1256,7 @@ fn resolve_marketplace_plugin_rejects_explicit_empty_products() {
     )
     .unwrap();
 
-    let err = resolve_marketplace_plugin(
+    let err = resolve_installable_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "disabled-plugin",
         Some(Product::Codex),

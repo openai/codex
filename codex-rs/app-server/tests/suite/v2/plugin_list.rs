@@ -34,6 +34,8 @@ use wiremock::matchers::query_param;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 const STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE: &str = ".tmp/app-server-remote-plugin-sync-v1";
+const ALTERNATE_MARKETPLACE_RELATIVE_PATH: &str = ".claude-plugin/marketplace.json";
+const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
 
 fn write_plugins_enabled_config(codex_home: &std::path::Path) -> std::io::Result<()> {
     std::fs::write(
@@ -42,6 +44,15 @@ fn write_plugins_enabled_config(codex_home: &std::path::Path) -> std::io::Result
 plugins = true
 "#,
     )
+}
+
+fn write_primary_plugin_manifest(
+    plugin_root: &std::path::Path,
+    plugin_name: &str,
+) -> std::io::Result<()> {
+    let manifest_path = plugin_root.join(".codex-plugin/plugin.json");
+    std::fs::create_dir_all(manifest_path.parent().expect("manifest parent"))?;
+    std::fs::write(manifest_path, format!(r#"{{"name":"{plugin_name}"}}"#))
 }
 
 #[tokio::test]
@@ -253,12 +264,23 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_skips_undiscoverab
     let repo_root = TempDir::new()?;
     let valid_plugin_root = repo_root.path().join("plugins/valid-plugin");
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
-    std::fs::create_dir_all(repo_root.path().join(".claude-plugin"))?;
-    std::fs::create_dir_all(valid_plugin_root.join(".claude-plugin"))?;
+    std::fs::create_dir_all(
+        repo_root
+            .path()
+            .join(ALTERNATE_MARKETPLACE_RELATIVE_PATH)
+            .parent()
+            .unwrap(),
+    )?;
+    std::fs::create_dir_all(
+        valid_plugin_root
+            .join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH)
+            .parent()
+            .unwrap(),
+    )?;
     write_plugins_enabled_config(codex_home.path())?;
 
     let marketplace_path =
-        AbsolutePathBuf::try_from(repo_root.path().join(".claude-plugin/marketplace.json"))?;
+        AbsolutePathBuf::try_from(repo_root.path().join(ALTERNATE_MARKETPLACE_RELATIVE_PATH))?;
     let valid_plugin_path = AbsolutePathBuf::try_from(valid_plugin_root.clone())?;
 
     std::fs::write(
@@ -278,7 +300,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_skips_undiscoverab
 }"#,
     )?;
     std::fs::write(
-        valid_plugin_root.join(".claude-plugin/plugin.json"),
+        valid_plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH),
         r#"{
   "name": "valid-plugin",
   "interface": {
@@ -404,8 +426,17 @@ async fn plugin_list_includes_install_and_enabled_state_from_config() -> Result<
     let repo_root = TempDir::new()?;
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(repo_root.path().join("enabled-plugin"))?;
+    std::fs::create_dir_all(repo_root.path().join("disabled-plugin"))?;
+    std::fs::create_dir_all(repo_root.path().join("uninstalled-plugin"))?;
     write_installed_plugin(&codex_home, "codex-curated", "enabled-plugin")?;
     write_installed_plugin(&codex_home, "codex-curated", "disabled-plugin")?;
+    write_primary_plugin_manifest(&repo_root.path().join("enabled-plugin"), "enabled-plugin")?;
+    write_primary_plugin_manifest(&repo_root.path().join("disabled-plugin"), "disabled-plugin")?;
+    write_primary_plugin_manifest(
+        &repo_root.path().join("uninstalled-plugin"),
+        "uninstalled-plugin",
+    )?;
     std::fs::write(
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -535,7 +566,9 @@ enabled = false
 async fn plugin_list_uses_home_config_for_enabled_state() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::create_dir_all(codex_home.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(codex_home.path().join("shared-plugin"))?;
     write_installed_plugin(&codex_home, "codex-curated", "shared-plugin")?;
+    write_primary_plugin_manifest(&codex_home.path().join("shared-plugin"), "shared-plugin")?;
     std::fs::write(
         codex_home.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -564,6 +597,11 @@ enabled = true
     let workspace_enabled = TempDir::new()?;
     std::fs::create_dir_all(workspace_enabled.path().join(".git"))?;
     std::fs::create_dir_all(workspace_enabled.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(workspace_enabled.path().join("shared-plugin"))?;
+    write_primary_plugin_manifest(
+        &workspace_enabled.path().join("shared-plugin"),
+        "shared-plugin",
+    )?;
     std::fs::write(
         workspace_enabled
             .path()

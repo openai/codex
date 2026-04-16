@@ -27,7 +27,6 @@ use codex_core_plugins::loader::refresh_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use codex_core_plugins::manifest::PluginManifestInterface;
-use codex_core_plugins::manifest::load_plugin_manifest;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplaceInterface;
 use codex_core_plugins::marketplace::MarketplaceListError;
@@ -37,6 +36,7 @@ use codex_core_plugins::marketplace::MarketplacePluginSource;
 use codex_core_plugins::marketplace::ResolvedMarketplacePlugin;
 use codex_core_plugins::marketplace::list_marketplaces;
 use codex_core_plugins::marketplace::load_marketplace;
+use codex_core_plugins::marketplace::resolve_installable_marketplace_plugin;
 use codex_core_plugins::marketplace::resolve_marketplace_plugin;
 use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
@@ -535,7 +535,7 @@ impl PluginsManager {
         &self,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let resolved = resolve_marketplace_plugin(
+        let resolved = resolve_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
@@ -549,7 +549,7 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let resolved = resolve_marketplace_plugin(
+        let resolved = resolve_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
@@ -572,7 +572,7 @@ impl PluginsManager {
         &self,
         resolved: ResolvedMarketplacePlugin,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let auth_policy = resolved.auth_policy;
+        let auth_policy = resolved.policy.authentication;
         let plugin_version =
             if resolved.plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
                 Some(
@@ -587,10 +587,11 @@ impl PluginsManager {
             };
         let store = self.store.clone();
         let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
+            let MarketplacePluginSource::Local { path: source_path } = resolved.source;
             if let Some(plugin_version) = plugin_version {
-                store.install_with_version(resolved.source_path, resolved.plugin_id, plugin_version)
+                store.install_with_version(source_path, resolved.plugin_id, plugin_version)
             } else {
-                store.install(resolved.source_path, resolved.plugin_id)
+                store.install(source_path, resolved.plugin_id)
             }
         })
         .await
@@ -978,72 +979,17 @@ impl PluginsManager {
             return Err(MarketplaceError::PluginsDisabled);
         }
 
-        let marketplace = load_marketplace(&request.marketplace_path)?;
-        let marketplace_name = marketplace.name.clone();
-        let plugin = marketplace
-            .plugins
-            .into_iter()
-            .find(|plugin| plugin.name == request.plugin_name);
-        let Some(plugin) = plugin else {
-            return Err(MarketplaceError::PluginNotFound {
-                plugin_name: request.plugin_name.clone(),
-                marketplace_name,
-            });
-        };
-        let plugin_id = PluginId::new(plugin.name.clone(), marketplace.name.clone()).map_err(
-            |err| match err {
-                PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
-            },
-        )?;
-        let plugin_key = plugin_id.as_key();
-        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let plugin = self
-            .read_plugin_detail_for_marketplace_plugin(
-                config,
-                &marketplace.name,
-                ConfiguredMarketplacePlugin {
-                    id: plugin_key.clone(),
-                    name: plugin.name,
-                    source: plugin.source,
-                    policy: plugin.policy,
-                    interface: plugin.interface,
-                    installed: installed_plugins.contains(&plugin_key),
-                    enabled: enabled_plugins.contains(&plugin_key),
-                },
-            )
-            .await?;
-
-        Ok(PluginReadOutcome {
-            marketplace_name: if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
-                OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()
-            } else {
-                marketplace.name
-            },
-            marketplace_path: marketplace.path,
-            plugin,
-        })
-    }
-
-    pub(crate) async fn read_plugin_detail_for_marketplace_plugin(
-        &self,
-        config: &Config,
-        marketplace_name: &str,
-        plugin: ConfiguredMarketplacePlugin,
-    ) -> Result<PluginDetail, MarketplaceError> {
+        let plugin = resolve_marketplace_plugin(&request.marketplace_path, &request.plugin_name)?;
         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
             return Err(MarketplaceError::PluginNotFound {
-                plugin_name: plugin.name,
-                marketplace_name: marketplace_name.to_string(),
+                plugin_name: plugin.plugin_id.plugin_name,
+                marketplace_name: plugin.plugin_id.marketplace_name,
             });
         }
 
-        let plugin_id =
-            PluginId::new(plugin.name.clone(), marketplace_name.to_string()).map_err(|err| {
-                match err {
-                    PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
-                }
-            })?;
-        let plugin_key = plugin_id.as_key();
+        let marketplace_name = plugin.plugin_id.marketplace_name.clone();
+        let plugin_key = plugin.plugin_id.as_key();
+        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let source_path = match &plugin.source {
             MarketplacePluginSource::Local { path } => path.clone(),
         };
@@ -1052,19 +998,17 @@ impl PluginsManager {
                 "path does not exist or is not a directory".to_string(),
             ));
         }
-        let manifest = load_plugin_manifest(source_path.as_path()).ok_or_else(|| {
+        let manifest = plugin.manifest.ok_or_else(|| {
             MarketplaceError::InvalidPlugin("missing or invalid plugin manifest".to_string())
         })?;
         let description = manifest.description.clone();
-        let manifest_paths = &manifest.paths;
-        let skill_config_rules = codex_core_skills::config_rules::skill_config_rules_from_stack(
-            &config.config_layer_stack,
-        );
         let resolved_skills = load_plugin_skills(
             &source_path,
-            manifest_paths,
+            &manifest.paths,
             self.restriction_product,
-            &skill_config_rules,
+            &codex_core_skills::config_rules::skill_config_rules_from_stack(
+                &config.config_layer_stack,
+            ),
         )
         .await;
         let apps = load_plugin_apps(source_path.as_path()).await;
@@ -1074,20 +1018,29 @@ impl PluginsManager {
             .collect::<Vec<_>>();
         mcp_server_names.sort_unstable();
         mcp_server_names.dedup();
-
-        Ok(PluginDetail {
-            id: plugin_key,
-            name: plugin.name,
+        let plugin = PluginDetail {
+            id: plugin_key.clone(),
+            name: plugin.plugin_id.plugin_name,
             description,
             source: plugin.source,
             policy: plugin.policy,
             interface: plugin.interface,
-            installed: plugin.installed,
-            enabled: plugin.enabled,
+            installed: installed_plugins.contains(&plugin_key),
+            enabled: enabled_plugins.contains(&plugin_key),
             skills: resolved_skills.skills,
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
             apps,
             mcp_server_names,
+        };
+
+        Ok(PluginReadOutcome {
+            marketplace_name: if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+                OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()
+            } else {
+                marketplace_name
+            },
+            marketplace_path: request.marketplace_path.clone(),
+            plugin,
         })
     }
 
