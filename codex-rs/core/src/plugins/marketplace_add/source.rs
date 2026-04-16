@@ -1,6 +1,6 @@
 use super::MarketplaceAddError;
-use crate::plugins::validate_marketplace_root;
 use crate::plugins::validate_plugin_segment;
+use codex_core_plugins::marketplace::validate_marketplace_root;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -126,7 +126,9 @@ fn normalize_git_url(url: &str) -> String {
 fn looks_like_local_path(source: &str) -> bool {
     Path::new(source).is_absolute()
         || source.starts_with("./")
+        || source.starts_with(".\\")
         || source.starts_with("../")
+        || source.starts_with("..\\")
         || source.starts_with("~/")
         || source == "."
         || source == ".."

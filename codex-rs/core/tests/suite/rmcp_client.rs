@@ -144,6 +144,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
+            experimental_environment: None,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,

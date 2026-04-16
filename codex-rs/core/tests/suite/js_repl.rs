@@ -622,6 +622,7 @@ async fn js_repl_can_invoke_mcp_tools_by_display_name() -> Result<()> {
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
