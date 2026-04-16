@@ -35,7 +35,7 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) -> 
 
 #[test]
 fn external_context_pollution_items_include_web_search_and_tool_search() {
-    let polluting_items = vec![
+    let polluting_items = [
         ResponseItem::WebSearchCall {
             id: None,
             status: Some("completed".to_string()),
@@ -65,7 +65,7 @@ fn external_context_pollution_items_include_web_search_and_tool_search() {
 
 #[test]
 fn external_context_pollution_items_exclude_local_tool_calls() {
-    let non_polluting_items = vec![
+    let non_polluting_items = [
         ResponseItem::LocalShellCall {
             id: None,
             call_id: Some("shell-1".to_string()),
