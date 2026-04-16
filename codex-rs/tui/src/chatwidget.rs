@@ -1084,8 +1084,11 @@ impl ThreadComposerState {
 pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
+    pending_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     rejected_steers_queue: VecDeque<UserMessage>,
+    rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     queued_user_messages: VecDeque<UserMessage>,
+    queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -1281,6 +1284,34 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
     }
 
     combined
+}
+
+fn user_message_for_restore(
+    message: UserMessage,
+    history_record: &UserMessageHistoryRecord,
+) -> UserMessage {
+    match history_record {
+        UserMessageHistoryRecord::Override(history_text) if !history_text.is_empty() => {
+            history_text.clone().into()
+        }
+        UserMessageHistoryRecord::Override(_) | UserMessageHistoryRecord::UserMessageText => {
+            message
+        }
+    }
+}
+
+fn user_message_preview_text(
+    message: &UserMessage,
+    history_record: Option<&UserMessageHistoryRecord>,
+) -> String {
+    match history_record {
+        Some(UserMessageHistoryRecord::Override(history_text)) if !history_text.is_empty() => {
+            history_text.clone()
+        }
+        Some(UserMessageHistoryRecord::Override(_))
+        | Some(UserMessageHistoryRecord::UserMessageText)
+        | None => message.text.clone(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2606,11 +2637,18 @@ impl ChatWidget {
 
     fn pop_latest_queued_user_message(&mut self) -> Option<UserMessage> {
         if let Some(user_message) = self.queued_user_messages.pop_back() {
-            self.queued_user_message_history_records.pop_back();
-            Some(user_message)
+            let history_record = self
+                .queued_user_message_history_records
+                .pop_back()
+                .unwrap_or(UserMessageHistoryRecord::UserMessageText);
+            Some(user_message_for_restore(user_message, &history_record))
         } else {
-            self.rejected_steer_history_records.pop_back();
-            self.rejected_steers_queue.pop_back()
+            let user_message = self.rejected_steers_queue.pop_back()?;
+            let history_record = self
+                .rejected_steer_history_records
+                .pop_back()
+                .unwrap_or(UserMessageHistoryRecord::UserMessageText);
+            Some(user_message_for_restore(user_message, &history_record))
         }
     }
 
@@ -3280,15 +3318,40 @@ impl ChatWidget {
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
-        let mut to_merge: Vec<UserMessage> = self.rejected_steers_queue.drain(..).collect();
-        self.rejected_steer_history_records.clear();
+        let rejected_messages = self.rejected_steers_queue.drain(..).collect::<Vec<_>>();
+        let mut rejected_history_records = self
+            .rejected_steer_history_records
+            .drain(..)
+            .collect::<Vec<_>>();
+        rejected_history_records.resize(
+            rejected_messages.len(),
+            UserMessageHistoryRecord::UserMessageText,
+        );
+        let mut to_merge: Vec<UserMessage> = rejected_messages
+            .into_iter()
+            .zip(rejected_history_records.iter())
+            .map(|(message, history_record)| user_message_for_restore(message, history_record))
+            .collect();
         to_merge.extend(
             self.pending_steers
                 .drain(..)
-                .map(|steer| steer.user_message),
+                .map(|steer| user_message_for_restore(steer.user_message, &steer.history_record)),
         );
-        to_merge.extend(self.queued_user_messages.drain(..));
-        self.queued_user_message_history_records.clear();
+        let queued_messages = self.queued_user_messages.drain(..).collect::<Vec<_>>();
+        let mut queued_history_records = self
+            .queued_user_message_history_records
+            .drain(..)
+            .collect::<Vec<_>>();
+        queued_history_records.resize(
+            queued_messages.len(),
+            UserMessageHistoryRecord::UserMessageText,
+        );
+        to_merge.extend(
+            queued_messages
+                .into_iter()
+                .zip(queued_history_records.iter())
+                .map(|(message, history_record)| user_message_for_restore(message, history_record)),
+        );
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty()
@@ -3333,8 +3396,15 @@ impl ChatWidget {
                 .iter()
                 .map(|pending| pending.user_message.clone())
                 .collect(),
+            pending_steer_history_records: self
+                .pending_steers
+                .iter()
+                .map(|pending| pending.history_record.clone())
+                .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
+            rejected_steer_history_records: self.rejected_steer_history_records.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
+            queued_user_message_history_records: self.queued_user_message_history_records.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3375,27 +3445,38 @@ impl ChatWidget {
                 );
                 self.bottom_pane.set_composer_pending_pastes(Vec::new());
             }
+            let mut pending_steer_history_records = input_state.pending_steer_history_records;
+            pending_steer_history_records.resize(
+                input_state.pending_steers.len(),
+                UserMessageHistoryRecord::UserMessageText,
+            );
             self.pending_steers = input_state
                 .pending_steers
                 .into_iter()
-                .map(|user_message| PendingSteer {
+                .zip(pending_steer_history_records)
+                .map(|(user_message, history_record)| PendingSteer {
                     compare_key: PendingSteerCompareKey {
                         message: user_message.text.clone(),
                         image_count: user_message.local_images.len()
                             + user_message.remote_image_urls.len(),
                     },
-                    history_record: UserMessageHistoryRecord::UserMessageText,
+                    history_record,
                     user_message,
                 })
                 .collect();
             self.rejected_steers_queue = input_state.rejected_steers_queue;
-            self.rejected_steer_history_records =
-                vec![UserMessageHistoryRecord::UserMessageText; self.rejected_steers_queue.len()]
-                    .into();
+            self.rejected_steer_history_records = input_state.rejected_steer_history_records;
+            self.rejected_steer_history_records.resize(
+                self.rejected_steers_queue.len(),
+                UserMessageHistoryRecord::UserMessageText,
+            );
             self.queued_user_messages = input_state.queued_user_messages;
             self.queued_user_message_history_records =
-                vec![UserMessageHistoryRecord::UserMessageText; self.queued_user_messages.len()]
-                    .into();
+                input_state.queued_user_message_history_records;
+            self.queued_user_message_history_records.resize(
+                self.queued_user_messages.len(),
+                UserMessageHistoryRecord::UserMessageText,
+            );
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
@@ -7269,17 +7350,28 @@ impl ChatWidget {
         let queued_messages: Vec<String> = self
             .queued_user_messages
             .iter()
-            .map(|m| m.text.clone())
+            .enumerate()
+            .map(|(idx, message)| {
+                user_message_preview_text(
+                    message,
+                    self.queued_user_message_history_records.get(idx),
+                )
+            })
             .collect();
         let pending_steers: Vec<String> = self
             .pending_steers
             .iter()
-            .map(|steer| steer.user_message.text.clone())
+            .map(|steer| {
+                user_message_preview_text(&steer.user_message, Some(&steer.history_record))
+            })
             .collect();
         let rejected_steers: Vec<String> = self
             .rejected_steers_queue
             .iter()
-            .map(|message| message.text.clone())
+            .enumerate()
+            .map(|(idx, message)| {
+                user_message_preview_text(message, self.rejected_steer_history_records.get(idx))
+            })
             .collect();
         self.bottom_pane.set_pending_input_preview(
             queued_messages,

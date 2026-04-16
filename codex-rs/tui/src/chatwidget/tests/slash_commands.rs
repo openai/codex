@@ -213,6 +213,39 @@ async fn queued_goal_slash_command_records_original_command_in_history() {
 }
 
 #[tokio::test]
+async fn restored_queued_goal_slash_command_records_original_command_in_history() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    let command = "/goal write a cat poem";
+
+    submit_composer_text(&mut chat, command);
+    let input_state = chat
+        .capture_thread_input_state()
+        .expect("expected queued input state");
+
+    let (mut restored_chat, _restored_rx, mut restored_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    restored_chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    restored_chat.restore_thread_input_state(Some(input_state));
+    restored_chat.thread_id = Some(ThreadId::new());
+    restored_chat.maybe_send_next_queued_input();
+
+    match next_submit_op(&mut restored_op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut restored_op_rx), command);
+}
+
+#[tokio::test]
 async fn rejected_goal_slash_command_retry_records_original_command_in_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
@@ -276,6 +309,51 @@ async fn rejected_goal_slash_command_retry_records_original_command_in_history()
         other => panic!("expected retried user turn, got {other:?}"),
     }
     assert_eq!(next_add_to_history_op(&mut op_rx), command);
+}
+
+#[tokio::test]
+async fn interrupted_goal_slash_command_restores_original_command_to_composer() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    let command = "/goal write a cat poem";
+
+    submit_composer_text(&mut chat, command);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut op_rx), command);
+
+    chat.handle_codex_event(Event {
+        id: "turn-aborted".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    assert_eq!(chat.bottom_pane.composer_text(), command);
 }
 
 #[tokio::test]
