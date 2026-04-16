@@ -2542,6 +2542,7 @@ impl CodexMessageProcessor {
                 service_name,
                 request_trace,
                 environment_id,
+                requested_cwd,
             )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",

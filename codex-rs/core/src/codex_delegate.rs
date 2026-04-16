@@ -83,6 +83,7 @@ pub(crate) async fn run_codex_thread_interactive(
             parent_ctx.environment.as_deref(),
         )),
         environment_id: None,
+        requested_cwd: None,
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),

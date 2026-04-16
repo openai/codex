@@ -1,3 +1,5 @@
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::OnceCell;
@@ -14,6 +16,7 @@ use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
+pub const CODEX_EXEC_SERVER_CWD_ENV_VAR: &str = "CODEX_EXEC_SERVER_CWD";
 
 const LOCAL_ENVIRONMENT_ID: &str = "local";
 const REMOTE_ENVIRONMENT_ID: &str = "remote";
@@ -24,13 +27,21 @@ enum ExplicitEnvironmentId {
     Remote,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EnvironmentConfig {
+    exec_server_url: Option<String>,
+    default_cwd: Option<PathBuf>,
+}
+
 /// Lazily creates and caches the active environment for a session.
 ///
 /// The manager keeps the session's environment selection stable so subagents
 /// and follow-up turns preserve an explicit disabled state.
 #[derive(Debug)]
 pub struct EnvironmentManager {
-    exec_server_url: Option<String>,
+    current_environment_config: Option<EnvironmentConfig>,
+    local_environment_config: Option<EnvironmentConfig>,
+    remote_environment_config: Option<EnvironmentConfig>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
     disabled: bool,
     current_environment: OnceCell<Option<Arc<Environment>>>,
@@ -47,18 +58,43 @@ impl Default for EnvironmentManager {
 impl EnvironmentManager {
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value.
     pub fn new(exec_server_url: Option<String>) -> Self {
-        Self::new_with_runtime_paths(exec_server_url, /*local_runtime_paths*/ None)
+        Self::new_with_runtime_paths(
+            exec_server_url,
+            /*exec_server_cwd*/ None,
+            /*local_runtime_paths*/ None,
+        )
     }
 
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value and local
     /// runtime paths used when creating local filesystem helpers.
     pub fn new_with_runtime_paths(
         exec_server_url: Option<String>,
+        exec_server_cwd: Option<PathBuf>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
         let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
+        let local_environment_config = (!disabled).then_some(EnvironmentConfig {
+            exec_server_url: None,
+            default_cwd: None,
+        });
+        let remote_environment_config =
+            exec_server_url
+                .clone()
+                .map(|exec_server_url| EnvironmentConfig {
+                    exec_server_url: Some(exec_server_url),
+                    default_cwd: exec_server_cwd,
+                });
+        let current_environment_config = if disabled {
+            None
+        } else if remote_environment_config.is_some() {
+            remote_environment_config.clone()
+        } else {
+            local_environment_config.clone()
+        };
         Self {
-            exec_server_url,
+            current_environment_config,
+            local_environment_config,
+            remote_environment_config,
             local_runtime_paths,
             disabled,
             current_environment: OnceCell::new(),
@@ -79,6 +115,9 @@ impl EnvironmentManager {
     ) -> Self {
         Self::new_with_runtime_paths(
             std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
+            std::env::var(CODEX_EXEC_SERVER_CWD_ENV_VAR)
+                .ok()
+                .map(PathBuf::from),
             local_runtime_paths,
         )
     }
@@ -88,7 +127,20 @@ impl EnvironmentManager {
     pub fn from_environment(environment: Option<&Environment>) -> Self {
         match environment {
             Some(environment) => Self {
-                exec_server_url: environment.exec_server_url().map(str::to_owned),
+                current_environment_config: Some(EnvironmentConfig {
+                    exec_server_url: environment.exec_server_url().map(str::to_owned),
+                    default_cwd: environment.default_cwd().map(PathBuf::from),
+                }),
+                local_environment_config: Some(EnvironmentConfig {
+                    exec_server_url: None,
+                    default_cwd: None,
+                }),
+                remote_environment_config: environment.exec_server_url().map(|exec_server_url| {
+                    EnvironmentConfig {
+                        exec_server_url: Some(exec_server_url.to_owned()),
+                        default_cwd: environment.default_cwd().map(PathBuf::from),
+                    }
+                }),
                 local_runtime_paths: environment.local_runtime_paths().cloned(),
                 disabled: false,
                 current_environment: OnceCell::new(),
@@ -96,7 +148,9 @@ impl EnvironmentManager {
                 remote_environment: OnceCell::new(),
             },
             None => Self {
-                exec_server_url: None,
+                current_environment_config: None,
+                local_environment_config: None,
+                remote_environment_config: None,
                 local_runtime_paths: None,
                 disabled: true,
                 current_environment: OnceCell::new(),
@@ -108,12 +162,14 @@ impl EnvironmentManager {
 
     /// Returns the remote exec-server URL when one is configured.
     pub fn exec_server_url(&self) -> Option<&str> {
-        self.exec_server_url.as_deref()
+        self.current_environment_config
+            .as_ref()
+            .and_then(|config| config.exec_server_url.as_deref())
     }
 
     /// Returns true when this manager is configured to use a remote exec server.
     pub fn is_remote(&self) -> bool {
-        self.exec_server_url.is_some()
+        self.exec_server_url().is_some()
     }
 
     /// Returns the cached environment, creating it on first access.
@@ -123,9 +179,12 @@ impl EnvironmentManager {
                 if self.disabled {
                     Ok(None)
                 } else {
+                    let Some(environment_config) = self.current_environment_config.clone() else {
+                        return Ok(None);
+                    };
                     Ok(Some(Arc::new(
-                        Environment::create_with_runtime_paths(
-                            self.exec_server_url.clone(),
+                        Environment::create_with_config(
+                            environment_config,
                             self.local_runtime_paths.clone(),
                         )
                         .await?,
@@ -154,11 +213,16 @@ impl EnvironmentManager {
                 "environments are disabled for this session".to_string(),
             ));
         }
+        let Some(environment_config) = self.local_environment_config.clone() else {
+            return Err(ExecServerError::Protocol(
+                "local environment is not configured".to_string(),
+            ));
+        };
 
         self.local_environment
             .get_or_try_init(|| async {
-                Environment::create_with_runtime_paths(
-                    /*exec_server_url*/ None,
+                Environment::create_with_config(
+                    environment_config,
                     self.local_runtime_paths.clone(),
                 )
                 .await
@@ -174,7 +238,7 @@ impl EnvironmentManager {
                 "environments are disabled for this session".to_string(),
             ));
         }
-        let Some(exec_server_url) = &self.exec_server_url else {
+        let Some(environment_config) = self.remote_environment_config.clone() else {
             return Err(ExecServerError::Protocol(
                 "remote environment is not configured".to_string(),
             ));
@@ -182,8 +246,8 @@ impl EnvironmentManager {
 
         self.remote_environment
             .get_or_try_init(|| async {
-                Environment::create_with_runtime_paths(
-                    Some(exec_server_url.clone()),
+                Environment::create_with_config(
+                    environment_config,
                     self.local_runtime_paths.clone(),
                 )
                 .await
@@ -201,6 +265,7 @@ impl EnvironmentManager {
 #[derive(Clone)]
 pub struct Environment {
     exec_server_url: Option<String>,
+    default_cwd: Option<PathBuf>,
     remote_exec_server_client: Option<ExecServerClient>,
     exec_backend: Arc<dyn ExecBackend>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
@@ -210,6 +275,7 @@ impl Default for Environment {
     fn default() -> Self {
         Self {
             exec_server_url: None,
+            default_cwd: None,
             remote_exec_server_client: None,
             exec_backend: Arc::new(LocalProcess::default()),
             local_runtime_paths: None,
@@ -237,7 +303,22 @@ impl Environment {
         exec_server_url: Option<String>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
-        let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
+        Self::create_with_config(
+            EnvironmentConfig {
+                exec_server_url,
+                default_cwd: None,
+            },
+            local_runtime_paths,
+        )
+        .await
+    }
+
+    async fn create_with_config(
+        environment_config: EnvironmentConfig,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> Result<Self, ExecServerError> {
+        let (exec_server_url, disabled) =
+            normalize_exec_server_url(environment_config.exec_server_url);
         if disabled {
             return Err(ExecServerError::Protocol(
                 "disabled mode does not create an Environment".to_string(),
@@ -268,6 +349,7 @@ impl Environment {
 
         Ok(Self {
             exec_server_url,
+            default_cwd: environment_config.default_cwd,
             remote_exec_server_client,
             exec_backend,
             local_runtime_paths,
@@ -285,6 +367,10 @@ impl Environment {
 
     pub fn local_runtime_paths(&self) -> Option<&ExecServerRuntimePaths> {
         self.local_runtime_paths.as_ref()
+    }
+
+    pub fn default_cwd(&self) -> Option<&Path> {
+        self.default_cwd.as_deref()
     }
 
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
@@ -372,6 +458,23 @@ mod tests {
         assert_eq!(manager.exec_server_url(), Some("ws://127.0.0.1:8765"));
     }
 
+    #[test]
+    fn environment_manager_carries_remote_default_cwd() {
+        let manager = EnvironmentManager::new_with_runtime_paths(
+            Some("ws://127.0.0.1:8765".to_string()),
+            Some(PathBuf::from("/tmp/devbox")),
+            /*local_runtime_paths*/ None,
+        );
+
+        assert_eq!(
+            manager
+                .remote_environment_config
+                .as_ref()
+                .and_then(|config| config.default_cwd.as_deref()),
+            Some(Path::new("/tmp/devbox"))
+        );
+    }
+
     #[tokio::test]
     async fn environment_manager_current_caches_environment() {
         let manager = EnvironmentManager::new(/*exec_server_url*/ None);
@@ -407,6 +510,31 @@ mod tests {
         assert_eq!(
             EnvironmentManager::from_environment(Some(&environment)).local_runtime_paths,
             Some(runtime_paths)
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_manager_preserves_default_cwd_from_environment() {
+        let environment = Environment::create_with_config(
+            EnvironmentConfig {
+                exec_server_url: None,
+                default_cwd: Some(PathBuf::from("/tmp/session")),
+            },
+            /*local_runtime_paths*/ None,
+        )
+        .await
+        .expect("create environment");
+
+        let manager = EnvironmentManager::from_environment(Some(&environment));
+
+        assert_eq!(
+            manager
+                .current()
+                .await
+                .expect("get current environment")
+                .expect("local environment")
+                .default_cwd(),
+            Some(Path::new("/tmp/session"))
         );
     }
 

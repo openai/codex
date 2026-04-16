@@ -431,6 +431,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) environment_id: Option<String>,
+    pub(crate) requested_cwd: Option<PathBuf>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
@@ -485,6 +486,7 @@ impl Codex {
             models_manager,
             environment_manager,
             environment_id,
+            requested_cwd,
             skills_manager,
             plugins_manager,
             mcp_manager,
@@ -508,6 +510,20 @@ impl Codex {
             .environment(environment_id.as_deref())
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        if requested_cwd.is_none()
+            && let Some(default_cwd) = environment
+                .as_ref()
+                .and_then(|environment| environment.default_cwd())
+        {
+            config.cwd =
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(default_cwd)
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!(
+                            "failed to resolve environment default cwd {}: {err}",
+                            default_cwd.display()
+                        ))
+                    })?;
+        }
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
