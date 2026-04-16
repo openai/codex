@@ -7,41 +7,52 @@ use reqwest::header::HeaderValue;
 
 use crate::chatgpt_hosts::is_allowed_chatgpt_host;
 
-static SHARED_CHATGPT_COOKIE_STORE: LazyLock<Arc<ChatGptCookieStore>> =
-    LazyLock::new(|| Arc::new(ChatGptCookieStore::default()));
+// WARNING: this store is process-global and may be shared across auth contexts.
+// It must only ever contain Cloudflare infrastructure cookies. Never extend this
+// store to persist ChatGPT account, session, auth, or other user-specific cookie
+// data.
+static SHARED_CHATGPT_CLOUDFLARE_COOKIE_STORE: LazyLock<Arc<ChatGptCloudflareCookieStore>> =
+    LazyLock::new(|| Arc::new(ChatGptCloudflareCookieStore::default()));
 
 #[derive(Debug, Default)]
-struct ChatGptCookieStore {
+struct ChatGptCloudflareCookieStore {
     jar: Jar,
 }
 
-impl CookieStore for ChatGptCookieStore {
+impl CookieStore for ChatGptCloudflareCookieStore {
     fn set_cookies(
         &self,
         cookie_headers: &mut dyn Iterator<Item = &HeaderValue>,
         url: &reqwest::Url,
     ) {
-        if is_chatgpt_cookie_url(url) {
-            self.jar.set_cookies(cookie_headers, url);
+        if !is_chatgpt_cookie_url(url) {
+            return;
         }
+
+        let mut cloudflare_cookie_headers =
+            cookie_headers.filter(|header| is_allowed_cloudflare_set_cookie_header(header));
+        self.jar.set_cookies(&mut cloudflare_cookie_headers, url);
     }
 
     fn cookies(&self, url: &reqwest::Url) -> Option<HeaderValue> {
         if is_chatgpt_cookie_url(url) {
-            self.jar.cookies(url)
+            self.jar.cookies(url).and_then(only_cloudflare_cookies)
         } else {
             None
         }
     }
 }
 
-/// Adds the process-local ChatGPT cookie jar used by Codex HTTP clients.
+/// Adds the process-local ChatGPT Cloudflare cookie jar used by Codex HTTP clients.
 ///
-/// The jar is intentionally not persisted to disk. It only preserves cookies for ChatGPT backend
-/// hosts so Cloudflare visitor cookies can be replayed across freshly built HTTP clients without
-/// broadening cookie handling for arbitrary third-party hosts.
-pub fn with_chatgpt_cookie_store(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
-    builder.cookie_provider(Arc::clone(&SHARED_CHATGPT_COOKIE_STORE))
+/// WARNING: this jar is global within the process. It is only acceptable because it hardcodes a
+/// small allowlist of Cloudflare cookie names and refuses all other ChatGPT cookies. Do not store
+/// ChatGPT account, session, auth, or other user-specific cookies here. If a future caller needs
+/// those cookies, the store must be scoped to the auth/session owner instead of shared globally.
+pub fn with_chatgpt_cloudflare_cookie_store(
+    builder: reqwest::ClientBuilder,
+) -> reqwest::ClientBuilder {
+    builder.cookie_provider(Arc::clone(&SHARED_CHATGPT_CLOUDFLARE_COOKIE_STORE))
 }
 
 fn is_chatgpt_cookie_url(url: &reqwest::Url) -> bool {
@@ -57,6 +68,54 @@ fn is_chatgpt_cookie_url(url: &reqwest::Url) -> bool {
     is_allowed_chatgpt_host(host)
 }
 
+fn is_allowed_cloudflare_set_cookie_header(header: &HeaderValue) -> bool {
+    header
+        .to_str()
+        .ok()
+        .and_then(set_cookie_name)
+        .is_some_and(is_allowed_cloudflare_cookie_name)
+}
+
+fn set_cookie_name(header: &str) -> Option<&str> {
+    let (name, _) = header.split_once('=')?;
+    let name = name.trim();
+    (!name.is_empty()).then_some(name)
+}
+
+fn only_cloudflare_cookies(header: HeaderValue) -> Option<HeaderValue> {
+    let header = header.to_str().ok()?;
+    let cookies = header
+        .split(';')
+        .filter_map(|cookie| {
+            let cookie = cookie.trim();
+            let name = cookie.split_once('=')?.0.trim();
+            is_allowed_cloudflare_cookie_name(name).then_some(cookie)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    if cookies.is_empty() {
+        None
+    } else {
+        HeaderValue::from_str(&cookies).ok()
+    }
+}
+
+fn is_allowed_cloudflare_cookie_name(name: &str) -> bool {
+    matches!(
+        name,
+        "__cf_bm"
+            | "__cflb"
+            | "__cfruid"
+            | "__cfseq"
+            | "__cfwaitingroom"
+            | "_cfuvid"
+            | "cf_clearance"
+            | "cf_ob_info"
+            | "cf_use_ob"
+    ) || name.starts_with("cf_chl_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,12 +123,56 @@ mod tests {
     use reqwest::cookie::CookieStore;
 
     #[test]
-    fn stores_and_returns_chatgpt_cookies() {
-        let store = ChatGptCookieStore::default();
+    fn stores_and_returns_cloudflare_cookies_for_chatgpt_hosts() {
+        let store = ChatGptCloudflareCookieStore::default();
         let url = reqwest::Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+        let cfuvid = HeaderValue::from_static("_cfuvid=visitor; Path=/; Secure; HttpOnly");
+        let clearance =
+            HeaderValue::from_static("cf_clearance=clearance; Path=/; Secure; HttpOnly");
+
+        store.set_cookies(&mut [&cfuvid, &clearance].into_iter(), &url);
+
+        assert_eq!(
+            store
+                .cookies(&url)
+                .and_then(|value| value.to_str().ok().map(str::to_string)),
+            Some("_cfuvid=visitor; cf_clearance=clearance".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_non_chatgpt_cookies() {
+        let store = ChatGptCloudflareCookieStore::default();
+        let url = reqwest::Url::parse("https://api.openai.com/v1/responses").unwrap();
         let set_cookie = HeaderValue::from_static("_cfuvid=visitor; Path=/; Secure; HttpOnly");
 
         store.set_cookies(&mut std::iter::once(&set_cookie), &url);
+
+        assert_eq!(store.cookies(&url), None);
+    }
+
+    #[test]
+    fn ignores_non_cloudflare_cookies_for_chatgpt_hosts() {
+        let store = ChatGptCloudflareCookieStore::default();
+        let url = reqwest::Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+        let set_cookie = HeaderValue::from_static(
+            "__Secure-next-auth.session-token=secret; Path=/; Secure; HttpOnly",
+        );
+
+        store.set_cookies(&mut std::iter::once(&set_cookie), &url);
+
+        assert_eq!(store.cookies(&url), None);
+    }
+
+    #[test]
+    fn ignores_mixed_non_cloudflare_cookies_for_chatgpt_hosts() {
+        let store = ChatGptCloudflareCookieStore::default();
+        let url = reqwest::Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
+        let cfuvid = HeaderValue::from_static("_cfuvid=visitor; Path=/; Secure; HttpOnly");
+        let account_cookie =
+            HeaderValue::from_static("chatgpt_session=secret; Path=/; Secure; HttpOnly");
+
+        store.set_cookies(&mut [&cfuvid, &account_cookie].into_iter(), &url);
 
         assert_eq!(
             store
@@ -80,19 +183,8 @@ mod tests {
     }
 
     #[test]
-    fn ignores_non_chatgpt_cookies() {
-        let store = ChatGptCookieStore::default();
-        let url = reqwest::Url::parse("https://api.openai.com/v1/responses").unwrap();
-        let set_cookie = HeaderValue::from_static("_cfuvid=visitor; Path=/; Secure; HttpOnly");
-
-        store.set_cookies(&mut std::iter::once(&set_cookie), &url);
-
-        assert_eq!(store.cookies(&url), None);
-    }
-
-    #[test]
-    fn does_not_return_chatgpt_cookies_for_other_hosts() {
-        let store = ChatGptCookieStore::default();
+    fn does_not_return_chatgpt_cloudflare_cookies_for_other_hosts() {
+        let store = ChatGptCloudflareCookieStore::default();
         let chatgpt_url =
             reqwest::Url::parse("https://chatgpt.com/backend-api/codex/responses").unwrap();
         let api_url = reqwest::Url::parse("https://api.openai.com/v1/responses").unwrap();
@@ -108,5 +200,32 @@ mod tests {
         let url = reqwest::Url::parse("wss://chatgpt.com/backend-api/codex/responses").unwrap();
 
         assert!(!is_chatgpt_cookie_url(&url));
+    }
+
+    #[test]
+    fn allows_only_known_cloudflare_cookie_names() {
+        for name in [
+            "__cf_bm",
+            "__cflb",
+            "__cfruid",
+            "__cfseq",
+            "__cfwaitingroom",
+            "_cfuvid",
+            "cf_clearance",
+            "cf_ob_info",
+            "cf_use_ob",
+            "cf_chl_rc_i",
+        ] {
+            assert!(is_allowed_cloudflare_cookie_name(name));
+        }
+
+        for name in [
+            "__Secure-next-auth.session-token",
+            "chatgpt_session",
+            "oai-auth-token",
+            "not_cf_clearance",
+        ] {
+            assert!(!is_allowed_cloudflare_cookie_name(name));
+        }
     }
 }

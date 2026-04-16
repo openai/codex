@@ -6,7 +6,7 @@ use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_client::build_reqwest_client_with_custom_ca;
-use codex_client::with_chatgpt_cookie_store;
+use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -138,7 +138,7 @@ impl Client {
         {
             base_url = format!("{base_url}/backend-api");
         }
-        let http = build_reqwest_client_with_custom_ca(with_chatgpt_cookie_store(
+        let http = build_reqwest_client_with_custom_ca(with_chatgpt_cloudflare_cookie_store(
             reqwest::Client::builder(),
         ))?;
         let path_style = PathStyle::from_base_url(&base_url);
