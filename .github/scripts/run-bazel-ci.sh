@@ -75,12 +75,19 @@ print_bazel_test_log_tails() {
     bazel_info_cmd+=("${bazel_startup_args[@]}")
   fi
 
+  # `bazel info` needs the same CI config as the failed test invocation so
+  # platform-specific output roots match. On Windows, omitting `ci-windows`
+  # would point at `local_windows-fastbuild` even when the test ran with the
+  # MSVC host platform under `local_windows_msvc-fastbuild`.
   if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
     bazel_info_args+=(
       "--config=${ci_config}"
       "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
     )
   fi
+  # Only pass flags that affect Bazel's output-root selection or repository
+  # lookup. Test/build-only flags such as execution logs or remote download
+  # mode can make `bazel info` fail, which would hide the real test log path.
   for arg in "${post_config_bazel_args[@]}"; do
     case "$arg" in
       --host_platform=* | --repo_contents_cache=* | --repository_cache=*)
