@@ -6696,13 +6696,16 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::InvalidImageRequest()) => {
-                let mut state = sess.state.lock().await;
-                error_or_panic(
-                    "Invalid image detected; sanitizing tool output to prevent poisoning",
-                );
-                if state.history.replace_last_turn_images("Invalid image") {
-                    continue;
+                {
+                    let mut state = sess.state.lock().await;
+                    error_or_panic(
+                        "Invalid image detected; sanitizing tool output to prevent poisoning",
+                    );
+                    if state.history.replace_last_turn_images("Invalid image") {
+                        continue;
+                    }
                 }
+
                 let event = EventMsg::Error(ErrorEvent {
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
