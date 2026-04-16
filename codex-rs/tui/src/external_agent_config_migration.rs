@@ -174,7 +174,7 @@ impl ExternalAgentConfigMigrationScreen {
         }
 
         if let Some(reformatted) =
-            reformat_description(&item.description, "Copy skill folders from ", " to ", cwd)
+            reformat_description(&item.description, "Migrate skills from ", " to ", cwd)
         {
             return reformatted;
         }

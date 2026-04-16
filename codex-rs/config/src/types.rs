@@ -584,9 +584,14 @@ const fn default_true() -> bool {
 pub struct ExternalConfigMigrationPrompts {
     /// Tracks whether home-level external config migration prompts are hidden.
     pub home: Option<bool>,
+    /// Tracks the last time the home-level external config migration prompt was shown.
+    pub home_last_prompted_at: Option<i64>,
     /// Tracks which project paths have opted out of external config migration prompts.
     #[serde(default)]
     pub projects: BTreeMap<String, bool>,
+    /// Tracks the last time a project-level external config migration prompt was shown.
+    #[serde(default)]
+    pub project_last_prompted_at: BTreeMap<String, i64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]

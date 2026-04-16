@@ -5,7 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum MarketplaceSource {
+pub(crate) enum MarketplaceSource {
     Git {
         url: String,
         ref_name: Option<String>,
@@ -15,7 +15,7 @@ pub(super) enum MarketplaceSource {
     },
 }
 
-pub(super) fn parse_marketplace_source(
+pub(crate) fn parse_marketplace_source(
     source: &str,
     explicit_ref: Option<String>,
 ) -> Result<MarketplaceSource, MarketplaceAddError> {

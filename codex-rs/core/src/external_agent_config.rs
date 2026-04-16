@@ -1,13 +1,16 @@
 use crate::plugins::MarketplaceAddRequest;
+use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::PluginId;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::PluginsManager;
 use crate::plugins::add_marketplace;
-<<<<<<< HEAD
-use crate::plugins::validate_marketplace_add_source;
-use codex_utils_absolute_path::AbsolutePathBuf;
-=======
->>>>>>> main
+use crate::plugins::find_marketplace_manifest_path;
+use crate::plugins::load_marketplace;
+use crate::plugins::marketplace_install_root;
+use crate::plugins::parse_marketplace_source;
+use crate::plugins::resolve_configured_marketplace_root;
+use crate::plugins::validate_plugin_segment;
+use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
@@ -20,8 +23,6 @@ use toml::Value as TomlValue;
 
 const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.detect";
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
-// Installed marketplace roots always expose their manifest at this relative path.
-const INSTALLED_MARKETPLACE_MANIFEST_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {
@@ -167,8 +168,8 @@ impl ExternalAgentConfigService {
         repo_root: Option<&Path>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<()> {
-        let configured_enabled_plugins =
-            configured_enabled_plugin_ids(&self.codex_home, repo_root)?;
+        let configured_plugin_ids = configured_plugin_ids(&self.codex_home)?;
+        let configured_marketplace_plugins = configured_marketplace_plugins(&self.codex_home)?;
         let cwd = repo_root.map(Path::to_path_buf);
         let source_settings = repo_root.map_or_else(
             || self.external_agent_home.join("settings.json"),
@@ -219,7 +220,8 @@ impl ExternalAgentConfigService {
             source_settings.as_path(),
             cwd.clone(),
             settings.as_ref(),
-            &configured_enabled_plugins,
+            &configured_plugin_ids,
+            &configured_marketplace_plugins,
             items,
         );
 
@@ -236,7 +238,7 @@ impl ExternalAgentConfigService {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: format!(
-                    "Copy skill folders from {} to {}",
+                    "Migrate skills from {} to {}",
                     source_skills.display(),
                     target_skills.display()
                 ),
@@ -295,11 +297,16 @@ impl ExternalAgentConfigService {
         source_settings: &Path,
         cwd: Option<PathBuf>,
         settings: Option<&JsonValue>,
-        configured_enabled_plugins: &HashSet<String>,
+        configured_plugin_ids: &HashSet<String>,
+        configured_marketplace_plugins: &BTreeMap<String, HashSet<String>>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) {
         let Some(plugin_details) = settings.and_then(|settings| {
-            extract_plugin_migration_details(settings, configured_enabled_plugins)
+            extract_plugin_migration_details(
+                settings,
+                configured_plugin_ids,
+                configured_marketplace_plugins,
+            )
         }) else {
             return;
         };
@@ -336,8 +343,13 @@ impl ExternalAgentConfigService {
                 .iter()
                 .map(|plugin_name| format!("{plugin_name}@{marketplace_name}"))
                 .collect::<Vec<_>>();
-            let import_source =
-                read_marketplace_import_source(cwd, &self.external_agent_home, &marketplace_name)?;
+            let source_settings = cwd.map_or_else(
+                || self.external_agent_home.join("settings.json"),
+                |cwd| cwd.join(".claude").join("settings.json"),
+            );
+            let import_source = read_external_settings(&source_settings)?.and_then(|settings| {
+                collect_marketplace_import_sources(&settings).remove(&marketplace_name)
+            });
             let Some(import_source) = import_source else {
                 outcome.failed_marketplaces.push(marketplace_name);
                 outcome.failed_plugin_ids.extend(plugin_ids);
@@ -351,12 +363,17 @@ impl ExternalAgentConfigService {
             let add_marketplace_outcome = add_marketplace(self.codex_home.clone(), request).await;
             let marketplace_path = match add_marketplace_outcome {
                 Ok(add_marketplace_outcome) => {
+                    let Some(marketplace_path) = find_marketplace_manifest_path(
+                        add_marketplace_outcome.installed_root.as_path(),
+                    ) else {
+                        outcome.failed_marketplaces.push(marketplace_name);
+                        outcome.failed_plugin_ids.extend(plugin_ids);
+                        continue;
+                    };
                     outcome
                         .succeeded_marketplaces
                         .push(marketplace_name.clone());
-                    add_marketplace_outcome
-                        .installed_root
-                        .join(INSTALLED_MARKETPLACE_MANIFEST_RELATIVE_PATH)
+                    marketplace_path
                 }
                 Err(_) => {
                     outcome.failed_marketplaces.push(marketplace_name);
@@ -527,25 +544,32 @@ fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
 
 fn extract_plugin_migration_details(
     settings: &JsonValue,
-    configured_enabled_plugins: &HashSet<String>,
+    configured_plugin_ids: &HashSet<String>,
+    configured_marketplace_plugins: &BTreeMap<String, HashSet<String>>,
 ) -> Option<MigrationDetails> {
     let loadable_marketplaces = collect_marketplace_import_sources(settings)
         .into_iter()
         .filter_map(|(marketplace_name, source)| {
-            validate_marketplace_add_source(&source.source, source.ref_name)
+            parse_marketplace_source(&source.source, source.ref_name)
                 .ok()
-                .map(|()| marketplace_name)
+                .map(|_| marketplace_name)
         })
         .collect::<HashSet<_>>();
     let mut plugins = BTreeMap::new();
     for plugin_id in collect_enabled_plugins(settings)
         .into_iter()
-        .filter(|plugin_id| !configured_enabled_plugins.contains(plugin_id))
+        .filter(|plugin_id| !configured_plugin_ids.contains(plugin_id))
     {
         let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
             continue;
         };
-        if !loadable_marketplaces.contains(&plugin_id.marketplace_name) {
+        if let Some(installable_plugins) =
+            configured_marketplace_plugins.get(&plugin_id.marketplace_name)
+        {
+            if !installable_plugins.contains(&plugin_id.plugin_name) {
+                continue;
+            }
+        } else if !loadable_marketplaces.contains(&plugin_id.marketplace_name) {
             continue;
         }
         let plugin_group = plugins
@@ -596,47 +620,105 @@ fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
         .collect()
 }
 
-fn configured_enabled_plugin_ids(
-    codex_home: &Path,
-    repo_root: Option<&Path>,
-) -> io::Result<HashSet<String>> {
+fn configured_plugin_ids(codex_home: &Path) -> io::Result<HashSet<String>> {
     let mut plugin_states = BTreeMap::new();
-    for config_path in [
-        Some(codex_home.join("config.toml")),
-        repo_root.map(|repo_root| repo_root.join(".codex").join("config.toml")),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if !config_path.is_file() {
-            continue;
-        }
-
-        let raw_config = fs::read_to_string(&config_path)?;
-        if raw_config.trim().is_empty() {
-            continue;
-        }
-
-        let config = toml::from_str::<TomlValue>(&raw_config)
-            .map_err(|err| invalid_data_error(format!("invalid config.toml: {err}")))?;
-        let Some(plugins) = config.get("plugins").and_then(TomlValue::as_table) else {
-            continue;
-        };
-
-        for (plugin_id, enabled) in plugins.iter().filter_map(|(plugin_id, plugin_config)| {
-            plugin_config
-                .get("enabled")
-                .and_then(TomlValue::as_bool)
-                .map(|enabled| (plugin_id, enabled))
-        }) {
-            plugin_states.insert(plugin_id.clone(), enabled);
-        }
+    let config_path = codex_home.join("config.toml");
+    if !config_path.is_file() {
+        return Ok(HashSet::new());
     }
 
-    Ok(plugin_states
-        .into_iter()
-        .filter_map(|(plugin_id, enabled)| enabled.then_some(plugin_id))
-        .collect())
+    let raw_config = fs::read_to_string(&config_path)?;
+    if raw_config.trim().is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let config = toml::from_str::<TomlValue>(&raw_config)
+        .map_err(|err| invalid_data_error(format!("invalid config.toml: {err}")))?;
+    let Some(plugins) = config.get("plugins").and_then(TomlValue::as_table) else {
+        return Ok(HashSet::new());
+    };
+
+    for (plugin_id, enabled) in plugins.iter().filter_map(|(plugin_id, plugin_config)| {
+        plugin_config
+            .get("enabled")
+            .and_then(TomlValue::as_bool)
+            .map(|enabled| (plugin_id, enabled))
+    }) {
+        plugin_states.insert(plugin_id.clone(), enabled);
+    }
+
+    Ok(plugin_states.into_keys().collect())
+}
+
+fn configured_marketplace_plugins(
+    codex_home: &Path,
+) -> io::Result<BTreeMap<String, HashSet<String>>> {
+    let default_install_root = marketplace_install_root(codex_home);
+    let mut marketplace_roots = BTreeMap::new();
+    let config_path = codex_home.join("config.toml");
+    if !config_path.is_file() {
+        return Ok(BTreeMap::new());
+    }
+
+    let raw_config = fs::read_to_string(&config_path)?;
+    if raw_config.trim().is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let config = toml::from_str::<TomlValue>(&raw_config)
+        .map_err(|err| invalid_data_error(format!("invalid config.toml: {err}")))?;
+    let Some(marketplaces) = config.get("marketplaces").and_then(TomlValue::as_table) else {
+        return Ok(BTreeMap::new());
+    };
+
+    for (marketplace_name, marketplace) in marketplaces {
+        if validate_plugin_segment(marketplace_name, "marketplace name").is_err()
+            || !marketplace.is_table()
+        {
+            continue;
+        }
+        let Some(root) = resolve_configured_marketplace_root(
+            marketplace_name,
+            marketplace,
+            &default_install_root,
+        ) else {
+            continue;
+        };
+        let root = if root.is_relative() {
+            config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(root)
+        } else {
+            root
+        };
+        marketplace_roots.insert(marketplace_name.clone(), root);
+    }
+
+    let mut marketplace_plugins = BTreeMap::new();
+    for (marketplace_name, root) in marketplace_roots {
+        let Some(manifest_path) = find_marketplace_manifest_path(&root) else {
+            continue;
+        };
+        let Ok(marketplace) = load_marketplace(&manifest_path) else {
+            continue;
+        };
+        let plugins =
+            marketplace
+                .plugins
+                .into_iter()
+                .filter(|plugin| {
+                    plugin.policy.installation != MarketplacePluginInstallPolicy::NotAvailable
+                        && plugin.policy.products.as_deref().is_none_or(|products| {
+                            Product::Codex.matches_product_restriction(products)
+                        })
+                })
+                .map(|plugin| plugin.name)
+                .collect::<HashSet<_>>();
+        marketplace_plugins.insert(marketplace_name, plugins);
+    }
+
+    Ok(marketplace_plugins)
 }
 
 fn collect_marketplace_import_sources(
@@ -689,22 +771,6 @@ fn collect_marketplace_import_sources(
 struct MarketplaceImportSource {
     source: String,
     ref_name: Option<String>,
-}
-
-fn read_marketplace_import_source(
-    cwd: Option<&Path>,
-    external_agent_home: &Path,
-    marketplace_name: &str,
-) -> io::Result<Option<MarketplaceImportSource>> {
-    let source_settings = cwd.map_or_else(
-        || external_agent_home.join("settings.json"),
-        |cwd| cwd.join(".claude").join("settings.json"),
-    );
-    let Some(settings) = read_external_settings(&source_settings)? else {
-        return Ok(None);
-    };
-
-    Ok(collect_marketplace_import_sources(&settings).remove(marketplace_name))
 }
 
 fn find_repo_root(cwd: Option<&Path>) -> io::Result<Option<PathBuf>> {

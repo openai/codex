@@ -158,6 +158,8 @@ use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -849,19 +851,7 @@ async fn prepare_startup_tooltip_override(
     Some(tooltip_override.message)
 }
 
-async fn rebuild_startup_config(
-    config: &Config,
-    cli_kv_overrides: &[(String, TomlValue)],
-    harness_overrides: &ConfigOverrides,
-) -> Result<Config> {
-    ConfigBuilder::default()
-        .codex_home(config.codex_home.to_path_buf())
-        .cli_overrides(cli_kv_overrides.to_vec())
-        .harness_overrides(harness_overrides.clone())
-        .build()
-        .await
-        .wrap_err("Failed to reload config after external agent migration")
-}
+const EXTERNAL_CONFIG_MIGRATION_PROMPT_COOLDOWN_SECS: i64 = 5 * 24 * 60 * 60;
 
 fn external_config_migration_project_key(path: &Path) -> String {
     path.display().to_string()
@@ -884,13 +874,49 @@ fn is_external_config_migration_scope_hidden(config: &Config, cwd: Option<&Path>
     }
 }
 
+fn external_config_migration_last_prompted_at(config: &Config, cwd: Option<&Path>) -> Option<i64> {
+    match cwd {
+        Some(cwd) => config
+            .notices
+            .external_config_migration_prompts
+            .project_last_prompted_at
+            .get(&external_config_migration_project_key(cwd))
+            .copied(),
+        None => {
+            config
+                .notices
+                .external_config_migration_prompts
+                .home_last_prompted_at
+        }
+    }
+}
+
+fn is_external_config_migration_scope_cooling_down(
+    config: &Config,
+    cwd: Option<&Path>,
+    now_unix_seconds: i64,
+) -> bool {
+    external_config_migration_last_prompted_at(config, cwd).is_some_and(|last_prompted_at| {
+        last_prompted_at.saturating_add(EXTERNAL_CONFIG_MIGRATION_PROMPT_COOLDOWN_SECS)
+            > now_unix_seconds
+    })
+}
+
 fn visible_external_agent_config_migration_items(
     config: &Config,
     items: Vec<ExternalAgentConfigMigrationItem>,
+    now_unix_seconds: i64,
 ) -> Vec<ExternalAgentConfigMigrationItem> {
     items
         .into_iter()
-        .filter(|item| !is_external_config_migration_scope_hidden(config, item.cwd.as_deref()))
+        .filter(|item| {
+            !is_external_config_migration_scope_hidden(config, item.cwd.as_deref())
+                && !is_external_config_migration_scope_cooling_down(
+                    config,
+                    item.cwd.as_deref(),
+                    now_unix_seconds,
+                )
+        })
         .collect()
 }
 
@@ -910,6 +936,70 @@ fn external_agent_config_migration_success_message(
 struct ExternalAgentConfigMigrationPromptResult {
     exit_info: Option<AppExitInfo>,
     success_message: Option<String>,
+}
+
+fn unix_seconds_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+async fn persist_external_agent_config_migration_prompt_shown(
+    config: &mut Config,
+    items: &[ExternalAgentConfigMigrationItem],
+    now_unix_seconds: i64,
+) -> Result<()> {
+    let mut edits = Vec::new();
+    if items.iter().any(|item| item.cwd.is_none()) {
+        edits.push(
+            ConfigEdit::SetNoticeExternalConfigMigrationPromptHomeLastPromptedAt(now_unix_seconds),
+        );
+    }
+
+    for project in items
+        .iter()
+        .filter_map(|item| item.cwd.as_deref())
+        .map(external_config_migration_project_key)
+    {
+        edits.push(
+            ConfigEdit::SetNoticeExternalConfigMigrationPromptProjectLastPromptedAt(
+                project,
+                now_unix_seconds,
+            ),
+        );
+    }
+
+    if edits.is_empty() {
+        return Ok(());
+    }
+
+    ConfigEditsBuilder::new(&config.codex_home)
+        .with_edits(edits)
+        .apply()
+        .await
+        .map_err(|err| color_eyre::eyre::eyre!("{err}"))
+        .wrap_err("Failed to save external config migration prompt timestamp")?;
+
+    if items.iter().any(|item| item.cwd.is_none()) {
+        config
+            .notices
+            .external_config_migration_prompts
+            .home_last_prompted_at = Some(now_unix_seconds);
+    }
+    for project in items
+        .iter()
+        .filter_map(|item| item.cwd.as_deref())
+        .map(external_config_migration_project_key)
+    {
+        config
+            .notices
+            .external_config_migration_prompts
+            .project_last_prompted_at
+            .insert(project, now_unix_seconds);
+    }
+
+    Ok(())
 }
 
 async fn persist_external_agent_config_migration_prompt_dismissal(
@@ -992,6 +1082,7 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
         });
     }
 
+    let now_unix_seconds = unix_seconds_now();
     let detected_items = match app_server
         .external_agent_config_detect(ExternalAgentConfigDetectParams {
             include_home: true,
@@ -999,7 +1090,9 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
         })
         .await
     {
-        Ok(response) => visible_external_agent_config_migration_items(config, response.items),
+        Ok(response) => {
+            visible_external_agent_config_migration_items(config, response.items, now_unix_seconds)
+        }
         Err(err) => {
             tracing::warn!(
                 error = %err,
@@ -1020,6 +1113,20 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
         });
     }
 
+    if let Err(err) = persist_external_agent_config_migration_prompt_shown(
+        config,
+        &detected_items,
+        now_unix_seconds,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %err,
+            cwd = %config.cwd.display(),
+            "failed to persist external config migration prompt timestamp"
+        );
+    }
+
     let mut selected_items = detected_items.clone();
     let mut error: Option<String> = None;
 
@@ -1038,9 +1145,13 @@ async fn handle_external_agent_config_migration_prompt_if_needed(
                     Ok(_) => {
                         let success_message =
                             external_agent_config_migration_success_message(&selected_items);
-                        *config =
-                            rebuild_startup_config(config, cli_kv_overrides, harness_overrides)
-                                .await?;
+                        *config = ConfigBuilder::default()
+                            .codex_home(config.codex_home.to_path_buf())
+                            .cli_overrides(cli_kv_overrides.to_vec())
+                            .harness_overrides(harness_overrides.clone())
+                            .build()
+                            .await
+                            .wrap_err("Failed to reload config after external agent migration")?;
                         return Ok(ExternalAgentConfigMigrationPromptResult {
                             exit_info: None,
                             success_message: Some(success_message),
@@ -10786,6 +10897,7 @@ guardian_approval = true
                     details: None,
                 },
             ],
+            /*now_unix_seconds*/ 1_760_000_000,
         );
 
         assert_eq!(
@@ -10797,6 +10909,89 @@ guardian_approval = true
                 details: None,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn visible_external_agent_config_migration_items_omits_recently_prompted_scopes() {
+        let codex_home = tempdir().expect("temp codex home");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        config
+            .notices
+            .external_config_migration_prompts
+            .home_last_prompted_at = Some(1_760_000_000);
+        config
+            .notices
+            .external_config_migration_prompts
+            .project_last_prompted_at
+            .insert("/tmp/project".to_string(), 1_760_000_000);
+
+        let visible = visible_external_agent_config_migration_items(
+            &config,
+            vec![
+                ExternalAgentConfigMigrationItem {
+                    item_type:
+                        codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Config,
+                    description: "home".to_string(),
+                    cwd: None,
+                    details: None,
+                },
+                ExternalAgentConfigMigrationItem {
+                    item_type:
+                        codex_app_server_protocol::ExternalAgentConfigMigrationItemType::AgentsMd,
+                    description: "project".to_string(),
+                    cwd: Some(PathBuf::from("/tmp/project")),
+                    details: None,
+                },
+                ExternalAgentConfigMigrationItem {
+                    item_type:
+                        codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Skills,
+                    description: "other project".to_string(),
+                    cwd: Some(PathBuf::from("/tmp/other")),
+                    details: None,
+                },
+            ],
+            /*now_unix_seconds*/
+            1_760_000_000 + EXTERNAL_CONFIG_MIGRATION_PROMPT_COOLDOWN_SECS - 1,
+        );
+
+        assert_eq!(
+            visible,
+            vec![ExternalAgentConfigMigrationItem {
+                item_type: codex_app_server_protocol::ExternalAgentConfigMigrationItemType::Skills,
+                description: "other project".to_string(),
+                cwd: Some(PathBuf::from("/tmp/other")),
+                details: None,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn external_config_migration_scope_cooldown_expires_after_five_days() {
+        let codex_home = tempdir().expect("temp codex home");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        config
+            .notices
+            .external_config_migration_prompts
+            .home_last_prompted_at = Some(1_760_000_000);
+
+        assert!(is_external_config_migration_scope_cooling_down(
+            &config,
+            /*cwd*/ None,
+            1_760_000_000 + EXTERNAL_CONFIG_MIGRATION_PROMPT_COOLDOWN_SECS - 1,
+        ));
+        assert!(!is_external_config_migration_scope_cooling_down(
+            &config,
+            /*cwd*/ None,
+            1_760_000_000 + EXTERNAL_CONFIG_MIGRATION_PROMPT_COOLDOWN_SECS,
+        ));
     }
 
     #[test]

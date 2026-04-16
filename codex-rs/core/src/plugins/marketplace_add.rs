@@ -20,7 +20,7 @@ use metadata::find_marketplace_root_by_name;
 use metadata::installed_marketplace_root_for_source;
 use metadata::record_added_marketplace_entry;
 use source::MarketplaceSource;
-use source::parse_marketplace_source;
+pub(crate) use source::parse_marketplace_source;
 use source::stage_marketplace_source;
 use source::validate_marketplace_source_root;
 
@@ -54,13 +54,6 @@ pub async fn add_marketplace(
     tokio::task::spawn_blocking(move || add_marketplace_sync(codex_home.as_path(), request))
         .await
         .map_err(|err| MarketplaceAddError::Internal(format!("failed to add marketplace: {err}")))?
-}
-
-pub fn validate_marketplace_add_source(
-    source: &str,
-    ref_name: Option<String>,
-) -> Result<(), MarketplaceAddError> {
-    parse_marketplace_source(source, ref_name).map(|_| ())
 }
 
 fn add_marketplace_sync(

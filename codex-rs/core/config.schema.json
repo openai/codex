@@ -641,6 +641,20 @@
           "description": "Tracks whether home-level external config migration prompts are hidden.",
           "type": "boolean"
         },
+        "home_last_prompted_at": {
+          "description": "Tracks the last time the home-level external config migration prompt was shown.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "project_last_prompted_at": {
+          "additionalProperties": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "default": {},
+          "description": "Tracks the last time a project-level external config migration prompt was shown.",
+          "type": "object"
+        },
         "projects": {
           "additionalProperties": {
             "type": "boolean"
@@ -1164,6 +1178,8 @@
           ],
           "default": {
             "home": null,
+            "home_last_prompted_at": null,
+            "project_last_prompted_at": {},
             "projects": {}
           },
           "description": "Tracks scopes where external config migration prompts should be suppressed."
