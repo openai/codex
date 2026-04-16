@@ -348,17 +348,16 @@ fn emit_hook_completed_metrics(
     hook_source: CodexHookSource,
 ) {
     let tags = hook_run_metric_tags(&completed.run, hook_source);
-    let tag_refs: Vec<(&str, &str)> = tags.iter().map(|(key, value)| (*key, *value)).collect();
-    let _ = turn_context
+    turn_context
         .session_telemetry
-        .counter(HOOK_RUN_METRIC, /*inc*/ 1, &tag_refs);
+        .counter(HOOK_RUN_METRIC, /*inc*/ 1, &tags);
     if let Some(duration_ms) = completed.run.duration_ms
         && let Ok(duration_ms) = u64::try_from(duration_ms)
     {
-        let _ = turn_context.session_telemetry.record_duration(
+        turn_context.session_telemetry.record_duration(
             HOOK_RUN_DURATION_METRIC,
             Duration::from_millis(duration_ms),
-            &tag_refs,
+            &tags,
         );
     }
 }
