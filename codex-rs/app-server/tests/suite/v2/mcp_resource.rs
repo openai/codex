@@ -202,17 +202,15 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
                 uri: TEST_RESOURCE_URI.to_string(),
             },
         })
-        .await?;
-    let error = match response {
-        Ok(result) => {
-            client.shutdown().await?;
-            anyhow::bail!("expected thread-not-found error, got response: {result:?}");
-        }
+        .await;
+    client.shutdown().await?;
+
+    let error = match response? {
+        Ok(result) => anyhow::bail!("expected thread-not-found error, got response: {result:?}"),
         Err(error) => error,
     };
     let error_debug = format!("{error:?}");
     let message = error.message;
-    client.shutdown().await?;
 
     assert!(
         message.contains("thread not found"),
