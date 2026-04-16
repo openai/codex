@@ -87,7 +87,9 @@ jobs:
 
   argument_comment_lint_package:
     name: Argument comment lint package
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
     needs: changed
     if: ${{ needs.changed.outputs.argument_comment_lint_package == 'true' }}
     env:
@@ -144,6 +146,9 @@ jobs:
           - name: Linux
             runner: ubuntu-24.04
             timeout_minutes: 30
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
           - name: macOS
             runner: macos-15-xlarge
             timeout_minutes: 30

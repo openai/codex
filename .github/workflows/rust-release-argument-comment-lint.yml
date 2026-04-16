@@ -39,12 +39,18 @@ jobs:
             lib_name: libargument_comment_lint@nightly-2025-09-18-x86_64-unknown-linux-gnu.so
             runner_binary: argument-comment-lint
             cargo_dylint_binary: cargo-dylint
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive_name: argument-comment-lint-aarch64-unknown-linux-gnu.tar.gz
             lib_name: libargument_comment_lint@nightly-2025-09-18-aarch64-unknown-linux-gnu.so
             runner_binary: argument-comment-lint
             cargo_dylint_binary: cargo-dylint
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             archive_name: argument-comment-lint-x86_64-pc-windows-msvc.zip

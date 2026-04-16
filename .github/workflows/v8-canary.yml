@@ -56,7 +56,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     needs: metadata
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
     permissions:
       contents: read
       actions: read
@@ -67,9 +67,15 @@ jobs:
           - runner: ubuntu-24.04
             platform: linux_amd64_musl
             target: x86_64-unknown-linux-musl
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-x64
           - runner: ubuntu-24.04-arm
             platform: linux_arm64_musl
             target: aarch64-unknown-linux-musl
+            runs_on:
+              group: codex-runners
+              labels: codex-linux-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
