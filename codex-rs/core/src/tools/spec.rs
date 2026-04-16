@@ -169,6 +169,21 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .iter()
         .map(|configured_tool| configured_tool.name().to_string())
         .collect::<HashSet<_>>();
+    let direct_mcp_tool_names = mcp_tools
+        .as_ref()
+        .map(|tools| {
+            tools
+                .values()
+                .map(ToolInfo::canonical_tool_name)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let planned_mcp_handler_names = plan
+        .handlers
+        .iter()
+        .filter(|handler| handler.kind == ToolHandlerKind::Mcp)
+        .map(|handler| handler.name.clone())
+        .collect::<HashSet<_>>();
 
     for spec in plan.specs {
         if spec.supports_parallel_tool_calls {
@@ -285,12 +300,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
     }
     if let Some(deferred_mcp_tools) = deferred_mcp_tools.as_ref() {
-        for (name, _) in deferred_mcp_tools.iter().filter(|(name, _)| {
-            !mcp_tools
-                .as_ref()
-                .is_some_and(|tools| tools.contains_key(*name))
-        }) {
-            builder.register_handler(name.clone(), mcp_handler.clone());
+        for tool in deferred_mcp_tools.values() {
+            let tool_name = tool.canonical_tool_name();
+            if direct_mcp_tool_names.contains(&tool_name)
+                || planned_mcp_handler_names.contains(&tool_name)
+            {
+                continue;
+            }
+            builder.register_handler(tool_name, mcp_handler.clone());
         }
     }
 
