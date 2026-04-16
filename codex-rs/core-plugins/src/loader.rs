@@ -41,6 +41,12 @@ const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 const CONFIG_TOML_FILE: &str = "config.toml";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NonCuratedCacheRefreshMode {
+    IfVersionChanged,
+    ForceReinstall,
+}
+
 pub fn log_plugin_load_errors(outcome: &PluginLoadOutcome<McpServerConfig>) {
     for plugin in outcome
         .plugins()
@@ -181,6 +187,29 @@ pub fn refresh_non_curated_plugin_cache(
     codex_home: &Path,
     additional_roots: &[AbsolutePathBuf],
 ) -> Result<bool, String> {
+    refresh_non_curated_plugin_cache_with_mode(
+        codex_home,
+        additional_roots,
+        NonCuratedCacheRefreshMode::IfVersionChanged,
+    )
+}
+
+pub fn refresh_non_curated_plugin_cache_force_reinstall(
+    codex_home: &Path,
+    additional_roots: &[AbsolutePathBuf],
+) -> Result<bool, String> {
+    refresh_non_curated_plugin_cache_with_mode(
+        codex_home,
+        additional_roots,
+        NonCuratedCacheRefreshMode::ForceReinstall,
+    )
+}
+
+fn refresh_non_curated_plugin_cache_with_mode(
+    codex_home: &Path,
+    additional_roots: &[AbsolutePathBuf],
+    mode: NonCuratedCacheRefreshMode,
+) -> Result<bool, String> {
     let configured_non_curated_plugin_ids =
         non_curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
             codex_home,
@@ -248,7 +277,9 @@ pub fn refresh_non_curated_plugin_cache(
             continue;
         };
 
-        if store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str()) {
+        if mode == NonCuratedCacheRefreshMode::IfVersionChanged
+            && store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str())
+        {
             continue;
         }
 

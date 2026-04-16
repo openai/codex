@@ -266,6 +266,7 @@ use crate::SkillInjections;
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
+use crate::agents_md::AgentsMdManager;
 use crate::build_skill_injections;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
@@ -294,7 +295,6 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
-use crate::project_doc::get_user_instructions;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -557,7 +557,9 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let user_instructions = get_user_instructions(&config, environment.as_deref()).await;
+        let user_instructions = AgentsMdManager::new(&config)
+            .user_instructions(environment.as_deref())
+            .await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -1084,6 +1086,18 @@ impl TurnContext {
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+        let legacy_file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            self.sandbox_policy.get(),
+            &self.cwd,
+        );
+        // Omit the derived split filesystem policy when it is equivalent to
+        // the legacy sandbox policy. This keeps turn-context payloads stable
+        // while both fields exist; once callers consume only the split policy,
+        // this comparison and the legacy projection should go away.
+        let file_system_sandbox_policy = (self.file_system_sandbox_policy
+            != legacy_file_system_sandbox_policy)
+            .then(|| self.file_system_sandbox_policy.clone());
+
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
@@ -1093,6 +1107,7 @@ impl TurnContext {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
+            file_system_sandbox_policy,
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
@@ -1288,7 +1303,14 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
-        if sandbox_policy_changed || (cwd_changed && file_system_policy_matches_legacy) {
+        if sandbox_policy_changed {
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                    next_configuration.sandbox_policy.get(),
+                    &next_configuration.cwd,
+                    &self.file_system_sandbox_policy,
+                );
+        } else if cwd_changed && file_system_policy_matches_legacy {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
             next_configuration.file_system_sandbox_policy =
@@ -6246,8 +6268,11 @@ pub(crate) async fn run_turn(
         HashMap::new()
     };
     let available_connectors = if turn_context.apps_enabled() {
-        let connectors = connectors::merge_plugin_apps_with_accessible(
-            loaded_plugins.effective_apps(),
+        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+            loaded_plugins
+                .effective_apps()
+                .into_iter()
+                .map(|connector_id| connector_id.0),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         );
         connectors::with_app_enabled_state(connectors, &turn_context.config)
@@ -6670,13 +6695,16 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::InvalidImageRequest()) => {
-                let mut state = sess.state.lock().await;
-                error_or_panic(
-                    "Invalid image detected; sanitizing tool output to prevent poisoning",
-                );
-                if state.history.replace_last_turn_images("Invalid image") {
-                    continue;
+                {
+                    let mut state = sess.state.lock().await;
+                    error_or_panic(
+                        "Invalid image detected; sanitizing tool output to prevent poisoning",
+                    );
+                    if state.history.replace_last_turn_images("Invalid image") {
+                        continue;
+                    }
                 }
+
                 let event = EventMsg::Error(ErrorEvent {
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
@@ -6891,7 +6919,7 @@ fn collect_explicit_app_ids_from_skill_items(
 
     let connector_slug_counts = build_connector_slug_counts(connectors);
     for connector in connectors {
-        let slug = connectors::connector_mention_slug(connector);
+        let slug = codex_connectors::metadata::connector_mention_slug(connector);
         let connector_count = connector_slug_counts.get(&slug).copied().unwrap_or(0);
         let skill_count = skill_name_counts_lower.get(&slug).copied().unwrap_or(0);
         if connector_count == 1 && skill_count == 0 && mention_names_lower.contains(&slug) {
@@ -6966,7 +6994,7 @@ fn connector_inserted_in_messages(
         return true;
     }
 
-    let mention_slug = connectors::connector_mention_slug(connector);
+    let mention_slug = codex_connectors::metadata::connector_mention_slug(connector);
     let connector_count = connector_slug_counts
         .get(&mention_slug)
         .copied()
@@ -7194,8 +7222,11 @@ pub(crate) async fn built_tools(
             connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
         });
     let connectors = if apps_enabled {
-        let connectors = connectors::merge_plugin_apps_with_accessible(
-            loaded_plugins.effective_apps(),
+        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+            loaded_plugins
+                .effective_apps()
+                .into_iter()
+                .map(|connector_id| connector_id.0),
             accessible_connectors.clone().unwrap_or_default(),
         );
         Some(connectors::with_app_enabled_state(

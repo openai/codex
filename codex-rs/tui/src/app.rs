@@ -2514,14 +2514,16 @@ impl App {
                 Ok(true)
             }
             AppCommandView::ListSkills { cwds, force_reload } => {
-                let response = app_server
-                    .skills_list(codex_app_server_protocol::SkillsListParams {
-                        cwds: cwds.to_vec(),
-                        force_reload,
-                        per_cwd_extra_user_roots: None,
-                    })
-                    .await?;
-                self.handle_skills_list_response(response);
+                self.handle_skills_list_result(
+                    app_server
+                        .skills_list(codex_app_server_protocol::SkillsListParams {
+                            cwds: cwds.to_vec(),
+                            force_reload,
+                            per_cwd_extra_user_roots: None,
+                        })
+                        .await,
+                    "failed to refresh skills",
+                );
                 Ok(true)
             }
             AppCommandView::Compact => {
@@ -2592,6 +2594,19 @@ impl App {
             }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
             _ => Ok(false),
+        }
+    }
+
+    fn handle_skills_list_result(
+        &mut self,
+        result: Result<SkillsListResponse>,
+        failure_message: &str,
+    ) {
+        match result {
+            Ok(response) => self.handle_skills_list_response(response),
+            Err(err) => {
+                tracing::warn!("{failure_message}: {err:#}");
+            }
         }
     }
 
@@ -4002,17 +4017,16 @@ impl App {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
         }
-        match app_server
-            .skills_list(codex_app_server_protocol::SkillsListParams {
-                cwds: vec![app.config.cwd.to_path_buf()],
-                force_reload: true,
-                per_cwd_extra_user_roots: None,
-            })
-            .await
-        {
-            Ok(response) => app.handle_skills_list_response(response),
-            Err(err) => tracing::warn!("failed to load skills on startup: {err:#}"),
-        }
+        app.handle_skills_list_result(
+            app_server
+                .skills_list(codex_app_server_protocol::SkillsListParams {
+                    cwds: vec![app.config.cwd.to_path_buf()],
+                    force_reload: true,
+                    per_cwd_extra_user_roots: None,
+                })
+                .await,
+            "failed to load skills on startup",
+        );
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -9225,6 +9239,7 @@ guardian_approval = true
             approval_policy: primary_session.approval_policy,
             sandbox_policy: primary_session.sandbox_policy.clone(),
             network: None,
+            file_system_sandbox_policy: None,
             model: "gpt-agent".to_string(),
             personality: None,
             collaboration_mode: None,

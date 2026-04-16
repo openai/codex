@@ -23,6 +23,7 @@ codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
+chrono = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
