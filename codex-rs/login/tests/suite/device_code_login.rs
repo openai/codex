@@ -183,7 +183,7 @@ async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
 
     let issuer = mock_server.uri();
     let mut opts = server_opts(&codex_home, issuer, AuthCredentialsStoreMode::File);
-    opts.forced_chatgpt_workspace_id = Some("org-required".to_string());
+    opts.forced_chatgpt_workspace_id = Some(vec!["org-required".to_string()]);
 
     let err = run_device_code_login(opts)
         .await
