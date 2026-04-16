@@ -573,11 +573,24 @@ fn normalize_git_plugin_source_url(
     if url.starts_with("http://") || url.starts_with("https://") {
         return Ok(normalize_github_git_url(url));
     }
-    if url.starts_with("file://")
-        || url.starts_with("./")
-        || url.starts_with("../")
-        || url.starts_with('/')
-    {
+    if url.starts_with("./") || url.starts_with("../") {
+        let mut normalized = PathBuf::new();
+        for component in marketplace_root_dir(marketplace_path)?
+            .as_path()
+            .join(url)
+            .components()
+        {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                _ => normalized.push(component.as_os_str()),
+            }
+        }
+        return Ok(normalized.display().to_string());
+    }
+    if url.starts_with("file://") || url.starts_with('/') {
         return Ok(url.to_string());
     }
     if url.starts_with("ssh://") || url.starts_with("git@") && url.contains(':') {
