@@ -10,8 +10,8 @@
 
 use std::path::PathBuf;
 
-use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
