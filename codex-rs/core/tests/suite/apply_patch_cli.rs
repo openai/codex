@@ -938,10 +938,6 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn apply_patch_custom_tool_streaming_emits_updated_changes() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_remote!(
-        Ok(()),
-        "apply_patch streaming integration test writes to the local test-runner filesystem",
-    );
 
     let harness = apply_patch_harness_with(|builder| {
         builder.with_config(|config| {

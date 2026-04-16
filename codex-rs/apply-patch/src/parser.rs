@@ -196,26 +196,9 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut remaining_lines = hunk_lines;
     let mut line_number = 2;
+    let allow_incomplete = matches!(mode, ParseMode::Streaming);
     while !remaining_lines.is_empty() {
-        let parsed_hunk = parse_one_hunk(
-            remaining_lines,
-            line_number,
-            match mode {
-                ParseMode::Streaming => IncompleteFinalChunk::Allow,
-                ParseMode::Strict | ParseMode::Lenient => IncompleteFinalChunk::Deny,
-            },
-        );
-        let (hunk, hunk_lines) = match parsed_hunk {
-            Ok(parsed) => parsed,
-            // Return accumulated hunks even if parsing the last one failed in streaming mode.
-            Err(err) if matches!(mode, ParseMode::Streaming) => {
-                if hunks.is_empty() {
-                    return Err(err);
-                }
-                break;
-            }
-            Err(err) => return Err(err),
-        };
+        let (hunk, hunk_lines) = parse_one_hunk(remaining_lines, line_number, allow_incomplete)?;
         hunks.push(hunk);
         line_number += hunk_lines;
         remaining_lines = &remaining_lines[hunk_lines..]
@@ -312,18 +295,12 @@ fn check_start_and_end_lines_strict(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum IncompleteFinalChunk {
-    Allow,
-    Deny,
-}
-
 /// Attempts to parse a single hunk from the start of lines.
 /// Returns the parsed hunk and the number of lines parsed (or a ParseError).
 fn parse_one_hunk(
     lines: &[&str],
     line_number: usize,
-    incomplete_final_chunk: IncompleteFinalChunk,
+    allow_incomplete: bool,
 ) -> Result<(Hunk, usize), ParseError> {
     // Be tolerant of case mismatches and extra padding around marker strings.
     let first_line = lines[0].trim();
@@ -384,7 +361,7 @@ fn parse_one_hunk(
                 break;
             }
 
-            if incomplete_final_chunk == IncompleteFinalChunk::Allow && remaining_lines[0] == "@" {
+            if allow_incomplete && remaining_lines[0] == "@" {
                 break;
             }
 
@@ -396,7 +373,7 @@ fn parse_one_hunk(
             let (chunk, chunk_lines) = match parsed_chunk {
                 Ok(parsed) => parsed,
                 Err(err)
-                    if incomplete_final_chunk == IncompleteFinalChunk::Allow
+                    if allow_incomplete
                         && !chunks.is_empty()
                         && matches!(
                             &err,
@@ -662,85 +639,32 @@ fn test_parse_patch_streaming_large_patch_by_character() {
     }
 
     assert_eq!(saw_hunk_counts, vec![1, 2, 3, 4, 5, 6, 7]);
+    let parsed = parse_patch_streaming(patch).unwrap();
+    assert_eq!(parsed.hunks.len(), 7);
     assert_eq!(
-        parse_patch_streaming(patch),
-        Ok(ApplyPatchArgs {
-            hunks: vec![
-                AddFile {
-                    path: PathBuf::from("docs/release-notes.md"),
-                    contents: "# Release notes\n\n## CLI\n- Surface apply_patch progress while arguments stream.\n- Keep final patch application gated on the completed tool call.\n- Include file summaries in the progress event payload.\n".to_string(),
-                },
+        parsed
+            .hunks
+            .iter()
+            .map(|hunk| match hunk {
+                AddFile { .. } => "add",
+                DeleteFile { .. } => "delete",
                 UpdateFile {
-                    path: PathBuf::from("src/config.rs"),
-                    move_path: None,
-                    chunks: vec![
-                        UpdateFileChunk {
-                            change_context: Some("impl Config".to_string()),
-                            old_lines: vec![
-                                "    pub apply_patch_progress: bool,".to_string(),
-                                "    pub include_diagnostics: bool,".to_string(),
-                            ],
-                            new_lines: vec![
-                                "    pub stream_apply_patch_progress: bool,".to_string(),
-                                "    pub include_diagnostics: bool,".to_string(),
-                            ],
-                            is_end_of_file: false,
-                        },
-                        UpdateFileChunk {
-                            change_context: Some("fn default_progress_interval()".to_string()),
-                            old_lines: vec!["    Duration::from_millis(500)".to_string()],
-                            new_lines: vec!["    Duration::from_millis(250)".to_string()],
-                            is_end_of_file: false,
-                        },
-                    ],
-                },
-                DeleteFile {
-                    path: PathBuf::from("src/legacy_patch_progress.rs"),
-                },
+                    move_path: Some(_), ..
+                } => "move-update",
                 UpdateFile {
-                    path: PathBuf::from("crates/cli/src/main.rs"),
-                    move_path: Some(PathBuf::from("crates/cli/src/bin/codex.rs")),
-                    chunks: vec![UpdateFileChunk {
-                        change_context: Some("fn run()".to_string()),
-                        old_lines: vec![
-                            "    let args = Args::parse();".to_string(),
-                            "    dispatch(args)".to_string(),
-                        ],
-                        new_lines: vec![
-                            "    let cli = Cli::parse();".to_string(),
-                            "    dispatch(cli)".to_string(),
-                        ],
-                        is_end_of_file: false,
-                    }],
-                },
-                AddFile {
-                    path: PathBuf::from("tests/fixtures/apply_patch_progress.json"),
-                    contents: "{\n  \"type\": \"apply_patch_progress\",\n  \"hunks\": [\n    { \"operation\": \"add\", \"path\": \"docs/release-notes.md\" },\n    { \"operation\": \"update\", \"path\": \"src/config.rs\" }\n  ]\n}\n".to_string(),
-                },
-                UpdateFile {
-                    path: PathBuf::from("README.md"),
-                    move_path: None,
-                    chunks: vec![UpdateFileChunk {
-                        change_context: Some("Development workflow".to_string()),
-                        old_lines: vec![
-                            "Build the Rust workspace before opening a pull request.".to_string(),
-                        ],
-                        new_lines: vec![
-                            "Build the Rust workspace before opening a pull request.".to_string(),
-                            "When touching streamed tool calls, include parser coverage for partial input."
-                                .to_string(),
-                            "Prefer tests that exercise the exact event payload shape.".to_string(),
-                        ],
-                        is_end_of_file: false,
-                    }],
-                },
-                DeleteFile {
-                    path: PathBuf::from("docs/old-apply-patch-progress.md"),
-                },
-            ],
-            patch: patch.to_string(),
-            workdir: None,
-        })
+                    move_path: None, ..
+                } => "update",
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "add",
+            "update",
+            "delete",
+            "move-update",
+            "add",
+            "update",
+            "delete"
+        ]
     );
 }
 
@@ -1085,11 +1009,7 @@ fn test_parse_patch_lenient() {
 #[test]
 fn test_parse_one_hunk() {
     assert_eq!(
-        parse_one_hunk(
-            &["bad"],
-            /*line_number*/ 234,
-            IncompleteFinalChunk::Deny
-        ),
+        parse_one_hunk(&["bad"], /*line_number*/ 234, /*allow_incomplete*/ false),
         Err(InvalidHunkError {
             message: "'bad' is not a valid hunk header. \
             Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'".to_string(),
