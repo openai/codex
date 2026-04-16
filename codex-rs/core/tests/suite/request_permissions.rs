@@ -94,7 +94,7 @@ fn shell_event_with_request_permissions<S: serde::Serialize>(
 ) -> Result<Value> {
     let args = json!({
         "command": command,
-        "timeout_ms": 10_000_u64,
+        "timeout_ms": 1_000_u64,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
     });
