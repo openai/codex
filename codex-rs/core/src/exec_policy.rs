@@ -300,7 +300,11 @@ impl ExecPolicyManager {
                 // explicitly allowed by execpolicy.
                 bypass_sandbox: commands.iter().all(|command| {
                     exec_policy
-                        .matches_for_command_with_options(command, None, &match_options)
+                        .matches_for_command_with_options(
+                            command,
+                            /*heuristics_fallback*/ None,
+                            &match_options,
+                        )
                         .iter()
                         .any(|rule_match| {
                             is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
