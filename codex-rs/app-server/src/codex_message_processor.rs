@@ -4073,8 +4073,11 @@ impl CodexMessageProcessor {
 
         match read_rollout_items_from_rollout(rollout_path).await {
             Ok(items) => {
-                // Rollback and compaction events can change earlier turns, so pagination
-                // has to replay the full rollout until turn metadata is indexed separately.
+                // This API optimizes network transfer by letting clients page through a
+                // thread's turns incrementally, but it still replays the entire rollout on
+                // every request. Rollback and compaction events can change earlier turns, so
+                // the server has to rebuild the full turn list until turn metadata is indexed
+                // separately.
                 let has_live_in_progress_turn =
                     match self.thread_manager.get_thread(thread_uuid).await {
                         Ok(thread) => matches!(thread.agent_status().await, AgentStatus::Running),
