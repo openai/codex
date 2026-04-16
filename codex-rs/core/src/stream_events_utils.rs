@@ -136,20 +136,28 @@ pub(crate) async fn record_completed_response_item(
         sess.defer_mailbox_delivery_to_next_turn(&turn_context.sub_id)
             .await;
     }
-    maybe_mark_thread_memory_mode_polluted_from_web_search(sess, turn_context, item).await;
+    mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
     record_stage1_output_usage_for_completed_item(turn_context, item).await;
 }
 
-async fn maybe_mark_thread_memory_mode_polluted_from_web_search(
+fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::CustomToolCall { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+    )
+}
+
+pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     sess: &Session,
     turn_context: &TurnContext,
     item: &ResponseItem,
 ) {
-    if !turn_context
-        .config
-        .memories
-        .no_memories_if_mcp_or_web_search
-        || !matches!(item, ResponseItem::WebSearchCall { .. })
+    if !turn_context.config.memories.disable_on_external_context
+        || !response_item_may_include_external_context(item)
     {
         return;
     }

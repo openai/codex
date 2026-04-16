@@ -178,8 +178,9 @@ pub struct ToolSuggestConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MemoriesToml {
-    /// When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `"polluted"`.
-    pub no_memories_if_mcp_or_web_search: Option<bool>,
+    /// When `true`, external context sources mark the thread `memory_mode` as `"polluted"`.
+    #[serde(alias = "no_memories_if_mcp_or_web_search")]
+    pub disable_on_external_context: Option<bool>,
     /// When `false`, newly created threads are stored with `memory_mode = "disabled"` in the state DB.
     pub generate_memories: Option<bool>,
     /// When `false`, skip injecting memory usage instructions into developer prompts.
@@ -203,7 +204,7 @@ pub struct MemoriesToml {
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoriesConfig {
-    pub no_memories_if_mcp_or_web_search: bool,
+    pub disable_on_external_context: bool,
     pub generate_memories: bool,
     pub use_memories: bool,
     pub max_raw_memories_for_consolidation: usize,
@@ -218,7 +219,7 @@ pub struct MemoriesConfig {
 impl Default for MemoriesConfig {
     fn default() -> Self {
         Self {
-            no_memories_if_mcp_or_web_search: false,
+            disable_on_external_context: false,
             generate_memories: true,
             use_memories: true,
             max_raw_memories_for_consolidation: DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
@@ -236,9 +237,9 @@ impl From<MemoriesToml> for MemoriesConfig {
     fn from(toml: MemoriesToml) -> Self {
         let defaults = Self::default();
         Self {
-            no_memories_if_mcp_or_web_search: toml
-                .no_memories_if_mcp_or_web_search
-                .unwrap_or(defaults.no_memories_if_mcp_or_web_search),
+            disable_on_external_context: toml
+                .disable_on_external_context
+                .unwrap_or(defaults.disable_on_external_context),
             generate_memories: toml.generate_memories.unwrap_or(defaults.generate_memories),
             use_memories: toml.use_memories.unwrap_or(defaults.use_memories),
             max_raw_memories_for_consolidation: toml

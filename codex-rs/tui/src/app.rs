@@ -8213,8 +8213,9 @@ mod tests {
             Some(&TomlValue::Boolean(false))
         );
         assert!(
-            !memories.contains_key("no_memories_if_mcp_or_web_search"),
-            "the TUI menu should not write the MCP pollution setting"
+            !memories.contains_key("disable_on_external_context")
+                && !memories.contains_key("no_memories_if_mcp_or_web_search"),
+            "the TUI menu should not write the external-context memory setting"
         );
         app_server.shutdown().await?;
         Ok(())
