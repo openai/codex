@@ -1649,6 +1649,8 @@ fn web_search_action_to_core(
 }
 
 impl ChatWidget {
+    const MODEL_PICKER_VIEW_ID: &'static str = "model_picker";
+
     /// Stores or overwrites the cached nickname and role for a collab agent thread.
     ///
     /// Called by `App::upsert_agent_picker_thread` and `App::replace_chat_widget` to keep the
@@ -7933,6 +7935,7 @@ impl ChatWidget {
             return;
         }
 
+        let return_to_models = presets.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
             let description =
@@ -7940,10 +7943,12 @@ impl ChatWidget {
             let is_current = preset.model.as_str() == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
+            let return_to_models_for_action = return_to_models.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
                 tx.send(AppEvent::OpenReasoningPopup {
                     model: preset_for_event,
+                    return_to_models: Some(return_to_models_for_action.clone()),
                 });
             })];
             items.push(SelectionItem {
@@ -7962,6 +7967,7 @@ impl ChatWidget {
             "Access legacy models by running codex -m <model_name> or in your config.toml",
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            view_id: Some(Self::MODEL_PICKER_VIEW_ID),
             footer_hint: Some("Press enter to select reasoning effort, or esc to dismiss.".into()),
             items,
             header,
@@ -8145,6 +8151,14 @@ impl ChatWidget {
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
+        self.open_reasoning_popup_with_return_models(preset, None);
+    }
+
+    pub(crate) fn open_reasoning_popup_with_return_models(
+        &mut self,
+        preset: ModelPreset,
+        return_to_models: Option<Vec<ModelPreset>>,
+    ) {
         let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
         let supported = preset.supported_reasoning_efforts;
         let in_plan_mode =
@@ -8301,13 +8315,35 @@ impl ChatWidget {
             format!("Select Reasoning Level for {model_slug}").bold(),
         ));
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
+        let should_replace_model_picker = return_to_models.is_some();
+        let on_cancel = return_to_models.map(|models| {
+            Box::new(move |tx: &AppEventSender| {
+                tx.send(AppEvent::OpenAllModelsPopup {
+                    models: models.clone(),
+                });
+            }) as Box<dyn Fn(&AppEventSender) + Send + Sync>
+        });
+
+        let params = SelectionViewParams {
             header: Box::new(header),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,
+            on_cancel,
             ..Default::default()
-        });
+        };
+        if should_replace_model_picker
+            && self
+                .bottom_pane
+                .selected_index_for_active_view(Self::MODEL_PICKER_VIEW_ID)
+                .is_some()
+        {
+            let _ = self
+                .bottom_pane
+                .replace_selection_view_if_active(Self::MODEL_PICKER_VIEW_ID, params);
+        } else {
+            self.bottom_pane.show_selection_view(params);
+        }
     }
 
     fn reasoning_effort_label(effort: ReasoningEffortConfig) -> &'static str {

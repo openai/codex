@@ -4766,8 +4766,12 @@ impl App {
             AppEvent::RealtimeWebrtcLocalAudioLevel(peak) => {
                 self.chat_widget.on_realtime_webrtc_local_audio_level(peak);
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
+            AppEvent::OpenReasoningPopup {
+                model,
+                return_to_models,
+            } => {
+                self.chat_widget
+                    .open_reasoning_popup_with_return_models(model, return_to_models);
             }
             AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
                 self.chat_widget
