@@ -535,6 +535,9 @@
             },
             "workspace_dependencies": {
               "type": "boolean"
+            },
+            "workspace_owner_usage_nudge": {
+              "type": "boolean"
             }
           },
           "type": "object"
@@ -2430,6 +2433,9 @@
           "type": "boolean"
         },
         "workspace_dependencies": {
+          "type": "boolean"
+        },
+        "workspace_owner_usage_nudge": {
           "type": "boolean"
         }
       },

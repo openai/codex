@@ -72,6 +72,7 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -91,6 +92,7 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
@@ -2070,6 +2072,21 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
+        });
+    }
+
+    fn send_add_credits_nudge_email(
+        &mut self,
+        app_server: &AppServerSession,
+        credit_type: AddCreditsNudgeCreditType,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = send_add_credits_nudge_email(request_handle, credit_type)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AddCreditsNudgeEmailFinished { result });
         });
     }
 
@@ -4800,6 +4817,18 @@ impl App {
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }
+            AppEvent::SendAddCreditsNudgeEmail { credit_type } => {
+                if self
+                    .chat_widget
+                    .start_add_credits_nudge_email_request(credit_type)
+                {
+                    self.send_add_credits_nudge_email(app_server, credit_type);
+                }
+            }
+            AppEvent::AddCreditsNudgeEmailFinished { result } => {
+                self.chat_widget
+                    .finish_add_credits_nudge_email_request(result);
+            }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {
                     for snapshot in snapshots {
@@ -6469,6 +6498,22 @@ async fn fetch_account_rate_limits(
         .wrap_err("account/rateLimits/read failed in TUI")?;
 
     Ok(app_server_rate_limit_snapshots_to_core(response))
+}
+
+async fn send_add_credits_nudge_email(
+    request_handle: AppServerRequestHandle,
+    credit_type: AddCreditsNudgeCreditType,
+) -> Result<codex_app_server_protocol::AddCreditsNudgeEmailStatus> {
+    let request_id = RequestId::String(format!("add-credits-nudge-{}", Uuid::new_v4()));
+    let response: codex_app_server_protocol::SendAddCreditsNudgeEmailResponse = request_handle
+        .request_typed(ClientRequest::SendAddCreditsNudgeEmail {
+            request_id,
+            params: SendAddCreditsNudgeEmailParams { credit_type },
+        })
+        .await
+        .wrap_err("account/sendAddCreditsNudgeEmail failed in TUI")?;
+
+    Ok(response.status)
 }
 
 async fn fetch_skills_list(
