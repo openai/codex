@@ -2732,43 +2732,93 @@ impl CodexMessageProcessor {
             }
         };
 
-        let thread_id_str = thread_id.to_string();
-        if let Err(err) = self
-            .thread_store
-            .read_thread(StoreReadThreadParams {
-                thread_id,
-                include_archived: false,
-                include_history: false,
-            })
-            .await
-        {
-            self.outgoing
-                .send_error(request_id, thread_store_archive_error("archive", err))
-                .await;
-            return;
+        let mut thread_ids = vec![thread_id];
+        if let Some(state_db_ctx) = get_state_db(&self.config).await {
+            let descendants = match state_db_ctx.list_thread_spawn_descendants(thread_id).await {
+                Ok(descendants) => descendants,
+                Err(err) => {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!(
+                                    "failed to list spawned descendants for thread id {thread_id}: {err}"
+                                ),
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                }
+            };
+            let mut seen = HashSet::from([thread_id]);
+            for descendant_id in descendants {
+                if seen.insert(descendant_id) {
+                    thread_ids.push(descendant_id);
+                }
+            }
         }
-        self.prepare_thread_for_archive(thread_id).await;
 
-        match self
-            .thread_store
-            .archive_thread(StoreArchiveThreadParams { thread_id })
-            .await
-        {
-            Ok(()) => {
-                let response = ThreadArchiveResponse {};
-                self.outgoing.send_response(request_id, response).await;
-                let notification = ThreadArchivedNotification {
-                    thread_id: thread_id_str,
-                };
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadArchived(notification))
-                    .await;
+        let mut archive_thread_ids = Vec::new();
+        for (index, thread_id) in thread_ids.into_iter().enumerate() {
+            match self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id,
+                    include_archived: index > 0,
+                    include_history: false,
+                })
+                .await
+            {
+                Ok(thread) => {
+                    if thread.archived_at.is_none() {
+                        archive_thread_ids.push(thread_id);
+                    }
+                }
+                Err(err) if index == 0 => {
+                    self.outgoing
+                        .send_error(request_id, thread_store_archive_error("archive", err))
+                        .await;
+                    return;
+                }
+                Err(err) => {
+                    self.outgoing
+                        .send_error(request_id, thread_store_archive_error("archive", err))
+                        .await;
+                    return;
+                }
             }
-            Err(err) => {
-                self.outgoing
-                    .send_error(request_id, thread_store_archive_error("archive", err))
-                    .await;
+        }
+
+        let mut archived_thread_ids = Vec::new();
+        for thread_id in archive_thread_ids.into_iter().rev() {
+            self.prepare_thread_for_archive(thread_id).await;
+            match self
+                .thread_store
+                .archive_thread(StoreArchiveThreadParams { thread_id })
+                .await
+            {
+                Ok(()) => {
+                    archived_thread_ids.push(thread_id.to_string());
+                }
+                Err(err) => {
+                    self.outgoing
+                        .send_error(request_id, thread_store_archive_error("archive", err))
+                        .await;
+                    return;
+                }
             }
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadArchiveResponse {})
+            .await;
+        for thread_id in archived_thread_ids {
+            let notification = ThreadArchivedNotification { thread_id };
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadArchived(notification))
+                .await;
         }
     }
 

@@ -144,6 +144,17 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
             .await
     }
 
+    /// List all spawned descendants of `root_thread_id`.
+    ///
+    /// Descendants are returned breadth-first by depth, then by thread id for stable ordering.
+    pub async fn list_thread_spawn_descendants(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<Vec<ThreadId>> {
+        self.list_thread_spawn_descendants_matching(root_thread_id, None)
+            .await
+    }
+
     /// Find a direct spawned child of `parent_thread_id` by canonical agent path.
     pub async fn find_thread_spawn_child_by_path(
         &self,
@@ -1655,5 +1666,11 @@ mod tests {
             .await
             .expect("open descendants from child should load");
         assert_eq!(open_descendants_from_child, vec![grandchild_thread_id]);
+
+        let all_descendants = runtime
+            .list_thread_spawn_descendants(parent_thread_id)
+            .await
+            .expect("all descendants should load");
+        assert_eq!(all_descendants, vec![child_thread_id, grandchild_thread_id]);
     }
 }
