@@ -2505,47 +2505,6 @@ impl CodexMessageProcessor {
             };
         }
 
-        if requested_cwd.is_none() {
-            match listener_task_context
-                .thread_manager
-                .environment_manager()
-                .default_cwd(environment_id.as_deref())
-            {
-                Ok(Some(default_cwd)) => {
-                    config.cwd =
-                        match codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-                            default_cwd,
-                        ) {
-                            Ok(default_cwd) => default_cwd,
-                            Err(err) => {
-                                listener_task_context
-                                    .outgoing
-                                    .send_error(
-                                        request_id,
-                                        invalid_request(format!(
-                                            "failed to resolve environment default cwd {}: {err}",
-                                            default_cwd.display()
-                                        )),
-                                    )
-                                    .await;
-                                return;
-                            }
-                        };
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    listener_task_context
-                        .outgoing
-                        .send_error(
-                            request_id,
-                            invalid_request(format!("failed to resolve environment: {err}")),
-                        )
-                        .await;
-                    return;
-                }
-            }
-        }
-
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
