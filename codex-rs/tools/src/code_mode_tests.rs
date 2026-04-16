@@ -7,6 +7,7 @@ use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::ToolName;
 use crate::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -106,6 +107,7 @@ fn tool_spec_to_code_mode_tool_definition_returns_augmented_nested_tools() {
         tool_spec_to_code_mode_tool_definition(&spec),
         Some(codex_code_mode::ToolDefinition {
             name: "apply_patch".to_string(),
+            tool_name: ToolName::plain("apply_patch"),
             description: r#"Apply a patch
 
 exec tool declaration:
@@ -182,7 +184,14 @@ fn create_wait_tool_matches_expected_spec() {
 
 #[test]
 fn create_code_mode_tool_matches_expected_spec() {
-    let enabled_tools = vec![("update_plan".to_string(), "Update the plan".to_string())];
+    let enabled_tools = vec![codex_code_mode::ToolDefinition {
+        name: "update_plan".to_string(),
+        tool_name: ToolName::plain("update_plan"),
+        description: "Update the plan".to_string(),
+        kind: codex_code_mode::CodeModeToolKind::Function,
+        input_schema: None,
+        output_schema: None,
+    }];
 
     assert_eq!(
         create_code_mode_tool(

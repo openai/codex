@@ -2,8 +2,10 @@ use crate::JsonSchema;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
+use crate::ToolName;
 use crate::ToolSearchOutputTool;
 use crate::ToolSpec;
+use crate::default_namespace_description;
 use crate::mcp_tool_to_deferred_responses_api_tool;
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
@@ -16,13 +18,13 @@ pub const TOOL_SEARCH_DEFAULT_LIMIT: usize = 8;
 pub const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ToolSearchAppInfo {
+pub struct ToolSearchSourceInfo {
     pub name: String,
     pub description: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ToolSearchAppSource<'a> {
+pub struct ToolSearchSource<'a> {
     pub server_name: &'a str,
     pub connector_name: Option<&'a str>,
     pub connector_description: Option<&'a str>,
@@ -30,6 +32,7 @@ pub struct ToolSearchAppSource<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToolSearchResultSource<'a> {
+    pub server_name: &'a str,
     pub tool_namespace: &'a str,
     pub tool_name: &'a str,
     pub tool: &'a rmcp::model::Tool,
@@ -143,11 +146,14 @@ pub struct ToolSuggestEntry {
     pub app_connector_ids: Vec<String>,
 }
 
-pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: usize) -> ToolSpec {
+pub fn create_tool_search_tool(
+    searchable_sources: &[ToolSearchSourceInfo],
+    default_limit: usize,
+) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "query".to_string(),
-            JsonSchema::string(Some("Search query for apps tools.".to_string())),
+            JsonSchema::string(Some("Search query for MCP tools.".to_string())),
         ),
         (
             "limit".to_string(),
@@ -157,22 +163,22 @@ pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: u
         ),
     ]);
 
-    let mut app_descriptions = BTreeMap::new();
-    for app_tool in app_tools {
-        app_descriptions
-            .entry(app_tool.name.clone())
+    let mut source_descriptions = BTreeMap::new();
+    for source in searchable_sources {
+        source_descriptions
+            .entry(source.name.clone())
             .and_modify(|existing: &mut Option<String>| {
                 if existing.is_none() {
-                    *existing = app_tool.description.clone();
+                    *existing = source.description.clone();
                 }
             })
-            .or_insert(app_tool.description.clone());
+            .or_insert(source.description.clone());
     }
 
-    let app_descriptions = if app_descriptions.is_empty() {
+    let source_descriptions = if source_descriptions.is_empty() {
         "None currently enabled.".to_string()
     } else {
-        app_descriptions
+        source_descriptions
             .into_iter()
             .map(|(name, description)| match description {
                 Some(description) => format!("- {name}: {description}"),
@@ -183,7 +189,7 @@ pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: u
     };
 
     let description = format!(
-        "# Apps (Connectors) tool discovery\n\nSearches over apps/connectors tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to all the tools of the following apps/connectors:\n{app_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required tools and load them for the apps mentioned above. For the apps mentioned above, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates` for tool discovery."
+        "# MCP tool discovery\n\nSearches over MCP tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following MCP servers/connectors:\n{source_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required MCP tools. For MCP tool discovery, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates`."
     );
 
     ToolSpec::ToolSearch {
@@ -200,13 +206,17 @@ pub fn create_tool_search_tool(app_tools: &[ToolSearchAppInfo], default_limit: u
 pub fn collect_tool_search_output_tools<'a>(
     tool_sources: impl IntoIterator<Item = ToolSearchResultSource<'a>>,
 ) -> Result<Vec<ToolSearchOutputTool>, serde_json::Error> {
-    let grouped = tool_sources.into_iter().fold(
-        BTreeMap::<&'a str, Vec<ToolSearchResultSource<'a>>>::new(),
-        |mut grouped, tool| {
-            grouped.entry(tool.tool_namespace).or_default().push(tool);
-            grouped
-        },
-    );
+    let mut grouped: Vec<(&'a str, Vec<ToolSearchResultSource<'a>>)> = Vec::new();
+    for tool in tool_sources {
+        if let Some((_, tools)) = grouped
+            .iter_mut()
+            .find(|(tool_namespace, _)| *tool_namespace == tool.tool_namespace)
+        {
+            tools.push(tool);
+        } else {
+            grouped.push((tool.tool_namespace, vec![tool]));
+        }
+    }
 
     let mut results = Vec::with_capacity(grouped.len());
     for (tool_namespace, tools) in grouped {
@@ -216,6 +226,8 @@ pub fn collect_tool_search_output_tools<'a>(
 
         let description = first_tool
             .connector_description
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
             .map(str::to_string)
             .or_else(|| {
                 first_tool
@@ -228,14 +240,16 @@ pub fn collect_tool_search_output_tools<'a>(
         let tools = tools
             .iter()
             .map(|tool| {
-                mcp_tool_to_deferred_responses_api_tool(tool.tool_name.to_string(), tool.tool)
+                let tool_name = ToolName::namespaced(tool.tool_namespace, tool.tool_name);
+                mcp_tool_to_deferred_responses_api_tool(&tool_name, tool.tool)
                     .map(ResponsesApiNamespaceTool::Function)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         results.push(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
             name: tool_namespace.to_string(),
-            description: description.unwrap_or_default(),
+            description: description
+                .unwrap_or_else(|| default_namespace_description(tool_namespace)),
             tools,
         }));
     }
@@ -243,25 +257,36 @@ pub fn collect_tool_search_output_tools<'a>(
     Ok(results)
 }
 
-pub fn collect_tool_search_app_infos<'a>(
-    app_tools: impl IntoIterator<Item = ToolSearchAppSource<'a>>,
-    codex_apps_server_name: &str,
-) -> Vec<ToolSearchAppInfo> {
-    app_tools
+pub fn collect_tool_search_source_infos<'a>(
+    searchable_tools: impl IntoIterator<Item = ToolSearchSource<'a>>,
+) -> Vec<ToolSearchSourceInfo> {
+    searchable_tools
         .into_iter()
-        .filter(|tool| tool.server_name == codex_apps_server_name)
         .filter_map(|tool| {
-            let name = tool
+            if let Some(name) = tool
                 .connector_name
                 .map(str::trim)
-                .filter(|connector_name| !connector_name.is_empty())?
-                .to_string();
-            let description = tool
-                .connector_description
-                .map(str::trim)
-                .filter(|connector_description| !connector_description.is_empty())
-                .map(str::to_string);
-            Some(ToolSearchAppInfo { name, description })
+                .filter(|connector_name| !connector_name.is_empty())
+            {
+                return Some(ToolSearchSourceInfo {
+                    name: name.to_string(),
+                    description: tool
+                        .connector_description
+                        .map(str::trim)
+                        .filter(|description| !description.is_empty())
+                        .map(str::to_string),
+                });
+            }
+
+            let name = tool.server_name.trim();
+            if name.is_empty() {
+                return None;
+            }
+
+            Some(ToolSearchSourceInfo {
+                name: name.to_string(),
+                description: None,
+            })
         })
         .collect()
 }

@@ -56,7 +56,7 @@ fn supports_osc9() -> bool {
     // that don't set it (e.g., tmux/ssh) to avoid regressing OSC 9 support.
     if matches!(
         env::var("TERM_PROGRAM").ok().as_deref(),
-        Some("WezTerm" | "ghostty")
+        Some("WezTerm" | "WarpTerminal" | "ghostty")
     ) {
         return true;
     }

@@ -12,12 +12,14 @@ use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
 use http::header::CONTENT_TYPE;
+use http::header::LOCATION;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::to_string;
 use serde_json::to_value;
 use std::sync::Arc;
 use tracing::instrument;
+use tracing::trace;
 
 const MULTIPART_BOUNDARY: &str = "codex-realtime-call-boundary";
 const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data; boundary=codex-realtime-call-boundary";
@@ -26,9 +28,14 @@ pub struct RealtimeCallClient<T: HttpTransport, A: AuthProvider> {
     session: EndpointSession<T, A>,
 }
 
+/// Answer from creating a WebRTC Realtime call.
+///
+/// `sdp` configures the peer connection. `call_id` is parsed from the response `Location` header
+/// and is later used by the server-side sideband WebSocket to join this exact call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeCallResponse {
     pub sdp: String,
+    pub call_id: String,
 }
 
 #[derive(Serialize)]
@@ -101,8 +108,9 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
             .await?;
 
         let sdp = decode_sdp_response(resp.body.as_ref())?;
+        let call_id = decode_call_id_from_location(&resp.headers)?;
 
-        Ok(RealtimeCallResponse { sdp })
+        Ok(RealtimeCallResponse { sdp, call_id })
     }
 
     pub async fn create_with_session_and_headers(
@@ -111,6 +119,10 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
         session_config: RealtimeSessionConfig,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
+        trace!(target: "codex_api::realtime_websocket::wire", "realtime call request SDP: {sdp}");
+        // WebRTC can begin inference as soon as the peer connection comes up, so the initial
+        // session payload is sent with call creation. The sideband WebSocket still sends its normal
+        // session.update after it joins.
         let mut session = realtime_session_json(session_config)?;
         if let Some(session) = session.as_object_mut() {
             session.remove("id");
@@ -127,7 +139,8 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
                 .execute(Method::POST, Self::path(), extra_headers, Some(body))
                 .await?;
             let sdp = decode_sdp_response(resp.body.as_ref())?;
-            return Ok(RealtimeCallResponse { sdp });
+            let call_id = decode_call_id_from_location(&resp.headers)?;
+            return Ok(RealtimeCallResponse { sdp, call_id });
         }
 
         let session = to_string(&session).map_err(|err| ApiError::InvalidRequest {
@@ -164,8 +177,9 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
             .await?;
 
         let sdp = decode_sdp_response(resp.body.as_ref())?;
+        let call_id = decode_call_id_from_location(&resp.headers)?;
 
-        Ok(RealtimeCallResponse { sdp })
+        Ok(RealtimeCallResponse { sdp, call_id })
     }
 }
 
@@ -182,10 +196,33 @@ fn decode_sdp_response(body: &[u8]) -> Result<String, ApiError> {
     })
 }
 
+fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError> {
+    let location = headers
+        .get(LOCATION)
+        .ok_or_else(|| ApiError::Stream("realtime call response missing Location".to_string()))?
+        .to_str()
+        .map_err(|err| ApiError::Stream(format!("invalid realtime call Location: {err}")))?;
+    trace!("realtime call Location: {location}");
+
+    location
+        .split('?')
+        .next()
+        .unwrap_or(location)
+        .rsplit('/')
+        .find(|segment| segment.starts_with("rtc_") && segment.len() > "rtc_".len())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ApiError::Stream(format!(
+                "realtime call Location does not contain a call id: {location}"
+            ))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::endpoint::realtime_websocket::RealtimeEventParser;
+    use crate::endpoint::realtime_websocket::RealtimeOutputModality;
     use crate::endpoint::realtime_websocket::RealtimeSessionMode;
     use crate::provider::RetryConfig;
     use async_trait::async_trait;
@@ -193,6 +230,7 @@ mod tests {
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
+    use codex_protocol::protocol::RealtimeVoice;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
     use std::sync::Mutex;
@@ -201,12 +239,27 @@ mod tests {
     #[derive(Clone)]
     struct CapturingTransport {
         last_request: Arc<Mutex<Option<Request>>>,
+        response_headers: HeaderMap,
     }
 
     impl CapturingTransport {
         fn new() -> Self {
+            Self::with_location("/v1/realtime/calls/rtc_test")
+        }
+
+        fn with_location(location: &str) -> Self {
+            let mut response_headers = HeaderMap::new();
+            response_headers.insert(LOCATION, HeaderValue::from_str(location).unwrap());
             Self {
                 last_request: Arc::new(Mutex::new(None)),
+                response_headers,
+            }
+        }
+
+        fn without_location() -> Self {
+            Self {
+                last_request: Arc::new(Mutex::new(None)),
+                response_headers: HeaderMap::new(),
             }
         }
     }
@@ -217,7 +270,7 @@ mod tests {
             *self.last_request.lock().unwrap() = Some(req);
             Ok(Response {
                 status: StatusCode::OK,
-                headers: HeaderMap::new(),
+                headers: self.response_headers.clone(),
                 body: Bytes::from_static(b"v=0\r\n"),
             })
         }
@@ -231,8 +284,11 @@ mod tests {
     struct DummyAuth;
 
     impl AuthProvider for DummyAuth {
-        fn bearer_token(&self) -> Option<String> {
-            Some("test-token".to_string())
+        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            headers.insert(
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer test-token"),
+            );
         }
     }
 
@@ -260,6 +316,8 @@ mod tests {
             session_id: Some(session_id.to_string()),
             event_parser: RealtimeEventParser::RealtimeV2,
             session_mode: RealtimeSessionMode::Conversational,
+            output_modality: RealtimeOutputModality::Audio,
+            voice: RealtimeVoice::Marin,
         }
     }
 
@@ -280,7 +338,8 @@ mod tests {
         assert_eq!(
             response,
             RealtimeCallResponse {
-                sdp: "v=0\r\n".to_string()
+                sdp: "v=0\r\n".to_string(),
+                call_id: "rtc_test".to_string(),
             }
         );
 
@@ -297,6 +356,41 @@ mod tests {
                 .get(http::header::AUTHORIZATION)
                 .and_then(|value| value.to_str().ok()),
             Some("Bearer test-token")
+        );
+        assert_eq!(
+            request.body,
+            Some(RequestBody::Raw(Bytes::from_static(b"v=offer\r\n")))
+        );
+    }
+
+    #[tokio::test]
+    async fn extracts_call_id_from_forwarded_backend_location() {
+        let transport =
+            CapturingTransport::with_location("/v1/realtime/calls/calls/rtc_backend_test");
+        let client = RealtimeCallClient::new(
+            transport.clone(),
+            provider("https://chatgpt.com/backend-api/codex"),
+            DummyAuth,
+        );
+
+        let response = client
+            .create("v=offer\r\n".to_string())
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(
+            response,
+            RealtimeCallResponse {
+                sdp: "v=0\r\n".to_string(),
+                call_id: "rtc_backend_test".to_string(),
+            }
+        );
+
+        let request = transport.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(
+            request.url,
+            "https://chatgpt.com/backend-api/codex/realtime/calls"
         );
         assert_eq!(
             request.body,
@@ -324,7 +418,8 @@ mod tests {
         assert_eq!(
             response,
             RealtimeCallResponse {
-                sdp: "v=0\r\n".to_string()
+                sdp: "v=0\r\n".to_string(),
+                call_id: "rtc_test".to_string(),
             }
         );
 
@@ -385,7 +480,8 @@ mod tests {
         assert_eq!(
             response,
             RealtimeCallResponse {
-                sdp: "v=0\r\n".to_string()
+                sdp: "v=0\r\n".to_string(),
+                call_id: "rtc_test".to_string(),
             }
         );
 
@@ -410,6 +506,37 @@ mod tests {
                 })
                 .expect("request should encode")
             ))
+        );
+    }
+
+    #[tokio::test]
+    async fn errors_when_location_is_missing() {
+        let transport = CapturingTransport::without_location();
+        let client =
+            RealtimeCallClient::new(transport, provider("https://api.openai.com/v1"), DummyAuth);
+
+        let err = client
+            .create("v=offer\r\n".to_string())
+            .await
+            .expect_err("request should require Location");
+
+        assert_eq!(
+            err.to_string(),
+            "stream error: realtime call response missing Location"
+        );
+    }
+
+    #[test]
+    fn rejects_location_without_call_id() {
+        let mut headers = HeaderMap::new();
+        headers.insert(LOCATION, HeaderValue::from_static("/v1/realtime/calls"));
+
+        let err = decode_call_id_from_location(&headers)
+            .expect_err("Location without rtc_ segment should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "stream error: realtime call Location does not contain a call id: /v1/realtime/calls"
         );
     }
 }

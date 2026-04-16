@@ -4,8 +4,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::path::Path;
-use std::path::PathBuf;
 
 use thiserror::Error;
 
@@ -16,21 +14,8 @@ const SKILLS_DIR_NAME: &str = "skills";
 const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".codex-system-skills.marker";
 const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
 
-/// Returns the on-disk cache location for embedded system skills.
-///
-/// This is typically located at `CODEX_HOME/skills/.system`.
-pub fn system_cache_root_dir(codex_home: &Path) -> PathBuf {
-    AbsolutePathBuf::try_from(codex_home)
-        .map(|codex_home| system_cache_root_dir_abs(&codex_home))
-        .map(AbsolutePathBuf::into_path_buf)
-        .unwrap_or_else(|_| {
-            codex_home
-                .join(SKILLS_DIR_NAME)
-                .join(SYSTEM_SKILLS_DIR_NAME)
-        })
-}
-
-fn system_cache_root_dir_abs(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
+/// Returns the on-disk cache location for embedded system skills from an absolute CODEX_HOME.
+pub fn system_cache_root_dir(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     codex_home
         .join(SKILLS_DIR_NAME)
         .join(SYSTEM_SKILLS_DIR_NAME)
@@ -44,14 +29,12 @@ fn system_cache_root_dir_abs(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
 /// To avoid doing unnecessary work on every startup, a marker file is written
 /// with a fingerprint of the embedded directory. When the marker matches, the
 /// install is skipped.
-pub fn install_system_skills(codex_home: &Path) -> Result<(), SystemSkillsError> {
-    let codex_home = AbsolutePathBuf::try_from(codex_home)
-        .map_err(|source| SystemSkillsError::io("normalize codex home dir", source))?;
+pub fn install_system_skills(codex_home: &AbsolutePathBuf) -> Result<(), SystemSkillsError> {
     let skills_root_dir = codex_home.join(SKILLS_DIR_NAME);
     fs::create_dir_all(skills_root_dir.as_path())
         .map_err(|source| SystemSkillsError::io("create skills root dir", source))?;
 
-    let dest_system = system_cache_root_dir_abs(&codex_home);
+    let dest_system = system_cache_root_dir(codex_home);
 
     let marker_path = dest_system.join(SYSTEM_SKILLS_MARKER_FILENAME);
     let expected_fingerprint = embedded_system_skills_fingerprint();

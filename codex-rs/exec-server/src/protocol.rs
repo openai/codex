@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::FileSystemSandboxContext;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_config::types::ShellEnvironmentPolicyInherit;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -46,11 +47,15 @@ impl From<Vec<u8>> for ByteChunk {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
     pub client_name: String,
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InitializeResponse {}
+pub struct InitializeResponse {
+    pub session_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,9 +65,21 @@ pub struct ExecParams {
     pub process_id: ProcessId,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
+    #[serde(default)]
+    pub env_policy: Option<ExecEnvPolicy>,
     pub env: HashMap<String, String>,
     pub tty: bool,
     pub arg0: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecEnvPolicy {
+    pub inherit: ShellEnvironmentPolicyInherit,
+    pub ignore_default_excludes: bool,
+    pub exclude: Vec<String>,
+    pub r#set: HashMap<String, String>,
+    pub include_only: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,7 +154,7 @@ pub struct TerminateResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileParams {
     pub path: AbsolutePathBuf,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,7 +168,7 @@ pub struct FsReadFileResponse {
 pub struct FsWriteFileParams {
     pub path: AbsolutePathBuf,
     pub data_base64: String,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,7 +180,7 @@ pub struct FsWriteFileResponse {}
 pub struct FsCreateDirectoryParams {
     pub path: AbsolutePathBuf,
     pub recursive: Option<bool>,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,7 +191,7 @@ pub struct FsCreateDirectoryResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct FsGetMetadataParams {
     pub path: AbsolutePathBuf,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +199,7 @@ pub struct FsGetMetadataParams {
 pub struct FsGetMetadataResponse {
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
     pub created_at_ms: i64,
     pub modified_at_ms: i64,
 }
@@ -190,7 +208,7 @@ pub struct FsGetMetadataResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadDirectoryParams {
     pub path: AbsolutePathBuf,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,7 +231,7 @@ pub struct FsRemoveParams {
     pub path: AbsolutePathBuf,
     pub recursive: Option<bool>,
     pub force: Option<bool>,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,7 +244,7 @@ pub struct FsCopyParams {
     pub source_path: AbsolutePathBuf,
     pub destination_path: AbsolutePathBuf,
     pub recursive: bool,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox: Option<FileSystemSandboxContext>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,16 +1,16 @@
 use crate::history_cell::PlainHistoryCell;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::config_loader::ConfigLayerEntry;
+use crate::legacy_core::config_loader::ConfigLayerStack;
+use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
+use crate::legacy_core::config_loader::NetworkConstraints;
+use crate::legacy_core::config_loader::NetworkDomainPermissionToml;
+use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
+use crate::legacy_core::config_loader::RequirementSource;
+use crate::legacy_core::config_loader::ResidencyRequirement;
+use crate::legacy_core::config_loader::SandboxModeRequirement;
+use crate::legacy_core::config_loader::WebSearchModeRequirement;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_core::config::Config;
-use codex_core::config_loader::ConfigLayerEntry;
-use codex_core::config_loader::ConfigLayerStack;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::NetworkConstraints;
-use codex_core::config_loader::NetworkDomainPermissionToml;
-use codex_core::config_loader::NetworkUnixSocketPermissionToml;
-use codex_core::config_loader::RequirementSource;
-use codex_core::config_loader::ResidencyRequirement;
-use codex_core::config_loader::SandboxModeRequirement;
-use codex_core::config_loader::WebSearchModeRequirement;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -37,7 +37,7 @@ pub(crate) fn new_debug_config_output(
                 .permissions
                 .network
                 .as_ref()
-                .is_some_and(codex_core::config::NetworkProxySpec::socks_enabled),
+                .is_some_and(crate::legacy_core::config::NetworkProxySpec::socks_enabled),
         );
         lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
         lines.push(format!("    - ALL_PROXY   = {all_proxy}").into());
@@ -367,7 +367,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         dangerously_allow_all_unix_sockets,
         domains,
         managed_allowed_domains_only,
-        danger_full_access_denylist_only,
         unix_sockets,
         allow_local_binding,
     } = network;
@@ -403,11 +402,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(managed_allowed_domains_only) = managed_allowed_domains_only {
         parts.push(format!(
             "managed_allowed_domains_only={managed_allowed_domains_only}"
-        ));
-    }
-    if let Some(danger_full_access_denylist_only) = danger_full_access_denylist_only {
-        parts.push(format!(
-            "danger_full_access_denylist_only={danger_full_access_denylist_only}"
         ));
     }
     if let Some(unix_sockets) = unix_sockets {
@@ -457,26 +451,26 @@ fn format_network_unix_socket_permission(
 mod tests {
     use super::render_debug_config_lines;
     use super::session_all_proxy_url;
+    use crate::legacy_core::config::Constrained;
+    use crate::legacy_core::config_loader::ConfigLayerEntry;
+    use crate::legacy_core::config_loader::ConfigLayerStack;
+    use crate::legacy_core::config_loader::ConfigRequirements;
+    use crate::legacy_core::config_loader::ConfigRequirementsToml;
+    use crate::legacy_core::config_loader::ConstrainedWithSource;
+    use crate::legacy_core::config_loader::FeatureRequirementsToml;
+    use crate::legacy_core::config_loader::McpServerIdentity;
+    use crate::legacy_core::config_loader::McpServerRequirement;
+    use crate::legacy_core::config_loader::NetworkConstraints;
+    use crate::legacy_core::config_loader::NetworkDomainPermissionToml;
+    use crate::legacy_core::config_loader::NetworkDomainPermissionsToml;
+    use crate::legacy_core::config_loader::NetworkUnixSocketPermissionToml;
+    use crate::legacy_core::config_loader::NetworkUnixSocketPermissionsToml;
+    use crate::legacy_core::config_loader::RequirementSource;
+    use crate::legacy_core::config_loader::ResidencyRequirement;
+    use crate::legacy_core::config_loader::SandboxModeRequirement;
+    use crate::legacy_core::config_loader::Sourced;
+    use crate::legacy_core::config_loader::WebSearchModeRequirement;
     use codex_app_server_protocol::ConfigLayerSource;
-    use codex_core::config::Constrained;
-    use codex_core::config_loader::ConfigLayerEntry;
-    use codex_core::config_loader::ConfigLayerStack;
-    use codex_core::config_loader::ConfigRequirements;
-    use codex_core::config_loader::ConfigRequirementsToml;
-    use codex_core::config_loader::ConstrainedWithSource;
-    use codex_core::config_loader::FeatureRequirementsToml;
-    use codex_core::config_loader::McpServerIdentity;
-    use codex_core::config_loader::McpServerRequirement;
-    use codex_core::config_loader::NetworkConstraints;
-    use codex_core::config_loader::NetworkDomainPermissionToml;
-    use codex_core::config_loader::NetworkDomainPermissionsToml;
-    use codex_core::config_loader::NetworkUnixSocketPermissionToml;
-    use codex_core::config_loader::NetworkUnixSocketPermissionsToml;
-    use codex_core::config_loader::RequirementSource;
-    use codex_core::config_loader::ResidencyRequirement;
-    use codex_core::config_loader::SandboxModeRequirement;
-    use codex_core::config_loader::Sourced;
-    use codex_core::config_loader::WebSearchModeRequirement;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::protocol::AskForApproval;
@@ -605,7 +599,6 @@ mod tests {
                             NetworkDomainPermissionToml::Allow,
                         )]),
                     }),
-                    danger_full_access_denylist_only: Some(true),
                     ..Default::default()
                 },
                 RequirementSource::CloudRequirements,
@@ -618,7 +611,7 @@ mod tests {
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
@@ -676,7 +669,7 @@ mod tests {
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
-            "experimental_network: enabled=true, domains={example.com=allow}, danger_full_access_denylist_only=true (source: cloud requirements)"
+            "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
         ));
         assert!(!rendered.contains("  - rules:"));
     }
@@ -811,7 +804,7 @@ approval_policy = "never"
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
-            guardian_developer_instructions: None,
+            guardian_policy_config: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,

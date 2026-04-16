@@ -51,6 +51,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             process_id: ProcessId::from("proc-1"),
             argv: vec!["true".to_string()],
             cwd: std::env::current_dir()?,
+            env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
             arg0: None,
@@ -127,6 +128,7 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
                 "sleep 0.05; printf 'session output\\n'".to_string(),
             ],
             cwd: std::env::current_dir()?,
+            env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
             arg0: None,
@@ -156,6 +158,7 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
                 "import sys; line = sys.stdin.readline(); sys.stdout.write(f'from-stdin:{line}'); sys.stdout.flush()".to_string(),
             ],
             cwd: std::env::current_dir()?,
+            env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: true,
             arg0: None,
@@ -192,6 +195,7 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
                 "printf 'queued output\\n'".to_string(),
             ],
             cwd: std::env::current_dir()?,
+            env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
             arg0: None,
@@ -210,6 +214,8 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
     let mut context = create_process_context(/*use_remote*/ true).await?;
     let session = context
@@ -222,6 +228,7 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
                 "sleep 10".to_string(),
             ],
             cwd: std::env::current_dir()?,
+            env_policy: /*env_policy*/ None,
             env: Default::default(),
             tty: false,
             arg0: None,
@@ -255,6 +262,8 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     assert_exec_process_starts_and_exits(use_remote).await
 }
@@ -262,6 +271,8 @@ async fn exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn exec_process_streams_output(use_remote: bool) -> Result<()> {
     assert_exec_process_streams_output(use_remote).await
 }
@@ -269,6 +280,8 @@ async fn exec_process_streams_output(use_remote: bool) -> Result<()> {
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn exec_process_write_then_read(use_remote: bool) -> Result<()> {
     assert_exec_process_write_then_read(use_remote).await
 }
@@ -276,6 +289,8 @@ async fn exec_process_write_then_read(use_remote: bool) -> Result<()> {
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
 async fn exec_process_preserves_queued_events_before_subscribe(use_remote: bool) -> Result<()> {
     assert_exec_process_preserves_queued_events_before_subscribe(use_remote).await
 }

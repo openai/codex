@@ -59,6 +59,7 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
     section.push_str("- `codex.emitImage(...)` adds one image to the outer `js_repl` function output each time you call it, so you can call it multiple times to emit multiple images. It accepts a data URL, a single `input_image` item, an object like `{ bytes, mimeType }`, or a raw tool response object with exactly one image and no text. It rejects mixed text-and-image content.\n");
     section.push_str("- `codex.tool(...)` and `codex.emitImage(...)` keep stable helper identities across cells. Saved references and persisted objects can reuse them in later cells, but async callbacks that fire after a cell finishes still fail because no exec is active.\n");
     section.push_str("- Request full-resolution image processing with `detail: \"original\"` only when the `view_image` tool schema includes a `detail` argument. The same availability applies to `codex.emitImage(...)`: if `view_image.detail` is present, you may also pass `detail: \"original\"` there. Use this when high-fidelity image perception or precise localization is needed, especially for CUA agents.\n");
+    section.push_str("- Raw MCP image blocks can request the same behavior by returning `_meta: { \"codex/imageDetail\": \"original\" }` on the image content item.\n");
     section.push_str("- Example of sharing an in-memory Playwright screenshot: `await codex.emitImage({ bytes: await page.screenshot({ type: \"jpeg\", quality: 85 }), mimeType: \"image/jpeg\", detail: \"original\" })`.\n");
     section.push_str("- Example of sharing a local image tool result: `await codex.emitImage(codex.tool(\"view_image\", { path: \"/absolute/path\", detail: \"original\" }))`.\n");
     section.push_str("- When encoding an image to send with `codex.emitImage(...)` or `view_image`, prefer JPEG at about 85 quality when lossy compression is acceptable; use PNG when transparency or lossless detail matters. Smaller uploads are faster and less likely to hit size limits.\n");
@@ -169,14 +170,14 @@ async fn read_project_docs_with_fs(
             break;
         }
 
-        match fs.get_metadata(&p).await {
+        match fs.get_metadata(&p, /*sandbox*/ None).await {
             Ok(metadata) if !metadata.is_file => continue,
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
         }
 
-        let mut data = match fs.read_file(&p).await {
+        let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
             Ok(data) => data,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
@@ -248,14 +249,14 @@ pub async fn discover_project_doc_paths(
     if !project_root_markers.is_empty() {
         for ancestor in dir.ancestors() {
             for marker in &project_root_markers {
-                let marker_path = AbsolutePathBuf::try_from(ancestor.join(marker))?;
-                let marker_exists = match fs.get_metadata(&marker_path).await {
+                let marker_path = ancestor.join(marker);
+                let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
                     Ok(_) => true,
                     Err(err) if err.kind() == io::ErrorKind::NotFound => false,
                     Err(err) => return Err(err),
                 };
                 if marker_exists {
-                    project_root = Some(AbsolutePathBuf::try_from(ancestor.to_path_buf())?);
+                    project_root = Some(ancestor.clone());
                     break;
                 }
             }
@@ -289,7 +290,7 @@ pub async fn discover_project_doc_paths(
     for d in search_dirs {
         for name in &candidate_filenames {
             let candidate = d.join(name);
-            match fs.get_metadata(&candidate).await {
+            match fs.get_metadata(&candidate, /*sandbox*/ None).await {
                 Ok(md) if md.is_file => {
                     found.push(candidate);
                     break;

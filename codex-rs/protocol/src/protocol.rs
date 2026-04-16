@@ -65,10 +65,12 @@ pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
 pub use crate::approvals::GuardianAssessmentAction;
+pub use crate::approvals::GuardianAssessmentDecisionSource;
 pub use crate::approvals::GuardianAssessmentEvent;
 pub use crate::approvals::GuardianAssessmentStatus;
 pub use crate::approvals::GuardianCommandSource;
 pub use crate::approvals::GuardianRiskLevel;
+pub use crate::approvals::GuardianUserAuthorization;
 pub use crate::approvals::NetworkApprovalContext;
 pub use crate::approvals::NetworkApprovalProtocol;
 pub use crate::approvals::NetworkPolicyAmendment;
@@ -132,11 +134,21 @@ pub struct McpServerRefreshConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationStartParams {
-    pub prompt: String,
+    /// Selects whether the realtime session should produce text or audio output.
+    pub output_modality: RealtimeOutputModality,
+    #[serde(
+        default,
+        deserialize_with = "conversation_start_prompt_serde::deserialize",
+        serialize_with = "conversation_start_prompt_serde::serialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub prompt: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<ConversationStartTransport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<RealtimeVoice>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -145,6 +157,130 @@ pub struct ConversationStartParams {
 pub enum ConversationStartTransport {
     Websocket,
     Webrtc { sdp: String },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeOutputModality {
+    Text,
+    Audio,
+}
+
+mod conversation_start_prompt_serde {
+    use serde::Deserializer;
+    use serde::Serializer;
+
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        serde_with::rust::double_option::deserialize(deserializer)
+    }
+
+    pub(crate) fn serialize<S>(
+        value: &Option<Option<String>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serde_with::rust::double_option::serialize(value, serializer)
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash, JsonSchema, TS, Ord, PartialOrd,
+)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RealtimeVoice {
+    Alloy,
+    Arbor,
+    Ash,
+    Ballad,
+    Breeze,
+    Cedar,
+    Coral,
+    Cove,
+    Echo,
+    Ember,
+    Juniper,
+    Maple,
+    Marin,
+    Sage,
+    Shimmer,
+    Sol,
+    Spruce,
+    Vale,
+    Verse,
+}
+
+impl RealtimeVoice {
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Alloy => "alloy",
+            Self::Arbor => "arbor",
+            Self::Ash => "ash",
+            Self::Ballad => "ballad",
+            Self::Breeze => "breeze",
+            Self::Cedar => "cedar",
+            Self::Coral => "coral",
+            Self::Cove => "cove",
+            Self::Echo => "echo",
+            Self::Ember => "ember",
+            Self::Juniper => "juniper",
+            Self::Maple => "maple",
+            Self::Marin => "marin",
+            Self::Sage => "sage",
+            Self::Shimmer => "shimmer",
+            Self::Sol => "sol",
+            Self::Spruce => "spruce",
+            Self::Vale => "vale",
+            Self::Verse => "verse",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct RealtimeVoicesList {
+    pub v1: Vec<RealtimeVoice>,
+    pub v2: Vec<RealtimeVoice>,
+    pub default_v1: RealtimeVoice,
+    pub default_v2: RealtimeVoice,
+}
+
+impl RealtimeVoicesList {
+    pub fn builtin() -> Self {
+        Self {
+            v1: vec![
+                RealtimeVoice::Juniper,
+                RealtimeVoice::Maple,
+                RealtimeVoice::Spruce,
+                RealtimeVoice::Ember,
+                RealtimeVoice::Vale,
+                RealtimeVoice::Breeze,
+                RealtimeVoice::Arbor,
+                RealtimeVoice::Sol,
+                RealtimeVoice::Cove,
+            ],
+            v2: vec![
+                RealtimeVoice::Alloy,
+                RealtimeVoice::Ash,
+                RealtimeVoice::Ballad,
+                RealtimeVoice::Coral,
+                RealtimeVoice::Echo,
+                RealtimeVoice::Sage,
+                RealtimeVoice::Shimmer,
+                RealtimeVoice::Verse,
+                RealtimeVoice::Marin,
+                RealtimeVoice::Cedar,
+            ],
+            default_v1: RealtimeVoice::Cove,
+            default_v2: RealtimeVoice::Marin,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -161,6 +297,11 @@ pub struct RealtimeAudioFrame {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeTranscriptDelta {
     pub delta: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeTranscriptDone {
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -188,6 +329,16 @@ pub struct RealtimeResponseCancelled {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeResponseCreated {
+    pub response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeResponseDone {
+    pub response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
         session_id: String,
@@ -195,9 +346,13 @@ pub enum RealtimeEvent {
     },
     InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
     InputTranscriptDelta(RealtimeTranscriptDelta),
+    InputTranscriptDone(RealtimeTranscriptDone),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
+    OutputTranscriptDone(RealtimeTranscriptDone),
     AudioOut(RealtimeAudioFrame),
+    ResponseCreated(RealtimeResponseCreated),
     ResponseCancelled(RealtimeResponseCancelled),
+    ResponseDone(RealtimeResponseDone),
     ConversationItemAdded(Value),
     ConversationItemDone {
         item_id: String,
@@ -242,6 +397,9 @@ pub enum Op {
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
 
+    /// Request the list of voices supported by realtime conversation streams.
+    RealtimeConversationListVoices,
+
     /// Legacy user input.
     ///
     /// Prefer [`Op::UserTurn`] so the caller provides full turn context
@@ -252,6 +410,9 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
+        /// Optional turn-scoped Responses API `client_metadata`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -491,6 +652,12 @@ pub enum Op {
     /// involve the model.
     SetThreadName { name: String },
 
+    /// Set whether the thread remains eligible for memory generation.
+    ///
+    /// This persists thread-level memory mode metadata without involving the
+    /// model.
+    SetThreadMemoryMode { mode: ThreadMemoryMode },
+
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
@@ -520,11 +687,19 @@ pub enum Op {
     ListModels,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadMemoryMode {
+    Enabled,
+    Disabled,
+}
+
 impl From<Vec<UserInput>> for Op {
     fn from(value: Vec<UserInput>) -> Self {
         Op::UserInput {
             items: value,
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         }
     }
 }
@@ -588,6 +763,7 @@ impl Op {
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationClose => "realtime_conversation_close",
+            Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::UserInput { .. } => "user_input",
             Self::UserTurn { .. } => "user_turn",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
@@ -608,6 +784,7 @@ impl Op {
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",
+            Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
@@ -1369,6 +1546,9 @@ pub enum EventMsg {
     /// List of skills available to the agent.
     ListSkillsResponse(ListSkillsResponseEvent),
 
+    /// List of voices supported by realtime conversation streams.
+    RealtimeConversationListVoicesResponse(RealtimeConversationListVoicesResponseEvent),
+
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
 
@@ -1486,7 +1666,7 @@ pub struct HookRunSummary {
     pub handler_type: HookHandlerType,
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
-    pub source_path: PathBuf,
+    pub source_path: AbsolutePathBuf,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
@@ -1516,8 +1696,8 @@ pub struct HookCompletedEvent {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeConversationVersion {
-    #[default]
     V1,
+    #[default]
     V2,
 }
 
@@ -2182,6 +2362,9 @@ pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_resource_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -2189,6 +2372,9 @@ pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
     pub invocation: McpInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_resource_uri: Option<String>,
     #[ts(type = "string")]
     pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
@@ -2252,7 +2438,7 @@ pub struct ImageGenerationEndEvent {
     pub result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub saved_path: Option<String>,
+    pub saved_path: Option<AbsolutePathBuf>,
 }
 
 // Conversation kept for backward compatibility.
@@ -2274,14 +2460,23 @@ pub struct ResumedHistory {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub enum InitialHistory {
     New,
+    Cleared,
     Resumed(ResumedHistory),
     Forked(Vec<RolloutItem>),
 }
 
 impl InitialHistory {
+    pub fn scan_rollout_items(&self, mut predicate: impl FnMut(&RolloutItem) -> bool) -> bool {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => false,
+            InitialHistory::Resumed(resumed) => resumed.history.iter().any(&mut predicate),
+            InitialHistory::Forked(items) => items.iter().any(predicate),
+        }
+    }
+
     pub fn forked_from_id(&self) -> Option<ThreadId> {
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.forked_from_id,
@@ -2297,7 +2492,7 @@ impl InitialHistory {
 
     pub fn session_cwd(&self) -> Option<PathBuf> {
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => session_cwd_from_items(&resumed.history),
             InitialHistory::Forked(items) => session_cwd_from_items(items),
         }
@@ -2305,7 +2500,7 @@ impl InitialHistory {
 
     pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
         match self {
-            InitialHistory::New => Vec::new(),
+            InitialHistory::New | InitialHistory::Cleared => Vec::new(),
             InitialHistory::Resumed(resumed) => resumed.history.clone(),
             InitialHistory::Forked(items) => items.clone(),
         }
@@ -2313,7 +2508,7 @@ impl InitialHistory {
 
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => Some(
                 resumed
                     .history
@@ -2339,7 +2534,7 @@ impl InitialHistory {
     pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
         // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
@@ -2355,7 +2550,7 @@ impl InitialHistory {
 
     pub fn get_dynamic_tools(&self) -> Option<Vec<DynamicToolSpec>> {
         match self {
-            InitialHistory::New => None,
+            InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => {
                 resumed.history.iter().find_map(|item| match item {
                     RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
@@ -2442,6 +2637,15 @@ impl SessionSource {
             "unknown" => SessionSource::Unknown,
             _ => SessionSource::Custom(normalized),
         })
+    }
+
+    /// Low cardinality thread source label for analytics.
+    pub fn thread_source_name(&self) -> Option<&'static str> {
+        match self {
+            SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
+            SessionSource::SubAgent(_) => Some("subagent"),
+            SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
+        }
     }
 
     pub fn get_nickname(&self) -> Option<String> {
@@ -2848,7 +3052,7 @@ pub struct ExecCommandBeginEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -2872,7 +3076,7 @@ pub struct ExecCommandEndEvent {
     /// The command that was executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -2905,7 +3109,7 @@ pub struct ViewImageToolCallEvent {
     /// Identifier for the originating tool call.
     pub call_id: String,
     /// Local filesystem path provided to the tool.
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -3118,6 +3322,11 @@ pub struct ListSkillsResponseEvent {
     pub skills: Vec<SkillsListEntry>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeConversationListVoicesResponseEvent {
+    pub voices: RealtimeVoicesList,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
@@ -3176,7 +3385,7 @@ pub struct SkillMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dependencies: Option<SkillDependencies>,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
 }
@@ -3188,9 +3397,9 @@ pub struct SkillInterface {
     #[ts(optional)]
     pub short_description: Option<String>,
     #[ts(optional)]
-    pub icon_small: Option<PathBuf>,
+    pub icon_small: Option<AbsolutePathBuf>,
     #[ts(optional)]
-    pub icon_large: Option<PathBuf>,
+    pub icon_large: Option<AbsolutePathBuf>,
     #[ts(optional)]
     pub brand_color: Option<String>,
     #[ts(optional)]
@@ -3274,7 +3483,7 @@ pub struct SessionConfiguredEvent {
 
     /// Working directory that should be treated as the *root* of the
     /// session.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
 
     /// The effort the model is putting into reasoning about the user's request.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3338,6 +3547,9 @@ pub enum ReviewDecision {
     #[default]
     Denied,
 
+    /// Automatic approval review timed out before reaching a decision.
+    TimedOut,
+
     /// User has denied this command and the agent should not do anything until
     /// the user's next command.
     Abort,
@@ -3358,6 +3570,7 @@ impl ReviewDecision {
                 NetworkPolicyRuleAction::Deny => "denied_with_network_policy_deny",
             },
             ReviewDecision::Denied => "denied",
+            ReviewDecision::TimedOut => "timed_out",
             ReviewDecision::Abort => "abort",
         }
     }
@@ -3611,6 +3824,8 @@ mod tests {
     use crate::permissions::NetworkSandboxPolicy;
     use anyhow::Result;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -3682,6 +3897,24 @@ mod tests {
             SessionSource::from_startup_arg(" Atlas ").unwrap(),
             SessionSource::Custom("atlas".to_string())
         );
+    }
+
+    #[test]
+    fn session_source_thread_source_name_classifies_user_and_subagent_sources() {
+        for (source, expected) in [
+            (SessionSource::Cli, Some("user")),
+            (SessionSource::VSCode, Some("user")),
+            (SessionSource::Exec, Some("user")),
+            (
+                SessionSource::SubAgent(SubAgentSource::Review),
+                Some("subagent"),
+            ),
+            (SessionSource::Mcp, None),
+            (SessionSource::Custom("atlas".to_string()), None),
+            (SessionSource::Unknown, None),
+        ] {
+            assert_eq!(source.thread_source_name(), expected);
+        }
     }
 
     #[test]
@@ -3994,7 +4227,8 @@ mod tests {
     #[test]
     fn restricted_file_system_policy_treats_root_with_carveouts_as_scoped_access() {
         let cwd = TempDir::new().expect("tempdir");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let root = AbsolutePathBuf::from_absolute_path(&canonical_cwd)
             .expect("absolute canonical tempdir")
             .as_path()
@@ -4004,8 +4238,7 @@ mod tests {
             .expect("filesystem root");
         let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path());
         let expected_blocked = AbsolutePathBuf::from_absolute_path(
-            cwd.path()
-                .canonicalize()
+            codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
                 .expect("canonicalize cwd")
                 .join("blocked"),
         )
@@ -4050,7 +4283,8 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         std::fs::create_dir_all(cwd.path().join(".agents")).expect("create .agents");
         std::fs::create_dir_all(cwd.path().join(".codex")).expect("create .codex");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let cwd_absolute =
             AbsolutePathBuf::from_absolute_path(&canonical_cwd).expect("absolute tempdir");
         let secret = AbsolutePathBuf::resolve_path_against_base("secret", cwd.path());
@@ -4117,7 +4351,8 @@ mod tests {
     #[test]
     fn restricted_file_system_policy_treats_read_entries_as_read_only_subpaths() {
         let cwd = TempDir::new().expect("tempdir");
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
         let docs_public = AbsolutePathBuf::resolve_path_against_base("docs/public", cwd.path());
         let expected_docs = AbsolutePathBuf::from_absolute_path(canonical_cwd.join("docs"))
@@ -4164,7 +4399,8 @@ mod tests {
     fn legacy_workspace_write_nested_readable_root_stays_writable() {
         let cwd = TempDir::new().expect("tempdir");
         let docs = AbsolutePathBuf::resolve_path_against_base("docs", cwd.path());
-        let canonical_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+        let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
+            .expect("canonicalize cwd");
         let expected_dot_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
         let policy = SandboxPolicy::WorkspaceWrite {
@@ -4350,7 +4586,7 @@ mod tests {
                 status: "completed".into(),
                 revised_prompt: Some("A tiny blue square".into()),
                 result: "Zm9v".into(),
-                saved_path: Some("/tmp/ig-1.png".into()),
+                saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
             }),
         };
 
@@ -4362,7 +4598,10 @@ mod tests {
                 assert_eq!(event.status, "completed");
                 assert_eq!(event.revised_prompt.as_deref(), Some("A tiny blue square"));
                 assert_eq!(event.result, "Zm9v");
-                assert_eq!(event.saved_path.as_deref(), Some("/tmp/ig-1.png"));
+                assert_eq!(
+                    event.saved_path.as_ref().map(AbsolutePathBuf::as_path),
+                    Some(test_path_buf("/tmp/ig-1.png").as_path())
+                );
             }
             _ => panic!("expected ImageGenerationEnd event"),
         }
@@ -4409,29 +4648,81 @@ mod tests {
             },
         });
         let start = Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "be helpful".to_string(),
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
             transport: None,
+            voice: None,
         });
         let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "be helpful".to_string(),
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
             transport: Some(ConversationStartTransport::Webrtc {
                 sdp: "v=offer\r\n".to_string(),
             }),
+            voice: Some(RealtimeVoice::Cove),
         });
         let text = Op::RealtimeConversationText(ConversationTextParams {
             text: "hello".to_string(),
         });
         let close = Op::RealtimeConversationClose;
+        let default_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: None,
+            session_id: None,
+            transport: None,
+            voice: None,
+        });
+        let null_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
+            prompt: Some(None),
+            session_id: None,
+            transport: None,
+            voice: None,
+        });
+        let list_voices = Op::RealtimeConversationListVoices;
 
         assert_eq!(
             serde_json::to_value(&start).unwrap(),
             json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": "be helpful",
                 "session_id": "conv_1"
             })
+        );
+        assert_eq!(
+            serde_json::to_value(&default_prompt_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start",
+                "output_modality": "audio"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&null_prompt_start).unwrap(),
+            json!({
+                "type": "realtime_conversation_start",
+                "output_modality": "audio",
+                "prompt": null
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(json!({
+                "type": "realtime_conversation_start",
+                "output_modality": "audio"
+            }))
+            .unwrap(),
+            default_prompt_start
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(json!({
+                "type": "realtime_conversation_start",
+                "output_modality": "audio",
+                "prompt": null
+            }))
+            .unwrap(),
+            null_prompt_start
         );
         assert_eq!(
             serde_json::to_value(&audio).unwrap(),
@@ -4460,16 +4751,62 @@ mod tests {
             close
         );
         assert_eq!(
+            serde_json::to_value(&list_voices).unwrap(),
+            json!({
+                "type": "realtime_conversation_list_voices"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(serde_json::to_value(&list_voices).unwrap()).unwrap(),
+            list_voices
+        );
+        assert_eq!(
             serde_json::to_value(&webrtc_start).unwrap(),
             json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": "be helpful",
                 "session_id": "conv_1",
                 "transport": {
                     "type": "webrtc",
                     "sdp": "v=offer\r\n"
-                }
+                },
+                "voice": "cove"
             })
+        );
+    }
+
+    #[test]
+    fn realtime_voice_list_is_stable() {
+        assert_eq!(
+            RealtimeVoicesList::builtin(),
+            RealtimeVoicesList {
+                v1: vec![
+                    RealtimeVoice::Juniper,
+                    RealtimeVoice::Maple,
+                    RealtimeVoice::Spruce,
+                    RealtimeVoice::Ember,
+                    RealtimeVoice::Vale,
+                    RealtimeVoice::Breeze,
+                    RealtimeVoice::Arbor,
+                    RealtimeVoice::Sol,
+                    RealtimeVoice::Cove,
+                ],
+                v2: vec![
+                    RealtimeVoice::Alloy,
+                    RealtimeVoice::Ash,
+                    RealtimeVoice::Ballad,
+                    RealtimeVoice::Coral,
+                    RealtimeVoice::Echo,
+                    RealtimeVoice::Sage,
+                    RealtimeVoice::Shimmer,
+                    RealtimeVoice::Verse,
+                    RealtimeVoice::Marin,
+                    RealtimeVoice::Cedar,
+                ],
+                default_v1: RealtimeVoice::Cove,
+                default_v2: RealtimeVoice::Marin,
+            }
         );
     }
 
@@ -4478,6 +4815,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4495,6 +4833,7 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
+                responsesapi_client_metadata: None,
             }
         );
 
@@ -4514,6 +4853,7 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
+            responsesapi_client_metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4525,6 +4865,33 @@ mod tests {
                 "final_output_json_schema": schema,
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn user_input_with_responsesapi_client_metadata_round_trips() -> Result<()> {
+        let op = Op::UserInput {
+            items: Vec::new(),
+            final_output_json_schema: None,
+            responsesapi_client_metadata: Some(HashMap::from([(
+                "fiber_run_id".to_string(),
+                "fiber-123".to_string(),
+            )])),
+        };
+
+        let json_op = serde_json::to_value(&op)?;
+        assert_eq!(
+            json_op,
+            json!({
+                "type": "user_input",
+                "items": [],
+                "responsesapi_client_metadata": {
+                    "fiber_run_id": "fiber-123",
+                }
+            })
+        );
+        assert_eq!(serde_json::from_value::<Op>(json_op)?, op);
 
         Ok(())
     }
@@ -4594,7 +4961,7 @@ mod tests {
     #[test]
     fn turn_context_item_deserializes_without_network() -> Result<()> {
         let item: TurnContextItem = serde_json::from_value(json!({
-            "cwd": "/tmp",
+            "cwd": test_path_buf("/tmp"),
             "approval_policy": "never",
             "sandbox_policy": { "type": "danger-full-access" },
             "model": "gpt-5",
@@ -4611,7 +4978,7 @@ mod tests {
         let item = TurnContextItem {
             turn_id: None,
             trace_id: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp"),
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
@@ -4661,7 +5028,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/home/user/project"),
+                cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -4683,7 +5050,7 @@ mod tests {
                 "sandbox_policy": {
                     "type": "read-only"
                 },
-                "cwd": "/home/user/project",
+                "cwd": test_path_buf("/home/user/project"),
                 "reasoning_effort": "medium",
                 "history_log_id": 0,
                 "history_entry_count": 0,

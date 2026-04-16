@@ -7,6 +7,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 
 use super::common;
@@ -22,7 +23,7 @@ use crate::schema::PostToolUseToolInput;
 pub struct PostToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
@@ -59,7 +60,9 @@ pub(crate) fn preview(
         Some(&request.tool_name),
     )
     .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
+    .map(|handler| {
+        common::hook_run_for_tool_use(dispatcher::running_summary(&handler), &request.tool_use_id)
+    })
     .collect()
 }
 
@@ -100,11 +103,13 @@ pub(crate) async fn run(
     }) {
         Ok(input_json) => input_json,
         Err(error) => {
-            return serialization_failure_outcome(common::serialization_failure_hook_events(
+            let hook_events = common::serialization_failure_hook_events_for_tool_use(
                 matched,
-                Some(request.turn_id),
+                Some(request.turn_id.clone()),
                 format!("failed to serialize post tool use hook input: {error}"),
-            ));
+                &request.tool_use_id,
+            );
+            return serialization_failure_outcome(hook_events);
         }
     };
 
@@ -113,7 +118,7 @@ pub(crate) async fn run(
         matched,
         input_json,
         request.cwd.as_path(),
-        Some(request.turn_id),
+        Some(request.turn_id.clone()),
         parse_completed,
     )
     .await;
@@ -135,7 +140,12 @@ pub(crate) async fn run(
     );
 
     PostToolUseOutcome {
-        hook_events: results.into_iter().map(|result| result.completed).collect(),
+        hook_events: results
+            .into_iter()
+            .map(|result| {
+                common::hook_completed_for_tool_use(result.completed, &request.tool_use_id)
+            })
+            .collect(),
         should_stop,
         stop_reason,
         additional_contexts,
@@ -293,18 +303,22 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PostTo
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
+    use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     use super::PostToolUseHandlerData;
     use super::parse_completed;
+    use super::preview;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
+    use crate::events::common;
 
     #[test]
     fn block_decision_stops_normal_processing() {
@@ -463,6 +477,46 @@ mod tests {
         assert_eq!(parsed.completed.run.entries, Vec::<HookOutputEntry>::new());
     }
 
+    #[test]
+    fn preview_and_completed_run_ids_include_tool_use_id() {
+        let request = request_for_tool_use("tool-call-456");
+        let runs = preview(&[handler()], &request);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].id,
+            format!(
+                "post-tool-use:0:{}:tool-call-456",
+                test_path_buf("/tmp/hooks.json").display()
+            )
+        );
+
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), "", ""),
+            Some("turn-1".to_string()),
+        );
+        let completed = common::hook_completed_for_tool_use(parsed.completed, &request.tool_use_id);
+
+        assert_eq!(completed.run.id, runs[0].id);
+    }
+
+    #[test]
+    fn serialization_failure_run_ids_include_tool_use_id() {
+        let request = request_for_tool_use("tool-call-456");
+        let runs = preview(&[handler()], &request);
+
+        let completed = common::serialization_failure_hook_events_for_tool_use(
+            vec![handler()],
+            Some(request.turn_id.clone()),
+            "serialize failed".into(),
+            &request.tool_use_id,
+        );
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].run.id, runs[0].id);
+    }
+
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::PostToolUse,
@@ -470,7 +524,7 @@ mod tests {
             command: "python3 post_tool_use_hook.py".to_string(),
             timeout_sec: 5,
             status_message: Some("running post tool use hook".to_string()),
-            source_path: PathBuf::from("/tmp/hooks.json"),
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
             display_order: 0,
         }
     }
@@ -484,6 +538,21 @@ mod tests {
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             error: None,
+        }
+    }
+
+    fn request_for_tool_use(tool_use_id: &str) -> super::PostToolUseRequest {
+        super::PostToolUseRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: test_path_buf("/tmp").abs(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_use_id: tool_use_id.to_string(),
+            command: "echo hello".to_string(),
+            tool_response: json!({"ok": true}),
         }
     }
 }

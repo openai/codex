@@ -71,7 +71,6 @@ pub struct ThreadItem {
     /// created_at comes from the filename timestamp with second precision.
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent update (from file mtime).
-    /// updated_at is truncated to second precision to match created_at.
     pub updated_at: Option<String>,
 }
 
@@ -292,7 +291,10 @@ impl<'de> serde::Deserialize<'de> for Cursor {
 
 impl From<codex_state::Anchor> for Cursor {
     fn from(anchor: codex_state::Anchor) -> Self {
-        let ts = OffsetDateTime::from_unix_timestamp(anchor.ts.timestamp())
+        let ts = anchor
+            .ts
+            .timestamp_nanos_opt()
+            .and_then(|nanos| OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).ok())
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
         Self::new(ts, anchor.id)
     }
@@ -754,6 +756,21 @@ async fn build_thread_item(
     None
 }
 
+/// Read a single rollout file into the same summary item shape used by thread listing.
+///
+/// This is for callers that already resolved a rollout path and need the same
+/// metadata/preview extraction as list operations without scanning the whole
+/// sessions tree.
+pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> {
+    build_thread_item(
+        path,
+        &[],
+        /*provider_matcher*/ None,
+        /*updated_at*/ None,
+    )
+    .await
+}
+
 /// Collects immediate subdirectories of `parent`, parses their (string) names with `parse`,
 /// and returns them sorted descending by the parsed key.
 async fn collect_dirs_desc<T, F>(parent: &Path, parse: F) -> io::Result<Vec<(T, PathBuf)>>
@@ -1156,17 +1173,16 @@ async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {
         return Ok(None);
     };
     let dt = OffsetDateTime::from(modified);
-    // Truncate to seconds so ordering and cursor comparisons align with the
-    // cursor timestamp format (which exposes seconds), keeping pagination stable.
-    Ok(truncate_to_seconds(dt))
+    Ok(truncate_to_millis(dt))
 }
 
 fn format_rfc3339(dt: OffsetDateTime) -> Option<String> {
     dt.format(&Rfc3339).ok()
 }
 
-fn truncate_to_seconds(dt: OffsetDateTime) -> Option<OffsetDateTime> {
-    dt.replace_nanosecond(0).ok()
+fn truncate_to_millis(dt: OffsetDateTime) -> Option<OffsetDateTime> {
+    let millis_nanos = (dt.nanosecond() / 1_000_000) * 1_000_000;
+    dt.replace_nanosecond(millis_nanos).ok()
 }
 
 async fn find_thread_path_by_id_str_in_subdir(

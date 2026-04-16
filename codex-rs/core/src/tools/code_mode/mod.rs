@@ -2,6 +2,7 @@ mod execute_handler;
 mod response_adapter;
 mod wait_handler;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::original_image_detail::can_request_original_image_detail;
+use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
 use crate::tools::ToolRouter;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -27,6 +30,7 @@ use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouterParams;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
+use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::collect_code_mode_tool_definitions;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -114,7 +118,7 @@ struct CoreTurnHost {
 impl CodeModeTurnHost for CoreTurnHost {
     async fn invoke_tool(
         &self,
-        tool_name: String,
+        tool_name: ToolName,
         input: Option<JsonValue>,
         cancellation_token: CancellationToken,
     ) -> Result<JsonValue, String> {
@@ -158,12 +162,14 @@ pub(super) async fn handle_runtime_response(
     match response {
         RuntimeResponse::Yielded { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
+            sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
+            sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
@@ -175,6 +181,7 @@ pub(super) async fn handle_runtime_response(
             ..
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
+            sanitize_runtime_image_detail(exec.turn.as_ref(), &mut content_items);
             exec.session
                 .services
                 .code_mode_service
@@ -194,6 +201,10 @@ pub(super) async fn handle_runtime_response(
             ))
         }
     }
+}
+
+fn sanitize_runtime_image_detail(turn: &TurnContext, items: &mut [FunctionCallOutputContentItem]) {
+    sanitize_image_detail_items(can_request_original_image_detail(&turn.model_info), items);
 }
 
 fn format_script_status(response: &RuntimeResponse) -> String {
@@ -250,7 +261,7 @@ pub(super) async fn build_enabled_tools(
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let mcp_tools = exec
+    let listed_mcp_tools = exec
         .session
         .services
         .mcp_connection_manager
@@ -258,14 +269,26 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         .await
         .list_all_tools()
         .await;
-    let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&mcp_tools);
+    let parallel_mcp_server_names = exec
+        .turn
+        .config
+        .mcp_servers
+        .get()
+        .iter()
+        .filter_map(|(server_name, server_config)| {
+            server_config
+                .supports_parallel_tool_calls
+                .then_some(server_name.clone())
+        })
+        .collect::<HashSet<_>>();
 
     ToolRouter::from_config(
         &nested_tools_config,
         ToolRouterParams {
-            mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
-            tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
-            app_tools: None,
+            deferred_mcp_tools: None,
+            mcp_tools: Some(listed_mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names,
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
         },
@@ -275,37 +298,40 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
 async fn call_nested_tool(
     exec: ExecContext,
     tool_runtime: ToolCallRuntime,
-    tool_name: String,
+    tool_name: ToolName,
     input: Option<JsonValue>,
     cancellation_token: CancellationToken,
 ) -> Result<JsonValue, FunctionCallError> {
-    if tool_name == PUBLIC_TOOL_NAME {
+    if tool_name.namespace.is_none() && tool_name.name == PUBLIC_TOOL_NAME {
         return Err(FunctionCallError::RespondToModel(format!(
             "{PUBLIC_TOOL_NAME} cannot invoke itself"
         )));
     }
 
-    let payload =
-        if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name, &None).await {
-            match serialize_function_tool_arguments(&tool_name, input) {
-                Ok(raw_arguments) => ToolPayload::Mcp {
-                    server,
-                    tool,
+    let (tool_call_name, payload) =
+        if let Some(tool_info) = exec.session.resolve_mcp_tool_info(&tool_name).await {
+            let raw_arguments = match serialize_function_tool_arguments(&tool_name, input) {
+                Ok(raw_arguments) => raw_arguments,
+                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
+            };
+            (
+                tool_info.canonical_tool_name(),
+                ToolPayload::Mcp {
+                    server: tool_info.server_name,
+                    tool: tool_info.tool.name.to_string(),
                     raw_arguments,
                 },
-                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-            }
+            )
         } else {
             match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
-                Ok(payload) => payload,
+                Ok(payload) => (tool_name, payload),
                 Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             }
         };
 
     let call = ToolCall {
-        tool_name: tool_name.clone(),
+        tool_name: tool_call_name,
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
-        tool_namespace: None,
         payload,
     };
     let result = tool_runtime
@@ -324,7 +350,7 @@ fn tool_kind_for_spec(spec: &ToolSpec) -> codex_code_mode::CodeModeToolKind {
 
 fn tool_kind_for_name(
     spec: Option<ToolSpec>,
-    tool_name: &str,
+    tool_name: &ToolName,
 ) -> Result<codex_code_mode::CodeModeToolKind, String> {
     spec.as_ref()
         .map(tool_kind_for_spec)
@@ -333,7 +359,7 @@ fn tool_kind_for_name(
 
 fn build_nested_tool_payload(
     spec: Option<ToolSpec>,
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
     let actual_kind = tool_kind_for_name(spec, tool_name)?;
@@ -348,7 +374,7 @@ fn build_nested_tool_payload(
 }
 
 fn build_function_tool_payload(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
     let arguments = serialize_function_tool_arguments(tool_name, input)?;
@@ -356,7 +382,7 @@ fn build_function_tool_payload(
 }
 
 fn serialize_function_tool_arguments(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<String, String> {
     match input {
@@ -370,7 +396,7 @@ fn serialize_function_tool_arguments(
 }
 
 fn build_freeform_tool_payload(
-    tool_name: &str,
+    tool_name: &ToolName,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
     match input {

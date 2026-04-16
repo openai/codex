@@ -9,6 +9,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -19,10 +20,13 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -37,7 +41,7 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
@@ -81,8 +85,8 @@ impl CodexThread {
     }
 
     #[doc(hidden)]
-    pub async fn flush_rollout(&self) {
-        self.codex.session.flush_rollout().await;
+    pub async fn flush_rollout(&self) -> std::io::Result<()> {
+        self.codex.session.flush_rollout().await
     }
 
     pub async fn submit_with_trace(
@@ -93,12 +97,20 @@ impl CodexThread {
         self.codex.submit_with_trace(op, trace).await
     }
 
+    /// Persist whether this thread is eligible for future memory generation.
+    pub async fn set_thread_memory_mode(&self, mode: ThreadMemoryMode) -> anyhow::Result<()> {
+        self.codex.set_thread_memory_mode(mode).await
+    }
+
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
+        responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
-        self.codex.steer_input(input, expected_turn_id).await
+        self.codex
+            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .await
     }
 
     pub async fn set_app_server_client_info(
@@ -188,6 +200,29 @@ impl CodexThread {
         Ok(submission_id)
     }
 
+    /// Append raw Responses API items to the thread's model-visible history.
+    pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+        if items.is_empty() {
+            return Err(CodexErr::InvalidRequest(
+                "items must not be empty".to_string(),
+            ));
+        }
+
+        let turn_context = self.codex.session.new_default_turn().await;
+        if self.codex.session.reference_context_item().await.is_none() {
+            self.codex
+                .session
+                .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+                .await;
+        }
+        self.codex
+            .session
+            .record_conversation_items(turn_context.as_ref(), &items)
+            .await;
+        self.codex.session.flush_rollout().await?;
+        Ok(())
+    }
+
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
     }
@@ -218,6 +253,19 @@ impl CodexThread {
             .await?;
 
         Ok(serde_json::to_value(result)?)
+    }
+
+    pub async fn call_mcp_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+    ) -> anyhow::Result<CallToolResult> {
+        self.codex
+            .session
+            .call_tool(server, tool, arguments, meta)
+            .await
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {

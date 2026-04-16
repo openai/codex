@@ -22,3 +22,4 @@ When the composer is empty, press Esc to step back and edit your last message; E
 Press Tab to queue a message when a task is running; otherwise it sends immediately (except `!`).
 Paste an image with Ctrl+V to attach it to your next message.
 You can resume a previous conversation by running `codex resume`
+Use /copy or press Ctrl+O to copy the latest agent response as Markdown.

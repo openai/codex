@@ -166,7 +166,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     assert!(command.contains("/bin/sh -c"));
     assert!(command.contains("sleep 0.01"));
     assert!(command.contains(&release_marker.display().to_string()));
-    assert_eq!(cwd, workspace);
+    assert_eq!(cwd.as_path(), workspace.as_path());
 
     mcp.interrupt_turn_and_wait_for_aborted(thread.id, turn.id, DEFAULT_READ_TIMEOUT)
         .await?;

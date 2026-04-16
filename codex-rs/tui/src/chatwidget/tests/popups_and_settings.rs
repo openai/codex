@@ -58,7 +58,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         .build()
         .await
         .expect("config");
-    let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
+    let resolved_model = crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref());
     let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let init = ChatWidgetInit {
         config: cfg.clone(),
@@ -1499,6 +1499,101 @@ async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
     };
     let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
     assert!(rendered.contains("Subagents will be enabled in the next session."));
+}
+
+#[tokio::test]
+async fn memories_enable_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ false);
+
+    chat.open_memories_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("memories_enable_prompt", popup);
+}
+
+#[tokio::test]
+async fn memories_enable_prompt_updates_feature_without_notice() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ false);
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateFeatureFlags { updates }) if updates == vec![(Feature::MemoryTool, true)]
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "memory enable prompt should not emit the success notice before persistence succeeds"
+    );
+}
+
+#[tokio::test]
+async fn memories_settings_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("memories_settings_popup", popup);
+}
+
+#[tokio::test]
+async fn memories_reset_confirmation_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("memories_reset_confirmation", popup);
+}
+
+#[tokio::test]
+async fn memories_settings_toggle_saves_on_enter() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char(' ')));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::UpdateMemorySettings {
+            use_memories: true,
+            generate_memories: true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn memories_reset_confirmation_sends_event_on_confirm() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::MemoryTool, /*enabled*/ true);
+    chat.config.memories.use_memories = true;
+    chat.config.memories.generate_memories = false;
+
+    chat.open_memories_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ResetMemories));
 }
 
 #[tokio::test]

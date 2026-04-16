@@ -38,8 +38,6 @@ use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
-use codex_config::types::NotificationMethod;
-use codex_config::types::Notifications;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
@@ -47,6 +45,7 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
+use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
@@ -125,6 +124,7 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
+const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -142,14 +142,41 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     }
 }
 
+fn resolve_cli_auth_credentials_store_mode(
+    configured: AuthCredentialsStoreMode,
+    package_version: &str,
+) -> AuthCredentialsStoreMode {
+    match (package_version, configured) {
+        (
+            LOCAL_DEV_BUILD_VERSION,
+            AuthCredentialsStoreMode::Keyring | AuthCredentialsStoreMode::Auto,
+        ) => AuthCredentialsStoreMode::File,
+        (_, mode) => mode,
+    }
+}
+
+fn resolve_mcp_oauth_credentials_store_mode(
+    configured: OAuthCredentialsStoreMode,
+    package_version: &str,
+) -> OAuthCredentialsStoreMode {
+    match (package_version, configured) {
+        (
+            LOCAL_DEV_BUILD_VERSION,
+            OAuthCredentialsStoreMode::Keyring | OAuthCredentialsStoreMode::Auto,
+        ) => OAuthCredentialsStoreMode::File,
+        (_, mode) => mode,
+    }
+}
+
 #[cfg(test)]
-pub(crate) fn test_config() -> Config {
+pub(crate) async fn test_config() -> Config {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("temp dir should resolve"),
     )
+    .await
     .expect("load default test config")
 }
 
@@ -246,7 +273,7 @@ pub struct Config {
     pub user_instructions: Option<String>,
 
     /// Path to the global AGENTS file loaded into `user_instructions`.
-    pub user_instructions_path: Option<PathBuf>,
+    pub user_instructions_path: Option<AbsolutePathBuf>,
 
     /// Base instructions override.
     pub base_instructions: Option<String>,
@@ -254,8 +281,11 @@ pub struct Config {
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
 
-    /// Guardian-specific developer instructions override from requirements.toml.
-    pub guardian_developer_instructions: Option<String>,
+    /// Guardian-specific tenant policy config override from requirements.toml.
+    /// This is inserted into the fixed guardian prompt template under the
+    /// `# Policy Configuration` section rather than replacing the whole
+    /// guardian developer prompt.
+    pub guardian_policy_config: Option<String>,
 
     /// Whether to inject the `<permissions instructions>` developer block.
     pub include_permissions_instructions: bool,
@@ -298,12 +328,8 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// TUI notifications preference. When set, the TUI will send terminal notifications on
-    /// approvals and turn completions when not focused.
-    pub tui_notifications: Notifications,
-
-    /// Notification method for terminal notifications (osc9 or bel).
-    pub tui_notification_method: NotificationMethod,
+    /// TUI notification settings, including enabled events, delivery method, and focus condition.
+    pub tui_notifications: TuiNotificationSettings,
 
     /// Enable ASCII animations and shimmer effects in the TUI.
     pub animations: bool,
@@ -326,8 +352,7 @@ pub struct Config {
 
     /// Ordered list of status line item identifiers for the TUI.
     ///
-    /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
-    /// `current-dir`.
+    /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
     /// Ordered list of terminal title item identifiers for the TUI.
@@ -401,7 +426,7 @@ pub struct Config {
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
-    pub codex_home: PathBuf,
+    pub codex_home: AbsolutePathBuf,
 
     /// Directory where Codex stores the SQLite state DB.
     pub sqlite_home: PathBuf,
@@ -592,7 +617,7 @@ impl Default for MultiAgentV2Config {
 
 impl AuthManagerConfig for Config {
     fn codex_home(&self) -> PathBuf {
-        self.codex_home.clone()
+        self.codex_home.to_path_buf()
     }
 
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
@@ -654,7 +679,10 @@ impl ConfigBuilder {
             cloud_requirements,
             fallback_cwd,
         } = self;
-        let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        let codex_home = match codex_home {
+            Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
+            None => find_codex_home()?,
+        };
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
@@ -699,6 +727,7 @@ impl ConfigBuilder {
             codex_home,
             config_layer_stack,
         )
+        .await
     }
 
     #[cfg(test)]
@@ -720,8 +749,11 @@ impl Config {
         }
     }
 
-    pub fn to_mcp_config(&self, plugins_manager: &crate::plugins::PluginsManager) -> McpConfig {
-        let loaded_plugins = plugins_manager.plugins_for_config(self);
+    pub async fn to_mcp_config(
+        &self,
+        plugins_manager: &crate::plugins::PluginsManager,
+    ) -> McpConfig {
+        let loaded_plugins = plugins_manager.plugins_for_config(self).await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
             configured_mcp_servers.entry(name).or_insert(plugin_server);
@@ -729,7 +761,7 @@ impl Config {
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
-            codex_home: self.codex_home.clone(),
+            codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
             mcp_oauth_callback_url: self.mcp_oauth_callback_url.clone(),
@@ -756,16 +788,20 @@ impl Config {
     }
 
     /// Load a default configuration when user config files are invalid.
-    pub fn load_default_with_cli_overrides(
+    pub async fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
-        Self::load_default_with_cli_overrides_for_codex_home(codex_home, cli_overrides)
+        Self::load_default_with_cli_overrides_for_codex_home(
+            codex_home.to_path_buf(),
+            cli_overrides,
+        )
+        .await
     }
 
     /// Load a default configuration for a specific Codex home without reading
     /// user, project, or system config layers.
-    pub fn load_default_with_cli_overrides_for_codex_home(
+    pub async fn load_default_with_cli_overrides_for_codex_home(
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
@@ -777,6 +813,7 @@ impl Config {
         })?;
         let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
         crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
+        let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)?;
         let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
         Self::load_config_with_layer_stack(
             config_toml,
@@ -784,6 +821,7 @@ impl Config {
             codex_home,
             ConfigLayerStack::default(),
         )
+        .await
     }
 
     /// This is a secondary way of creating [Config], which is appropriate when
@@ -1379,22 +1417,24 @@ pub(crate) fn resolve_web_search_mode_for_turn(
 
 impl Config {
     #[cfg(test)]
-    fn load_from_base_config_with_overrides(
+    async fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        codex_home: PathBuf,
+        codex_home: AbsolutePathBuf,
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
+        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack).await
     }
 
-    pub(crate) fn load_config_with_layer_stack(
+    pub(crate) async fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        codex_home: PathBuf,
+        codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        // Keep the large config-construction future off small test thread stacks.
+        Box::pin(async move {
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
@@ -1513,6 +1553,7 @@ impl Config {
             .collect();
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
+            .await
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
@@ -1544,7 +1585,6 @@ impl Config {
         };
         let memories_root = memory_root(&codex_home);
         std::fs::create_dir_all(&memories_root)?;
-        let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
         if !additional_writable_roots
             .iter()
             .any(|existing| existing == &memories_root)
@@ -1603,13 +1643,15 @@ impl Config {
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
-            let mut sandbox_policy = cfg.derive_sandbox_policy(
-                sandbox_mode,
-                config_profile.sandbox_mode,
-                windows_sandbox_level,
-                resolved_cwd.as_path(),
-                Some(&constrained_sandbox_policy),
-            );
+            let mut sandbox_policy = cfg
+                .derive_sandbox_policy(
+                    sandbox_mode,
+                    config_profile.sandbox_mode,
+                    windows_sandbox_level,
+                    resolved_cwd.as_path(),
+                    Some(&constrained_sandbox_policy),
+                )
+                .await;
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
                 for path in &additional_writable_roots {
                     if !writable_roots.iter().any(|existing| existing == path) {
@@ -1840,9 +1882,8 @@ impl Config {
             .include_environment_context
             .or(cfg.include_environment_context)
             .unwrap_or(true);
-        let guardian_developer_instructions = guardian_developer_instructions_from_requirements(
-            config_layer_stack.requirements_toml(),
-        );
+        let guardian_policy_config =
+            guardian_policy_config_from_requirements(config_layer_stack.requirements_toml());
         let personality = personality
             .or(config_profile.personality)
             .or(cfg.personality)
@@ -1893,11 +1934,7 @@ impl Config {
             .log_dir
             .as_ref()
             .map(AbsolutePathBuf::to_path_buf)
-            .unwrap_or_else(|| {
-                let mut p = codex_home.clone();
-                p.push("log");
-                p
-            });
+            .unwrap_or_else(|| codex_home.join("log").to_path_buf());
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
@@ -2018,11 +2055,17 @@ impl Config {
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
+            cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(
+                cfg.cli_auth_credentials_store.unwrap_or_default(),
+                env!("CARGO_PKG_VERSION"),
+            ),
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
+            mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+                cfg.mcp_oauth_credentials_store.unwrap_or_default(),
+                env!("CARGO_PKG_VERSION"),
+            ),
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
@@ -2065,7 +2108,7 @@ impl Config {
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
-            guardian_developer_instructions,
+            guardian_policy_config,
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
@@ -2092,10 +2135,14 @@ impl Config {
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             realtime: cfg
                 .realtime
-                .map_or_else(RealtimeConfig::default, |realtime| RealtimeConfig {
-                    version: realtime.version.unwrap_or_default(),
-                    session_type: realtime.session_type.unwrap_or_default(),
-                    transport: realtime.transport.unwrap_or_default(),
+                .map_or_else(RealtimeConfig::default, |realtime| {
+                    let defaults = RealtimeConfig::default();
+                    RealtimeConfig {
+                        version: realtime.version.unwrap_or(defaults.version),
+                        session_type: realtime.session_type.unwrap_or(defaults.session_type),
+                        transport: realtime.transport.unwrap_or(defaults.transport),
+                        voice: realtime.voice,
+                    }
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
@@ -2133,12 +2180,7 @@ impl Config {
             tui_notifications: cfg
                 .tui
                 .as_ref()
-                .map(|t| t.notifications.clone())
-                .unwrap_or_default(),
-            tui_notification_method: cfg
-                .tui
-                .as_ref()
-                .map(|t| t.notification_method)
+                .map(|t| t.notification_settings.clone())
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
@@ -2174,13 +2216,14 @@ impl Config {
             },
         };
         Ok(config)
+        })
+        .await
     }
 
-    fn load_instructions(codex_dir: Option<&Path>) -> Option<LoadedUserInstructions> {
+    fn load_instructions(codex_dir: Option<&AbsolutePathBuf>) -> Option<LoadedUserInstructions> {
         let base = codex_dir?;
         for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
-            let mut path = base.to_path_buf();
-            path.push(candidate);
+            let path = base.join(candidate);
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
@@ -2250,7 +2293,11 @@ impl Config {
     }
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
-        self.config_layer_stack
+        !matches!(
+            self.permissions.sandbox_policy.get(),
+            SandboxPolicy::DangerFullAccess
+        ) && self
+            .config_layer_stack
             .requirements_toml()
             .network
             .is_some()
@@ -2263,7 +2310,7 @@ impl Config {
 
 struct LoadedUserInstructions {
     contents: String,
-    path: PathBuf,
+    path: AbsolutePathBuf,
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
@@ -2273,11 +2320,11 @@ pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayer
         .any(|layer| toml_uses_deprecated_instructions_file(&layer.config))
 }
 
-fn guardian_developer_instructions_from_requirements(
+fn guardian_policy_config_from_requirements(
     requirements_toml: &ConfigRequirementsToml,
 ) -> Option<String> {
     requirements_toml
-        .guardian_developer_instructions
+        .guardian_policy_config
         .as_deref()
         .and_then(|value| {
             let trimmed = value.trim();
@@ -2310,7 +2357,7 @@ fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
 ///   value will be canonicalized and this function will Err otherwise.
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
-pub fn find_codex_home() -> std::io::Result<PathBuf> {
+pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
     codex_utils_home_dir::find_codex_home()
 }
 

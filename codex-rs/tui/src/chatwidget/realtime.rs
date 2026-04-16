@@ -7,6 +7,7 @@ use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSession;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
@@ -14,8 +15,6 @@ use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 use std::sync::atomic::AtomicU16;
 #[cfg(not(target_os = "linux"))]
 use std::time::Duration;
-
-const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum RealtimeConversationPhase {
@@ -31,7 +30,6 @@ pub(super) struct RealtimeConversationUiState {
     pub(super) phase: RealtimeConversationPhase,
     requested_close: bool,
     session_id: Option<String>,
-    warned_audio_only_submission: bool,
     transport: RealtimeConversationUiTransport,
     #[cfg(not(target_os = "linux"))]
     pub(super) meter_placeholder_id: Option<String>,
@@ -193,28 +191,6 @@ impl ChatWidget {
         self.last_rendered_user_message_event.as_ref() != Some(&key)
     }
 
-    pub(super) fn maybe_defer_user_message_for_realtime(
-        &mut self,
-        user_message: UserMessage,
-    ) -> Option<UserMessage> {
-        if !self.realtime_conversation.is_live() {
-            return Some(user_message);
-        }
-
-        self.restore_user_message_to_composer(user_message);
-        if !self.realtime_conversation.warned_audio_only_submission {
-            self.realtime_conversation.warned_audio_only_submission = true;
-            self.add_info_message(
-                "Realtime voice mode is audio-only. Use /realtime to stop.".to_string(),
-                /*hint*/ None,
-            );
-        } else {
-            self.request_redraw();
-        }
-
-        None
-    }
-
     fn realtime_footer_hint_items() -> Vec<(String, String)> {
         vec![("/realtime".to_string(), "stop live voice".to_string())]
     }
@@ -240,7 +216,6 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
-        self.realtime_conversation.warned_audio_only_submission = false;
         self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
         match self.config.realtime.transport {
             RealtimeTransport::Websocket => {
@@ -262,9 +237,11 @@ impl ChatWidget {
     ) {
         self.submit_op(AppCommand::realtime_conversation_start(
             ConversationStartParams {
-                prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
+                output_modality: RealtimeOutputModality::Audio,
+                prompt: None,
                 session_id: None,
                 transport,
+                voice: self.config.realtime.voice,
             },
         ));
     }
@@ -298,7 +275,6 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
-        self.realtime_conversation.warned_audio_only_submission = false;
         self.realtime_conversation.transport = RealtimeConversationUiTransport::Websocket;
     }
 
@@ -321,7 +297,6 @@ impl ChatWidget {
             return;
         }
         self.realtime_conversation.session_id = ev.session_id;
-        self.realtime_conversation.warned_audio_only_submission = false;
         self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
         if self.realtime_conversation_uses_webrtc() {
             self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
@@ -341,7 +316,9 @@ impl ChatWidget {
                 ev.payload,
                 RealtimeEvent::AudioOut(_)
                     | RealtimeEvent::InputAudioSpeechStarted(_)
+                    | RealtimeEvent::ResponseCreated(_)
                     | RealtimeEvent::ResponseCancelled(_)
+                    | RealtimeEvent::ResponseDone(_)
             )
         {
             return;
@@ -352,9 +329,13 @@ impl ChatWidget {
             }
             RealtimeEvent::InputAudioSpeechStarted(_) => self.interrupt_realtime_audio_playback(),
             RealtimeEvent::InputTranscriptDelta(_) => {}
+            RealtimeEvent::InputTranscriptDone(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
+            RealtimeEvent::OutputTranscriptDone(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
+            RealtimeEvent::ResponseCreated(_) => {}
             RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
+            RealtimeEvent::ResponseDone(_) => {}
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}

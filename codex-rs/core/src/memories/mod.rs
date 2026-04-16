@@ -25,9 +25,12 @@ pub(crate) use control::clear_memory_root_contents;
 pub(crate) use start::start_memories_startup_task;
 
 mod artifacts {
+    pub(super) const EXTENSIONS_SUBDIR: &str = "memories_extensions";
     pub(super) const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";
     pub(super) const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
 }
+
+mod extensions;
 
 /// Phase 1 (startup extraction).
 mod phase_one {
@@ -64,7 +67,7 @@ mod phase_one {
 /// Phase 2 (aka `Consolidation`).
 mod phase_two {
     /// Default model used for phase 2.
-    pub(super) const MODEL: &str = "gpt-5.3-codex";
+    pub(super) const MODEL: &str = "gpt-5.4";
     /// Default reasoning effort used for phase 2.
     pub(super) const REASONING_EFFORT: super::ReasoningEffort = super::ReasoningEffort::Medium;
     /// Lease duration (seconds) for phase-2 consolidation job ownership.
@@ -95,15 +98,20 @@ mod metrics {
     pub(super) const MEMORY_PHASE_TWO_TOKEN_USAGE: &str = "codex.memory.phase2.token_usage";
 }
 
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub fn memory_root(codex_home: &Path) -> PathBuf {
+pub fn memory_root(codex_home: &AbsolutePathBuf) -> AbsolutePathBuf {
     codex_home.join("memories")
 }
 
 fn rollout_summaries_dir(root: &Path) -> PathBuf {
     root.join(artifacts::ROLLOUT_SUMMARIES_SUBDIR)
+}
+
+fn memory_extensions_root(root: &Path) -> PathBuf {
+    root.with_file_name(artifacts::EXTENSIONS_SUBDIR)
 }
 
 fn raw_memories_file(root: &Path) -> PathBuf {

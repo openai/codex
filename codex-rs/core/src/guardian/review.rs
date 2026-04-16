@@ -3,9 +3,11 @@ use std::sync::Arc;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
+use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
@@ -14,28 +16,62 @@ use tokio_util::sync::CancellationToken;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 
-use super::GUARDIAN_APPROVAL_RISK_THRESHOLD;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
+use super::GuardianAssessmentOutcome;
+use super::GuardianRejection;
 use super::approval_request::guardian_assessment_action;
-use super::approval_request::guardian_request_id;
+use super::approval_request::guardian_request_target_item_id;
 use super::approval_request::guardian_request_turn_id;
-use super::prompt::build_guardian_prompt_items;
 use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
 
-pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
-    "This action was rejected due to unacceptable risk. ",
+const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
     "The agent must not attempt to achieve the same outcome via workaround, ",
     "indirect execution, or policy circumvention. ",
     "Proceed only with a materially safer alternative, ",
     "or if the user explicitly approves the action after being informed of the risk. ",
     "Otherwise, stop and request user input.",
 );
+
+const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
+    "The automatic permission approval review did not finish before its deadline. ",
+    "Do not assume the action is unsafe based on the timeout alone. ",
+    "You may retry once, or ask the user for guidance or explicit approval.",
+);
+
+pub(crate) fn new_guardian_review_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &str) -> String {
+    let rejection = session
+        .services
+        .guardian_rejections
+        .lock()
+        .await
+        .remove(review_id)
+        .filter(|rejection| !rejection.rationale.trim().is_empty())
+        .unwrap_or_else(|| GuardianRejection {
+            rationale: "Guardian denied the action without a specific rationale.".to_string(),
+            source: GuardianAssessmentDecisionSource::Agent,
+        });
+    match rejection.source {
+        GuardianAssessmentDecisionSource::Agent => format!(
+            "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
+            rejection.rationale.trim(),
+            GUARDIAN_REJECTION_INSTRUCTIONS
+        ),
+    }
+}
+
+pub(crate) fn guardian_timeout_message() -> String {
+    GUARDIAN_TIMEOUT_INSTRUCTIONS.to_string()
+}
 
 #[derive(Debug)]
 pub(super) enum GuardianReviewOutcome {
@@ -49,6 +85,7 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
         GuardianRiskLevel::Low => "low",
         GuardianRiskLevel::Medium => "medium",
         GuardianRiskLevel::High => "high",
+        GuardianRiskLevel::Critical => "critical",
     }
 }
 
@@ -70,28 +107,32 @@ pub(crate) fn is_guardian_reviewer_source(
     )
 }
 
-/// This function always fails closed: any timeout, review-session failure, or
-/// parse failure is treated as a high-risk denial.
+/// This function always fails closed: timeouts, review-session failures, and
+/// parse failures all block execution, but timeouts are still surfaced to the
+/// caller as distinct from explicit guardian denials.
 async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
-    let assessment_id = guardian_request_id(&request).to_string();
+    let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action(&request);
     session
         .send_event(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: assessment_id.clone(),
+                id: review_id.clone(),
+                target_item_id: target_item_id.clone(),
                 turn_id: assessment_turn_id.clone(),
                 status: GuardianAssessmentStatus::InProgress,
-                risk_score: None,
                 risk_level: None,
+                user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: action_summary.clone(),
             }),
         )
@@ -105,12 +146,14 @@ async fn run_guardian_review(
             .send_event(
                 turn.as_ref(),
                 EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                    id: assessment_id,
+                    id: review_id,
+                    target_item_id,
                     turn_id: assessment_turn_id,
                     status: GuardianAssessmentStatus::Aborted,
-                    risk_score: None,
                     risk_level: None,
+                    user_authorization: None,
                     rationale: None,
+                    decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                     action: action_summary,
                 }),
             )
@@ -120,47 +163,67 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let outcome = match build_guardian_prompt_items(session.as_ref(), retry_reason, request).await {
-        Ok(prompt_items) => {
-            run_guardian_review_session(
-                session.clone(),
-                turn.clone(),
-                prompt_items,
-                schema,
-                external_cancel,
-            )
-            .await
-        }
-        Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
-    };
+    let outcome = Box::pin(run_guardian_review_session(
+        session.clone(),
+        turn.clone(),
+        request,
+        retry_reason,
+        schema,
+        external_cancel,
+    ))
+    .await;
 
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
         GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Deny,
             rationale: format!("Automatic approval review failed: {err}"),
-            evidence: vec![],
         },
-        GuardianReviewOutcome::TimedOut => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
-            rationale:
+        GuardianReviewOutcome::TimedOut => {
+            let rationale =
                 "Automatic approval review timed out while evaluating the requested approval."
-                    .to_string(),
-            evidence: vec![],
-        },
+                    .to_string();
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::Warning(WarningEvent {
+                        message: rationale.clone(),
+                    }),
+                )
+                .await;
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                        id: review_id,
+                        target_item_id,
+                        turn_id: assessment_turn_id,
+                        status: GuardianAssessmentStatus::TimedOut,
+                        risk_level: None,
+                        user_authorization: None,
+                        rationale: Some(rationale),
+                        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+                        action: terminal_action,
+                    }),
+                )
+                .await;
+            return ReviewDecision::TimedOut;
+        }
         GuardianReviewOutcome::Aborted => {
             session
                 .send_event(
                     turn.as_ref(),
                     EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                        id: assessment_id,
+                        id: review_id,
+                        target_item_id,
                         turn_id: assessment_turn_id,
                         status: GuardianAssessmentStatus::Aborted,
-                        risk_score: None,
                         risk_level: None,
+                        user_authorization: None,
                         rationale: None,
+                        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                         action: action_summary,
                     }),
                 )
@@ -169,10 +232,19 @@ async fn run_guardian_review(
         }
     };
 
-    let approved = assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD;
+    let approved = match assessment.outcome {
+        GuardianAssessmentOutcome::Allow => true,
+        GuardianAssessmentOutcome::Deny => false,
+    };
     let verdict = if approved { "approved" } else { "denied" };
+    let user_authorization = match assessment.user_authorization {
+        GuardianUserAuthorization::Unknown => "unknown",
+        GuardianUserAuthorization::Low => "low",
+        GuardianUserAuthorization::Medium => "medium",
+        GuardianUserAuthorization::High => "high",
+    };
     let warning = format!(
-        "Automatic approval review {verdict} (risk: {}): {}",
+        "Automatic approval review {verdict} (risk: {}, authorization: {user_authorization}): {}",
         guardian_risk_level_str(assessment.risk_level),
         assessment.rationale
     );
@@ -187,16 +259,30 @@ async fn run_guardian_review(
     } else {
         GuardianAssessmentStatus::Denied
     };
+    {
+        let mut rationales = session.services.guardian_rejections.lock().await;
+        if approved {
+            rationales.remove(&review_id);
+        } else {
+            let rejection = GuardianRejection {
+                rationale: assessment.rationale.clone(),
+                source: GuardianAssessmentDecisionSource::Agent,
+            };
+            rationales.insert(review_id.clone(), rejection);
+        }
+    }
     session
         .send_event(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-                id: assessment_id,
+                id: review_id,
+                target_item_id,
                 turn_id: assessment_turn_id,
                 status,
-                risk_score: Some(assessment.risk_score),
                 risk_level: Some(assessment.risk_level),
+                user_authorization: Some(assessment.user_authorization),
                 rationale: Some(assessment.rationale.clone()),
+                decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                 action: terminal_action,
             }),
         )
@@ -213,33 +299,39 @@ async fn run_guardian_review(
 pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    run_guardian_review(
+    // Box the delegated review future so callers do not inline the entire
+    // guardian session state machine into their own async stack.
+    Box::pin(run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
+        review_id,
         request,
         retry_reason,
         /*external_cancel*/ None,
-    )
+    ))
     .await
 }
 
 pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     cancel_token: CancellationToken,
 ) -> ReviewDecision {
-    run_guardian_review(
+    Box::pin(run_guardian_review(
         Arc::clone(session),
         Arc::clone(turn),
+        review_id,
         request,
         retry_reason,
         Some(cancel_token),
-    )
+    ))
     .await
 }
 
@@ -260,7 +352,8 @@ pub(crate) async fn review_approval_request_with_cancel(
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    prompt_items: Vec<codex_protocol::user_input::UserInput>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
 ) -> GuardianReviewOutcome {
@@ -320,21 +413,24 @@ pub(super) async fn run_guardian_review_session(
         Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
     };
 
-    match session
-        .guardian_review_session
-        .run_review(GuardianReviewSessionParams {
-            parent_session: Arc::clone(&session),
-            parent_turn: turn.clone(),
-            spawn_config: guardian_config,
-            prompt_items,
-            schema,
-            model: guardian_model,
-            reasoning_effort: guardian_reasoning_effort,
-            reasoning_summary: turn.reasoning_summary,
-            personality: turn.personality,
-            external_cancel,
-        })
-        .await
+    match Box::pin(
+        session
+            .guardian_review_session
+            .run_review(GuardianReviewSessionParams {
+                parent_session: Arc::clone(&session),
+                parent_turn: turn.clone(),
+                spawn_config: guardian_config,
+                request,
+                retry_reason,
+                schema,
+                model: guardian_model,
+                reasoning_effort: guardian_reasoning_effort,
+                reasoning_summary: turn.reasoning_summary,
+                personality: turn.personality,
+                external_cancel,
+            }),
+    )
+    .await
     {
         GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) => {
             GuardianReviewOutcome::Completed(parse_guardian_assessment(

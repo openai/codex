@@ -24,12 +24,14 @@ codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-app-server-test-client = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-api = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
@@ -43,6 +45,7 @@ codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-tui = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }

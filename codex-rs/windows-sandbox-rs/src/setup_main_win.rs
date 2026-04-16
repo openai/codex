@@ -11,6 +11,7 @@ use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
+use codex_windows_sandbox::add_deny_write_ace;
 use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
@@ -21,8 +22,6 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
-use codex_windows_sandbox::protect_workspace_agents_dir;
-use codex_windows_sandbox::protect_workspace_codex_dir;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -85,6 +84,7 @@ struct Payload {
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
     #[serde(default)]
+    deny_write_paths: Vec<PathBuf>,
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
@@ -642,6 +642,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
 
+    let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
     let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
 
@@ -759,6 +760,50 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     });
 
+    for path in &payload.deny_write_paths {
+        if !seen_deny_paths.insert(path.clone()) {
+            continue;
+        }
+
+        // These are deny-write carveouts, not deny-read paths. They may come from explicit
+        // read-only-under-a-writable-root carveouts in the transformed sandbox policy, or from
+        // legacy protected children such as `.git`, `.codex`, and `.agents`.
+        //
+        // Deny ACEs attach to filesystem objects; if an explicit policy carveout does not exist
+        // during setup, the sandbox could otherwise create it later under a writable parent and
+        // bypass the carveout. Materialize missing carveouts as directories so the deny-write ACL
+        // is present before the command starts. Legacy protected children are filtered before
+        // payload creation, so this should not create sentinel directories in a workspace.
+        if !path.exists() {
+            std::fs::create_dir_all(path)
+                .with_context(|| format!("failed to create deny-write path {}", path.display()))?;
+        }
+
+        let canonical_path = canonicalize_path(path);
+        let deny_psid = if canonical_path.starts_with(&canonical_command_cwd) {
+            workspace_psid
+        } else {
+            cap_psid
+        };
+
+        match unsafe { add_deny_write_ace(path, deny_psid) } {
+            Ok(true) => {
+                log_line(
+                    log,
+                    &format!("applied deny ACE to protect {}", path.display()),
+                )?;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                refresh_errors.push(format!("deny ACE failed on {}: {err}", path.display()));
+                log_line(
+                    log,
+                    &format!("deny ACE failed on {}: {err}", path.display()),
+                )?;
+            }
+        }
+    }
+
     lock_sandbox_dir(
         &sandbox_bin_dir(&payload.codex_home),
         &payload.real_user,
@@ -831,54 +876,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    // Protect the current workspace's `.codex` and `.agents` directories from tampering
-    // (write/delete) by using a workspace-specific capability SID. If a directory doesn't exist
-    // yet, skip it (it will be picked up on the next refresh).
-    match unsafe { protect_workspace_codex_dir(&payload.command_cwd, workspace_psid) } {
-        Ok(true) => {
-            let cwd_codex = payload.command_cwd.join(".codex");
-            log_line(
-                log,
-                &format!(
-                    "applied deny ACE to protect workspace .codex {}",
-                    cwd_codex.display()
-                ),
-            )?;
-        }
-        Ok(false) => {}
-        Err(err) => {
-            let cwd_codex = payload.command_cwd.join(".codex");
-            refresh_errors.push(format!("deny ACE failed on {}: {err}", cwd_codex.display()));
-            log_line(
-                log,
-                &format!("deny ACE failed on {}: {err}", cwd_codex.display()),
-            )?;
-        }
-    }
-    match unsafe { protect_workspace_agents_dir(&payload.command_cwd, workspace_psid) } {
-        Ok(true) => {
-            let cwd_agents = payload.command_cwd.join(".agents");
-            log_line(
-                log,
-                &format!(
-                    "applied deny ACE to protect workspace .agents {}",
-                    cwd_agents.display()
-                ),
-            )?;
-        }
-        Ok(false) => {}
-        Err(err) => {
-            let cwd_agents = payload.command_cwd.join(".agents");
-            refresh_errors.push(format!(
-                "deny ACE failed on {}: {err}",
-                cwd_agents.display()
-            ));
-            log_line(
-                log,
-                &format!("deny ACE failed on {}: {err}", cwd_agents.display()),
-            )?;
-        }
-    }
     unsafe {
         if !sandbox_group_psid.is_null() {
             LocalFree(sandbox_group_psid as HLOCAL);
