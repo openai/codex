@@ -31,11 +31,12 @@ pub(crate) async fn run_responses_command(
         &config, /*enable_codex_api_key_env*/ true,
     );
     let model_provider = create_model_provider(config.model_provider, Some(base_auth_manager));
-    let provider_auth = model_provider.resolve_auth().await?;
+    let api_provider = model_provider.api_provider().await?;
+    let api_auth = model_provider.api_auth().await?;
     let client = codex_api::ResponsesClient::new(
         codex_api::ReqwestTransport::new(codex_login::default_client::build_reqwest_client()),
-        provider_auth.api_provider,
-        provider_auth.api_auth,
+        api_provider,
+        api_auth,
     );
 
     let mut stream = client

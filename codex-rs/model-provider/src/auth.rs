@@ -21,7 +21,7 @@ pub(crate) fn auth_manager_for_provider(
 }
 
 fn bearer_auth_provider_from_auth(
-    auth: Option<CodexAuth>,
+    auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<BearerAuthProvider> {
     if let Some(api_key) = provider.api_key()? {
@@ -57,7 +57,7 @@ fn bearer_auth_provider_from_auth(
 }
 
 pub(crate) fn resolve_provider_auth(
-    auth: Option<CodexAuth>,
+    auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<SharedAuthProvider> {
     Ok(Arc::new(bearer_auth_provider_from_auth(auth, provider)?))

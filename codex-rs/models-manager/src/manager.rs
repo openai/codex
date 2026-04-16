@@ -436,27 +436,25 @@ impl ModelsManager {
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
-        let codex_api_key_env_enabled = self
-            .provider
-            .auth_manager()
+        let auth_manager = self.provider.auth_manager();
+        let codex_api_key_env_enabled = auth_manager
+            .as_ref()
             .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
-        let provider_auth = self.provider.resolve_auth().await?;
-        let auth_mode = provider_auth.auth.as_ref().map(CodexAuth::auth_mode);
+        let auth = self.provider.auth().await;
+        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
+        let api_provider = self.provider.api_provider().await?;
+        let api_auth = self.provider.api_auth().await?;
         let auth_env = collect_auth_env_telemetry(self.provider.info(), codex_api_key_env_enabled);
         let transport = ReqwestTransport::new(build_reqwest_client());
-        let auth_telemetry = auth_header_telemetry(provider_auth.api_auth.as_ref());
+        let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
             auth_header_attached: auth_telemetry.attached,
             auth_header_name: auth_telemetry.name,
             auth_env,
         });
-        let client = ModelsClient::new(
-            transport,
-            provider_auth.api_provider,
-            provider_auth.api_auth,
-        )
-        .with_telemetry(Some(request_telemetry));
+        let client = ModelsClient::new(transport, api_provider, api_auth)
+            .with_telemetry(Some(request_telemetry));
 
         let client_version = crate::client_version_to_whole();
         let (models, etag) = timeout(
