@@ -119,6 +119,7 @@ mod diff_render;
 mod exec_cell;
 mod exec_command;
 mod external_agent_config_migration;
+mod external_agent_config_migration_startup;
 mod external_editor;
 mod file_search;
 mod frames;
