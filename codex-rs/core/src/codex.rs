@@ -41,6 +41,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
@@ -7830,8 +7831,15 @@ async fn drain_in_flight(
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
-                sess.record_conversation_items(&turn_context, &[response_input.into()])
+                let response_item = response_input.into();
+                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
                     .await;
+                mark_thread_memory_mode_polluted_if_external_context(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &response_item,
+                )
+                .await;
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
