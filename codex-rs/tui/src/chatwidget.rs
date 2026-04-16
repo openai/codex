@@ -5834,7 +5834,7 @@ impl ChatWidget {
 
         // Persist the submitted text to cross-session message history. Mentions are encoded into
         // placeholder syntax so recall can reconstruct the mention bindings in a future session.
-        let history_text = match history_record {
+        let history_text = match &history_record {
             UserMessageHistoryRecord::UserMessageText if !text.is_empty() => {
                 let encoded_mentions = mention_bindings
                     .iter()
@@ -5846,7 +5846,7 @@ impl ChatWidget {
                 Some(encode_history_mentions(&text, &encoded_mentions))
             }
             UserMessageHistoryRecord::Override(history_text) if !history_text.is_empty() => {
-                Some(history_text)
+                Some(history_text.clone())
             }
             UserMessageHistoryRecord::UserMessageText | UserMessageHistoryRecord::Override(_) => {
                 None
@@ -5863,38 +5863,59 @@ impl ChatWidget {
         }
 
         // Show replayable user content in conversation history.
-        if render_in_history && !text.is_empty() {
-            let local_image_paths = local_images
-                .into_iter()
-                .map(|img| img.path)
-                .collect::<Vec<_>>();
-            self.last_rendered_user_message_event =
-                Some(Self::rendered_user_message_event_from_parts(
-                    text.clone(),
-                    text_elements.clone(),
-                    local_image_paths.clone(),
-                    remote_image_urls.clone(),
-                ));
-            self.add_to_history(history_cell::new_user_prompt(
+        let display_user_message = render_in_history.then(|| {
+            user_message_for_restore(
+                UserMessage {
+                    text,
+                    local_images,
+                    remote_image_urls,
+                    text_elements,
+                    mention_bindings,
+                },
+                &history_record,
+            )
+        });
+        if let Some(display_user_message) = display_user_message {
+            let UserMessage {
                 text,
-                text_elements,
-                local_image_paths,
+                local_images,
                 remote_image_urls,
-            ));
-        } else if render_in_history && !remote_image_urls.is_empty() {
-            self.last_rendered_user_message_event =
-                Some(Self::rendered_user_message_event_from_parts(
+                text_elements,
+                mention_bindings: _,
+            } = display_user_message;
+            if !text.is_empty() {
+                let local_image_paths = local_images
+                    .into_iter()
+                    .map(|img| img.path)
+                    .collect::<Vec<_>>();
+                self.last_rendered_user_message_event =
+                    Some(Self::rendered_user_message_event_from_parts(
+                        text.clone(),
+                        text_elements.clone(),
+                        local_image_paths.clone(),
+                        remote_image_urls.clone(),
+                    ));
+                self.add_to_history(history_cell::new_user_prompt(
+                    text,
+                    text_elements,
+                    local_image_paths,
+                    remote_image_urls,
+                ));
+            } else if !remote_image_urls.is_empty() {
+                self.last_rendered_user_message_event =
+                    Some(Self::rendered_user_message_event_from_parts(
+                        String::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        remote_image_urls.clone(),
+                    ));
+                self.add_to_history(history_cell::new_user_prompt(
                     String::new(),
                     Vec::new(),
                     Vec::new(),
-                    remote_image_urls.clone(),
+                    remote_image_urls,
                 ));
-            self.add_to_history(history_cell::new_user_prompt(
-                String::new(),
-                Vec::new(),
-                Vec::new(),
-                remote_image_urls,
-            ));
+            }
         }
 
         self.needs_final_message_separator = false;

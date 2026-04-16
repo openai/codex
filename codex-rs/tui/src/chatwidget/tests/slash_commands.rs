@@ -183,6 +183,20 @@ async fn goal_slash_command_records_original_command_in_history() {
     }
     assert_eq!(next_add_to_history_op(&mut op_rx), command);
     assert_eq!(recall_latest_after_clearing(&mut chat), command);
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains(command),
+        "expected transcript to render original command, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("Set the current thread goal"),
+        "transcript should not render the internal parser prompt: {rendered:?}"
+    );
 }
 
 #[tokio::test]
