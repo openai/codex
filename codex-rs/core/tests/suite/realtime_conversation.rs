@@ -273,7 +273,9 @@ async fn assert_seeded_thread_visible_in_store(
         .await
         .context("list seeded threads through production thread store")?;
     anyhow::ensure!(
-        page.items.iter().any(|thread| thread.thread_id == *thread_id),
+        page.items
+            .iter()
+            .any(|thread| thread.thread_id == *thread_id),
         "seeded thread `{title}` ({thread_id}) was not visible through production thread store"
     );
     Ok(())
@@ -1602,10 +1604,7 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     assert_startup_context_contains(&startup_context, "Recent sessions: 1");
     assert_startup_context_contains(&startup_context, "Latest branch: branch-latest");
     assert_startup_context_contains(&startup_context, "User asks:");
-    assert_startup_context_contains(
-        &startup_context,
-        "Investigate realtime startup context",
-    );
+    assert_startup_context_contains(&startup_context, "Investigate realtime startup context");
     assert_startup_context_contains(&startup_context, "## Machine / Workspace Map");
     assert_startup_context_contains(&startup_context, "README.md");
     assert_startup_context_excludes(&startup_context, MEMORY_PROMPT_PHRASE);
