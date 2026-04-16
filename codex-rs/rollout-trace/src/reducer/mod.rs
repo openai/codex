@@ -77,6 +77,10 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
             .with_context(|| format!("parse trace event line {}", line_index + 1))?;
         reducer.apply_event(event)?;
     }
+    // Spawn edges prefer the child task message as their target, but a child can
+    // fail before that message is ever reduced. Only after replaying the whole
+    // bundle do we know which spawn deliveries need the child-thread fallback.
+    reducer.resolve_pending_spawn_edge_fallbacks()?;
 
     Ok(reducer.rollout)
 }

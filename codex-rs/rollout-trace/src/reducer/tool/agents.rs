@@ -23,13 +23,15 @@ use crate::payload::RawPayloadRef;
 ///
 /// Multi-agent v2 records the sender tool before the target thread necessarily
 /// includes the delivered mailbox message in a model-visible request. The edge
-/// stays pending until it can target that exact conversation item.
+/// stays pending so it can target that exact conversation item when possible.
 pub(in crate::reducer) struct PendingAgentInteractionEdge {
     pub(in crate::reducer) edge_id: String,
     pub(in crate::reducer) kind: InteractionEdgeKind,
     pub(in crate::reducer) source: TraceAnchor,
     pub(in crate::reducer) target_thread_id: String,
     pub(in crate::reducer) message_content: String,
+    /// Spawn-only fallback for children that fail before their task message is model-visible.
+    pub(in crate::reducer) unresolved_spawn_thread_id: Option<String>,
     pub(in crate::reducer) started_at_unix_ms: i64,
     pub(in crate::reducer) ended_at_unix_ms: Option<i64>,
     pub(in crate::reducer) carried_raw_payload_ids: Vec<String>,
@@ -225,8 +227,9 @@ impl TraceReducer {
             source: TraceAnchor::ToolCall {
                 tool_call_id: tool_call_id.to_string(),
             },
-            target_thread_id: child_thread_id,
+            target_thread_id: child_thread_id.clone(),
             message_content: payload.prompt.clone(),
+            unresolved_spawn_thread_id: Some(child_thread_id),
             started_at_unix_ms: tool_call.execution.started_at_unix_ms,
             ended_at_unix_ms: Some(wall_time_unix_ms),
             carried_raw_payload_ids: self.agent_tool_payload_ids(tool_call_id)?,
@@ -266,6 +269,7 @@ impl TraceReducer {
             },
             target_thread_id,
             message_content,
+            unresolved_spawn_thread_id: None,
             started_at_unix_ms: tool_call.execution.started_at_unix_ms,
             ended_at_unix_ms,
             carried_raw_payload_ids: self.agent_tool_payload_ids(tool_call_id)?,
@@ -326,29 +330,36 @@ impl TraceReducer {
         })
     }
 
-    /// Queues or resolves the edge from a child agent's final message to its parent notification.
+    /// Queues or resolves the edge from a child completion to its parent notification.
     pub(in crate::reducer) fn queue_agent_result_interaction_edge(
         &mut self,
         observed: ObservedAgentResultEdge,
     ) -> Result<()> {
-        let Some(source_item_id) = self.latest_assistant_message_item_for_turn(
+        let source = if let Some(source_item_id) = self.latest_assistant_message_item_for_turn(
             &observed.child_thread_id,
             &observed.child_codex_turn_id,
-        ) else {
-            bail!(
-                "agent result edge {} could not find a child result message",
-                observed.edge_id
-            );
+        ) {
+            TraceAnchor::ConversationItem {
+                item_id: source_item_id,
+            }
+        } else {
+            // Child completion is delivered from AgentStatus, not from transcript
+            // content. Failed or cancelled children can therefore notify the parent
+            // without producing a final assistant message. Anchor those edges to
+            // the child thread so the trace keeps the valid delivery instead of
+            // inventing a missing conversation item.
+            TraceAnchor::Thread {
+                thread_id: observed.child_thread_id,
+            }
         };
 
         self.queue_or_resolve_agent_interaction_edge(PendingAgentInteractionEdge {
             edge_id: observed.edge_id,
             kind: InteractionEdgeKind::AgentResult,
-            source: TraceAnchor::ConversationItem {
-                item_id: source_item_id,
-            },
+            source,
             target_thread_id: observed.parent_thread_id,
             message_content: observed.message,
+            unresolved_spawn_thread_id: None,
             started_at_unix_ms: observed.wall_time_unix_ms,
             ended_at_unix_ms: Some(observed.wall_time_unix_ms),
             carried_raw_payload_ids: observed
@@ -399,6 +410,7 @@ impl TraceReducer {
                 || existing.source != pending.source
                 || existing.target_thread_id != pending.target_thread_id
                 || existing.message_content != pending.message_content
+                || existing.unresolved_spawn_thread_id != pending.unresolved_spawn_thread_id
             {
                 bail!(
                     "pending interaction edge {} was observed with conflicting delivery data",
@@ -422,6 +434,44 @@ impl TraceReducer {
         }
 
         self.pending_agent_interaction_edges.push(pending);
+        Ok(())
+    }
+
+    /// Materializes unresolved spawn edges that have a valid child-thread fallback target.
+    pub(in crate::reducer) fn resolve_pending_spawn_edge_fallbacks(&mut self) -> Result<()> {
+        let pending_edges = std::mem::take(&mut self.pending_agent_interaction_edges);
+        for pending in pending_edges {
+            let Some(child_thread_id) = pending.unresolved_spawn_thread_id else {
+                continue;
+            };
+            if pending.kind != InteractionEdgeKind::SpawnAgent {
+                bail!(
+                    "non-spawn interaction edge {} carried a spawn fallback target",
+                    pending.edge_id
+                );
+            }
+            if !self.rollout.threads.contains_key(&child_thread_id) {
+                continue;
+            }
+
+            // Spawn normally resolves to the child task message because that is
+            // where the delegated work first becomes model-visible. A child can
+            // fail before that transcript item exists, but the spawned thread is
+            // still real and the spawning tool still created it. Preserve that
+            // relationship with the thread fallback instead of dropping the edge.
+            self.upsert_interaction_edge(InteractionEdge {
+                edge_id: pending.edge_id,
+                kind: pending.kind,
+                source: pending.source,
+                target: TraceAnchor::Thread {
+                    thread_id: child_thread_id,
+                },
+                started_at_unix_ms: pending.started_at_unix_ms,
+                ended_at_unix_ms: pending.ended_at_unix_ms,
+                carried_item_ids: Vec::new(),
+                carried_raw_payload_ids: pending.carried_raw_payload_ids,
+            })?;
+        }
         Ok(())
     }
 
