@@ -555,6 +555,47 @@ enabled = false
     assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
 }
 
+#[test]
+fn detect_repo_skips_plugins_without_explicit_enabled_in_codex() {
+    let root = TempDir::new().expect("create tempdir");
+    let claude_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo claude dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/claude-plugins"
+            }
+          }
+        }"#,
+    )
+    .expect("write repo settings");
+    fs::write(
+        codex_home.join("config.toml"),
+        r#"
+[plugins."formatter@acme-tools"]
+"#,
+    )
+    .expect("write codex config");
+
+    let items = service_for_paths(claude_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root]),
+        })
+        .expect("detect");
+
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+}
+
 #[tokio::test]
 async fn import_plugins_requires_details() {
     let (_root, claude_home, codex_home) = fixture_paths();

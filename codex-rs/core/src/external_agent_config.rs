@@ -621,7 +621,6 @@ fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
 }
 
 fn configured_plugin_ids(codex_home: &Path) -> io::Result<HashSet<String>> {
-    let mut plugin_states = BTreeMap::new();
     let config_path = codex_home.join("config.toml");
     if !config_path.is_file() {
         return Ok(HashSet::new());
@@ -638,16 +637,7 @@ fn configured_plugin_ids(codex_home: &Path) -> io::Result<HashSet<String>> {
         return Ok(HashSet::new());
     };
 
-    for (plugin_id, enabled) in plugins.iter().filter_map(|(plugin_id, plugin_config)| {
-        plugin_config
-            .get("enabled")
-            .and_then(TomlValue::as_bool)
-            .map(|enabled| (plugin_id, enabled))
-    }) {
-        plugin_states.insert(plugin_id.clone(), enabled);
-    }
-
-    Ok(plugin_states.into_keys().collect())
+    Ok(plugins.keys().cloned().collect())
 }
 
 fn configured_marketplace_plugins(
