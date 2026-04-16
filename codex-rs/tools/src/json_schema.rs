@@ -674,5 +674,12 @@ fn singleton_null_schema_error() -> serde_json::Error {
 }
 
 #[cfg(test)]
+pub(crate) use crate::json_schema_structured_outputs::validate_structured_outputs_schema;
+
+#[cfg(test)]
 #[path = "json_schema_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "json_schema_structured_outputs_tests.rs"]
+mod structured_outputs_tests;
