@@ -1575,7 +1575,11 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
     let state_db = child_thread
         .state_db()
         .expect("sqlite state db should be available for nickname resume test");
-    timeout(Duration::from_secs(5), async {
+    // Linux Bazel runners can take noticeably longer to flush the freshly
+    // spawned child thread metadata into SQLite than local cargo test runs.
+    // Give the persistence poll enough headroom so this resume test validates
+    // the stored nickname/role behavior instead of racing the background write.
+    timeout(Duration::from_secs(20), async {
         loop {
             if let Ok(Some(metadata)) = state_db.get_thread(child_thread_id).await
                 && metadata.agent_nickname.is_some()
