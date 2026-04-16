@@ -6832,11 +6832,9 @@ async fn apply_prefix_compact_candidate(
         .reference_context_item()
         .await
         .or(candidate.captured_reference_context_item);
-    let mut new_history = compact::build_prefix_compacted_history(
-        candidate.replacement_prefix,
-        candidate.captured_context,
-        retained_suffix,
-    );
+    let mut new_history = candidate.replacement_prefix;
+    new_history.extend(candidate.captured_context);
+    new_history.extend(retained_suffix);
 
     new_history.extend(
         current_items

@@ -23,30 +23,6 @@ async fn process_compacted_history_with_test_session(
     (refreshed, initial_context)
 }
 
-fn input_message(role: &str, text: &str) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: role.to_string(),
-        content: vec![ContentItem::InputText {
-            text: text.to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    }
-}
-
-fn output_message(text: &str) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: text.to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    }
-}
-
 #[test]
 fn remote_compact_task_supports_openai_provider() {
     let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
@@ -620,66 +596,4 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last
         },
     ];
     assert_eq!(refreshed, expected);
-}
-
-#[test]
-fn build_prefix_compacted_history_inserts_captured_context_after_prefix() {
-    let prefix_user = input_message("user", "older user in compacted prefix");
-    let captured_developer = input_message("developer", "captured permissions");
-    let captured_user = input_message("user", "captured environment");
-    let suffix_assistant = output_message("working through suffix");
-    let suffix_user = input_message("user", "latest user in retained suffix");
-
-    let refreshed = build_prefix_compacted_history(
-        vec![prefix_user.clone()],
-        vec![captured_developer.clone(), captured_user.clone()],
-        vec![suffix_assistant.clone(), suffix_user.clone()],
-    );
-
-    assert_eq!(
-        refreshed,
-        vec![
-            prefix_user,
-            captured_developer,
-            captured_user,
-            suffix_assistant,
-            suffix_user,
-        ]
-    );
-}
-
-#[test]
-fn build_prefix_compacted_history_preserves_suffix_context_items() {
-    let prefix_user = input_message("user", "older user in compacted prefix");
-    let captured_context = input_message("developer", "captured permissions");
-    let suffix_developer = input_message("developer", "<permissions instructions>\nnew sandbox");
-    let suffix_user_context = input_message(
-        "user",
-        r#"<environment_context>
-  <cwd>/repo</cwd>
-  <shell>zsh</shell>
-</environment_context>"#,
-    );
-    let suffix_assistant = output_message("continuing after context change");
-
-    let refreshed = build_prefix_compacted_history(
-        vec![prefix_user.clone()],
-        vec![captured_context.clone()],
-        vec![
-            suffix_developer.clone(),
-            suffix_user_context.clone(),
-            suffix_assistant.clone(),
-        ],
-    );
-
-    assert_eq!(
-        refreshed,
-        vec![
-            prefix_user,
-            captured_context,
-            suffix_developer,
-            suffix_user_context,
-            suffix_assistant,
-        ]
-    );
 }

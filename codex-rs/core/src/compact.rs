@@ -481,22 +481,6 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
     compacted_history
 }
 
-/// Builds prefix-compaction replacement history from a processed compacted prefix, the context
-/// captured when that prefix snapshot was taken, and the live retained suffix.
-///
-/// The prefix has already gone through the same retention filtering as classic remote compaction.
-/// The captured context is inserted immediately after the prefix so the untouched suffix remains
-/// under the same chronological context state that existed when the suffix began.
-pub(crate) fn build_prefix_compacted_history(
-    mut processed_prefix: Vec<ResponseItem>,
-    captured_context: Vec<ResponseItem>,
-    retained_suffix: Vec<ResponseItem>,
-) -> Vec<ResponseItem> {
-    processed_prefix.extend(captured_context);
-    processed_prefix.extend(retained_suffix);
-    processed_prefix
-}
-
 pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItem>,
     user_messages: &[String],

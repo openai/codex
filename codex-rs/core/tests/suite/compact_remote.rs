@@ -156,33 +156,6 @@ impl Respond for PrefixRaceCompactResponder {
     }
 }
 
-#[derive(Clone, Debug)]
-struct ModeAwareCompactResponder {
-    requests: StdArc<StdMutex<Vec<serde_json::Value>>>,
-}
-
-impl Respond for ModeAwareCompactResponder {
-    fn respond(&self, request: &wiremock::Request) -> ResponseTemplate {
-        let body = request
-            .body_json::<serde_json::Value>()
-            .expect("compact request body should be JSON");
-        let prefix_mode = body.get("mode").and_then(serde_json::Value::as_str) == Some("prefix");
-        self.requests
-            .lock()
-            .expect("request lock poisoned")
-            .push(body);
-
-        let summary = if prefix_mode {
-            "PREFIX_SUMMARY"
-        } else {
-            "NORMAL_FALLBACK_SUMMARY"
-        };
-        ResponseTemplate::new(200)
-            .insert_header("content-type", "application/json")
-            .set_body_json(json!({ "output": compacted_summary_only_output(summary) }))
-    }
-}
-
 fn remote_realtime_test_codex_builder(
     realtime_server: &responses::WebSocketTestServer,
 ) -> TestCodexBuilder {
@@ -1330,7 +1303,7 @@ async fn oversized_prefix_snapshot_skips_prefix_compact_request() -> Result<()> 
     let compact_requests = StdArc::new(StdMutex::new(Vec::new()));
     Mock::given(method("POST"))
         .and(path_regex(".*/responses/compact$"))
-        .respond_with(ModeAwareCompactResponder {
+        .respond_with(PrefixRaceCompactResponder {
             requests: StdArc::clone(&compact_requests),
         })
         .up_to_n_times(1)
@@ -1385,7 +1358,7 @@ async fn oversized_prefix_snapshot_skips_prefix_compact_request() -> Result<()> 
     assert_eq!(requests.len(), 3);
     let third_request_body = requests[2].body_json().to_string();
     assert!(third_request_body.contains("NORMAL_FALLBACK_SUMMARY"));
-    assert!(!third_request_body.contains("PREFIX_SUMMARY"));
+    assert!(!third_request_body.contains("PREFIX_STALE_SUMMARY"));
 
     Ok(())
 }
