@@ -1642,15 +1642,12 @@ impl CodexMessageProcessor {
         }
 
         if let Some(expected_workspaces) = self.config.forced_chatgpt_workspace_id.as_deref()
-            && !expected_workspaces
-                .iter()
-                .any(|expected_workspace| chatgpt_account_id == *expected_workspace)
+            && !expected_workspaces.contains(&chatgpt_account_id)
         {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!(
-                    "External auth must use one of workspace(s) {:?}, but received {chatgpt_account_id:?}.",
-                    expected_workspaces
+                    "External auth must use one of workspace(s) {expected_workspaces:?}, but received {chatgpt_account_id:?}.",
                 ),
                 data: None,
             };
