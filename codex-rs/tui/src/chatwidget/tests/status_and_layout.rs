@@ -1341,7 +1341,9 @@ fn goal_status_indicator_formats_statuses_and_budgets() {
             /*token_budget*/ None,
             /*tokens_used*/ 0,
         )),
-        Some(GoalStatusIndicator::Active { usage: None })
+        Some(GoalStatusIndicator::Active {
+            usage: Some("30m".to_string()),
+        })
     );
     assert_eq!(
         goal_status_indicator_from_app_goal(&test_thread_goal(
@@ -1417,6 +1419,7 @@ fn test_thread_goal(
         status,
         token_budget,
         tokens_used,
+        time_used_seconds: 30 * 60,
         created_at: 0,
         updated_at: 0,
     }

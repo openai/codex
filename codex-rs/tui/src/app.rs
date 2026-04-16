@@ -265,6 +265,12 @@ fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
 
 fn goal_usage_summary(goal: &ThreadGoal) -> String {
     let mut parts = vec![format!("Objective: {}", goal.objective)];
+    if goal.time_used_seconds > 0 {
+        parts.push(format!(
+            "Time: {}.",
+            crate::goal_display::format_goal_elapsed_seconds(goal.time_used_seconds)
+        ));
+    }
     if let Some(token_budget) = goal.token_budget {
         parts.push(format!(
             "Tokens: {}/{}.",
@@ -6721,19 +6727,20 @@ mod tests {
             status: ThreadGoalStatus::BudgetLimited,
             token_budget,
             tokens_used,
+            time_used_seconds: 120,
             created_at: 0,
             updated_at: 0,
         }
     }
 
     #[test]
-    fn goal_usage_summary_formats_budgeted_tokens() {
+    fn goal_usage_summary_formats_time_and_budgeted_tokens() {
         assert_eq!(
             goal_usage_summary(&test_thread_goal(
                 /*token_budget*/ Some(50_000),
                 /*tokens_used*/ 63_876,
             )),
-            "Objective: Complete the task described in ../gameboy-long-running-prompt5.txt Tokens: 63.9K/50K."
+            "Objective: Complete the task described in ../gameboy-long-running-prompt5.txt Time: 2m. Tokens: 63.9K/50K."
         );
     }
 

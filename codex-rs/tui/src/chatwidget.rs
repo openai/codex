@@ -6753,6 +6753,7 @@ impl ChatWidget {
                     },
                     token_budget: goal.token_budget,
                     tokens_used: goal.tokens_used,
+                    time_used_seconds: goal.time_used_seconds,
                     created_at: goal.created_at,
                     updated_at: goal.updated_at,
                 });
