@@ -131,10 +131,10 @@ pub type ConversationManager = ThreadManager;
 pub type NewConversation = NewThread;
 #[deprecated(note = "use CodexThread")]
 pub type CodexConversation = CodexThread;
-pub(crate) mod project_doc;
-pub use project_doc::AgentsMdManager;
-pub use project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-pub use project_doc::LOCAL_PROJECT_DOC_FILENAME;
+pub(crate) mod agents_md;
+pub use agents_md::AgentsMdManager;
+pub use agents_md::DEFAULT_AGENTS_MD_FILENAME;
+pub use agents_md::LOCAL_AGENTS_MD_FILENAME;
 mod rollout;
 pub(crate) mod safety;
 mod session_rollout_init_error;

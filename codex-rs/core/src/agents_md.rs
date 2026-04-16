@@ -33,14 +33,14 @@ use tracing::error;
 pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
     include_str!("../hierarchical_agents_message.md");
 
-/// Default filename scanned for project-level docs.
-pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
-/// Preferred local override for project-level docs.
-pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
+/// Default filename scanned for AGENTS.md instructions.
+pub const DEFAULT_AGENTS_MD_FILENAME: &str = "AGENTS.md";
+/// Preferred local override for AGENTS.md instructions.
+pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 
-/// When both `Config::instructions` and the project doc are present, they will
+/// When both `Config::instructions` and AGENTS.md docs are present, they will
 /// be concatenated with the following separator.
-const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
 fn render_js_repl_instructions(config: &Config) -> Option<String> {
     if !config.features.enabled(Feature::JsRepl) {
@@ -97,7 +97,7 @@ impl<'a> AgentsMdManager<'a> {
         codex_dir: Option<&AbsolutePathBuf>,
     ) -> Option<LoadedAgentsMd> {
         let base = codex_dir?;
-        for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
+        for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
             let path = base.join(candidate);
             if let Ok(contents) = std::fs::read_to_string(&path) {
                 let trimmed = contents.trim();
@@ -126,7 +126,7 @@ impl<'a> AgentsMdManager<'a> {
         &self,
         fs: &dyn ExecutorFileSystem,
     ) -> Option<String> {
-        let project_docs = self.read_project_docs(fs).await;
+        let agents_md_docs = self.read_agents_md(fs).await;
 
         let mut output = String::new();
 
@@ -134,16 +134,16 @@ impl<'a> AgentsMdManager<'a> {
             output.push_str(&instructions);
         }
 
-        match project_docs {
+        match agents_md_docs {
             Ok(Some(docs)) => {
                 if !output.is_empty() {
-                    output.push_str(PROJECT_DOC_SEPARATOR);
+                    output.push_str(AGENTS_MD_SEPARATOR);
                 }
                 output.push_str(&docs);
             }
             Ok(None) => {}
             Err(e) => {
-                error!("error trying to find project doc: {e:#}");
+                error!("error trying to find AGENTS.md docs: {e:#}");
             }
         };
 
@@ -170,31 +170,32 @@ impl<'a> AgentsMdManager<'a> {
 
     /// Returns all instruction source files included in the current config.
     pub async fn instruction_sources(&self, fs: &dyn ExecutorFileSystem) -> Vec<AbsolutePathBuf> {
-        let mut paths: Vec<AbsolutePathBuf> =
-            self.config.user_instructions_path.iter().cloned().collect();
-        match self.project_doc_paths(fs).await {
-            Ok(project_doc_paths) => paths.extend(project_doc_paths),
+        let mut paths = Self::load_global_instructions(Some(&self.config.codex_home))
+            .map(|loaded| vec![loaded.path])
+            .unwrap_or_default();
+        match self.agents_md_paths(fs).await {
+            Ok(agents_md_paths) => paths.extend(agents_md_paths),
             Err(err) => {
-                tracing::warn!(error = %err, "failed to discover project docs for instruction sources");
+                tracing::warn!(error = %err, "failed to discover AGENTS.md docs for instruction sources");
             }
         }
         paths
     }
 
-    /// Attempt to locate and load the project documentation.
+    /// Attempt to locate and load AGENTS.md documentation.
     ///
     /// On success returns `Ok(Some(contents))` where `contents` is the
     /// concatenation of all discovered docs. If no documentation file is found
     /// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
     /// `Err` so callers can decide how to handle them.
-    async fn read_project_docs(&self, fs: &dyn ExecutorFileSystem) -> io::Result<Option<String>> {
+    async fn read_agents_md(&self, fs: &dyn ExecutorFileSystem) -> io::Result<Option<String>> {
         let max_total = self.config.project_doc_max_bytes;
 
         if max_total == 0 {
             return Ok(None);
         }
 
-        let paths = self.project_doc_paths(fs).await?;
+        let paths = self.agents_md_paths(fs).await?;
         if paths.is_empty() {
             return Ok(None);
         }
@@ -247,11 +248,11 @@ impl<'a> AgentsMdManager<'a> {
     }
 
     /// Discover the list of AGENTS.md files using the same search rules as
-    /// `read_project_docs`, but return the file paths instead of concatenated
+    /// `read_agents_md`, but return the file paths instead of concatenated
     /// contents. The list is ordered from project root to the current working
     /// directory (inclusive). Symlinks are allowed. When `project_doc_max_bytes`
     /// is zero, returns an empty list.
-    async fn project_doc_paths(
+    async fn agents_md_paths(
         &self,
         fs: &dyn ExecutorFileSystem,
     ) -> io::Result<Vec<AbsolutePathBuf>> {
@@ -346,8 +347,8 @@ impl<'a> AgentsMdManager<'a> {
     fn candidate_filenames(&self) -> Vec<&str> {
         let mut names: Vec<&str> =
             Vec::with_capacity(2 + self.config.project_doc_fallback_filenames.len());
-        names.push(LOCAL_PROJECT_DOC_FILENAME);
-        names.push(DEFAULT_PROJECT_DOC_FILENAME);
+        names.push(LOCAL_AGENTS_MD_FILENAME);
+        names.push(DEFAULT_AGENTS_MD_FILENAME);
         for candidate in &self.config.project_doc_fallback_filenames {
             let candidate = candidate.as_str();
             if candidate.is_empty() {
@@ -362,5 +363,5 @@ impl<'a> AgentsMdManager<'a> {
 }
 
 #[cfg(test)]
-#[path = "project_doc_tests.rs"]
+#[path = "agents_md_tests.rs"]
 mod tests;

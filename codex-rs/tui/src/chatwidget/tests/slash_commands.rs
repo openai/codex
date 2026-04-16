@@ -73,7 +73,7 @@ async fn ctrl_d_with_modal_open_does_not_quit() {
 async fn slash_init_skips_when_project_doc_exists() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let tempdir = tempdir().unwrap();
-    let existing_path = tempdir.path().join(DEFAULT_PROJECT_DOC_FILENAME);
+    let existing_path = tempdir.path().join(DEFAULT_AGENTS_MD_FILENAME);
     std::fs::write(&existing_path, "existing instructions").unwrap();
     chat.config.cwd = tempdir.path().to_path_buf().abs();
 
@@ -88,7 +88,7 @@ async fn slash_init_skips_when_project_doc_exists() {
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains(DEFAULT_PROJECT_DOC_FILENAME),
+        rendered.contains(DEFAULT_AGENTS_MD_FILENAME),
         "info message should mention the existing file: {rendered:?}"
     );
     assert!(

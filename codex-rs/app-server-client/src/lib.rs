@@ -65,9 +65,9 @@ pub use crate::remote::RemoteAppServerConnectArgs;
 /// while legacy startup/config paths are migrated to RPCs.
 pub mod legacy_core {
     pub use codex_core::Cursor;
-    pub use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
+    pub use codex_core::DEFAULT_AGENTS_MD_FILENAME;
     pub use codex_core::INTERACTIVE_SESSION_SOURCES;
-    pub use codex_core::LOCAL_PROJECT_DOC_FILENAME;
+    pub use codex_core::LOCAL_AGENTS_MD_FILENAME;
     pub use codex_core::McpManager;
     pub use codex_core::PLUGIN_TEXT_MENTION_SIGIL;
     pub use codex_core::RolloutRecorder;

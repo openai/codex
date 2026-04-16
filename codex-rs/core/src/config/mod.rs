@@ -1,3 +1,4 @@
+use crate::agents_md::AgentsMdManager;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::CloudRequirementsLoader;
@@ -15,7 +16,6 @@ use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
-use crate::project_doc::AgentsMdManager;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -119,7 +119,7 @@ pub use codex_git_utils::GhostSnapshotConfig;
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
-pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
@@ -269,9 +269,6 @@ pub struct Config {
 
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
-
-    /// Path to the global AGENTS file loaded into `user_instructions`.
-    pub user_instructions_path: Option<AbsolutePathBuf>,
 
     /// Base instructions override.
     pub base_instructions: Option<String>,
@@ -1444,10 +1441,8 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let (user_instructions, user_instructions_path) =
-            AgentsMdManager::load_global_instructions(Some(&codex_home))
-                .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
-                .unwrap_or((None, None));
+        let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
+            .map(|loaded| loaded.contents);
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -2034,7 +2029,6 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,
-            user_instructions_path,
             base_instructions,
             personality,
             developer_instructions,
@@ -2059,7 +2053,7 @@ impl Config {
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
-            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
+            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
                 .unwrap_or_default()
