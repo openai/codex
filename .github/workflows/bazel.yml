@@ -96,14 +96,19 @@ jobs:
             )
 
             set +e
-            ./.github/scripts/run-bazel-ci.sh \
-              --ci-config=ci-windows-cross-build \
-              -- \
-              build \
-              --build_tests_only \
-              "${bazel_common_args[@]}" \
-              -- \
-              "${bazel_cross_warmup_targets[@]}"
+            if command -v timeout >/dev/null 2>&1; then
+              timeout 180s \
+                ./.github/scripts/run-bazel-ci.sh \
+                  --ci-config=ci-windows-cross-build \
+                  -- \
+                  build \
+                  --build_tests_only \
+                  "${bazel_common_args[@]}" \
+                  -- \
+                  "${bazel_cross_warmup_targets[@]}"
+            else
+              echo "::warning title=Windows cross-remote build::Skipping remote cache warmup because timeout is unavailable."
+            fi
             cross_build_status=$?
             set -e
 
