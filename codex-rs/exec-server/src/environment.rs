@@ -35,7 +35,7 @@ struct EnvironmentConfig {
 
 /// Resolves the current or explicitly selected execution environment for a
 /// session.
-pub trait EnvironmentResolver: Send + Sync + std::fmt::Debug {
+pub trait EnvironmentProvider: Send + Sync + std::fmt::Debug {
     async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError>;
 
     async fn environment(
@@ -223,7 +223,7 @@ impl EnvironmentManager {
     }
 }
 
-impl EnvironmentResolver for EnvironmentManager {
+impl EnvironmentProvider for EnvironmentManager {
     /// Returns the cached environment, creating it on first access.
     async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
         self.current_environment
@@ -268,21 +268,21 @@ impl EnvironmentResolver for EnvironmentManager {
 
 impl EnvironmentManager {
     pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
-        <Self as EnvironmentResolver>::current(self).await
+        <Self as EnvironmentProvider>::current(self).await
     }
 
     pub async fn environment(
         &self,
         environment_id: Option<&str>,
     ) -> Result<Option<Arc<Environment>>, ExecServerError> {
-        <Self as EnvironmentResolver>::environment(self, environment_id).await
+        <Self as EnvironmentProvider>::environment(self, environment_id).await
     }
 
     pub fn default_cwd(
         &self,
         environment_id: Option<&str>,
     ) -> Result<Option<&Path>, ExecServerError> {
-        <Self as EnvironmentResolver>::default_cwd(self, environment_id)
+        <Self as EnvironmentProvider>::default_cwd(self, environment_id)
     }
 
     async fn local_environment(&self) -> Result<Arc<Environment>, ExecServerError> {
