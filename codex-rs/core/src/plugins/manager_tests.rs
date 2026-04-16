@@ -1578,7 +1578,13 @@ source = "/tmp/debug"
 
     let marketplace = marketplaces
         .into_iter()
-        .find(|marketplace| marketplace.name == "debug")
+        .find(|marketplace| {
+            marketplace.path
+                == AbsolutePathBuf::try_from(
+                    marketplace_root.join(".agents/plugins/marketplace.json"),
+                )
+                .unwrap()
+        })
         .expect("installed marketplace should be listed");
 
     assert_eq!(
@@ -1648,7 +1654,13 @@ source = "/tmp/debug"
 
     let marketplace = marketplaces
         .into_iter()
-        .find(|marketplace| marketplace.name == "debug")
+        .find(|marketplace| {
+            marketplace.path
+                == AbsolutePathBuf::try_from(
+                    marketplace_root.join(".agents/plugins/marketplace.json"),
+                )
+                .unwrap()
+        })
         .expect("configured marketplace should be discovered");
 
     assert_eq!(marketplace.plugins[0].id, "sample@debug");
@@ -1695,7 +1707,16 @@ plugins = true
         .unwrap()
         .marketplaces;
 
-    assert!(marketplaces.is_empty());
+    assert!(
+        marketplaces.iter().all(|marketplace| {
+            marketplace.path
+                != AbsolutePathBuf::try_from(
+                    marketplace_root.join(".agents/plugins/marketplace.json"),
+                )
+                .unwrap()
+        }),
+        "installed marketplace root missing from config should not be listed"
+    );
 }
 
 #[tokio::test]

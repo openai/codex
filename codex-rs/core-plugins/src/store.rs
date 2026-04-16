@@ -114,7 +114,7 @@ impl PluginStore {
         let plugin_name = plugin_name_for_source(source_path.as_path())?;
         if plugin_name != plugin_id.plugin_name {
             return Err(PluginStoreError::Invalid(format!(
-                "plugin manifest name `{plugin_name}` does not match marketplace plugin name `{}`",
+                "plugin.json name `{plugin_name}` does not match marketplace plugin name `{}`",
                 plugin_id.plugin_name
             )));
         }
@@ -185,7 +185,7 @@ fn validate_plugin_version_segment(plugin_version: &str) -> Result<(), String> {
 
 fn plugin_manifest_for_source(source_path: &Path) -> Result<PluginManifest, PluginStoreError> {
     load_plugin_manifest(source_path)
-        .ok_or_else(|| PluginStoreError::Invalid("missing or invalid plugin manifest".to_string()))
+        .ok_or_else(|| PluginStoreError::Invalid("missing or invalid plugin.json".to_string()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,25 +199,24 @@ fn plugin_manifest_version_for_source(
     source_path: &Path,
 ) -> Result<Option<String>, PluginStoreError> {
     let manifest_path = find_plugin_manifest_path(source_path)
-        .ok_or_else(|| PluginStoreError::Invalid("missing plugin manifest".to_string()))?;
+        .ok_or_else(|| PluginStoreError::Invalid("missing plugin.json".to_string()))?;
 
     let contents = fs::read_to_string(&manifest_path)
-        .map_err(|err| PluginStoreError::io("failed to read plugin manifest", err))?;
-    let manifest: RawPluginManifestVersion = serde_json::from_str(&contents).map_err(|err| {
-        PluginStoreError::Invalid(format!("failed to parse plugin manifest: {err}"))
-    })?;
+        .map_err(|err| PluginStoreError::io("failed to read plugin.json", err))?;
+    let manifest: RawPluginManifestVersion = serde_json::from_str(&contents)
+        .map_err(|err| PluginStoreError::Invalid(format!("failed to parse plugin.json: {err}")))?;
     let Some(version) = manifest.version else {
         return Ok(None);
     };
     let Some(version) = version.as_str() else {
         return Err(PluginStoreError::Invalid(
-            "invalid plugin version in plugin manifest: expected string".to_string(),
+            "invalid plugin version in plugin.json: expected string".to_string(),
         ));
     };
     let version = version.trim();
     if version.is_empty() {
         return Err(PluginStoreError::Invalid(
-            "invalid plugin version in plugin manifest: must not be blank".to_string(),
+            "invalid plugin version in plugin.json: must not be blank".to_string(),
         ));
     }
     Ok(Some(version.to_string()))

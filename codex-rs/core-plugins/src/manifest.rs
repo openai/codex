@@ -390,6 +390,8 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
+    const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
+
     fn write_manifest(plugin_root: &Path, version: Option<&str>, interface: &str) {
         fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
         let version = version
@@ -408,10 +410,11 @@ mod tests {
         .expect("write manifest");
     }
 
-    fn write_alternate_manifest(plugin_root: &Path, contents: &str) {
-        fs::create_dir_all(plugin_root.join(".claude-plugin")).expect("create manifest dir");
-        fs::write(plugin_root.join(".claude-plugin/plugin.json"), contents)
-            .expect("write manifest");
+    fn write_alternate_plugin_manifest(plugin_root: &Path, contents: &str) {
+        let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH);
+        fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+            .expect("create manifest dir");
+        fs::write(manifest_path, contents).expect("write manifest");
     }
 
     fn load_manifest(plugin_root: &Path) -> PluginManifest {
@@ -517,7 +520,7 @@ mod tests {
     fn plugin_manifest_uses_alternate_discoverable_path() {
         let tmp = tempdir().expect("tempdir");
         let plugin_root = tmp.path().join("demo-plugin");
-        write_alternate_manifest(
+        write_alternate_plugin_manifest(
             &plugin_root,
             r#"{
   "name": "demo-plugin",

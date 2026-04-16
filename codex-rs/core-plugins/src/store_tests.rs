@@ -175,7 +175,7 @@ fn install_rejects_blank_manifest_version() {
 
     assert_eq!(
         err,
-        "invalid plugin version in plugin manifest: must not be blank"
+        "invalid plugin version in plugin.json: must not be blank"
     );
 }
 
@@ -301,6 +301,6 @@ fn install_rejects_manifest_names_that_do_not_match_marketplace_plugin_name() {
 
     assert_eq!(
         err.to_string(),
-        "plugin manifest name `manifest-name` does not match marketplace plugin name `different-name`"
+        "plugin.json name `manifest-name` does not match marketplace plugin name `different-name`"
     );
 }

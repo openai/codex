@@ -46,15 +46,6 @@ plugins = true
     )
 }
 
-fn write_primary_plugin_manifest(
-    plugin_root: &std::path::Path,
-    plugin_name: &str,
-) -> std::io::Result<()> {
-    let manifest_path = plugin_root.join(".codex-plugin/plugin.json");
-    std::fs::create_dir_all(manifest_path.parent().expect("manifest parent"))?;
-    std::fs::write(manifest_path, format!(r#"{{"name":"{plugin_name}"}}"#))
-}
-
 #[tokio::test]
 async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -258,7 +249,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
 }
 
 #[tokio::test]
-async fn plugin_list_uses_alternate_discoverable_manifest_and_skips_undiscoverable_plugins()
+async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverable_plugins()
 -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
@@ -340,33 +331,49 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_skips_undiscoverab
             name: "alternate-marketplace".to_string(),
             path: marketplace_path,
             interface: None,
-            plugins: vec![PluginSummary {
-                id: "valid-plugin@alternate-marketplace".to_string(),
-                name: "valid-plugin".to_string(),
-                source: PluginSource::Local {
-                    path: valid_plugin_path,
+            plugins: vec![
+                PluginSummary {
+                    id: "valid-plugin@alternate-marketplace".to_string(),
+                    name: "valid-plugin".to_string(),
+                    source: PluginSource::Local {
+                        path: valid_plugin_path,
+                    },
+                    installed: false,
+                    enabled: false,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnInstall,
+                    interface: Some(codex_app_server_protocol::PluginInterface {
+                        display_name: Some("Valid Plugin".to_string()),
+                        short_description: None,
+                        long_description: None,
+                        developer_name: None,
+                        category: None,
+                        capabilities: Vec::new(),
+                        website_url: None,
+                        privacy_policy_url: None,
+                        terms_of_service_url: None,
+                        default_prompt: None,
+                        brand_color: None,
+                        composer_icon: None,
+                        logo: None,
+                        screenshots: Vec::new(),
+                    }),
                 },
-                installed: false,
-                enabled: false,
-                install_policy: PluginInstallPolicy::Available,
-                auth_policy: PluginAuthPolicy::OnInstall,
-                interface: Some(codex_app_server_protocol::PluginInterface {
-                    display_name: Some("Valid Plugin".to_string()),
-                    short_description: None,
-                    long_description: None,
-                    developer_name: None,
-                    category: None,
-                    capabilities: Vec::new(),
-                    website_url: None,
-                    privacy_policy_url: None,
-                    terms_of_service_url: None,
-                    default_prompt: None,
-                    brand_color: None,
-                    composer_icon: None,
-                    logo: None,
-                    screenshots: Vec::new(),
-                }),
-            }],
+                PluginSummary {
+                    id: "missing-plugin@alternate-marketplace".to_string(),
+                    name: "missing-plugin".to_string(),
+                    source: PluginSource::Local {
+                        path: AbsolutePathBuf::try_from(
+                            repo_root.path().join("plugins/missing-plugin"),
+                        )?,
+                    },
+                    installed: false,
+                    enabled: false,
+                    install_policy: PluginInstallPolicy::Available,
+                    auth_policy: PluginAuthPolicy::OnInstall,
+                    interface: None,
+                },
+            ],
         }]
     );
     assert!(response.marketplace_load_errors.is_empty());
@@ -426,17 +433,8 @@ async fn plugin_list_includes_install_and_enabled_state_from_config() -> Result<
     let repo_root = TempDir::new()?;
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
-    std::fs::create_dir_all(repo_root.path().join("enabled-plugin"))?;
-    std::fs::create_dir_all(repo_root.path().join("disabled-plugin"))?;
-    std::fs::create_dir_all(repo_root.path().join("uninstalled-plugin"))?;
     write_installed_plugin(&codex_home, "codex-curated", "enabled-plugin")?;
     write_installed_plugin(&codex_home, "codex-curated", "disabled-plugin")?;
-    write_primary_plugin_manifest(&repo_root.path().join("enabled-plugin"), "enabled-plugin")?;
-    write_primary_plugin_manifest(&repo_root.path().join("disabled-plugin"), "disabled-plugin")?;
-    write_primary_plugin_manifest(
-        &repo_root.path().join("uninstalled-plugin"),
-        "uninstalled-plugin",
-    )?;
     std::fs::write(
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -566,9 +564,7 @@ enabled = false
 async fn plugin_list_uses_home_config_for_enabled_state() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::create_dir_all(codex_home.path().join(".agents/plugins"))?;
-    std::fs::create_dir_all(codex_home.path().join("shared-plugin"))?;
     write_installed_plugin(&codex_home, "codex-curated", "shared-plugin")?;
-    write_primary_plugin_manifest(&codex_home.path().join("shared-plugin"), "shared-plugin")?;
     std::fs::write(
         codex_home.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -597,11 +593,6 @@ enabled = true
     let workspace_enabled = TempDir::new()?;
     std::fs::create_dir_all(workspace_enabled.path().join(".git"))?;
     std::fs::create_dir_all(workspace_enabled.path().join(".agents/plugins"))?;
-    std::fs::create_dir_all(workspace_enabled.path().join("shared-plugin"))?;
-    write_primary_plugin_manifest(
-        &workspace_enabled.path().join("shared-plugin"),
-        "shared-plugin",
-    )?;
     std::fs::write(
         workspace_enabled
             .path()

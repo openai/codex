@@ -160,7 +160,7 @@ impl MarketplaceError {
     }
 }
 
-pub fn resolve_marketplace_plugin(
+pub fn find_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
@@ -185,12 +185,12 @@ pub fn resolve_marketplace_plugin(
     })
 }
 
-pub fn resolve_installable_marketplace_plugin(
+pub fn find_installable_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
     restriction_product: Option<Product>,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
-    let resolved = resolve_marketplace_plugin(marketplace_path, plugin_name)?;
+    let resolved = find_marketplace_plugin(marketplace_path, plugin_name)?;
     let product_allowed = match resolved.policy.products.as_deref() {
         None => true,
         Some([]) => false,
@@ -266,21 +266,20 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
     let mut plugins = Vec::new();
 
     for plugin in marketplace.plugins {
-        let Some(plugin) = resolve_marketplace_plugin_entry(path, &marketplace.name, plugin)?
-        else {
-            continue;
+        let plugin = match resolve_marketplace_plugin_entry(path, &marketplace.name, plugin) {
+            Ok(Some(plugin)) => plugin,
+            Ok(None) => continue,
+            Err(MarketplaceError::InvalidPlugin(message)) => {
+                warn!(
+                    path = %path.display(),
+                    marketplace = %marketplace.name,
+                    error = %message,
+                    "skipping invalid marketplace plugin"
+                );
+                continue;
+            }
+            Err(err) => return Err(err),
         };
-        // Only list marketplace plugins that Codex can actually load.
-        if plugin.manifest.is_none() {
-            let MarketplacePluginSource::Local { path: source_path } = &plugin.source;
-            warn!(
-                path = %path.display(),
-                plugin = plugin.plugin_id.plugin_name,
-                source_path = %source_path.display(),
-                "skipping marketplace plugin that failed to load"
-            );
-            continue;
-        }
 
         plugins.push(MarketplacePlugin {
             name: plugin.plugin_id.plugin_name,

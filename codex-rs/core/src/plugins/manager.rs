@@ -27,6 +27,7 @@ use codex_core_plugins::loader::refresh_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
 use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use codex_core_plugins::manifest::PluginManifestInterface;
+use codex_core_plugins::manifest::load_plugin_manifest;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplaceInterface;
 use codex_core_plugins::marketplace::MarketplaceListError;
@@ -34,10 +35,10 @@ use codex_core_plugins::marketplace::MarketplacePluginAuthPolicy;
 use codex_core_plugins::marketplace::MarketplacePluginPolicy;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
 use codex_core_plugins::marketplace::ResolvedMarketplacePlugin;
+use codex_core_plugins::marketplace::find_installable_marketplace_plugin;
+use codex_core_plugins::marketplace::find_marketplace_plugin;
 use codex_core_plugins::marketplace::list_marketplaces;
 use codex_core_plugins::marketplace::load_marketplace;
-use codex_core_plugins::marketplace::resolve_installable_marketplace_plugin;
-use codex_core_plugins::marketplace::resolve_marketplace_plugin;
 use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use codex_core_plugins::marketplace_upgrade::configured_git_marketplace_names;
@@ -535,7 +536,7 @@ impl PluginsManager {
         &self,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let resolved = resolve_installable_marketplace_plugin(
+        let resolved = find_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
@@ -549,7 +550,7 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
-        let resolved = resolve_installable_marketplace_plugin(
+        let resolved = find_installable_marketplace_plugin(
             &request.marketplace_path,
             &request.plugin_name,
             self.restriction_product,
@@ -979,7 +980,7 @@ impl PluginsManager {
             return Err(MarketplaceError::PluginsDisabled);
         }
 
-        let plugin = resolve_marketplace_plugin(&request.marketplace_path, &request.plugin_name)?;
+        let plugin = find_marketplace_plugin(&request.marketplace_path, &request.plugin_name)?;
         if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
             return Err(MarketplaceError::PluginNotFound {
                 plugin_name: plugin.plugin_id.plugin_name,
@@ -990,6 +991,46 @@ impl PluginsManager {
         let marketplace_name = plugin.plugin_id.marketplace_name.clone();
         let plugin_key = plugin.plugin_id.as_key();
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let plugin = self
+            .read_plugin_detail_for_marketplace_plugin(
+                config,
+                &marketplace_name,
+                ConfiguredMarketplacePlugin {
+                    id: plugin_key.clone(),
+                    name: plugin.plugin_id.plugin_name,
+                    source: plugin.source,
+                    policy: plugin.policy,
+                    interface: plugin.interface,
+                    installed: installed_plugins.contains(&plugin_key),
+                    enabled: enabled_plugins.contains(&plugin_key),
+                },
+            )
+            .await?;
+
+        Ok(PluginReadOutcome {
+            marketplace_name: if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+                OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()
+            } else {
+                marketplace_name
+            },
+            marketplace_path: request.marketplace_path.clone(),
+            plugin,
+        })
+    }
+
+    pub(crate) async fn read_plugin_detail_for_marketplace_plugin(
+        &self,
+        config: &Config,
+        marketplace_name: &str,
+        plugin: ConfiguredMarketplacePlugin,
+    ) -> Result<PluginDetail, MarketplaceError> {
+        if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
+            return Err(MarketplaceError::PluginNotFound {
+                plugin_name: plugin.name,
+                marketplace_name: marketplace_name.to_string(),
+            });
+        }
+
         let source_path = match &plugin.source {
             MarketplacePluginSource::Local { path } => path.clone(),
         };
@@ -998,8 +1039,8 @@ impl PluginsManager {
                 "path does not exist or is not a directory".to_string(),
             ));
         }
-        let manifest = plugin.manifest.ok_or_else(|| {
-            MarketplaceError::InvalidPlugin("missing or invalid plugin manifest".to_string())
+        let manifest = load_plugin_manifest(source_path.as_path()).ok_or_else(|| {
+            MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
         })?;
         let description = manifest.description.clone();
         let resolved_skills = load_plugin_skills(
@@ -1018,29 +1059,20 @@ impl PluginsManager {
             .collect::<Vec<_>>();
         mcp_server_names.sort_unstable();
         mcp_server_names.dedup();
-        let plugin = PluginDetail {
-            id: plugin_key.clone(),
-            name: plugin.plugin_id.plugin_name,
+
+        Ok(PluginDetail {
+            id: plugin.id,
+            name: plugin.name,
             description,
             source: plugin.source,
             policy: plugin.policy,
             interface: plugin.interface,
-            installed: installed_plugins.contains(&plugin_key),
-            enabled: enabled_plugins.contains(&plugin_key),
+            installed: plugin.installed,
+            enabled: plugin.enabled,
             skills: resolved_skills.skills,
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
             apps,
             mcp_server_names,
-        };
-
-        Ok(PluginReadOutcome {
-            marketplace_name: if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
-                OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()
-            } else {
-                marketplace_name
-            },
-            marketplace_path: request.marketplace_path.clone(),
-            plugin,
         })
     }
 
