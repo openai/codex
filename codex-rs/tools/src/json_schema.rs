@@ -147,8 +147,9 @@ impl From<JsonSchema> for AdditionalProperties {
 
 /// Parse the tool `input_schema` or return an error for invalid schema.
 pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
-    let mut input_schema = input_schema.clone();
-    sanitize_json_schema(&mut input_schema);
+    let root_schema = input_schema.clone();
+    let mut input_schema = root_schema.clone();
+    sanitize_json_schema(&mut input_schema, &root_schema);
     let schema: JsonSchema = serde_json::from_value(input_schema)?;
     if matches!(
         schema.schema_type,
@@ -162,11 +163,13 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// schema representation. This function:
 /// - Ensures every typed schema object has a `"type"` when required.
+/// - Resolves local `$ref` indirections and unwraps single-variant
+///   `oneOf`/`anyOf`/`allOf` wrappers before inferring a fallback type.
 /// - Preserves explicit `anyOf`.
 /// - Collapses `const` into single-value `enum`.
 /// - Fills required child fields for object/array schema types, including
 ///   nullable unions, with permissive defaults when absent.
-fn sanitize_json_schema(value: &mut JsonValue) {
+fn sanitize_json_schema(value: &mut JsonValue, root_schema: &JsonValue) {
     match value {
         JsonValue::Bool(_) => {
             // JSON Schema boolean form: true/false. Coerce to an accept-all string.
@@ -174,30 +177,42 @@ fn sanitize_json_schema(value: &mut JsonValue) {
         }
         JsonValue::Array(values) => {
             for value in values {
-                sanitize_json_schema(value);
+                sanitize_json_schema(value, root_schema);
             }
         }
         JsonValue::Object(map) => {
+            if let Some(replacement) = resolve_json_schema_reference(map, root_schema) {
+                *value = replacement;
+                sanitize_json_schema(value, root_schema);
+                return;
+            }
+
+            if let Some(replacement) = unwrap_single_variant_combiner(map) {
+                *value = replacement;
+                sanitize_json_schema(value, root_schema);
+                return;
+            }
+
             if let Some(properties) = map.get_mut("properties")
                 && let Some(properties_map) = properties.as_object_mut()
             {
                 for value in properties_map.values_mut() {
-                    sanitize_json_schema(value);
+                    sanitize_json_schema(value, root_schema);
                 }
             }
             if let Some(items) = map.get_mut("items") {
-                sanitize_json_schema(items);
+                sanitize_json_schema(items, root_schema);
             }
             if let Some(additional_properties) = map.get_mut("additionalProperties")
                 && !matches!(additional_properties, JsonValue::Bool(_))
             {
-                sanitize_json_schema(additional_properties);
+                sanitize_json_schema(additional_properties, root_schema);
             }
             if let Some(value) = map.get_mut("prefixItems") {
-                sanitize_json_schema(value);
+                sanitize_json_schema(value, root_schema);
             }
             if let Some(value) = map.get_mut("anyOf") {
-                sanitize_json_schema(value);
+                sanitize_json_schema(value, root_schema);
             }
 
             if let Some(const_value) = map.remove("const") {
@@ -237,6 +252,48 @@ fn sanitize_json_schema(value: &mut JsonValue) {
         }
         _ => {}
     }
+}
+
+fn resolve_json_schema_reference(
+    map: &serde_json::Map<String, JsonValue>,
+    root_schema: &JsonValue,
+) -> Option<JsonValue> {
+    let reference = map.get("$ref")?.as_str()?;
+    let pointer = reference.strip_prefix('#')?;
+    let mut replacement = root_schema.pointer(pointer)?.clone();
+    if let JsonValue::Object(replacement_map) = &mut replacement {
+        for (key, value) in map {
+            if key != "$ref" {
+                replacement_map.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Some(replacement)
+}
+
+fn unwrap_single_variant_combiner(map: &serde_json::Map<String, JsonValue>) -> Option<JsonValue> {
+    for combiner in ["oneOf", "anyOf", "allOf"] {
+        let Some(variants) = map.get(combiner).and_then(JsonValue::as_array) else {
+            continue;
+        };
+        if variants.len() != 1 {
+            continue;
+        }
+
+        let mut replacement = variants[0].clone();
+        if let JsonValue::Object(replacement_map) = &mut replacement {
+            for (key, value) in map {
+                if key != combiner {
+                    replacement_map
+                        .entry(key.clone())
+                        .or_insert_with(|| value.clone());
+                }
+            }
+        }
+        return Some(replacement);
+    }
+
+    None
 }
 
 fn ensure_default_children_for_schema_types(

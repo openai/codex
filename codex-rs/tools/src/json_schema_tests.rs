@@ -452,6 +452,97 @@ fn parse_tool_input_schema_fills_default_items_for_nullable_array_union() {
     );
 }
 
+#[test]
+fn parse_tool_input_schema_resolves_local_ref_objects() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "start": { "$ref": "#/$defs/date_time_zone" }
+        },
+        "$defs": {
+            "date_time_zone": {
+                "type": "object",
+                "properties": {
+                    "dateTime": { "type": "string" },
+                    "timeZone": { "type": "string" }
+                },
+                "required": ["dateTime", "timeZone"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "start".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([
+                        (
+                            "dateTime".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                        (
+                            "timeZone".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                    ]),
+                    Some(vec!["dateTime".to_string(), "timeZone".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_unwraps_single_variant_all_of_objects() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "end": {
+                "allOf": [{
+                    "type": "object",
+                    "properties": {
+                        "dateTime": { "type": "string" },
+                        "timeZone": { "type": "string" }
+                    },
+                    "required": ["dateTime", "timeZone"]
+                }]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "end".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([
+                        (
+                            "dateTime".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                        (
+                            "timeZone".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        ),
+                    ]),
+                    Some(vec!["dateTime".to_string(), "timeZone".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
 // Schemas that should be preserved for Responses API compatibility rather than
 // being rewritten into a different shape.
 
@@ -541,7 +632,7 @@ fn parse_tool_input_schema_preserves_nested_nullable_any_of_shape() {
                     ],
                     /*description*/ None,
                 ),
-            ),]),
+            )]),
             /*required*/ None,
             /*additional_properties*/ None
         )
