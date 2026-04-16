@@ -394,8 +394,12 @@ fn merge_json_schema_objects(
                     *base_value = merged_value;
                 }
             }
-            "minimum" | "exclusiveMinimum" => merge_numeric_bound(base_value, overlay_value, true),
-            "maximum" | "exclusiveMaximum" => merge_numeric_bound(base_value, overlay_value, false),
+            "minimum" | "exclusiveMinimum" => {
+                merge_numeric_bound(base_value, overlay_value, /*take_max*/ true)
+            }
+            "maximum" | "exclusiveMaximum" => {
+                merge_numeric_bound(base_value, overlay_value, /*take_max*/ false)
+            }
             _ => {
                 if let (Some(base_map), Some(overlay_map)) =
                     (base_value.as_object_mut(), overlay_value.as_object())
