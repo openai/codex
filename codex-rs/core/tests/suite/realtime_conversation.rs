@@ -1536,9 +1536,7 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     assert!(startup_context.contains(STARTUP_CONTEXT_CLOSE_TAG));
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
     assert!(!startup_context.contains("## User"));
-    // The recent-work section may be truncated or regrouped, so keep this test
-    // focused on the concrete metadata and asks we rely on rather than the
-    // exact markdown subheading marker that happens to wrap them.
+    assert!(startup_context.contains("### "));
     assert!(startup_context.contains("Recent sessions: 1"));
     assert!(startup_context.contains("Latest branch: branch-latest"));
     assert!(startup_context.contains("User asks:"));
