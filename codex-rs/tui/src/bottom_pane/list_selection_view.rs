@@ -798,7 +798,11 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Char(' '),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } if self.selected_item_has_toggle() => self.toggle_selected(),
+            } if self.selected_item_has_toggle()
+                && (!self.is_searchable || self.search_query.is_empty()) =>
+            {
+                self.toggle_selected()
+            }
             KeyEvent {
                 code: KeyCode::Char(' '),
                 modifiers: KeyModifiers::NONE,
@@ -1479,6 +1483,45 @@ mod tests {
         assert!(
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn space_appends_to_active_search_instead_of_toggling_selected_item() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                items: vec![SelectionItem {
+                    name: "Plugin".to_string(),
+                    toggle: Some(SelectionToggle {
+                        is_on: false,
+                        action: Box::new(|_enabled, tx: &_| {
+                            tx.send(AppEvent::OpenApprovalsPopup);
+                        }),
+                    }),
+                    ..Default::default()
+                }],
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+        );
+        view.set_search_query("plugin".to_string());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+        assert_eq!(view.search_query, "plugin ");
+        assert!(
+            !view.active_items()[0]
+                .toggle
+                .as_ref()
+                .is_some_and(|toggle| toggle.is_on),
+            "expected Space to leave the toggle state unchanged while search is active"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "expected Space with an active search query to avoid firing the toggle action"
         );
     }
 

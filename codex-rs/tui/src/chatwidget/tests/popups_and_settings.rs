@@ -664,6 +664,46 @@ async fn plugins_popup_space_on_uninstalled_row_does_not_start_search() {
 }
 
 #[tokio::test]
+async fn plugins_popup_space_with_active_search_does_not_toggle_installed_plugin() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    type_plugins_search_query(&mut chat, "dr");
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+    assert!(
+        rx.try_recv().is_err(),
+        "did not expect Space with an active plugin search to emit a toggle event"
+    );
+}
+
+#[tokio::test]
 async fn plugins_popup_search_filters_visible_rows_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);

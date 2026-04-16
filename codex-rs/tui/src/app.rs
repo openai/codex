@@ -1049,6 +1049,9 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    // Serialize plugin enablement writes per plugin so stale completions cannot
+    // overwrite a newer toggle.
+    pending_plugin_enabled_writes: HashMap<(PathBuf, String), Option<bool>>,
 }
 
 #[derive(Default)]
@@ -2178,6 +2181,23 @@ impl App {
     }
 
     fn set_plugin_enabled(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    ) {
+        let key = (cwd.clone(), plugin_id.clone());
+        if let Some(queued_enabled) = self.pending_plugin_enabled_writes.get_mut(&key) {
+            *queued_enabled = Some(enabled);
+            return;
+        }
+
+        self.pending_plugin_enabled_writes.insert(key, None);
+        self.spawn_plugin_enabled_write(app_server, cwd, plugin_id, enabled);
+    }
+
+    fn spawn_plugin_enabled_write(
         &mut self,
         app_server: &AppServerSession,
         cwd: PathBuf,
@@ -4049,6 +4069,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_plugin_enabled_writes: HashMap::new(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -5313,19 +5334,35 @@ impl App {
                 enabled,
                 result,
             } => {
-                let update_succeeded = result.is_ok();
-                if update_succeeded {
-                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-                        tracing::warn!(
-                            error = %err,
-                            "failed to refresh config after plugin toggle"
-                        );
+                let key = (cwd.clone(), plugin_id.clone());
+                let queued_enabled = self
+                    .pending_plugin_enabled_writes
+                    .get_mut(&key)
+                    .and_then(Option::take);
+                let should_apply_result = if let Some(queued_enabled) = queued_enabled
+                    && (result.is_err() || queued_enabled != enabled)
+                {
+                    self.spawn_plugin_enabled_write(app_server, cwd, plugin_id, queued_enabled);
+                    false
+                } else {
+                    true
+                };
+                if should_apply_result {
+                    self.pending_plugin_enabled_writes.remove(&key);
+                    let update_succeeded = result.is_ok();
+                    if update_succeeded {
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to refresh config after plugin toggle"
+                            );
+                        }
+                        self.chat_widget.refresh_plugin_mentions();
+                        self.chat_widget.submit_op(AppCommand::reload_user_config());
                     }
-                    self.chat_widget.refresh_plugin_mentions();
-                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    self.chat_widget
+                        .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
                 }
-                self.chat_widget
-                    .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
             }
             AppEvent::RefreshPluginMentions => {
                 self.refresh_plugin_mentions();
