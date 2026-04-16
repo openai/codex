@@ -69,7 +69,7 @@ impl GoalAccountingState {
     }
 
     async fn token_delta_since_last_accounting(&self, current: TokenUsage) -> i64 {
-        let mut last = self.last_accounted_token_usage.lock().await;
+        let last = self.last_accounted_token_usage.lock().await;
         let delta = TokenUsage {
             input_tokens: current.input_tokens.saturating_sub(last.input_tokens),
             cached_input_tokens: current
@@ -81,11 +81,11 @@ impl GoalAccountingState {
                 .saturating_sub(last.reasoning_output_tokens),
             total_tokens: current.total_tokens.saturating_sub(last.total_tokens),
         };
-        let token_delta = goal_token_delta_for_usage(&delta);
-        if token_delta > 0 {
-            *last = current;
-        }
-        token_delta
+        goal_token_delta_for_usage(&delta)
+    }
+
+    async fn mark_accounted(&self, current: TokenUsage) {
+        *self.last_accounted_token_usage.lock().await = current;
     }
 }
 
@@ -199,8 +199,10 @@ impl Session {
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
             return Ok(());
         }
-        let token_delta = self
-            .goal_token_delta_since_last_accounting(turn_context)
+        let current_token_usage = self.total_token_usage().await.unwrap_or_default();
+        let token_delta = turn_context
+            .goal_accounting
+            .token_delta_since_last_accounting(current_token_usage.clone())
             .await;
         if token_delta <= 0 {
             return Ok(());
@@ -219,7 +221,13 @@ impl Session {
             .account_thread_goal_usage(self.conversation_id, token_delta, mode)
             .await?;
         let goal = match outcome {
-            codex_state::ThreadGoalAccountingOutcome::Updated(goal) => goal,
+            codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
+                turn_context
+                    .goal_accounting
+                    .mark_accounted(current_token_usage)
+                    .await;
+                goal
+            }
             codex_state::ThreadGoalAccountingOutcome::Unchanged(goal) => {
                 if let Some(goal) = goal {
                     *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal));
@@ -247,14 +255,6 @@ impl Session {
             });
         }
         Ok(())
-    }
-
-    async fn goal_token_delta_since_last_accounting(&self, turn_context: &TurnContext) -> i64 {
-        let current = self.total_token_usage().await.unwrap_or_default();
-        turn_context
-            .goal_accounting
-            .token_delta_since_last_accounting(current)
-            .await
     }
 
     pub(crate) async fn pause_active_thread_goal_for_interrupt(&self) -> anyhow::Result<()> {
