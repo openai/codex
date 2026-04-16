@@ -12,7 +12,7 @@ use super::epoch_millis_to_datetime;
 pub enum ThreadGoalStatus {
     Active,
     Paused,
-    BudgetStopped,
+    BudgetLimited,
     Complete,
 }
 
@@ -21,7 +21,7 @@ impl ThreadGoalStatus {
         match self {
             Self::Active => "active",
             Self::Paused => "paused",
-            Self::BudgetStopped => "budget_stopped",
+            Self::BudgetLimited => "budget_limited",
             Self::Complete => "complete",
         }
     }
@@ -31,7 +31,7 @@ impl ThreadGoalStatus {
     }
 
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::BudgetStopped | Self::Complete)
+        matches!(self, Self::BudgetLimited | Self::Complete)
     }
 }
 
@@ -42,7 +42,7 @@ impl TryFrom<&str> for ThreadGoalStatus {
         match value {
             "active" => Ok(Self::Active),
             "paused" => Ok(Self::Paused),
-            "budget_stopped" | "budget_exceeded" => Ok(Self::BudgetStopped),
+            "budget_limited" => Ok(Self::BudgetLimited),
             "complete" => Ok(Self::Complete),
             other => Err(anyhow!("unknown thread goal status `{other}`")),
         }

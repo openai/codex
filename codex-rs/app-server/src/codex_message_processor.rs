@@ -9426,7 +9426,7 @@ fn thread_goal_status_to_state(status: ThreadGoalStatus) -> codex_state::ThreadG
     match status {
         ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
         ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,
-        ThreadGoalStatus::BudgetStopped => codex_state::ThreadGoalStatus::BudgetStopped,
+        ThreadGoalStatus::BudgetLimited => codex_state::ThreadGoalStatus::BudgetLimited,
         ThreadGoalStatus::Complete => codex_state::ThreadGoalStatus::Complete,
     }
 }
@@ -9435,7 +9435,7 @@ fn thread_goal_status_from_state(status: codex_state::ThreadGoalStatus) -> Threa
     match status {
         codex_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
         codex_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
-        codex_state::ThreadGoalStatus::BudgetStopped => ThreadGoalStatus::BudgetStopped,
+        codex_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
 }

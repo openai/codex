@@ -3521,8 +3521,7 @@ pub struct ThreadNameUpdatedEvent {
 pub enum ThreadGoalStatus {
     Active,
     Paused,
-    #[serde(alias = "budgetExceeded")]
-    BudgetStopped,
+    BudgetLimited,
     Complete,
 }
 
@@ -3651,7 +3650,7 @@ pub enum TurnAbortReason {
     Interrupted,
     Replaced,
     ReviewEnded,
-    BudgetExceeded,
+    BudgetLimited,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

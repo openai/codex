@@ -127,6 +127,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration as StdDuration;
 
 #[path = "codex_tests_guardian.rs"]
@@ -5550,6 +5551,36 @@ async fn interrupt_without_active_turn_pauses_active_goal() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn interrupt_without_active_turn_pauses_out_of_band_goal() -> anyhow::Result<()> {
+    let (sess, _tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+        )
+        .await?;
+    assert!(!sess.thread_goal_may_exist.load(Ordering::SeqCst));
+
+    sess.interrupt_task().await;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after interrupt");
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn active_goal_continuation_waits_for_trigger_turn_mailbox_prompt() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
@@ -5766,6 +5797,55 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
         );
     }
     continuation_completed??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_accounting_charges_out_of_band_goal() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(1_000),
+        )
+        .await?;
+    assert!(!sess.thread_goal_may_exist.load(Ordering::SeqCst));
+    tc.goal_accounting
+        .mark_turn_started(TokenUsage::default())
+        .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 30,
+                cached_input_tokens: 10,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 55,
+            },
+            last_token_usage: TokenUsage::default(),
+            model_context_window: None,
+        }));
+    }
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(45, goal.tokens_used);
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
 
     Ok(())
 }

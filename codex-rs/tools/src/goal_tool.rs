@@ -48,11 +48,11 @@ pub fn create_set_goal_tool() -> ToolSpec {
                 vec![
                     json!("active"),
                     json!("paused"),
-                    json!("budgetStopped"),
+                    json!("budgetLimited"),
                     json!("complete"),
                 ],
                 Some(
-                    "Optional. Set to active, paused, budgetStopped, or complete. Use complete only when the objective is achieved and no required work remains. Use budgetStopped when the objective has not been achieved and cannot be achieved within the remaining budget, or when the remaining budget is too small for productive continuation."
+                    "Optional. Set to active, paused, budgetLimited, or complete. Use complete only when the objective is achieved and no required work remains. Use budgetLimited when the objective has not been achieved and cannot be achieved within the remaining budget, or when the remaining budget is too small for productive continuation."
                         .to_string(),
                 ),
             ),
@@ -69,7 +69,7 @@ pub fn create_set_goal_tool() -> ToolSpec {
 Providing `objective` creates or replaces the goal and resets time/token usage accounting to zero.
 Omitting `objective` updates the existing goal while preserving usage accounting; use this for pause, resume, achieved-goal, or budget-only changes.
 Set status to `complete` only when the objective has actually been achieved and no required work remains.
-Set status to `budgetStopped` when a budgeted goal has not been achieved and cannot be achieved within the remaining budget, or when the budget is exhausted or nearly exhausted.
+Set status to `budgetLimited` when a budgeted goal has not been achieved and cannot be achieved within the remaining budget, or when the budget is exhausted or nearly exhausted.
 Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.
 When marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user.
 The system owns usage fields, so this tool cannot set them directly."#

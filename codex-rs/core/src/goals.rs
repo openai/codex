@@ -90,10 +90,6 @@ impl GoalAccountingState {
 }
 
 impl Session {
-    pub(crate) fn thread_goal_may_exist(&self) -> bool {
-        self.thread_goal_may_exist.load(Ordering::SeqCst)
-    }
-
     pub(crate) async fn get_thread_goal(&self) -> anyhow::Result<Option<ThreadGoal>> {
         if !self.enabled(Feature::GoalMode) {
             return Ok(None);
@@ -203,17 +199,13 @@ impl Session {
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
             return Ok(());
         }
-        if !self.thread_goal_may_exist.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-
         let token_delta = self
             .goal_token_delta_since_last_accounting(turn_context)
             .await;
         if token_delta <= 0 {
             return Ok(());
         }
-        let Some(state_db) = self.known_state_db_for_thread_goals().await else {
+        let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
         let mode = if matches!(boundary, GoalAccountingBoundary::Turn)
@@ -246,11 +238,11 @@ impl Session {
             }),
         )
         .await;
-        if status == codex_state::ThreadGoalStatus::BudgetStopped {
+        if status == codex_state::ThreadGoalStatus::BudgetLimited {
             let session = Arc::clone(self);
             tokio::spawn(async move {
                 session
-                    .abort_all_tasks_without_restart(TurnAbortReason::BudgetExceeded)
+                    .abort_all_tasks_without_restart(TurnAbortReason::BudgetLimited)
                     .await;
             });
         }
@@ -360,13 +352,6 @@ impl Session {
 }
 
 impl Session {
-    async fn known_state_db_for_thread_goals(&self) -> Option<StateDbHandle> {
-        if let Some(state_db) = self.state_db() {
-            return Some(state_db);
-        }
-        self.thread_goal_state_db.lock().await.clone()
-    }
-
     async fn state_db_for_thread_goals(&self) -> anyhow::Result<Option<StateDbHandle>> {
         if let Some(state_db) = self.state_db() {
             return Ok(Some(state_db));
@@ -428,7 +413,7 @@ Budget:
 
 Avoid repeating work that is already done. Choose the next concrete action toward the objective. Only mark the goal achieved when the objective has actually been achieved and no required work remains. If the objective is achieved, call set_goal with status "complete" and omit objective so usage accounting is preserved. If the achieved goal has a token budget, report the final consumed budget to the user after set_goal succeeds.
 
-If the goal has not been achieved and cannot be achieved within the remaining budget, or the remaining budget is too small for productive continuation, call set_goal with status "budgetStopped" and omit objective. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If the goal is otherwise blocked and cannot continue productively for a non-budget reason, call set_goal with status "paused" and omit objective."#,
+If the goal has not been achieved and cannot be achieved within the remaining budget, or the remaining budget is too small for productive continuation, call set_goal with status "budgetLimited" and omit objective. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If the goal is otherwise blocked and cannot continue productively for a non-budget reason, call set_goal with status "paused" and omit objective."#,
         objective = goal.objective,
         tokens_used = goal.tokens_used,
     )
@@ -452,7 +437,7 @@ pub(crate) fn protocol_goal_status_from_state(
     match status {
         codex_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
         codex_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
-        codex_state::ThreadGoalStatus::BudgetStopped => ThreadGoalStatus::BudgetStopped,
+        codex_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
 }
@@ -463,7 +448,7 @@ pub(crate) fn state_goal_status_from_protocol(
     match status {
         ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
         ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,
-        ThreadGoalStatus::BudgetStopped => codex_state::ThreadGoalStatus::BudgetStopped,
+        ThreadGoalStatus::BudgetLimited => codex_state::ThreadGoalStatus::BudgetLimited,
         ThreadGoalStatus::Complete => codex_state::ThreadGoalStatus::Complete,
     }
 }

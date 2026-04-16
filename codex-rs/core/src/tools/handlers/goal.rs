@@ -41,7 +41,7 @@ struct SetGoalArgs {
 enum ToolGoalStatus {
     Active,
     Paused,
-    BudgetStopped,
+    BudgetLimited,
     Complete,
 }
 
@@ -50,7 +50,7 @@ impl From<ToolGoalStatus> for ThreadGoalStatus {
         match value {
             ToolGoalStatus::Active => Self::Active,
             ToolGoalStatus::Paused => Self::Paused,
-            ToolGoalStatus::BudgetStopped => Self::BudgetStopped,
+            ToolGoalStatus::BudgetLimited => Self::BudgetLimited,
             ToolGoalStatus::Complete => Self::Complete,
         }
     }

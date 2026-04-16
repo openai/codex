@@ -415,7 +415,6 @@ impl Session {
         let active_turn = self.take_active_turn().await;
 
         if reason == TurnAbortReason::Interrupted
-            && self.thread_goal_may_exist()
             && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
         {
             warn!("failed to pause active thread goal after interrupt: {err}");
