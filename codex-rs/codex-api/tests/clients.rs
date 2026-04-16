@@ -13,6 +13,7 @@ use codex_api::ResponsesClient;
 use codex_api::ResponsesOptions;
 use codex_client::HttpTransport;
 use codex_client::Request;
+use codex_client::RequestBody;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
@@ -90,9 +91,7 @@ impl HttpTransport for RecordingTransport {
 struct NoAuth;
 
 impl AuthProvider for NoAuth {
-    fn bearer_token(&self) -> Option<String> {
-        None
-    }
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
 #[derive(Clone)]
@@ -111,12 +110,14 @@ impl StaticAuth {
 }
 
 impl AuthProvider for StaticAuth {
-    fn bearer_token(&self) -> Option<String> {
-        Some(self.token.clone())
-    }
-
-    fn account_id(&self) -> Option<String> {
-        Some(self.account_id.clone())
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        let token = &self.token;
+        if let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}")) {
+            headers.insert(http::header::AUTHORIZATION, header);
+        }
+        if let Ok(header) = HeaderValue::from_str(&self.account_id) {
+            headers.insert("ChatGPT-Account-ID", header);
+        }
     }
 }
 
@@ -266,7 +267,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
 
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),
-        instructions: Some("Say hi".into()),
+        instructions: "Say hi".into(),
         input: Vec::new(),
         tools: Vec::new(),
         tool_choice: "auto".into(),
@@ -303,7 +304,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
 
     let request = ResponsesApiRequest {
         model: "gpt-test".into(),
-        instructions: Some("Say hi".into()),
+        instructions: "Say hi".into(),
         input: vec![ResponseItem::Message {
             id: Some("msg_1".into()),
             role: "user".into(),
@@ -363,6 +364,7 @@ async fn azure_default_store_attaches_ids_and_headers() -> Result<()> {
     let input_id = req
         .body
         .as_ref()
+        .and_then(RequestBody::json)
         .and_then(|body| body.get("input"))
         .and_then(|input| input.get(0))
         .and_then(|item| item.get("id"))

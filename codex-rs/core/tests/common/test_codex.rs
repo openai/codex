@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::io::ErrorKind;
 use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -7,7 +8,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -19,6 +19,7 @@ use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -30,6 +31,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -41,7 +43,6 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 use crate::PathBufExt;
-use crate::RemoteEnvConfig;
 use crate::TempDirExt;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
@@ -49,8 +50,8 @@ use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
 use crate::responses::start_mock_server;
 use crate::streaming_sse::StreamingSseServer;
-use crate::wait_for_event;
 use crate::wait_for_event_match;
+use crate::wait_for_event_with_timeout;
 use wiremock::Match;
 use wiremock::matchers::path_regex;
 
@@ -59,50 +60,16 @@ type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -> BoxFuture<'static, Result<()>>
     + Send;
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
-const REMOTE_EXEC_SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
-const REMOTE_EXEC_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(25);
-static REMOTE_EXEC_SERVER_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Debug)]
-struct RemoteExecServerProcess {
-    container_name: String,
-    pid: u32,
-    remote_exec_server_path: String,
-    stdout_path: String,
-    cleanup_paths: Vec<String>,
-}
-
-impl Drop for RemoteExecServerProcess {
-    fn drop(&mut self) {
-        let cleanup_paths = self.cleanup_paths.join(" ");
-        let cleanup_paths_script = if cleanup_paths.is_empty() {
-            String::new()
-        } else {
-            format!("rm -rf {cleanup_paths}; ")
-        };
-        let script = format!(
-            "if kill -0 {pid} 2>/dev/null; then kill {pid}; fi; {cleanup_paths_script}rm -f {remote_exec_server_path} {stdout_path}",
-            pid = self.pid,
-            cleanup_paths_script = cleanup_paths_script,
-            remote_exec_server_path = self.remote_exec_server_path,
-            stdout_path = self.stdout_path
-        );
-        let _ = docker_command_capture_stdout(["exec", &self.container_name, "sh", "-lc", &script]);
-    }
-}
-
-impl RemoteExecServerProcess {
-    fn register_cleanup_path(&mut self, path: &Path) {
-        self.cleanup_paths.push(path.display().to_string());
-    }
-}
+const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
+static REMOTE_TEST_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub struct TestEnv {
     environment: codex_exec_server::Environment,
     cwd: AbsolutePathBuf,
     local_cwd_temp_dir: Option<Arc<TempDir>>,
-    _remote_exec_server_process: Option<RemoteExecServerProcess>,
+    remote_container_name: Option<String>,
 }
 
 impl TestEnv {
@@ -114,7 +81,7 @@ impl TestEnv {
             environment,
             cwd,
             local_cwd_temp_dir: Some(local_cwd_temp_dir),
-            _remote_exec_server_process: None,
+            remote_container_name: None,
         })
     }
 
@@ -135,161 +102,64 @@ impl TestEnv {
     }
 }
 
+impl Drop for TestEnv {
+    fn drop(&mut self) {
+        if let Some(container_name) = &self.remote_container_name {
+            let script = format!("rm -rf {}", self.cwd.as_path().display());
+            let _ = docker_command_capture_stdout(["exec", container_name, "sh", "-lc", &script]);
+        }
+    }
+}
+
 pub async fn test_env() -> Result<TestEnv> {
     match get_remote_test_env() {
         Some(remote_env) => {
-            let mut remote_process = start_remote_exec_server(&remote_env)?;
-            let remote_ip = remote_container_ip(&remote_env.container_name)?;
-            let websocket_url = rewrite_websocket_host(&remote_process.listen_url, &remote_ip)?;
+            let websocket_url = remote_exec_server_url()?;
             let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
-                .create_directory(&cwd, CreateDirectoryOptions { recursive: true })
+                .create_directory(
+                    &cwd,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
                 .await?;
-            remote_process.process.register_cleanup_path(cwd.as_path());
             Ok(TestEnv {
                 environment,
                 cwd,
                 local_cwd_temp_dir: None,
-                _remote_exec_server_process: Some(remote_process.process),
+                remote_container_name: Some(remote_env.container_name),
             })
         }
         None => TestEnv::local().await,
     }
 }
 
-struct RemoteExecServerStart {
-    process: RemoteExecServerProcess,
-    listen_url: String,
-}
-
-fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecServerStart> {
-    let container_name = remote_env.container_name.as_str();
-    let instance_id = remote_exec_server_instance_id();
-    let remote_exec_server_path = format!("/tmp/codex-exec-server-{instance_id}");
-    let stdout_path = format!("/tmp/codex-exec-server-{instance_id}.stdout");
-    let local_binary = codex_utils_cargo_bin::cargo_bin("codex-exec-server")
-        .context("resolve codex-exec-server binary")?;
-    let local_binary = local_binary.to_string_lossy().to_string();
-    let remote_binary = format!("{container_name}:{remote_exec_server_path}");
-
-    docker_command_success(["cp", &local_binary, &remote_binary])?;
-    docker_command_success([
-        "exec",
-        container_name,
-        "chmod",
-        "+x",
-        &remote_exec_server_path,
-    ])?;
-
-    let start_script = format!(
-        "rm -f {stdout_path}; \
-nohup {remote_exec_server_path} --listen ws://0.0.0.0:0 > {stdout_path} 2>&1 & \
-echo $!"
-    );
-    let pid_output =
-        docker_command_capture_stdout(["exec", container_name, "sh", "-lc", &start_script])?;
-    let pid = pid_output
-        .trim()
-        .parse::<u32>()
-        .with_context(|| format!("parse remote exec-server PID from {pid_output:?}"))?;
-
-    let listen_url = wait_for_remote_listen_url(container_name, &stdout_path)?;
-
-    Ok(RemoteExecServerStart {
-        process: RemoteExecServerProcess {
-            container_name: container_name.to_string(),
-            pid,
-            remote_exec_server_path,
-            stdout_path,
-            cleanup_paths: Vec::new(),
-        },
-        listen_url,
-    })
-}
-
 fn remote_aware_cwd_path() -> AbsolutePathBuf {
     PathBuf::from(format!(
         "/tmp/codex-core-test-cwd-{}",
-        remote_exec_server_instance_id()
+        remote_test_instance_id()
     ))
     .abs()
 }
 
-fn wait_for_remote_listen_url(container_name: &str, stdout_path: &str) -> Result<String> {
-    let deadline = Instant::now() + REMOTE_EXEC_SERVER_START_TIMEOUT;
-    loop {
-        let line = docker_command_capture_stdout([
-            "exec",
-            container_name,
-            "sh",
-            "-lc",
-            &format!("head -n 1 {stdout_path} 2>/dev/null || true"),
-        ])?;
-        let listen_url = line.trim();
-        if listen_url.starts_with("ws://") {
-            return Ok(listen_url.to_string());
-        }
-
-        if Instant::now() >= deadline {
-            return Err(anyhow!(
-                "timed out waiting for remote exec-server listen URL in container `{container_name}` after {REMOTE_EXEC_SERVER_START_TIMEOUT:?}"
-            ));
-        }
-        std::thread::sleep(REMOTE_EXEC_SERVER_POLL_INTERVAL);
+fn remote_exec_server_url() -> Result<String> {
+    let listen_url = std::env::var(REMOTE_EXEC_SERVER_URL_ENV_VAR).with_context(|| {
+        format!("{REMOTE_EXEC_SERVER_URL_ENV_VAR} must be set for remote tests")
+    })?;
+    let listen_url = listen_url.trim();
+    if listen_url.is_empty() {
+        return Err(anyhow!(
+            "{REMOTE_EXEC_SERVER_URL_ENV_VAR} must not be empty"
+        ));
     }
+    Ok(listen_url.to_string())
 }
 
-fn remote_exec_server_instance_id() -> String {
-    let instance = REMOTE_EXEC_SERVER_INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+fn remote_test_instance_id() -> String {
+    let instance = REMOTE_TEST_INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{}-{instance}", std::process::id())
-}
-
-fn remote_container_ip(container_name: &str) -> Result<String> {
-    let ip = docker_command_capture_stdout([
-        "inspect",
-        "-f",
-        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-        container_name,
-    ])?;
-    let ip = ip.trim();
-    if ip.is_empty() {
-        return Err(anyhow!(
-            "container `{container_name}` has no IP address; cannot connect to remote exec-server"
-        ));
-    }
-    Ok(ip.to_string())
-}
-
-fn rewrite_websocket_host(listen_url: &str, host: &str) -> Result<String> {
-    let Some(address) = listen_url.strip_prefix("ws://") else {
-        return Err(anyhow!(
-            "unexpected websocket listen URL `{listen_url}`; expected ws://IP:PORT"
-        ));
-    };
-    let Some((_, port)) = address.rsplit_once(':') else {
-        return Err(anyhow!(
-            "unexpected websocket listen URL `{listen_url}`; expected ws://IP:PORT"
-        ));
-    };
-    Ok(format!("ws://{host}:{port}"))
-}
-
-fn docker_command_success<const N: usize>(args: [&str; N]) -> Result<()> {
-    let output = Command::new("docker")
-        .args(args)
-        .output()
-        .with_context(|| format!("run docker {args:?}"))?;
-    if !output.status.success() {
-        return Err(anyhow!(
-            "docker {:?} failed: stdout={} stderr={}",
-            args,
-            String::from_utf8_lossy(&output.stdout).trim(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(())
 }
 
 fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<String> {
@@ -451,6 +321,7 @@ impl TestCodexBuilder {
             config.model_provider.base_url = Some(base_url_clone);
             config.model_provider.supports_websockets = true;
             config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
+            config.realtime.version = RealtimeWsVersion::V1;
         }));
         let test_env = TestEnv::local().await?;
         Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
@@ -517,12 +388,13 @@ impl TestCodexBuilder {
                 SessionSource::Exec,
                 CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
+                /*analytics_events_client*/ None,
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 auth.clone(),
                 config.model_provider.clone(),
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 Arc::clone(&environment_manager),
             )
         };
@@ -767,10 +639,14 @@ impl TestCodex {
             _ => None,
         })
         .await;
-        wait_for_event(&self.codex, |event| match event {
-            EventMsg::TurnComplete(event) => event.turn_id == turn_id,
-            _ => false,
-        })
+        wait_for_event_with_timeout(
+            &self.codex,
+            |event| match event {
+                EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+                _ => false,
+            },
+            SUBMIT_TURN_COMPLETE_TIMEOUT,
+        )
         .await;
         Ok(())
     }
@@ -796,6 +672,12 @@ impl TestCodexHarness {
         Ok(Self { server, test })
     }
 
+    pub async fn with_remote_aware_builder(mut builder: TestCodexBuilder) -> Result<Self> {
+        let server = start_mock_server().await;
+        let test = builder.build_remote_aware(&server).await?;
+        Ok(Self { server, test })
+    }
+
     pub fn server(&self) -> &MockServer {
         &self.server
     }
@@ -805,11 +687,85 @@ impl TestCodexHarness {
     }
 
     pub fn cwd(&self) -> &Path {
-        self.test.cwd_path()
+        self.test.config.cwd.as_path()
     }
 
     pub fn path(&self, rel: impl AsRef<Path>) -> PathBuf {
-        self.test.workspace_path(rel)
+        self.path_abs(rel).into_path_buf()
+    }
+
+    pub fn path_abs(&self, rel: impl AsRef<Path>) -> AbsolutePathBuf {
+        self.test.config.cwd.join(rel)
+    }
+
+    pub async fn write_file(
+        &self,
+        rel: impl AsRef<Path>,
+        contents: impl AsRef<[u8]>,
+    ) -> Result<()> {
+        let abs_path = self.path_abs(rel);
+        if let Some(parent) = abs_path.parent() {
+            self.test
+                .fs()
+                .create_directory(
+                    &parent,
+                    CreateDirectoryOptions { recursive: true },
+                    /*sandbox*/ None,
+                )
+                .await?;
+        }
+        self.test
+            .fs()
+            .write_file(&abs_path, contents.as_ref().to_vec(), /*sandbox*/ None)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn read_file_text(&self, rel: impl AsRef<Path>) -> Result<String> {
+        Ok(self
+            .test
+            .fs()
+            .read_file_text(&self.path_abs(rel), /*sandbox*/ None)
+            .await?)
+    }
+
+    pub async fn create_dir_all(&self, rel: impl AsRef<Path>) -> Result<()> {
+        self.test
+            .fs()
+            .create_directory(
+                &self.path_abs(rel),
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn path_exists(&self, rel: impl AsRef<Path>) -> Result<bool> {
+        self.abs_path_exists(&self.path_abs(rel)).await
+    }
+
+    pub async fn remove_abs_path(&self, path: &AbsolutePathBuf) -> Result<()> {
+        self.test
+            .fs()
+            .remove(
+                path,
+                RemoveOptions {
+                    recursive: false,
+                    force: true,
+                },
+                /*sandbox*/ None,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn abs_path_exists(&self, path: &AbsolutePathBuf) -> Result<bool> {
+        match self.test.fs().get_metadata(path, /*sandbox*/ None).await {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub async fn submit(&self, prompt: &str) -> Result<()> {

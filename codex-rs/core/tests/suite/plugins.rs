@@ -168,22 +168,6 @@ fn tool_names(body: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn tool_description(body: &serde_json::Value, tool_name: &str) -> Option<String> {
-    body.get("tools")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|tools| {
-            tools.iter().find_map(|tool| {
-                if tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name) {
-                    tool.get("description")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string)
-                } else {
-                    None
-                }
-            })
-        })
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn capability_sections_render_in_developer_message_in_order() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -213,6 +197,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
 
@@ -288,6 +273,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -317,20 +303,27 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     assert!(
         request_tools
             .iter()
-            .any(|name| name == "mcp__codex_apps__google_calendar_create_event"),
+            .any(|name| name == "mcp__codex_apps__google_calendar"),
         "expected plugin app tools to become visible for this turn: {request_tools:?}"
     );
-    let echo_description = tool_description(&request_body, "mcp__sample__echo")
+    let echo_tool = request
+        .tool_by_name("mcp__sample__", "echo")
+        .expect("plugin MCP tool should be present");
+    let echo_description = echo_tool
+        .get("description")
+        .and_then(serde_json::Value::as_str)
         .expect("plugin MCP tool description should be present");
     assert!(
         echo_description.contains("This tool is part of plugin `sample`."),
         "expected plugin MCP provenance in tool description: {echo_description:?}"
     );
-    let calendar_description = tool_description(
-        &request_body,
-        "mcp__codex_apps__google_calendar_create_event",
-    )
-    .expect("plugin app tool description should be present");
+    let calendar_tool = request
+        .tool_by_name("mcp__codex_apps__google_calendar", "_create_event")
+        .expect("plugin app tool should be present");
+    let calendar_description = calendar_tool
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .expect("plugin app tool description should be present");
     assert!(
         calendar_description.contains("This tool is part of plugin `sample`."),
         "expected plugin app provenance in tool description: {calendar_description:?}"
@@ -360,6 +353,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

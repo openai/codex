@@ -531,8 +531,9 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
     let args = json!({
         "command": script,
-        // The intercepted apply_patch path self-invokes codex, which can take
-        // longer than a second in Bazel macOS test environments.
+        // Keep this above the default because intercepted apply_patch still
+        // performs filesystem work that can be slow in Bazel macOS test
+        // environments.
         "timeout_ms": 5_000,
     });
     let call_id = "shell-snapshot-apply-patch";

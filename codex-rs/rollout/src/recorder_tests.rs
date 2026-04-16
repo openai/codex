@@ -63,7 +63,7 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
 }
 
 #[tokio::test]
-async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<()> {
+async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
     let thread_id = ThreadId::new();
@@ -73,8 +73,7 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
             thread_id,
             /*forked_from_id*/ None,
             SessionSource::Exec,
-            Some(BaseInstructions::default()),
-            /*developer_instructions*/ None,
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
@@ -86,7 +85,7 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
     let rollout_path = recorder.rollout_path().to_path_buf();
     assert!(
         !rollout_path.exists(),
-        "rollout file should not exist before first user message"
+        "rollout file should not exist before the first recordable item"
     );
 
     recorder
@@ -100,8 +99,8 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         .await?;
     recorder.flush().await?;
     assert!(
-        !rollout_path.exists(),
-        "rollout file should remain deferred before first user message"
+        rollout_path.exists(),
+        "flush with pending items should materialize the rollout"
     );
 
     recorder
@@ -115,10 +114,6 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         ))])
         .await?;
     recorder.flush().await?;
-    assert!(
-        !rollout_path.exists(),
-        "user-message-like items should not materialize without explicit persist"
-    );
 
     recorder.persist().await?;
     // Second call verifies `persist()` is idempotent after materialization.
@@ -148,6 +143,96 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
 }
 
 #[tokio::test]
+async fn persist_reports_filesystem_error_and_retries_buffered_items() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            /*forked_from_id*/ None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: "buffered-before-persist".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        ))])
+        .await?;
+    let sessions_blocker_path = home.path().join("sessions");
+    File::create(&sessions_blocker_path)?;
+
+    let err = recorder
+        .persist()
+        .await
+        .expect_err("blocked sessions directory should fail persist");
+    assert_ne!(err.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        !rollout_path.exists(),
+        "failed persist should keep the rollout deferred"
+    );
+
+    fs::remove_file(sessions_blocker_path)?;
+    recorder.flush().await?;
+    let text = std::fs::read_to_string(&rollout_path)?;
+    assert!(
+        text.contains("buffered-before-persist"),
+        "retry should preserve items buffered before the failed persist"
+    );
+
+    recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn writer_state_retries_write_error_before_reporting_flush_success() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let rollout_path = home.path().join("rollout.jsonl");
+    File::create(&rollout_path)?;
+    let read_only_file = std::fs::OpenOptions::new().read(true).open(&rollout_path)?;
+    let mut state = RolloutWriterState::new(
+        Some(tokio::fs::File::from_std(read_only_file)),
+        /*deferred_log_file_info*/ None,
+        /*meta*/ None,
+        home.path().to_path_buf(),
+        rollout_path.clone(),
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
+        config.model_provider_id.clone(),
+        config.generate_memories,
+    );
+    state.add_items(vec![RolloutItem::EventMsg(EventMsg::AgentMessage(
+        AgentMessageEvent {
+            message: "queued-after-writer-error".to_string(),
+            phase: None,
+            memory_citation: None,
+        },
+    ))]);
+
+    state.flush().await?;
+    let text_after_retry = std::fs::read_to_string(&rollout_path)?;
+    assert!(
+        text_after_retry.contains("queued-after-writer-error"),
+        "flush should retry after reopening and write buffered items"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
@@ -167,8 +252,7 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
             thread_id,
             /*forked_from_id*/ None,
             SessionSource::Cli,
-            Some(BaseInstructions::default()),
-            /*developer_instructions*/ None,
+            BaseInstructions::default(),
             Vec::new(),
             EventPersistenceMode::Limited,
         ),
@@ -460,6 +544,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             network: None,
+            file_system_sandbox_policy: None,
             model: "test-model".to_string(),
             personality: None,
             collaboration_mode: None,

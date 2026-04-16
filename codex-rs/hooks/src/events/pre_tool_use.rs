@@ -7,6 +7,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
 use crate::engine::CommandShell;
@@ -20,7 +21,7 @@ use crate::schema::PreToolUseCommandInput;
 pub struct PreToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
@@ -52,7 +53,9 @@ pub(crate) fn preview(
         Some(&request.tool_name),
     )
     .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
+    .map(|handler| {
+        common::hook_run_for_tool_use(dispatcher::running_summary(&handler), &request.tool_use_id)
+    })
     .collect()
 }
 
@@ -90,11 +93,13 @@ pub(crate) async fn run(
     }) {
         Ok(input_json) => input_json,
         Err(error) => {
-            return serialization_failure_outcome(common::serialization_failure_hook_events(
+            let hook_events = common::serialization_failure_hook_events_for_tool_use(
                 matched,
-                Some(request.turn_id),
+                Some(request.turn_id.clone()),
                 format!("failed to serialize pre tool use hook input: {error}"),
-            ));
+                &request.tool_use_id,
+            );
+            return serialization_failure_outcome(hook_events);
         }
     };
 
@@ -142,7 +147,12 @@ pub(crate) async fn run(
         .find_map(|result| result.data.block_reason.clone());
 
     PreToolUseOutcome {
-        hook_events: results.into_iter().map(|result| result.completed).collect(),
+        hook_events: results
+            .into_iter()
+            .map(|result| {
+                common::hook_completed_for_tool_use(result.completed, &request.tool_use_id)
+            })
+            .collect(),
         should_block,
         block_reason,
     }
@@ -258,21 +268,23 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PreToo
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
     use super::PreToolUseHandlerData;
     use super::PreToolUseRequest;
     use super::parse_completed;
+    use super::preview;
     use crate::engine::CommandShell;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
+    use crate::events::common;
 
     #[test]
     fn permission_decision_deny_blocks_processing() {
@@ -510,8 +522,8 @@ mod tests {
                 command: blocking_command,
                 timeout_sec: 5,
                 status_message: None,
-                source_path: PathBuf::from("/tmp/home/.codex/hooks.json"),
-                is_project: false,
+                source_path: test_path_buf("/tmp/home/.codex/hooks.json").abs(),
+                source: codex_protocol::protocol::HookSource::User,
                 display_order: 0,
             },
             ConfiguredHandler {
@@ -520,8 +532,8 @@ mod tests {
                 command: project_command,
                 timeout_sec: 5,
                 status_message: None,
-                source_path: PathBuf::from("/tmp/project/.codex/hooks.json"),
-                is_project: true,
+                source_path: test_path_buf("/tmp/project/.codex/hooks.json").abs(),
+                source: codex_protocol::protocol::HookSource::Project,
                 display_order: 1,
             },
         ];
@@ -535,7 +547,7 @@ mod tests {
             PreToolUseRequest {
                 session_id: ThreadId::new(),
                 turn_id: "turn-1".to_string(),
-                cwd: temp.path().to_path_buf(),
+                cwd: temp.path().to_path_buf().abs(),
                 transcript_path: None,
                 model: "gpt-5".to_string(),
                 permission_mode: "default".to_string(),
@@ -564,6 +576,46 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn preview_and_completed_run_ids_include_tool_use_id() {
+        let request = request_for_tool_use("tool-call-123");
+        let runs = preview(&[handler()], &request);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(
+            runs[0].id,
+            format!(
+                "pre-tool-use:0:{}:tool-call-123",
+                test_path_buf("/tmp/hooks.json").display()
+            )
+        );
+
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), "", ""),
+            Some("turn-1".to_string()),
+        );
+        let completed = common::hook_completed_for_tool_use(parsed.completed, &request.tool_use_id);
+
+        assert_eq!(completed.run.id, runs[0].id);
+    }
+
+    #[test]
+    fn serialization_failure_run_ids_include_tool_use_id() {
+        let request = request_for_tool_use("tool-call-123");
+        let runs = preview(&[handler()], &request);
+
+        let completed = common::serialization_failure_hook_events_for_tool_use(
+            vec![handler()],
+            Some(request.turn_id.clone()),
+            "serialize failed".into(),
+            &request.tool_use_id,
+        );
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].run.id, runs[0].id);
+    }
+
     fn handler() -> ConfiguredHandler {
         ConfiguredHandler {
             event_name: HookEventName::PreToolUse,
@@ -571,8 +623,8 @@ mod tests {
             command: "echo hook".to_string(),
             timeout_sec: 5,
             status_message: None,
-            source_path: PathBuf::from("/tmp/hooks.json"),
-            is_project: false,
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
         }
     }
@@ -586,6 +638,20 @@ mod tests {
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             error: None,
+        }
+    }
+
+    fn request_for_tool_use(tool_use_id: &str) -> super::PreToolUseRequest {
+        super::PreToolUseRequest {
+            session_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            cwd: test_path_buf("/tmp").abs(),
+            transcript_path: None,
+            model: "gpt-test".to_string(),
+            permission_mode: "default".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_use_id: tool_use_id.to_string(),
+            command: "echo hello".to_string(),
         }
     }
 }

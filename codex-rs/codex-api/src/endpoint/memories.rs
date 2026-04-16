@@ -72,6 +72,7 @@ mod tests {
     use crate::provider::RetryConfig;
     use async_trait::async_trait;
     use codex_client::Request;
+    use codex_client::RequestBody;
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
@@ -102,9 +103,7 @@ mod tests {
     struct DummyAuth;
 
     impl AuthProvider for DummyAuth {
-        fn bearer_token(&self) -> Option<String> {
-            None
-        }
+        fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
     }
 
     #[derive(Clone)]
@@ -213,7 +212,11 @@ mod tests {
             request.url,
             "https://example.com/api/codex/memories/trace_summarize"
         );
-        let body = request.body.expect("request body should be present");
+        let body = request
+            .body
+            .as_ref()
+            .and_then(RequestBody::json)
+            .expect("request body should be JSON");
         assert_eq!(body["model"], "gpt-test");
         assert_eq!(body["traces"][0]["id"], "trace-1");
         assert_eq!(

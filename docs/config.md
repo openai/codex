@@ -12,14 +12,34 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
-## MCP tool approvals
-
-Codex stores per-tool approval overrides for custom MCP servers under
-`mcp_servers` in `~/.codex/config.toml`:
+MCP tools default to serialized calls. To mark every tool exposed by one server
+as eligible for parallel tool calls, set `supports_parallel_tool_calls` on that
+server:
 
 ```toml
+[mcp_servers.docs]
+command = "docs-server"
+supports_parallel_tool_calls = true
+```
+
+Only enable parallel calls for MCP servers whose tools are safe to run at the
+same time. If tools read and write shared state, files, databases, or external
+resources, review those read/write race conditions before enabling this setting.
+
+## MCP tool approvals
+
+Codex stores approval defaults and per-tool overrides for custom MCP servers
+under `mcp_servers` in `~/.codex/config.toml`. Set
+`default_tools_approval_mode` on the server to apply a default to every tool,
+and use per-tool `approval_mode` entries for exceptions:
+
+```toml
+[mcp_servers.docs]
+command = "docs-server"
+default_tools_approval_mode = "approve"
+
 [mcp_servers.docs.tools.search]
-approval_mode = "approve"
+approval_mode = "prompt"
 ```
 
 ## Apps (Connectors)

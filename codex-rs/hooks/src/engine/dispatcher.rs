@@ -50,6 +50,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
+        source: handler.source,
         display_order: handler.display_order,
         status: HookRunStatus::Running,
         status_message: handler.status_message.clone(),
@@ -90,7 +91,7 @@ pub(crate) fn select_handlers_by_trust_precedence(
     let mut non_project = Vec::new();
     let mut project = Vec::new();
     for handler in select_handlers(handlers, event_name, matcher_input) {
-        if handler.is_project {
+        if handler.source == codex_protocol::protocol::HookSource::Project {
             project.push(handler);
         } else {
             non_project.push(handler);
@@ -136,6 +137,7 @@ pub(crate) fn completed_summary(
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
+        source: handler.source,
         display_order: handler.display_order,
         status,
         status_message: handler.status_message.clone(),
@@ -158,9 +160,10 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookSource;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
 
     use super::ConfiguredHandler;
     use super::select_handlers;
@@ -178,8 +181,8 @@ mod tests {
             command: command.to_string(),
             timeout_sec: 5,
             status_message: None,
-            source_path: PathBuf::from("/tmp/hooks.json"),
-            is_project: false,
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: HookSource::User,
             display_order,
         }
     }
@@ -197,8 +200,12 @@ mod tests {
             command: command.to_string(),
             timeout_sec: 5,
             status_message: None,
-            source_path: PathBuf::from(source_path),
-            is_project: source_path.contains("/project/"),
+            source_path: test_path_buf(source_path).abs(),
+            source: if source_path.contains("/project/") {
+                HookSource::Project
+            } else {
+                HookSource::User
+            },
             display_order,
         }
     }

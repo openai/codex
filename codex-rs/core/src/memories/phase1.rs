@@ -336,9 +336,9 @@ mod job {
             }],
             tools: Vec::new(),
             parallel_tool_calls: false,
-            base_instructions: Some(BaseInstructions {
+            base_instructions: BaseInstructions {
                 text: phase_one::PROMPT.to_string(),
-            }),
+            },
             personality: None,
             output_schema: Some(output_schema()),
         };
@@ -477,9 +477,10 @@ mod job {
                 }
             })
             .collect::<Vec<_>>();
-        serde_json::to_string(&filtered).map_err(|err| {
+        let serialized = serde_json::to_string(&filtered).map_err(|err| {
             CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}"))
-        })
+        })?;
+        Ok(redact_secrets(serialized))
     }
 
     fn sanitize_response_item_for_memories(item: &ResponseItem) -> Option<ResponseItem> {

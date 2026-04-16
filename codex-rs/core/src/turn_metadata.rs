@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
 use serde::Serialize;
+use serde_json::Value;
 use tokio::task::JoinHandle;
 
 use crate::sandbox_tags::sandbox_tag;
@@ -15,6 +15,8 @@ use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, Default)]
 struct WorkspaceGitMetadata {
@@ -56,6 +58,8 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_source: Option<&'static str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
@@ -69,8 +73,23 @@ impl TurnMetadataBag {
     }
 }
 
+fn merge_responsesapi_client_metadata(
+    header: &str,
+    responsesapi_client_metadata: Option<&HashMap<String, String>>,
+) -> Option<String> {
+    let responsesapi_client_metadata = responsesapi_client_metadata?;
+    let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(header).ok()?;
+    for (key, value) in responsesapi_client_metadata {
+        metadata
+            .entry(key.clone())
+            .or_insert_with(|| Value::String(value.clone()));
+    }
+    serde_json::to_string(&metadata).ok()
+}
+
 fn build_turn_metadata_bag(
     session_id: Option<String>,
+    thread_source: Option<&'static str>,
     turn_id: Option<String>,
     sandbox: Option<String>,
     repo_root: Option<String>,
@@ -85,13 +104,17 @@ fn build_turn_metadata_bag(
 
     TurnMetadataBag {
         session_id,
+        thread_source,
         turn_id,
         workspaces,
         sandbox,
     }
 }
 
-pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Option<String> {
+pub async fn build_turn_metadata_header(
+    cwd: &AbsolutePathBuf,
+    sandbox: Option<&str>,
+) -> Option<String> {
     let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
 
     let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
@@ -110,6 +133,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
 
     build_turn_metadata_bag(
         /*session_id*/ None,
+        /*thread_source*/ None,
         /*turn_id*/ None,
         sandbox.map(ToString::to_string),
         repo_root,
@@ -124,19 +148,21 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnMetadataState {
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     repo_root: Option<String>,
     base_metadata: TurnMetadataBag,
     base_header: String,
     enriched_header: Arc<RwLock<Option<String>>>,
+    responsesapi_client_metadata: Arc<RwLock<Option<HashMap<String, String>>>>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl TurnMetadataState {
     pub(crate) fn new(
         session_id: String,
+        session_source: &SessionSource,
         turn_id: String,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
     ) -> Self {
@@ -144,6 +170,7 @@ impl TurnMetadataState {
         let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
+            session_source.thread_source_name(),
             Some(turn_id),
             sandbox,
             /*repo_root*/ None,
@@ -159,26 +186,46 @@ impl TurnMetadataState {
             base_metadata,
             base_header,
             enriched_header: Arc::new(RwLock::new(None)),
+            responsesapi_client_metadata: Arc::new(RwLock::new(None)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
     }
 
     pub(crate) fn current_header_value(&self) -> Option<String> {
-        if let Some(header) = self
+        let header = if let Some(header) = self
             .enriched_header
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .cloned()
         {
-            return Some(header);
-        }
-        Some(self.base_header.clone())
+            header
+        } else {
+            self.base_header.clone()
+        };
+        let responsesapi_client_metadata = self
+            .responsesapi_client_metadata
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        merge_responsesapi_client_metadata(&header, responsesapi_client_metadata.as_ref())
+            .or(Some(header))
     }
 
     pub(crate) fn current_meta_value(&self) -> Option<serde_json::Value> {
         self.current_header_value()
             .and_then(|header| serde_json::from_str(&header).ok())
+    }
+
+    pub(crate) fn set_responsesapi_client_metadata(
+        &self,
+        responsesapi_client_metadata: HashMap<String, String>,
+    ) {
+        *self
+            .responsesapi_client_metadata
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(responsesapi_client_metadata);
     }
 
     pub(crate) fn spawn_git_enrichment_task(&self) {
@@ -203,6 +250,7 @@ impl TurnMetadataState {
 
             let enriched_metadata = build_turn_metadata_bag(
                 state.base_metadata.session_id.clone(),
+                state.base_metadata.thread_source,
                 state.base_metadata.turn_id.clone(),
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),

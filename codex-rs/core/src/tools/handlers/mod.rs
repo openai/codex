@@ -15,17 +15,18 @@ mod shell;
 mod test_sync;
 mod tool_search;
 mod tool_suggest;
+mod unavailable_tool;
 pub(crate) mod unified_exec;
 mod view_image;
 
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
@@ -49,6 +50,8 @@ pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
 pub use tool_suggest::ToolSuggestHandler;
+pub use unavailable_tool::UnavailableToolHandler;
+pub(crate) use unavailable_tool::unavailable_tool_message;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 
@@ -63,7 +66,7 @@ where
 
 fn parse_arguments_with_base_path<T>(
     arguments: &str,
-    base_path: &Path,
+    base_path: &AbsolutePathBuf,
 ) -> Result<T, FunctionCallError>
 where
     T: for<'de> Deserialize<'de>,
@@ -74,18 +77,14 @@ where
 
 fn resolve_workdir_base_path(
     arguments: &str,
-    default_cwd: &Path,
-) -> Result<PathBuf, FunctionCallError> {
+    default_cwd: &AbsolutePathBuf,
+) -> Result<AbsolutePathBuf, FunctionCallError> {
     let arguments: Value = parse_arguments(arguments)?;
     Ok(arguments
         .get("workdir")
         .and_then(Value::as_str)
         .filter(|workdir| !workdir.is_empty())
-        .map(PathBuf::from)
-        .map_or_else(
-            || default_cwd.to_path_buf(),
-            |workdir| crate::util::resolve_path(default_cwd, &workdir),
-        ))
+        .map_or_else(|| default_cwd.clone(), |workdir| default_cwd.join(workdir)))
 }
 
 /// Validates feature/policy constraints for `with_additional_permissions` and

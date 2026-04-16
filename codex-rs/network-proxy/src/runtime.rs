@@ -335,6 +335,17 @@ impl NetworkProxyState {
         }
     }
 
+    pub async fn replace_config_state(&self, mut new_state: ConfigState) -> Result<()> {
+        self.reload_if_needed().await?;
+        let mut guard = self.state.write().await;
+        log_policy_changes(&guard.config, &new_state.config);
+        new_state.blocked = guard.blocked.clone();
+        new_state.blocked_total = guard.blocked_total;
+        *guard = new_state;
+        info!("updated network proxy config state");
+        Ok(())
+    }
+
     pub async fn host_blocked(&self, host: &str, port: u16) -> Result<HostBlockDecision> {
         self.reload_if_needed().await?;
         let host = match Host::parse(host) {

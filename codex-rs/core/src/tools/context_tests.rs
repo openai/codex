@@ -86,6 +86,148 @@ fn mcp_code_mode_result_serializes_full_call_tool_result() {
 }
 
 #[test]
+fn mcp_tool_output_response_item_includes_wall_time() {
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "done",
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
+    };
+
+    let response = output.to_response_item(
+        "mcp-call-1",
+        &ToolPayload::Mcp {
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    );
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            assert_eq!(call_id, "mcp-call-1");
+            assert_eq!(output.success, Some(true));
+            let Some(text) = output.body.to_text() else {
+                panic!("MCP output should serialize as text");
+            };
+            let Some(payload) = text.strip_prefix("Wall time: 1.2500 seconds\nOutput:\n") else {
+                panic!("MCP output should include wall-time header: {text}");
+            };
+            let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_else(|err| {
+                panic!("MCP output should serialize JSON content: {err}");
+            });
+            assert_eq!(
+                parsed,
+                json!([{
+                    "type": "text",
+                    "text": "done",
+                }])
+            );
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_tool_output_response_item_preserves_content_items() {
+    let image_url = "data:image/png;base64,AAA";
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "mimeType": "image/png",
+                "data": "AAA",
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        wall_time: std::time::Duration::from_millis(500),
+        original_image_detail_supported: false,
+    };
+
+    let response = output.to_response_item(
+        "mcp-call-2",
+        &ToolPayload::Mcp {
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    );
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            assert_eq!(
+                output.content_items(),
+                Some(
+                    vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: "Wall time: 0.5000 seconds\nOutput:".to_string(),
+                        },
+                        FunctionCallOutputContentItem::InputImage {
+                            image_url: image_url.to_string(),
+                            detail: None,
+                        },
+                    ]
+                    .as_slice()
+                )
+            );
+            assert_eq!(
+                output.body.to_text().as_deref(),
+                Some("Wall time: 0.5000 seconds\nOutput:")
+            );
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "ignored",
+            })],
+            structured_content: Some(serde_json::json!({
+                "content": "done",
+            })),
+            is_error: Some(false),
+            meta: None,
+        },
+        wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
+    };
+
+    let result = output.code_mode_result(&ToolPayload::Mcp {
+        server: "server".to_string(),
+        tool: "tool".to_string(),
+        raw_arguments: "{}".to_string(),
+    });
+
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "ignored",
+            }],
+            "structuredContent": {
+                "content": "done",
+            },
+            "isError": false,
+        })
+    );
+}
+
+#[test]
 fn custom_tool_calls_can_derive_text_from_content_items() {
     let payload = ToolPayload::Custom {
         input: "patch".to_string(),
@@ -147,11 +289,11 @@ fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
                 description: String::new(),
                 strict: false,
                 defer_loading: Some(true),
-                parameters: codex_tools::JsonSchema::Object {
-                    properties: Default::default(),
-                    required: None,
-                    additional_properties: None,
-                },
+                parameters: codex_tools::JsonSchema::object(
+                    /*properties*/ Default::default(),
+                    /*required*/ None,
+                    /*additional_properties*/ None,
+                ),
                 output_schema: None,
             },
         )],
@@ -249,11 +391,7 @@ fn exec_command_tool_output_formats_truncated_response() {
         process_id: None,
         exit_code: Some(0),
         original_token_count: Some(10),
-        session_command: Some(vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "rm -rf /tmp/example.sqlite".to_string(),
-        ]),
+        session_command: None,
     }
     .to_response_item("call-42", &payload);
 
@@ -267,8 +405,7 @@ fn exec_command_tool_output_formats_truncated_response() {
                 .expect("exec output should serialize as text");
             assert_regex_match(
                 r#"(?sx)
-                    ^Command:\ /bin/zsh\ -lc\ 'rm\ -rf\ /tmp/example\.sqlite'
-                    \nChunk\ ID:\ abc123
+                    ^Chunk\ ID:\ abc123
                     \nWall\ time:\ \d+\.\d{4}\ seconds
                     \nProcess\ exited\ with\ code\ 0
                     \nOriginal\ token\ count:\ 10

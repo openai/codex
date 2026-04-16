@@ -31,6 +31,10 @@ pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
+const MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 1;
+const MAX_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 4096;
+const MIN_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 1;
+const MAX_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 128;
 
 const fn default_enabled() -> bool {
     true
@@ -185,12 +189,14 @@ pub struct MemoriesToml {
     /// When `false`, skip injecting memory usage instructions into developer prompts.
     pub use_memories: Option<bool>,
     /// Maximum number of recent raw memories retained for global consolidation.
+    #[schemars(range(min = 1, max = 4096))]
     pub max_raw_memories_for_consolidation: Option<usize>,
     /// Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.
     pub max_unused_days: Option<i64>,
     /// Maximum age of the threads used for memories.
     pub max_rollout_age_days: Option<i64>,
     /// Maximum number of rollout candidates processed per pass.
+    #[schemars(range(min = 1, max = 128))]
     pub max_rollouts_per_startup: Option<usize>,
     /// Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.
     pub min_rollout_idle_hours: Option<i64>,
@@ -244,7 +250,10 @@ impl From<MemoriesToml> for MemoriesConfig {
             max_raw_memories_for_consolidation: toml
                 .max_raw_memories_for_consolidation
                 .unwrap_or(defaults.max_raw_memories_for_consolidation)
-                .min(4096),
+                .clamp(
+                    MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+                    MAX_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+                ),
             max_unused_days: toml
                 .max_unused_days
                 .unwrap_or(defaults.max_unused_days)
@@ -256,7 +265,10 @@ impl From<MemoriesToml> for MemoriesConfig {
             max_rollouts_per_startup: toml
                 .max_rollouts_per_startup
                 .unwrap_or(defaults.max_rollouts_per_startup)
-                .min(128),
+                .clamp(
+                    MIN_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
+                    MAX_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
+                ),
             min_rollout_idle_hours: toml
                 .min_rollout_idle_hours
                 .unwrap_or(defaults.min_rollout_idle_hours)
@@ -472,6 +484,44 @@ impl fmt::Display for NotificationMethod {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NotificationCondition {
+    /// Emit TUI notifications only while the terminal is unfocused.
+    #[default]
+    Unfocused,
+    /// Emit TUI notifications regardless of terminal focus.
+    Always,
+}
+
+impl fmt::Display for NotificationCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NotificationCondition::Unfocused => write!(f, "unfocused"),
+            NotificationCondition::Always => write!(f, "always"),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiNotificationSettings {
+    /// Enable desktop notifications from the TUI.
+    /// Defaults to `true`.
+    #[serde(default, rename = "notifications")]
+    pub notifications: Notifications,
+
+    /// Notification method to use for terminal notifications.
+    /// Defaults to `auto`.
+    #[serde(default, rename = "notification_method")]
+    pub method: NotificationMethod,
+
+    /// Controls whether TUI notifications are delivered only when the terminal is unfocused or
+    /// regardless of focus. Defaults to `unfocused`.
+    #[serde(default, rename = "notification_condition")]
+    pub condition: NotificationCondition,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelAvailabilityNuxConfig {
@@ -484,15 +534,8 @@ pub struct ModelAvailabilityNuxConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct Tui {
-    /// Enable desktop notifications from the TUI when the terminal is unfocused.
-    /// Defaults to `true`.
-    #[serde(default)]
-    pub notifications: Notifications,
-
-    /// Notification method to use for unfocused terminal notifications.
-    /// Defaults to `auto`.
-    #[serde(default)]
-    pub notification_method: NotificationMethod,
+    #[serde(default, flatten)]
+    pub notification_settings: TuiNotificationSettings,
 
     /// Enable animations (welcome screen, shimmer effects, spinners).
     /// Defaults to `true`.
@@ -518,8 +561,7 @@ pub struct Tui {
     /// Ordered list of status line item identifiers.
     ///
     /// When set, the TUI renders the selected items as the status line.
-    /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
-    /// `current-dir`.
+    /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
 
@@ -578,6 +620,36 @@ pub struct PluginConfig {
     pub enabled: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct MarketplaceConfig {
+    /// Last time Codex successfully added or refreshed this marketplace.
+    #[serde(default)]
+    pub last_updated: Option<String>,
+    /// Git revision Codex last successfully activated for this marketplace.
+    #[serde(default)]
+    pub last_revision: Option<String>,
+    /// Source kind used to install this marketplace.
+    #[serde(default)]
+    pub source_type: Option<MarketplaceSourceType>,
+    /// Source location used when the marketplace was added.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Git ref to check out when `source_type` is `git`.
+    #[serde(default, rename = "ref")]
+    pub ref_name: Option<String>,
+    /// Sparse checkout paths used when `source_type` is `git`.
+    #[serde(default)]
+    pub sparse_paths: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketplaceSourceType {
+    Git,
+    Local,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SandboxWorkspaceWrite {
@@ -602,7 +674,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {
     /// "Core" environment variables for the platform. On UNIX, this would

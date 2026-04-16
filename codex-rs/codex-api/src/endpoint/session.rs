@@ -1,10 +1,10 @@
 use crate::auth::AuthProvider;
-use crate::auth::add_auth_headers;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::telemetry::run_with_request_telemetry;
 use codex_client::HttpTransport;
 use codex_client::Request;
+use codex_client::RequestBody;
 use codex_client::RequestTelemetry;
 use codex_client::Response;
 use codex_client::StreamResponse;
@@ -53,9 +53,10 @@ impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
         let mut req = self.provider.build_request(method.clone(), path);
         req.headers.extend(extra_headers.clone());
         if let Some(body) = body {
-            req.body = Some(body.clone());
+            req.body = Some(RequestBody::Json(body.clone()));
         }
-        add_auth_headers(&self.auth, req)
+        self.auth.add_auth_headers(&mut req.headers);
+        req
     }
 
     pub(crate) async fn execute(

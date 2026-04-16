@@ -7,6 +7,8 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_rollout::SESSIONS_SUBDIR;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -25,6 +27,16 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
         .join("2025")
         .join("01")
         .join("01");
+    write_rollout_with_user_event(&dir, thread_id).await
+}
+
+async fn write_archived_session_with_user_event(codex_home: &Path) -> io::Result<()> {
+    let thread_id = ThreadId::new();
+    let dir = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    write_rollout_with_user_event(&dir, thread_id).await
+}
+
+async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::Result<()> {
     tokio::fs::create_dir_all(&dir).await?;
     let file_path = dir.join(format!("rollout-{TEST_TIMESTAMP}-{thread_id}.jsonl"));
     let mut file = tokio::fs::File::create(&file_path).await?;
@@ -43,7 +55,6 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
             agent_role: None,
             model_provider: None,
             base_instructions: None,
-            developer_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
         },
@@ -74,6 +85,22 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
 async fn applies_when_sessions_exist_and_no_personality() -> io::Result<()> {
     let temp = TempDir::new()?;
     write_session_with_user_event(temp.path()).await?;
+
+    let config_toml = ConfigToml::default();
+    let status = maybe_migrate_personality(temp.path(), &config_toml).await?;
+
+    assert_eq!(status, PersonalityMigrationStatus::Applied);
+    assert!(temp.path().join(PERSONALITY_MIGRATION_FILENAME).exists());
+
+    let persisted = read_config_toml(temp.path()).await?;
+    assert_eq!(persisted.personality, Some(Personality::Pragmatic));
+    Ok(())
+}
+
+#[tokio::test]
+async fn applies_when_only_archived_sessions_exist_and_no_personality() -> io::Result<()> {
+    let temp = TempDir::new()?;
+    write_archived_session_with_user_event(temp.path()).await?;
 
     let config_toml = ConfigToml::default();
     let status = maybe_migrate_personality(temp.path(), &config_toml).await?;

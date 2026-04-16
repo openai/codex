@@ -12,6 +12,7 @@ use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
 use crate::types::History;
+use crate::types::MarketplaceConfig;
 use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
 use crate::types::Notice;
@@ -325,6 +326,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
 
+    /// User-level marketplace entries keyed by marketplace name.
+    #[serde(default)]
+    pub marketplaces: HashMap<String, MarketplaceConfig>,
+
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.
@@ -445,7 +450,17 @@ pub enum RealtimeWsMode {
     Transcription,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeTransport {
+    #[default]
+    #[serde(rename = "webrtc")]
+    WebRtc,
+    Websocket,
+}
+
 pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
+pub use codex_protocol::protocol::RealtimeVoice;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -453,6 +468,8 @@ pub struct RealtimeConfig {
     pub version: RealtimeWsVersion,
     #[serde(rename = "type")]
     pub session_type: RealtimeWsMode,
+    pub transport: RealtimeTransport,
+    pub voice: Option<RealtimeVoice>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -461,6 +478,8 @@ pub struct RealtimeToml {
     pub version: Option<RealtimeWsVersion>,
     #[serde(rename = "type")]
     pub session_type: Option<RealtimeWsMode>,
+    pub transport: Option<RealtimeTransport>,
+    pub voice: Option<RealtimeVoice>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -577,7 +596,7 @@ pub struct GhostSnapshotToml {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    pub fn derive_sandbox_policy(
+    pub async fn derive_sandbox_policy(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
@@ -591,11 +610,13 @@ impl ConfigToml {
         let resolved_sandbox_mode = sandbox_mode_override
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
-            .or_else(|| {
+            .or(if sandbox_mode_was_explicit {
+                None
+            } else {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                self.get_active_project(resolved_cwd).and_then(|p| {
+                self.get_active_project(resolved_cwd).await.and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
@@ -657,27 +678,24 @@ impl ConfigToml {
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
-        let mut projects = HashMap::new();
-        for (key, project_config) in self.projects.clone().unwrap_or_default() {
-            for normalized_key in normalized_project_lookup_keys(Path::new(&key)) {
-                projects.insert(normalized_key, project_config.clone());
-            }
-        }
+    pub async fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+        let projects = self.projects.as_ref()?;
 
         for normalized_cwd in normalized_project_lookup_keys(resolved_cwd) {
-            if let Some(project_config) = projects.get(&normalized_cwd) {
-                return Some(project_config.clone());
+            if let Some(project_config) = project_config_for_lookup_key(projects, &normalized_cwd) {
+                return Some(project_config);
             }
         }
 
         // If cwd lives inside a git repo/worktree, check whether the root git project
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd) {
+        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd).await {
             for normalized_repo_root in normalized_project_lookup_keys(&repo_root) {
-                if let Some(project_config_for_root) = projects.get(&normalized_repo_root) {
-                    return Some(project_config_for_root.clone());
+                if let Some(project_config_for_root) =
+                    project_config_for_lookup_key(projects, &normalized_repo_root)
+                {
+                    return Some(project_config_for_root);
                 }
             }
         }
@@ -731,6 +749,24 @@ fn normalize_project_lookup_key(key: String) -> String {
     } else {
         key
     }
+}
+
+fn project_config_for_lookup_key(
+    projects: &HashMap<String, ProjectConfig>,
+    lookup_key: &str,
+) -> Option<ProjectConfig> {
+    if let Some(project_config) = projects.get(lookup_key) {
+        return Some(project_config.clone());
+    }
+
+    let mut normalized_matches: Vec<_> = projects
+        .iter()
+        .filter(|(key, _)| normalize_project_lookup_key((*key).clone()) == lookup_key)
+        .collect();
+    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches
+        .first()
+        .map(|(_, project_config)| (**project_config).clone())
 }
 
 pub fn validate_reserved_model_provider_ids(

@@ -1,13 +1,28 @@
 use crate::events::AppServerRpcTransport;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::GuardianReviewEventParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_plugin::PluginTelemetryMetadata;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookSource;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TokenUsage;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -27,6 +42,126 @@ pub fn build_track_events_context(
         model_slug,
         thread_id,
         turn_id,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSubmissionType {
+    Default,
+    Queued,
+}
+
+#[derive(Clone)]
+pub struct TurnResolvedConfigFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub num_input_images: usize,
+    pub submission_type: Option<TurnSubmissionType>,
+    pub ephemeral: bool,
+    pub session_source: SessionSource,
+    pub model: String,
+    pub model_provider: String,
+    pub sandbox_policy: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub reasoning_summary: Option<ReasoningSummary>,
+    pub service_tier: Option<ServiceTier>,
+    pub approval_policy: AskForApproval,
+    pub approvals_reviewer: ApprovalsReviewer,
+    pub sandbox_network_access: bool,
+    pub collaboration_mode: ModeKind,
+    pub personality: Option<Personality>,
+    pub is_first_turn: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadInitializationMode {
+    New,
+    Forked,
+    Resumed,
+}
+
+#[derive(Clone)]
+pub struct TurnTokenUsageFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub token_usage: TokenUsage,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnStatus {
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerResult {
+    Accepted,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerRejectionReason {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+    EmptyInput,
+    InputTooLarge,
+}
+
+#[derive(Clone)]
+pub struct CodexTurnSteerEvent {
+    pub expected_turn_id: Option<String>,
+    pub accepted_turn_id: Option<String>,
+    pub num_input_images: usize,
+    pub result: TurnSteerResult,
+    pub rejection_reason: Option<TurnSteerRejectionReason>,
+    pub created_at: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum AnalyticsJsonRpcError {
+    TurnSteer(TurnSteerRequestError),
+    Input(InputError),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TurnSteerRequestError {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum InputError {
+    Empty,
+    TooLarge,
+}
+
+impl From<TurnSteerRequestError> for TurnSteerRejectionReason {
+    fn from(error: TurnSteerRequestError) -> Self {
+        match error {
+            TurnSteerRequestError::NoActiveTurn => Self::NoActiveTurn,
+            TurnSteerRequestError::ExpectedTurnMismatch => Self::ExpectedTurnMismatch,
+            TurnSteerRequestError::NonSteerableReview => Self::NonSteerableReview,
+            TurnSteerRequestError::NonSteerableCompact => Self::NonSteerableCompact,
+        }
+    }
+}
+
+impl From<InputError> for TurnSteerRejectionReason {
+    fn from(error: InputError) -> Self {
+        match error {
+            InputError::Empty => Self::EmptyInput,
+            InputError::TooLarge => Self::InputTooLarge,
+        }
     }
 }
 
@@ -54,6 +189,7 @@ pub struct AppInvocation {
 #[derive(Clone)]
 pub struct SubAgentThreadStartedInput {
     pub thread_id: String,
+    pub parent_thread_id: Option<String>,
     pub product_client_id: String,
     pub client_name: String,
     pub client_version: String,
@@ -61,6 +197,69 @@ pub struct SubAgentThreadStartedInput {
     pub ephemeral: bool,
     pub subagent_source: SubAgentSource,
     pub created_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionTrigger {
+    Manual,
+    Auto,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionReason {
+    UserRequested,
+    ContextLimit,
+    ModelDownshift,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionImplementation {
+    Responses,
+    ResponsesCompact,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionPhase {
+    StandaloneTurn,
+    PreTurn,
+    MidTurn,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStrategy {
+    Memento,
+    PrefixCompaction,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStatus {
+    Completed,
+    Failed,
+    Interrupted,
+}
+
+#[derive(Clone)]
+pub struct CodexCompactionEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub trigger: CompactionTrigger,
+    pub reason: CompactionReason,
+    pub implementation: CompactionImplementation,
+    pub phase: CompactionPhase,
+    pub strategy: CompactionStrategy,
+    pub status: CompactionStatus,
+    pub error: Option<String>,
+    pub active_context_tokens_before: i64,
+    pub active_context_tokens_after: i64,
+    pub started_at: u64,
+    pub completed_at: u64,
+    pub duration_ms: Option<u64>,
 }
 
 #[allow(dead_code)]
@@ -81,6 +280,12 @@ pub(crate) enum AnalyticsFact {
         connection_id: u64,
         response: Box<ClientResponse>,
     },
+    ErrorResponse {
+        connection_id: u64,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+        error_type: Option<AnalyticsJsonRpcError>,
+    },
     Notification(Box<ServerNotification>),
     // Facts that do not naturally exist on the app-server protocol surface, or
     // would require non-trivial protocol reshaping on this branch.
@@ -89,9 +294,14 @@ pub(crate) enum AnalyticsFact {
 
 pub(crate) enum CustomAnalyticsFact {
     SubAgentThreadStarted(SubAgentThreadStartedInput),
+    Compaction(Box<CodexCompactionEvent>),
+    GuardianReview(Box<GuardianReviewEventParams>),
+    TurnResolvedConfig(Box<TurnResolvedConfigFact>),
+    TurnTokenUsage(Box<TurnTokenUsageFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),
+    HookRun(HookRunInput),
     PluginUsed(PluginUsedInput),
     PluginStateChanged(PluginStateChangedInput),
 }
@@ -109,6 +319,17 @@ pub(crate) struct AppMentionedInput {
 pub(crate) struct AppUsedInput {
     pub tracking: TrackEventsContext,
     pub app: AppInvocation,
+}
+
+pub(crate) struct HookRunInput {
+    pub tracking: TrackEventsContext,
+    pub hook: HookRunFact,
+}
+
+pub struct HookRunFact {
+    pub event_name: HookEventName,
+    pub hook_source: HookSource,
+    pub status: HookRunStatus,
 }
 
 pub(crate) struct PluginUsedInput {

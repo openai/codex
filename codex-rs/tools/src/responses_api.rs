@@ -1,5 +1,6 @@
 use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolName;
 use crate::parse_dynamic_tool;
 use crate::parse_mcp_tool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -38,6 +39,7 @@ pub struct ResponsesApiTool {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum ToolSearchOutputTool {
     #[allow(dead_code)]
     #[serde(rename = "function")]
@@ -51,6 +53,10 @@ pub struct ResponsesApiNamespace {
     pub name: String,
     pub description: String,
     pub tools: Vec<ResponsesApiNamespaceTool>,
+}
+
+pub(crate) fn default_namespace_description(namespace_name: &str) -> String {
+    format!("Tools in the {namespace_name} namespace.")
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -69,20 +75,22 @@ pub fn dynamic_tool_to_responses_api_tool(
 }
 
 pub fn mcp_tool_to_responses_api_tool(
-    name: String,
+    tool_name: &ToolName,
     tool: &rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?.renamed(name),
+        parse_mcp_tool(tool)?.renamed(tool_name.name.clone()),
     ))
 }
 
 pub fn mcp_tool_to_deferred_responses_api_tool(
-    name: String,
+    tool_name: &ToolName,
     tool: &rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
     Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?.renamed(name).into_deferred(),
+        parse_mcp_tool(tool)?
+            .renamed(tool_name.name.clone())
+            .into_deferred(),
     ))
 }
 

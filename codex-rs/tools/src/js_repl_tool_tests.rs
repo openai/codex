@@ -1,4 +1,5 @@
 use super::*;
+use crate::JsonSchema;
 use crate::ToolSpec;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -29,11 +30,11 @@ fn js_repl_reset_tool_matches_expected_spec() {
                     .to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::Object {
-                properties: BTreeMap::new(),
-                required: None,
-                additional_properties: Some(false.into()),
-            },
+            parameters: JsonSchema::object(
+                BTreeMap::new(),
+                /*required*/ None,
+                Some(false.into())
+            ),
             output_schema: None,
         })
     );
