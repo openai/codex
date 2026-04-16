@@ -282,6 +282,7 @@ impl GuardianReviewAnalyticsResult {
             result.had_prior_review_context = Some(metadata.had_prior_review_context);
             result.reviewed_action_truncated = metadata.reviewed_action_truncated;
             result.token_usage = metadata.token_usage;
+            result.time_to_first_token_ms = metadata.time_to_first_token_ms;
         }
 
         result
