@@ -6,13 +6,16 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use codex_windows_sandbox::DenyReadAclRecordKind;
 use codex_windows_sandbox::LOG_FILE_NAME;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::add_deny_write_ace;
+use codex_windows_sandbox::apply_deny_read_acls;
 use codex_windows_sandbox::canonicalize_path;
+use codex_windows_sandbox::cleanup_stale_persistent_deny_read_acls;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
@@ -28,6 +31,7 @@ use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::workspace_cap_sid_for_cwd;
+use codex_windows_sandbox::write_persistent_deny_read_acl_record;
 use codex_windows_sandbox::write_setup_error_report;
 use serde::Deserialize;
 use serde::Serialize;
@@ -83,6 +87,8 @@ struct Payload {
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+    #[serde(default)]
+    deny_read_paths: Vec<PathBuf>,
     #[serde(default)]
     deny_write_paths: Vec<PathBuf>,
     proxy_ports: Vec<u16>,
@@ -468,6 +474,29 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
         sandbox_group_psid,
         rx_psids: &rx_psids,
     };
+    // Stale cleanup must happen before the helper re-grants read ACLs because
+    // the cleanup primitive revokes all ACEs for the sandbox group SID.
+    match unsafe {
+        cleanup_stale_persistent_deny_read_acls(
+            &payload.codex_home,
+            DenyReadAclRecordKind::SandboxGroup,
+            &payload.deny_read_paths,
+            sandbox_group_psid,
+        )
+    } {
+        Ok(cleaned) => {
+            if !cleaned.is_empty() {
+                log_line(
+                    log,
+                    &format!("cleaned {} stale deny-read ACLs", cleaned.len()),
+                )?;
+            }
+        }
+        Err(err) => {
+            refresh_errors.push(format!("cleanup stale deny-read ACLs failed: {err}"));
+            log_line(log, &format!("cleanup stale deny-read ACLs failed: {err}"))?;
+        }
+    }
     apply_read_acls(
         &payload.read_roots,
         &subjects,
@@ -477,6 +506,24 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
         "read",
         OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
     )?;
+    // Deny-read ACEs are applied after read grants so the DACL ends with
+    // explicit deny entries that take precedence over the broad read allowlist.
+    match unsafe { apply_deny_read_acls(&payload.deny_read_paths, sandbox_group_psid) } {
+        Ok(applied) => {
+            write_persistent_deny_read_acl_record(
+                &payload.codex_home,
+                DenyReadAclRecordKind::SandboxGroup,
+                &applied,
+            )?;
+            if !applied.is_empty() {
+                log_line(log, &format!("applied {} deny-read ACLs", applied.len()))?;
+            }
+        }
+        Err(err) => {
+            refresh_errors.push(format!("apply deny-read ACLs failed: {err}"));
+            log_line(log, &format!("apply deny-read ACLs failed: {err}"))?;
+        }
+    }
     unsafe {
         if !sandbox_group_psid.is_null() {
             LocalFree(sandbox_group_psid as HLOCAL);
@@ -603,8 +650,14 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    if payload.read_roots.is_empty() {
-        log_line(log, "no read roots to grant; skipping read ACL helper")?;
+    // The read ACL helper is also responsible for persistent deny-read cleanup,
+    // so it must run whenever deny-read paths are present even if no new read
+    // roots need to be granted.
+    if payload.read_roots.is_empty() && payload.deny_read_paths.is_empty() {
+        log_line(
+            log,
+            "no read roots or deny-read paths; skipping read ACL helper",
+        )?;
     } else {
         match read_acl_mutex_exists() {
             Ok(true) => {

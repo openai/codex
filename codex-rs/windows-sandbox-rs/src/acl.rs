@@ -22,6 +22,7 @@ use windows_sys::Win32::Security::EqualSid;
 use windows_sys::Win32::Security::GetAce;
 use windows_sys::Win32::Security::GetAclInformation;
 use windows_sys::Win32::Security::MapGenericMask;
+use windows_sys::Win32::Security::ACCESS_DENIED_ACE;
 use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
 use windows_sys::Win32::Security::ACE_HEADER;
 use windows_sys::Win32::Security::ACL;
@@ -48,6 +49,9 @@ use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
 const SE_KERNEL_OBJECT: u32 = 6;
 const INHERIT_ONLY_ACE: u8 = 0x08;
+const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+const ACCESS_DENIED_ACE_TYPE: u8 = 1;
+const GENERIC_READ_MASK: u32 = 0x8000_0000;
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
 
@@ -125,7 +129,7 @@ pub unsafe fn dacl_mask_allows(
             continue;
         }
         let hdr = &*(p_ace as *const ACE_HEADER);
-        if hdr.AceType != 0 {
+        if hdr.AceType != ACCESS_ALLOWED_ACE_TYPE {
             continue; // not ACCESS_ALLOWED
         }
         if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
@@ -194,7 +198,7 @@ pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) 
             continue;
         }
         let hdr = &*(p_ace as *const ACE_HEADER);
-        if hdr.AceType != 0 {
+        if hdr.AceType != ACCESS_ALLOWED_ACE_TYPE {
             continue; // ACCESS_ALLOWED_ACE_TYPE
         }
         // Ignore ACEs that are inherit-only (do not apply to the current object)
@@ -242,17 +246,55 @@ pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -
             continue;
         }
         let hdr = &*(p_ace as *const ACE_HEADER);
-        if hdr.AceType != 1 {
+        if hdr.AceType != ACCESS_DENIED_ACE_TYPE {
             continue; // ACCESS_DENIED_ACE_TYPE
         }
         if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
             continue;
         }
-        let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
+        let ace = &*(p_ace as *const ACCESS_DENIED_ACE);
         let base = p_ace as usize;
         let sid_ptr =
             (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void;
         if EqualSid(sid_ptr, psid) != 0 && (ace.Mask & deny_write_mask) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+pub unsafe fn dacl_has_read_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
+    if p_dacl.is_null() {
+        return false;
+    }
+    let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
+    let ok = GetAclInformation(
+        p_dacl as *const ACL,
+        &mut info as *mut _ as *mut c_void,
+        std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+        AclSizeInformation,
+    );
+    if ok == 0 {
+        return false;
+    }
+    let deny_read_mask = FILE_GENERIC_READ | GENERIC_READ_MASK;
+    for i in 0..info.AceCount {
+        let mut p_ace: *mut c_void = std::ptr::null_mut();
+        if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
+            continue;
+        }
+        let hdr = &*(p_ace as *const ACE_HEADER);
+        if hdr.AceType != ACCESS_DENIED_ACE_TYPE {
+            continue; // ACCESS_DENIED_ACE_TYPE
+        }
+        if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
+            continue;
+        }
+        let ace = &*(p_ace as *const ACCESS_DENIED_ACE);
+        let base = p_ace as usize;
+        let sid_ptr =
+            (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void;
+        if EqualSid(sid_ptr, psid) != 0 && (ace.Mask & deny_read_mask) != 0 {
             return true;
         }
     }
@@ -508,6 +550,85 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool>
             if !p_new_dacl.is_null() {
                 LocalFree(p_new_dacl as HLOCAL);
             }
+        }
+    }
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    Ok(added)
+}
+
+/// Adds a deny ACE to prevent reads for the given SID on the target path.
+///
+/// `SetEntriesInAclW` places newly-created deny ACEs before allow ACEs, which
+/// keeps the resulting DACL in the order Windows expects for denies to win.
+/// The ACE is inheritable so a deny applied to a materialized directory also
+/// covers files and directories later created underneath it.
+///
+/// # Safety
+/// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
+pub unsafe fn add_deny_read_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
+    let mut p_sd: *mut c_void = std::ptr::null_mut();
+    let mut p_dacl: *mut ACL = std::ptr::null_mut();
+    let code = GetNamedSecurityInfoW(
+        to_wide(path).as_ptr(),
+        1,
+        DACL_SECURITY_INFORMATION,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        &mut p_dacl,
+        std::ptr::null_mut(),
+        &mut p_sd,
+    );
+    if code != ERROR_SUCCESS {
+        return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
+    }
+    let mut added = false;
+    if !dacl_has_read_deny_for_sid(p_dacl, psid) {
+        let trustee = TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: 0,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_UNKNOWN,
+            ptstrName: psid as *mut u16,
+        };
+        let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
+        explicit.grfAccessPermissions = FILE_GENERIC_READ | GENERIC_READ_MASK;
+        explicit.grfAccessMode = DENY_ACCESS;
+        explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
+        explicit.Trustee = trustee;
+        let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
+        let code2 = SetEntriesInAclW(1, &explicit, p_dacl, &mut p_new_dacl);
+        if code2 != ERROR_SUCCESS {
+            if !p_sd.is_null() {
+                LocalFree(p_sd as HLOCAL);
+            }
+            if !p_new_dacl.is_null() {
+                LocalFree(p_new_dacl as HLOCAL);
+            }
+            return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
+        }
+        let code3 = SetNamedSecurityInfoW(
+            to_wide(path).as_ptr() as *mut u16,
+            1,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            p_new_dacl,
+            std::ptr::null_mut(),
+        );
+        if code3 != ERROR_SUCCESS {
+            if !p_sd.is_null() {
+                LocalFree(p_sd as HLOCAL);
+            }
+            if !p_new_dacl.is_null() {
+                LocalFree(p_new_dacl as HLOCAL);
+            }
+            return Err(anyhow!("SetNamedSecurityInfoW failed: {code3}"));
+        }
+        added = true;
+        if !p_new_dacl.is_null() {
+            LocalFree(p_new_dacl as HLOCAL);
         }
     }
     if !p_sd.is_null() {

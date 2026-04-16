@@ -14,6 +14,7 @@ windows_modules!(
     audit,
     cap,
     desktop,
+    deny_read_acl,
     dpapi,
     env,
     helper_materialization,
@@ -47,6 +48,8 @@ mod elevated_impl;
 mod setup_error;
 
 #[cfg(target_os = "windows")]
+pub use acl::add_deny_read_ace;
+#[cfg(target_os = "windows")]
 pub use acl::add_deny_write_ace;
 
 #[cfg(target_os = "windows")]
@@ -69,6 +72,16 @@ pub use cap::load_or_create_cap_sids;
 pub use cap::workspace_cap_sid_for_cwd;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
+#[cfg(target_os = "windows")]
+pub use deny_read_acl::DenyReadAclRecordKind;
+#[cfg(target_os = "windows")]
+pub use deny_read_acl::apply_deny_read_acls;
+#[cfg(target_os = "windows")]
+pub use deny_read_acl::cleanup_stale_persistent_deny_read_acls;
+#[cfg(target_os = "windows")]
+pub use deny_read_acl::plan_deny_read_acl_paths;
+#[cfg(target_os = "windows")]
+pub use deny_read_acl::write_persistent_deny_read_acl_record;
 #[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
@@ -180,7 +193,7 @@ pub use windows_impl::CaptureResult;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
-pub use windows_impl::run_windows_sandbox_capture_with_extra_deny_write_paths;
+pub use windows_impl::run_windows_sandbox_capture_with_filesystem_overrides;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
@@ -211,6 +224,10 @@ mod windows_impl {
     use super::allow::compute_allow_paths;
     use super::cap::load_or_create_cap_sids;
     use super::cap::workspace_cap_sid_for_cwd;
+    use super::deny_read_acl::DenyReadAclRecordKind;
+    use super::deny_read_acl::apply_deny_read_acls;
+    use super::deny_read_acl::cleanup_stale_persistent_deny_read_acls;
+    use super::deny_read_acl::write_persistent_deny_read_acl_record;
     use super::env::apply_no_network_to_env;
     use super::env::ensure_non_interactive_pager;
     use super::env::normalize_null_device_env;
@@ -298,7 +315,7 @@ mod windows_impl {
         timeout_ms: Option<u64>,
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
-        run_windows_sandbox_capture_with_extra_deny_write_paths(
+        run_windows_sandbox_capture_with_filesystem_overrides(
             policy_json_or_preset,
             sandbox_policy_cwd,
             codex_home,
@@ -307,12 +324,13 @@ mod windows_impl {
             env_map,
             timeout_ms,
             &[],
+            &[],
             use_private_desktop,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn run_windows_sandbox_capture_with_extra_deny_write_paths(
+    pub fn run_windows_sandbox_capture_with_filesystem_overrides(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
         codex_home: &Path,
@@ -320,6 +338,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        additional_deny_read_paths: &[PathBuf],
         additional_deny_write_paths: &[PathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
@@ -405,6 +424,20 @@ mod windows_impl {
         }
         let canonical_cwd = canonicalize_path(&current_dir);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
+        if persist_aces {
+            // Persistent workspace-write ACEs survive between commands, so drop
+            // deny-read ACLs from the previous policy before applying the new
+            // overlay. Non-persistent runs use guards and clean up at process
+            // exit instead.
+            unsafe {
+                cleanup_stale_persistent_deny_read_acls(
+                    codex_home,
+                    DenyReadAclRecordKind::RestrictedToken,
+                    additional_deny_read_paths,
+                    psid_generic,
+                )?;
+            }
+        }
         unsafe {
             for p in &allow {
                 let psid = if is_workspace_write && is_command_cwd_root(p, &canonical_cwd) {
@@ -432,6 +465,30 @@ mod windows_impl {
                     guards.push((p.clone(), psid_generic));
                 }
             }
+            // Read denies are layered after allow/deny-write setup so they can
+            // override broad read grants for the sandbox principal without
+            // changing the existing write policy computation.
+            let applied_deny_read_paths =
+                match apply_deny_read_acls(additional_deny_read_paths, psid_generic) {
+                    Ok(paths) => paths,
+                    Err(err) => {
+                        if !persist_aces {
+                            cleanup_acl_guards(&mut guards);
+                        }
+                        return Err(err);
+                    }
+                };
+            if persist_aces {
+                write_persistent_deny_read_acl_record(
+                    codex_home,
+                    DenyReadAclRecordKind::RestrictedToken,
+                    &applied_deny_read_paths,
+                )?;
+            } else {
+                for path in applied_deny_read_paths {
+                    guards.push((path, psid_generic));
+                }
+            }
             allow_null_device(psid_generic);
             if let Some(psid) = psid_workspace {
                 allow_null_device(psid);
@@ -454,6 +511,7 @@ mod windows_impl {
         let created = match spawn_res {
             Ok(v) => v,
             Err(err) => {
+                cleanup_acl_guards(&mut guards);
                 unsafe {
                     CloseHandle(in_r);
                     CloseHandle(in_w);
@@ -562,11 +620,7 @@ mod windows_impl {
         }
 
         if !persist_aces {
-            unsafe {
-                for (p, sid) in guards {
-                    revoke_ace(&p, sid);
-                }
-            }
+            cleanup_acl_guards(&mut guards);
         }
 
         Ok(CaptureResult {
@@ -575,6 +629,14 @@ mod windows_impl {
             stderr,
             timed_out,
         })
+    }
+
+    fn cleanup_acl_guards(guards: &mut Vec<(PathBuf, *mut c_void)>) {
+        unsafe {
+            for (p, sid) in guards.drain(..) {
+                revoke_ace(&p, sid);
+            }
+        }
     }
 
     pub fn run_windows_sandbox_legacy_preflight(

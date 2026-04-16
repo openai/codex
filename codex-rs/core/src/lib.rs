@@ -117,6 +117,7 @@ pub mod review_format;
 pub mod review_prompts;
 mod thread_manager;
 pub(crate) mod web_search;
+pub(crate) mod windows_deny_read;
 pub(crate) mod windows_sandbox_read_grants;
 pub use thread_manager::ForkSnapshot;
 pub use thread_manager::NewThread;

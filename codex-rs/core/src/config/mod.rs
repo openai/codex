@@ -2023,12 +2023,6 @@ impl Config {
                     }
                 })
                 .map_err(std::io::Error::from)?;
-
-            if cfg!(target_os = "windows") {
-                startup_warnings.push(format!(
-                    "managed filesystem deny_read from {filesystem_requirements_source} is only enforced for direct file tools on Windows; shell subprocess reads are not sandboxed"
-                ));
-            }
         }
         apply_requirement_constrained_value(
             "approvals_reviewer",
