@@ -15,6 +15,7 @@ use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::test_support;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::config_toml::ConfigToml;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
@@ -701,6 +702,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
                 .to_string(),
         },
         /*retry_reason*/ None,
+        GuardianApprovalRequestSource::MainTurn,
         cancel_token,
     )
     .await;
