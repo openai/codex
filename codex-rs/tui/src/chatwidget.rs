@@ -885,8 +885,11 @@ pub(crate) struct ChatWidget {
     // history has been rendered so resumed/forked prompts keep chronological
     // order.
     suppress_initial_user_message_submit: bool,
-    // User messages queued while a turn is in progress
+    // User messages queued while a turn is in progress.
     queued_user_messages: VecDeque<UserMessage>,
+    // History records for queued user messages. This is kept in lockstep with
+    // `queued_user_messages`, with missing entries treated as user-message text.
+    queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
@@ -1047,6 +1050,7 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
+#[derive(Clone)]
 enum UserMessageHistoryRecord {
     UserMessageText,
     Override(String),
@@ -2539,20 +2543,30 @@ impl ChatWidget {
         !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
     }
 
-    fn pop_next_queued_user_message(&mut self) -> Option<UserMessage> {
+    fn pop_next_queued_user_message(&mut self) -> Option<(UserMessage, UserMessageHistoryRecord)> {
         if self.rejected_steers_queue.is_empty() {
-            self.queued_user_messages.pop_front()
+            self.queued_user_messages.pop_front().map(|user_message| {
+                let history_record = self
+                    .queued_user_message_history_records
+                    .pop_front()
+                    .unwrap_or(UserMessageHistoryRecord::UserMessageText);
+                (user_message, history_record)
+            })
         } else {
-            Some(merge_user_messages(
-                self.rejected_steers_queue.drain(..).collect(),
+            Some((
+                merge_user_messages(self.rejected_steers_queue.drain(..).collect()),
+                UserMessageHistoryRecord::UserMessageText,
             ))
         }
     }
 
     fn pop_latest_queued_user_message(&mut self) -> Option<UserMessage> {
-        self.queued_user_messages
-            .pop_back()
-            .or_else(|| self.rejected_steers_queue.pop_back())
+        if let Some(user_message) = self.queued_user_messages.pop_back() {
+            self.queued_user_message_history_records.pop_back();
+            Some(user_message)
+        } else {
+            self.rejected_steers_queue.pop_back()
+        }
     }
 
     pub(crate) fn enqueue_rejected_steer(&mut self) -> bool {
@@ -3226,6 +3240,7 @@ impl ChatWidget {
                 .map(|steer| steer.user_message),
         );
         to_merge.extend(self.queued_user_messages.drain(..));
+        self.queued_user_message_history_records.clear();
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty()
@@ -3326,6 +3341,9 @@ impl ChatWidget {
                 .collect();
             self.rejected_steers_queue = input_state.rejected_steers_queue;
             self.queued_user_messages = input_state.queued_user_messages;
+            self.queued_user_message_history_records =
+                vec![UserMessageHistoryRecord::UserMessageText; self.queued_user_messages.len()]
+                    .into();
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
@@ -3339,6 +3357,7 @@ impl ChatWidget {
             );
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
+            self.queued_user_message_history_records.clear();
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
@@ -4954,6 +4973,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            queued_user_message_history_records: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -5392,6 +5412,8 @@ impl ChatWidget {
     fn queue_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() || self.bottom_pane.is_task_running() {
             self.queued_user_messages.push_back(user_message);
+            self.queued_user_message_history_records
+                .push_back(UserMessageHistoryRecord::UserMessageText);
             self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
@@ -5413,6 +5435,8 @@ impl ChatWidget {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
+            self.queued_user_message_history_records
+                .push_front(history_record);
             self.refresh_pending_input_preview();
             return;
         }
@@ -7177,8 +7201,8 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() {
             return;
         }
-        if let Some(user_message) = self.pop_next_queued_user_message() {
-            self.submit_user_message(user_message);
+        if let Some((user_message, history_record)) = self.pop_next_queued_user_message() {
+            self.submit_user_message_with_history_record(user_message, history_record);
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();

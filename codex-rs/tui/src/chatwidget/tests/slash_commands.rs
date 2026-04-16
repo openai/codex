@@ -186,6 +186,33 @@ async fn goal_slash_command_records_original_command_in_history() {
 }
 
 #[tokio::test]
+async fn queued_goal_slash_command_records_original_command_in_history() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    let command = "/goal write a cat poem";
+
+    submit_composer_text(&mut chat, command);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.thread_id = Some(ThreadId::new());
+    chat.maybe_send_next_queued_input();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut op_rx), command);
+}
+
+#[tokio::test]
 async fn usage_error_slash_command_is_available_from_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.set_feature_enabled(Feature::FastMode, /*enabled*/ true);
