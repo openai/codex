@@ -3161,25 +3161,8 @@ impl CodexMessageProcessor {
     }
 
     async fn emit_thread_goal_updated_if_present(&self, thread_id: ThreadId) {
-        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
-            Ok(state_db) => state_db,
-            Err(err) => {
-                warn!(
-                    "failed to open state db before emitting thread goal update for {thread_id}: {}",
-                    err.message
-                );
-                return;
-            }
-        };
-        let goal = match state_db.get_thread_goal(thread_id).await {
-            Ok(Some(goal)) => api_thread_goal_from_state(goal),
-            Ok(None) => return,
-            Err(err) => {
-                warn!(
-                    "failed to read thread goal before emitting resume update for {thread_id}: {err}"
-                );
-                return;
-            }
+        let Some(goal) = self.thread_goal_updated_notification_goal(thread_id).await else {
+            return;
         };
         self.outgoing
             .send_server_notification(ServerNotification::ThreadGoalUpdated(
@@ -3189,6 +3172,32 @@ impl CodexMessageProcessor {
                 },
             ))
             .await;
+    }
+
+    async fn thread_goal_updated_notification_goal(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<ThreadGoal> {
+        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
+            Ok(state_db) => state_db,
+            Err(err) => {
+                warn!(
+                    "failed to open state db before emitting thread goal update for {thread_id}: {}",
+                    err.message
+                );
+                return None;
+            }
+        };
+        match state_db.get_thread_goal(thread_id).await {
+            Ok(Some(goal)) => Some(api_thread_goal_from_state(goal)),
+            Ok(None) => None,
+            Err(err) => {
+                warn!(
+                    "failed to read thread goal before emitting resume update for {thread_id}: {err}"
+                );
+                None
+            }
+        }
     }
 
     async fn thread_memory_mode_set(
@@ -4671,6 +4680,12 @@ impl CodexMessageProcessor {
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
+                    thread_goal: if self.config.features.enabled(Feature::GoalMode) {
+                        self.thread_goal_updated_notification_goal(existing_thread_id)
+                            .await
+                    } else {
+                        None
+                    },
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -4682,10 +4697,7 @@ impl CodexMessageProcessor {
                     data: None,
                 };
                 self.outgoing.send_error(request_id, err).await;
-            }
-            if self.config.features.enabled(Feature::GoalMode) {
-                self.emit_thread_goal_updated_if_present(existing_thread_id)
-                    .await;
+                return true;
             }
             return true;
         }
@@ -8826,6 +8838,16 @@ async fn handle_pending_thread_resume_request(
         reasoning_effort,
     };
     outgoing.send_response(request_id, response).await;
+    if let Some(goal) = pending.thread_goal {
+        outgoing
+            .send_server_notification(ServerNotification::ThreadGoalUpdated(
+                ThreadGoalUpdatedNotification {
+                    thread_id: conversation_id.to_string(),
+                    goal,
+                },
+            ))
+            .await;
+    }
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
