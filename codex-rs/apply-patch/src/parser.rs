@@ -185,60 +185,30 @@ enum ParseMode {
     Streaming,
 }
 
-struct PatchScope<'a> {
-    lines: &'a [&'a str],
-    body_end_index: usize,
-    allow_incomplete_final_hunk: bool,
-}
-
-impl<'a> PatchScope<'a> {
-    fn complete(lines: &'a [&'a str]) -> Self {
-        Self {
-            lines,
-            body_end_index: lines.len().saturating_sub(1),
-            allow_incomplete_final_hunk: false,
-        }
-    }
-
-    fn streaming(lines: &'a [&'a str]) -> Self {
-        let body_end_index = if lines
-            .last()
-            .is_some_and(|line| line.trim() == END_PATCH_MARKER)
-        {
-            lines.len().saturating_sub(1)
-        } else {
-            lines.len()
-        };
-        Self {
-            lines,
-            body_end_index,
-            allow_incomplete_final_hunk: true,
-        }
-    }
-}
-
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
     let lines: Vec<&str> = patch.trim().lines().collect();
-    let scope = match check_patch_boundaries_strict(&lines) {
-        Ok(scope) => scope,
-        Err(e) => match mode {
-            ParseMode::Strict => {
-                return Err(e);
-            }
-            ParseMode::Lenient => check_patch_boundaries_lenient(&lines, e)?,
-            ParseMode::Streaming => check_patch_boundaries_streaming(&lines, e)?,
-        },
+    let (patch_lines, hunk_lines) = match mode {
+        ParseMode::Strict => check_patch_boundaries_strict(&lines)?,
+        ParseMode::Lenient => check_patch_boundaries_lenient(&lines)?,
+        ParseMode::Streaming => check_patch_boundaries_streaming(&lines)?,
     };
 
     let mut hunks: Vec<Hunk> = Vec::new();
-    let mut remaining_lines = &scope.lines[1..scope.body_end_index];
+    let mut remaining_lines = hunk_lines;
     let mut line_number = 2;
     while !remaining_lines.is_empty() {
-        let parsed_hunk = parse_one_hunk(remaining_lines, line_number);
+        let parsed_hunk = parse_one_hunk(
+            remaining_lines,
+            line_number,
+            match mode {
+                ParseMode::Streaming => IncompleteFinalChunk::Allow,
+                ParseMode::Strict | ParseMode::Lenient => IncompleteFinalChunk::Deny,
+            },
+        );
         let (hunk, hunk_lines) = match parsed_hunk {
             Ok(parsed) => parsed,
             // Return accumulated hunks even if parsing the last one failed in streaming mode.
-            Err(err) if scope.allow_incomplete_final_hunk => {
+            Err(err) if matches!(mode, ParseMode::Streaming) => {
                 if hunks.is_empty() {
                     return Err(err);
                 }
@@ -250,7 +220,7 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         line_number += hunk_lines;
         remaining_lines = &remaining_lines[hunk_lines..]
     }
-    let patch = scope.lines.join("\n");
+    let patch = patch_lines.join("\n");
     Ok(ApplyPatchArgs {
         hunks,
         patch,
@@ -260,26 +230,35 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
 
 fn check_patch_boundaries_streaming<'a>(
     original_lines: &'a [&'a str],
-    original_parse_error: ParseError,
-) -> Result<PatchScope<'a>, ParseError> {
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
     match original_lines {
         [first, ..] if first.trim() == BEGIN_PATCH_MARKER => {
-            Ok(PatchScope::streaming(original_lines))
+            let body_lines = if original_lines
+                .last()
+                .is_some_and(|line| line.trim() == END_PATCH_MARKER)
+            {
+                &original_lines[1..original_lines.len() - 1]
+            } else {
+                &original_lines[1..]
+            };
+            Ok((original_lines, body_lines))
         }
-        _ => Err(original_parse_error),
+        _ => check_patch_boundaries_strict(original_lines),
     }
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
 /// returning an error if they do not match the expected markers.
-fn check_patch_boundaries_strict<'a>(lines: &'a [&'a str]) -> Result<PatchScope<'a>, ParseError> {
+fn check_patch_boundaries_strict<'a>(
+    lines: &'a [&'a str],
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
     let (first_line, last_line) = match lines {
         [] => (None, None),
         [first] => (Some(first), Some(first)),
         [first, .., last] => (Some(first), Some(last)),
     };
     check_start_and_end_lines_strict(first_line, last_line)?;
-    Ok(PatchScope::complete(lines))
+    Ok((lines, &lines[1..lines.len() - 1]))
 }
 
 /// If we are in lenient mode, we check if the first line starts with `<<EOF`
@@ -291,8 +270,12 @@ fn check_patch_boundaries_strict<'a>(lines: &'a [&'a str]) -> Result<PatchScope<
 /// contents, excluding the heredoc markers.
 fn check_patch_boundaries_lenient<'a>(
     original_lines: &'a [&'a str],
-    original_parse_error: ParseError,
-) -> Result<PatchScope<'a>, ParseError> {
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
+    let original_parse_error = match check_patch_boundaries_strict(original_lines) {
+        Ok(lines) => return Ok(lines),
+        Err(e) => e,
+    };
+
     match original_lines {
         [first, .., last] => {
             if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
@@ -329,9 +312,19 @@ fn check_start_and_end_lines_strict(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IncompleteFinalChunk {
+    Allow,
+    Deny,
+}
+
 /// Attempts to parse a single hunk from the start of lines.
 /// Returns the parsed hunk and the number of lines parsed (or a ParseError).
-fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), ParseError> {
+fn parse_one_hunk(
+    lines: &[&str],
+    line_number: usize,
+    incomplete_final_chunk: IncompleteFinalChunk,
+) -> Result<(Hunk, usize), ParseError> {
     // Be tolerant of case mismatches and extra padding around marker strings.
     let first_line = lines[0].trim();
     if let Some(path) = first_line.strip_prefix(ADD_FILE_MARKER) {
@@ -391,11 +384,30 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
                 break;
             }
 
-            let (chunk, chunk_lines) = parse_update_file_chunk(
+            if incomplete_final_chunk == IncompleteFinalChunk::Allow && remaining_lines[0] == "@" {
+                break;
+            }
+
+            let parsed_chunk = parse_update_file_chunk(
                 remaining_lines,
                 line_number + parsed_lines,
                 chunks.is_empty(),
-            )?;
+            );
+            let (chunk, chunk_lines) = match parsed_chunk {
+                Ok(parsed) => parsed,
+                Err(err)
+                    if incomplete_final_chunk == IncompleteFinalChunk::Allow
+                        && !chunks.is_empty()
+                        && matches!(
+                            &err,
+                            InvalidHunkError { message, .. }
+                                if message == "Update hunk does not contain any lines"
+                        ) =>
+                {
+                    break;
+                }
+                Err(err) => return Err(err),
+            };
             chunks.push(chunk);
             parsed_lines += chunk_lines;
             remaining_lines = &remaining_lines[chunk_lines..]
@@ -593,16 +605,43 @@ fn test_parse_patch_streaming() {
 fn test_parse_patch_streaming_large_patch_by_character() {
     let patch = "\
 *** Begin Patch
-*** Add File: added.txt
-+alpha
-+beta
-*** Update File: updated.txt
-*** Move to: moved.txt
-@@
--old
-+new
- unchanged
-*** Delete File: deleted.txt
+*** Add File: docs/release-notes.md
++# Release notes
++
++## CLI
++- Surface apply_patch progress while arguments stream.
++- Keep final patch application gated on the completed tool call.
++- Include file summaries in the progress event payload.
+*** Update File: src/config.rs
+@@ impl Config
+-    pub apply_patch_progress: bool,
++    pub stream_apply_patch_progress: bool,
+     pub include_diagnostics: bool,
+@@ fn default_progress_interval()
+-    Duration::from_millis(500)
++    Duration::from_millis(250)
+*** Delete File: src/legacy_patch_progress.rs
+*** Update File: crates/cli/src/main.rs
+*** Move to: crates/cli/src/bin/codex.rs
+@@ fn run()
+-    let args = Args::parse();
+-    dispatch(args)
++    let cli = Cli::parse();
++    dispatch(cli)
+*** Add File: tests/fixtures/apply_patch_progress.json
++{
++  \"type\": \"apply_patch_progress\",
++  \"hunks\": [
++    { \"operation\": \"add\", \"path\": \"docs/release-notes.md\" },
++    { \"operation\": \"update\", \"path\": \"src/config.rs\" }
++  ]
++}
+*** Update File: README.md
+@@ Development workflow
+ Build the Rust workspace before opening a pull request.
++When touching streamed tool calls, include parser coverage for partial input.
++Prefer tests that exercise the exact event payload shape.
+*** Delete File: docs/old-apply-patch-progress.md
 *** End Patch";
 
     let mut max_hunk_count = 0;
@@ -622,27 +661,81 @@ fn test_parse_patch_streaming_large_patch_by_character() {
         }
     }
 
-    assert_eq!(saw_hunk_counts, vec![1, 2, 3]);
+    assert_eq!(saw_hunk_counts, vec![1, 2, 3, 4, 5, 6, 7]);
     assert_eq!(
         parse_patch_streaming(patch),
         Ok(ApplyPatchArgs {
             hunks: vec![
                 AddFile {
-                    path: PathBuf::from("added.txt"),
-                    contents: "alpha\nbeta\n".to_string(),
+                    path: PathBuf::from("docs/release-notes.md"),
+                    contents: "# Release notes\n\n## CLI\n- Surface apply_patch progress while arguments stream.\n- Keep final patch application gated on the completed tool call.\n- Include file summaries in the progress event payload.\n".to_string(),
                 },
                 UpdateFile {
-                    path: PathBuf::from("updated.txt"),
-                    move_path: Some(PathBuf::from("moved.txt")),
+                    path: PathBuf::from("src/config.rs"),
+                    move_path: None,
+                    chunks: vec![
+                        UpdateFileChunk {
+                            change_context: Some("impl Config".to_string()),
+                            old_lines: vec![
+                                "    pub apply_patch_progress: bool,".to_string(),
+                                "    pub include_diagnostics: bool,".to_string(),
+                            ],
+                            new_lines: vec![
+                                "    pub stream_apply_patch_progress: bool,".to_string(),
+                                "    pub include_diagnostics: bool,".to_string(),
+                            ],
+                            is_end_of_file: false,
+                        },
+                        UpdateFileChunk {
+                            change_context: Some("fn default_progress_interval()".to_string()),
+                            old_lines: vec!["    Duration::from_millis(500)".to_string()],
+                            new_lines: vec!["    Duration::from_millis(250)".to_string()],
+                            is_end_of_file: false,
+                        },
+                    ],
+                },
+                DeleteFile {
+                    path: PathBuf::from("src/legacy_patch_progress.rs"),
+                },
+                UpdateFile {
+                    path: PathBuf::from("crates/cli/src/main.rs"),
+                    move_path: Some(PathBuf::from("crates/cli/src/bin/codex.rs")),
                     chunks: vec![UpdateFileChunk {
-                        change_context: None,
-                        old_lines: vec!["old".to_string(), "unchanged".to_string()],
-                        new_lines: vec!["new".to_string(), "unchanged".to_string()],
+                        change_context: Some("fn run()".to_string()),
+                        old_lines: vec![
+                            "    let args = Args::parse();".to_string(),
+                            "    dispatch(args)".to_string(),
+                        ],
+                        new_lines: vec![
+                            "    let cli = Cli::parse();".to_string(),
+                            "    dispatch(cli)".to_string(),
+                        ],
+                        is_end_of_file: false,
+                    }],
+                },
+                AddFile {
+                    path: PathBuf::from("tests/fixtures/apply_patch_progress.json"),
+                    contents: "{\n  \"type\": \"apply_patch_progress\",\n  \"hunks\": [\n    { \"operation\": \"add\", \"path\": \"docs/release-notes.md\" },\n    { \"operation\": \"update\", \"path\": \"src/config.rs\" }\n  ]\n}\n".to_string(),
+                },
+                UpdateFile {
+                    path: PathBuf::from("README.md"),
+                    move_path: None,
+                    chunks: vec![UpdateFileChunk {
+                        change_context: Some("Development workflow".to_string()),
+                        old_lines: vec![
+                            "Build the Rust workspace before opening a pull request.".to_string(),
+                        ],
+                        new_lines: vec![
+                            "Build the Rust workspace before opening a pull request.".to_string(),
+                            "When touching streamed tool calls, include parser coverage for partial input."
+                                .to_string(),
+                            "Prefer tests that exercise the exact event payload shape.".to_string(),
+                        ],
                         is_end_of_file: false,
                     }],
                 },
                 DeleteFile {
-                    path: PathBuf::from("deleted.txt"),
+                    path: PathBuf::from("docs/old-apply-patch-progress.md"),
                 },
             ],
             patch: patch.to_string(),
@@ -992,7 +1085,11 @@ fn test_parse_patch_lenient() {
 #[test]
 fn test_parse_one_hunk() {
     assert_eq!(
-        parse_one_hunk(&["bad"], /*line_number*/ 234),
+        parse_one_hunk(
+            &["bad"],
+            /*line_number*/ 234,
+            IncompleteFinalChunk::Deny
+        ),
         Err(InvalidHunkError {
             message: "'bad' is not a valid hunk header. \
             Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'".to_string(),
