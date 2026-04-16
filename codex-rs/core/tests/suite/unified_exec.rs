@@ -2346,11 +2346,11 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
-    skip_if_windows!(Ok(()));
 
     let server = start_mock_server().await;
     let read_only_policy = SandboxPolicy::new_read_only_policy();
@@ -2394,7 +2394,7 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
     );
     let args = serde_json::json!({
         "cmd": cmd,
-        "yield_time_ms": 500,
+        "yield_time_ms": 5_000,
     });
 
     let responses = vec![

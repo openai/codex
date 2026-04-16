@@ -119,6 +119,8 @@ pub(crate) fn create_bwrap_command_args(
 ) -> Result<BwrapArgs> {
     let unreadable_globs =
         file_system_sandbox_policy.get_unreadable_globs_with_cwd(sandbox_policy_cwd);
+    // Full disk write normally skips bwrap, but unreadable glob patterns still
+    // need concrete bwrap masks for the matches expanded below.
     if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
             Ok(BwrapArgs {
@@ -262,11 +264,15 @@ fn create_filesystem_args(
     // Bubblewrap can only mask concrete paths. Expand unreadable glob patterns
     // to the existing matches we can see before constructing the mount overlay;
     // core tool helpers still evaluate the original patterns directly at read time.
-    unreadable_roots.extend(expand_unreadable_globs_with_ripgrep(
-        &unreadable_globs,
-        cwd,
-        unreadable_glob_scan_max_depth,
-    )?);
+    unreadable_roots.extend(
+        expand_unreadable_globs_with_ripgrep(
+            &unreadable_globs,
+            cwd,
+            unreadable_glob_scan_max_depth,
+        )?
+        .into_iter()
+        .map(AbsolutePathBuf::into_path_buf),
+    );
     unreadable_roots.sort();
     unreadable_roots.dedup();
 
@@ -464,7 +470,7 @@ fn expand_unreadable_globs_with_ripgrep(
     patterns: &[String],
     cwd: &Path,
     max_depth: Option<usize>,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<AbsolutePathBuf>> {
     if patterns.is_empty() || max_depth == Some(0) {
         return Ok(Vec::new());
     }
@@ -472,10 +478,10 @@ fn expand_unreadable_globs_with_ripgrep(
     // Group each pattern by the static path prefix before its first glob
     // metacharacter. That keeps scans narrow, avoids searching from `/`, and
     // lets one `rg --files` call handle all patterns under the same root.
-    let mut patterns_by_search_root: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    let mut patterns_by_search_root: BTreeMap<AbsolutePathBuf, Vec<String>> = BTreeMap::new();
     for pattern in patterns {
         if let Some((search_root, glob)) = split_pattern_for_ripgrep(pattern, cwd)
-            && search_root.is_dir()
+            && search_root.as_path().is_dir()
         {
             patterns_by_search_root
                 .entry(search_root)
@@ -489,14 +495,11 @@ fn expand_unreadable_globs_with_ripgrep(
     // bypassing an unreadable glob match.
     let mut expanded_paths = BTreeSet::new();
     for (search_root, globs) in patterns_by_search_root {
-        for path in ripgrep_files(&search_root, &globs, max_depth)? {
-            let normalized = AbsolutePathBuf::from_absolute_path(&path)
-                .map(AbsolutePathBuf::into_path_buf)
-                .unwrap_or(path);
-            if let Some(target) = canonical_target_if_symlinked_path(&normalized) {
-                expanded_paths.insert(target);
+        for path in ripgrep_files(search_root.as_path(), &globs, max_depth)? {
+            if let Some(target) = canonical_target_if_symlinked_path(path.as_path()) {
+                expanded_paths.insert(AbsolutePathBuf::from_absolute_path_checked(target)?);
             }
-            expanded_paths.insert(normalized);
+            expanded_paths.insert(path);
             if expanded_paths.len() > MAX_UNREADABLE_GLOB_MATCHES {
                 return Err(CodexErr::Fatal(format!(
                     "unreadable glob expansion for {} matched more than {MAX_UNREADABLE_GLOB_MATCHES} paths",
@@ -509,7 +512,7 @@ fn expand_unreadable_globs_with_ripgrep(
     Ok(expanded_paths.into_iter().collect())
 }
 
-fn split_pattern_for_ripgrep(pattern: &str, cwd: &Path) -> Option<(PathBuf, String)> {
+fn split_pattern_for_ripgrep(pattern: &str, cwd: &Path) -> Option<(AbsolutePathBuf, String)> {
     // Resolve relative patterns once, then split at the first glob
     // metacharacter. The prefix becomes the search root and the suffix stays as
     // the ripgrep glob. Root-level glob scans are intentionally skipped because
@@ -533,6 +536,7 @@ fn split_pattern_for_ripgrep(pattern: &str, cwd: &Path) -> Option<(PathBuf, Stri
     } else {
         PathBuf::from(&pattern[..search_root_end])
     };
+    let search_root = AbsolutePathBuf::from_absolute_path_checked(search_root).ok()?;
     let glob = escape_unclosed_glob_classes(&pattern[search_root_end + 1..]);
     (!glob.is_empty()).then_some((search_root, glob))
 }
@@ -576,7 +580,7 @@ fn ripgrep_files(
     search_root: &Path,
     globs: &[String],
     max_depth: Option<usize>,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<AbsolutePathBuf>> {
     // Use `rg --files` rather than shell expansion so dotfiles and ignored files
     // are still considered. A status 1 with no stderr is ripgrep's "no matches"
     // case, not a sandbox construction error.
@@ -634,7 +638,8 @@ fn ripgrep_files(
                 search_root.join(path)
             }
         })
-        .collect();
+        .map(AbsolutePathBuf::from_absolute_path_checked)
+        .collect::<io::Result<Vec<_>>>()?;
     Ok(paths)
 }
 
@@ -642,7 +647,7 @@ fn glob_files(
     search_root: &Path,
     globs: &[String],
     max_depth: Option<usize>,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<AbsolutePathBuf>> {
     let mut builder = GlobSetBuilder::new();
     for glob in globs {
         let glob = GlobBuilder::new(glob)
@@ -673,8 +678,8 @@ fn collect_glob_files(
     search_root: &Path,
     dir: &Path,
     glob_set: &GlobSet,
-    max_depth: Option<usize>,
-    paths: &mut Vec<PathBuf>,
+    remaining_depth: Option<usize>,
+    paths: &mut Vec<AbsolutePathBuf>,
 ) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -683,16 +688,18 @@ fn collect_glob_files(
         let relative = path.strip_prefix(search_root).unwrap_or(path.as_path());
 
         if (file_type.is_file() || file_type.is_symlink()) && glob_set.is_match(relative) {
-            paths.push(path.clone());
+            paths.push(AbsolutePathBuf::from_absolute_path_checked(&path)?);
         }
 
         if !file_type.is_dir() {
             continue;
         }
-        if max_depth.is_some_and(|max_depth| relative.components().count() >= max_depth) {
-            continue;
-        }
-        collect_glob_files(search_root, &path, glob_set, max_depth, paths)?;
+        let remaining_depth = match remaining_depth {
+            Some(0 | 1) => continue,
+            Some(depth) => Some(depth - 1),
+            None => None,
+        };
+        collect_glob_files(search_root, &path, glob_set, remaining_depth, paths)?;
     }
     Ok(())
 }
@@ -1095,7 +1102,10 @@ mod tests {
         )
         .expect("create bwrap args");
 
-        assert_ne!(args.args, command);
+        assert_ne!(
+            args.args, command,
+            "full-write policy with unreadable globs must still use bwrap"
+        );
         assert_file_masked(&args.args, &root_env);
     }
 
@@ -1989,7 +1999,7 @@ mod tests {
         let (search_root, glob) =
             split_pattern_for_ripgrep("/tmp/[*.env", Path::new("/")).expect("split pattern");
 
-        assert_eq!(search_root, PathBuf::from("/tmp"));
+        assert_eq!(search_root.as_path(), Path::new("/tmp"));
         assert_eq!(glob, r"\[*.env");
     }
 
@@ -2000,6 +2010,9 @@ mod tests {
             .is_ok_and(|output| output.status.success())
     }
 
+    /// Assert that `path` is masked due to a bwrap arg sequence like:
+    ///
+    /// `bwrap ... --perms 000 --ro-bind-data FD PATH`
     fn assert_file_masked(args: &[String], path: &Path) {
         let path = path_to_string(path);
         assert!(

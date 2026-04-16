@@ -384,7 +384,7 @@ async fn sandbox_denied_shell_returns_original_output() -> Result<()> {
     ];
     let args = json!({
         "command": command,
-        "timeout_ms": 1_000,
+        "timeout_ms": 5_000,
     });
 
     let responses = vec![

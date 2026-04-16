@@ -261,9 +261,10 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
 
 #[test]
 fn unreadable_globstar_slash_matches_zero_or_more_directories() {
-    let regex =
-        seatbelt_regex_for_unreadable_glob("/tmp/repo/**/*.env").expect("glob should compile");
-    let regex = regex_lite::Regex::new(&regex).expect("regex should compile");
+    let regex = seatbelt_regex_for_unreadable_glob("/tmp/repo/**/*.env");
+    assert_eq!(regex.as_deref(), Some(r"^/tmp/repo/(.*/)?[^/]*\.env$"));
+    let regex = regex_lite::Regex::new(regex.as_deref().expect("glob should compile"))
+        .expect("regex should compile");
 
     assert!(regex.is_match("/tmp/repo/.env"));
     assert!(regex.is_match("/tmp/repo/app/.env"));
@@ -273,9 +274,13 @@ fn unreadable_globstar_slash_matches_zero_or_more_directories() {
 
 #[test]
 fn unreadable_globs_use_git_style_component_matching() {
-    let regex = seatbelt_regex_for_unreadable_glob("/tmp/repo/*/file[0-9]?.txt")
-        .expect("glob should compile");
-    let regex = regex_lite::Regex::new(&regex).expect("regex should compile");
+    let regex = seatbelt_regex_for_unreadable_glob("/tmp/repo/*/file[0-9]?.txt");
+    assert_eq!(
+        regex.as_deref(),
+        Some(r"^/tmp/repo/[^/]*/file[0-9][^/]\.txt$")
+    );
+    let regex = regex_lite::Regex::new(regex.as_deref().expect("glob should compile"))
+        .expect("regex should compile");
 
     assert!(regex.is_match("/tmp/repo/app/file42.txt"));
     assert!(!regex.is_match("/tmp/repo/app/nested/file42.txt"));
@@ -285,9 +290,10 @@ fn unreadable_globs_use_git_style_component_matching() {
 
 #[test]
 fn unreadable_globs_treat_unclosed_character_classes_as_literals() {
-    let regex =
-        seatbelt_regex_for_unreadable_glob("/tmp/repo/[*.env").expect("glob should compile");
-    let regex = regex_lite::Regex::new(&regex).expect("regex should compile");
+    let regex = seatbelt_regex_for_unreadable_glob("/tmp/repo/[*.env");
+    assert_eq!(regex.as_deref(), Some(r"^/tmp/repo/\[[^/]*\.env$"));
+    let regex = regex_lite::Regex::new(regex.as_deref().expect("glob should compile"))
+        .expect("regex should compile");
 
     assert!(regex.is_match("/tmp/repo/[local.env"));
     assert!(regex.is_match("/tmp/repo/[.env"));

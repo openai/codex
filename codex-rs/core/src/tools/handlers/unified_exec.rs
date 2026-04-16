@@ -23,6 +23,7 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
@@ -31,6 +32,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use codex_tools::UnifiedExecShellMode;
+use codex_utils_output_truncation::approx_token_count;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -334,17 +336,23 @@ impl ToolHandler for UnifiedExecHandler {
                     .await
                 {
                     Ok(response) => response,
-                    Err(UnifiedExecError::SandboxDenied { output, .. }) => ExecCommandToolOutput {
-                        event_call_id: context.call_id.clone(),
-                        chunk_id: String::new(),
-                        wall_time: output.duration,
-                        raw_output: output.aggregated_output.text.into_bytes(),
-                        max_output_tokens,
-                        process_id: None,
-                        exit_code: Some(output.exit_code),
-                        original_token_count: None,
-                        session_command: Some(session_command),
-                    },
+                    Err(UnifiedExecError::SandboxDenied { output, .. }) => {
+                        let output_text = output.aggregated_output.text;
+                        let original_token_count = approx_token_count(&output_text);
+                        ExecCommandToolOutput {
+                            event_call_id: context.call_id.clone(),
+                            chunk_id: generate_chunk_id(),
+                            wall_time: output.duration,
+                            raw_output: output_text.into_bytes(),
+                            max_output_tokens,
+                            // Sandbox denial is terminal, so there is no live
+                            // process for write_stdin to resume.
+                            process_id: None,
+                            exit_code: Some(output.exit_code),
+                            original_token_count: Some(original_token_count),
+                            session_command: Some(session_command),
+                        }
+                    }
                     Err(err) => {
                         return Err(FunctionCallError::RespondToModel(format!(
                             "exec_command failed for `{command_for_display}`: {err:?}"
