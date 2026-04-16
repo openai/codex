@@ -14,6 +14,7 @@ pub enum ThreadGoalAccountingOutcome {
 pub enum ThreadGoalAccountingMode {
     ActiveOnly,
     ActiveOrComplete,
+    ActiveOrStopped,
 }
 
 impl StateRuntime {
@@ -221,6 +222,9 @@ WHERE thread_id = ?
         let status_filter = match mode {
             ThreadGoalAccountingMode::ActiveOnly => "status = 'active'",
             ThreadGoalAccountingMode::ActiveOrComplete => "status IN ('active', 'complete')",
+            ThreadGoalAccountingMode::ActiveOrStopped => {
+                "status IN ('active', 'paused', 'budget_limited')"
+            }
         };
         let query = format!(
             r#"
@@ -611,6 +615,53 @@ mod tests {
             panic!("completed goal should be updated for final accounting");
         };
         assert_eq!(crate::ThreadGoalStatus::Complete, goal.status);
+        assert_eq!(200, goal.tokens_used);
+        assert_eq!(30, goal.time_used_seconds);
+    }
+
+    #[tokio::test]
+    async fn usage_accounting_can_finalize_stopped_goal_for_stopping_turn() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "finish the report",
+                crate::ThreadGoalStatus::Paused,
+                /*token_budget*/ Some(1_000),
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let active_only = runtime
+            .account_thread_goal_usage(
+                thread_id,
+                /*time_delta_seconds*/ 30,
+                /*token_delta*/ 200,
+                ThreadGoalAccountingMode::ActiveOnly,
+            )
+            .await
+            .expect("usage accounting should succeed");
+        let ThreadGoalAccountingOutcome::Unchanged(Some(goal)) = active_only else {
+            panic!("paused goal should not be updated by active-only accounting");
+        };
+        assert_eq!(crate::ThreadGoalStatus::Paused, goal.status);
+        assert_eq!(0, goal.tokens_used);
+        assert_eq!(0, goal.time_used_seconds);
+
+        let stopping_turn = runtime
+            .account_thread_goal_usage(
+                thread_id,
+                /*time_delta_seconds*/ 30,
+                /*token_delta*/ 200,
+                ThreadGoalAccountingMode::ActiveOrStopped,
+            )
+            .await
+            .expect("usage accounting should succeed");
+        let ThreadGoalAccountingOutcome::Updated(goal) = stopping_turn else {
+            panic!("paused goal should be updated for final accounting");
+        };
+        assert_eq!(crate::ThreadGoalStatus::Paused, goal.status);
         assert_eq!(200, goal.tokens_used);
         assert_eq!(30, goal.time_used_seconds);
     }
