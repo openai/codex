@@ -70,6 +70,12 @@ fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
 }
 
 #[test]
+fn force_windows_log_tail_probe_failure() {
+    eprintln!("WINDOWS_LOG_TAIL_PROBE_MARKER");
+    panic!("intentional throwaway failure to verify Bazel test log tailing");
+}
+
+#[test]
 fn build_tool_suggestion_elicitation_request_for_plugin_omits_install_url() {
     let args = ToolSuggestArgs {
         tool_type: DiscoverableToolType::Plugin,
