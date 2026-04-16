@@ -29,6 +29,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::responses;
@@ -246,15 +247,12 @@ async fn seed_recent_thread(
     };
     let user_message = RolloutLine {
         timestamp,
-        item: RolloutItem::ResponseItem(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: first_user_message.to_string(),
-            }],
-            end_turn: None,
-            phase: None,
-        }),
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: first_user_message.to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
     };
     fs::write(
         &rollout_path,
