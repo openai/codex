@@ -69,7 +69,7 @@ pub(crate) struct GuardianRejection {
 }
 
 #[cfg(test)]
-use approval_request::format_guardian_action_pretty;
+use approval_request::format_guardian_action_pretty_with_truncation;
 #[cfg(test)]
 use approval_request::guardian_assessment_action;
 #[cfg(test)]
@@ -100,6 +100,8 @@ use prompt::parse_guardian_assessment;
 use prompt::render_guardian_transcript_entries;
 #[cfg(test)]
 use review::GuardianReviewOutcome;
+#[cfg(test)]
+use review::GuardianReviewSessionReport;
 #[cfg(test)]
 use review::run_guardian_review_session as run_guardian_review_session_for_test;
 #[cfg(test)]

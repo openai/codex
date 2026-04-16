@@ -74,6 +74,16 @@ impl TurnTimingState {
         (completed_at, duration_ms)
     }
 
+    pub(crate) async fn time_to_first_token_ms(&self) -> Option<i64> {
+        let state = self.state.lock().await;
+        let started_at = state.started_at?;
+        let first_token_at = state.first_token_at?;
+        Some(
+            i64::try_from(first_token_at.duration_since(started_at).as_millis())
+                .unwrap_or(i64::MAX),
+        )
+    }
+
     pub(crate) async fn record_ttft_for_response_event(
         &self,
         event: &ResponseEvent,
