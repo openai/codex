@@ -1,6 +1,7 @@
 use super::build_current_thread_section;
 use super::build_recent_work_section;
 use super::build_workspace_section_with_user_root;
+use super::format_startup_context_blob;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_git_utils::GitSha;
@@ -171,29 +172,47 @@ fn current_thread_section_keeps_latest_turns_when_history_exceeds_budget() {
 }
 
 #[test]
-fn workspace_section_requires_meaningful_structure() {
+fn startup_context_blob_is_wrapped_in_tags_and_fits_budget() {
+    let body = format!(
+        "Startup context from Codex.\n{}\n{}",
+        "recent work ".repeat(1_200),
+        "workspace tree ".repeat(800),
+    );
+
+    let wrapped = format_startup_context_blob(&body, /*budget_tokens*/ 200);
+
+    assert!(wrapped.starts_with("<startup_context>\n"));
+    assert!(wrapped.ends_with("\n</startup_context>"));
+    assert!(wrapped.contains("Startup context from Codex."));
+    assert!(wrapped.contains("tokens truncated"));
+    assert!(wrapped.len().div_ceil(4) <= 200);
+}
+
+#[tokio::test]
+async fn workspace_section_requires_meaningful_structure() {
     let cwd = TempDir::new().expect("tempdir");
     assert_eq!(
-        build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None),
+        build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None).await,
         None
     );
 }
 
-#[test]
-fn workspace_section_includes_tree_when_entries_exist() {
+#[tokio::test]
+async fn workspace_section_includes_tree_when_entries_exist() {
     let cwd = TempDir::new().expect("tempdir");
     fs::create_dir(cwd.path().join("docs")).expect("create docs dir");
     fs::write(cwd.path().join("README.md"), "hello").expect("write readme");
 
     let section = build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None)
+        .await
         .expect("workspace section");
     assert!(section.contains("Working directory tree:"));
     assert!(section.contains("- docs/"));
     assert!(section.contains("- README.md"));
 }
 
-#[test]
-fn workspace_section_includes_user_root_tree_when_distinct() {
+#[tokio::test]
+async fn workspace_section_includes_user_root_tree_when_distinct() {
     let root = TempDir::new().expect("tempdir");
     let cwd = root.path().join("cwd");
     let git_root = root.path().join("git");
@@ -207,14 +226,15 @@ fn workspace_section_includes_user_root_tree_when_distinct() {
     fs::write(user_root.join(".zshrc"), "export TEST=1").expect("write home file");
 
     let section = build_workspace_section_with_user_root(cwd.as_path(), Some(user_root))
+        .await
         .expect("workspace section");
     assert!(section.contains("User root tree:"));
     assert!(section.contains("- code/"));
     assert!(!section.contains("- .zshrc"));
 }
 
-#[test]
-fn recent_work_section_groups_threads_by_cwd() {
+#[tokio::test]
+async fn recent_work_section_groups_threads_by_cwd() {
     let root = TempDir::new().expect("tempdir");
     let repo = root.path().join("repo");
     let workspace_a = repo.join("workspace-a");
@@ -250,6 +270,7 @@ fn recent_work_section_groups_threads_by_cwd() {
     let repo = fs::canonicalize(repo).expect("canonicalize repo");
 
     let section = build_recent_work_section(current_cwd.as_path(), &recent_threads)
+        .await
         .expect("recent work section");
     assert!(section.contains(&format!("### Git repo: {}", repo.display())));
     assert!(section.contains("Recent sessions: 2"));

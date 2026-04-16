@@ -1206,6 +1206,12 @@
             "id": {
               "type": "string"
             },
+            "mcpAppResourceUri": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "result": {
               "anyOf": [
                 {
