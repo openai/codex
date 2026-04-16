@@ -540,7 +540,7 @@ fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<Str
 async fn build_config(
     codex_home: &Path,
     forced_login_method: Option<ForcedLoginMethod>,
-    forced_chatgpt_workspace_id: Option<String>,
+    forced_chatgpt_workspace_id: Option<Vec<String>>,
 ) -> AuthConfig {
     AuthConfig {
         codex_home: codex_home.to_path_buf(),
@@ -620,13 +620,13 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some("org_mine".to_string()),
+        Some(vec!["org_mine".to_string()]),
     )
     .await;
 
     let err = super::enforce_login_restrictions(&config)
         .expect_err("expected workspace mismatch to error");
-    assert!(err.to_string().contains("workspace org_mine"));
+    assert!(err.to_string().contains("workspace(s) org_mine"));
     assert!(
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be removed on mismatch"
@@ -650,7 +650,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some("org_mine".to_string()),
+        Some(vec!["org_mine".to_string()]),
     )
     .await;
 
@@ -659,6 +659,31 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
         codex_home.path().join("auth.json").exists(),
         "auth.json should remain when restrictions pass"
     );
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
+    let codex_home = tempdir().unwrap();
+    let _jwt = write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        Some(vec!["org_other".to_string(), "org_mine".to_string()]),
+    )
+    .await;
+
+    super::enforce_login_restrictions(&config)
+        .expect("any matching workspace in the allowed list should succeed");
 }
 
 #[tokio::test]
@@ -671,7 +696,7 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
     let config = build_config(
         codex_home.path(),
         /*forced_login_method*/ None,
-        Some("org_mine".to_string()),
+        Some(vec!["org_mine".to_string()]),
     )
     .await;
 

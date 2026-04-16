@@ -7012,7 +7012,7 @@ class Config(BaseModel):
     ] = None
     compact_prompt: str | None = None
     developer_instructions: str | None = None
-    forced_chatgpt_workspace_id: str | None = None
+    forced_chatgpt_workspace_id: list[str] | None = None
     forced_login_method: ForcedLoginMethod | None = None
     instructions: str | None = None
     model: str | None = None
