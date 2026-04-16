@@ -15,6 +15,13 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+// macOS arm64 and Windows Bazel CI can spend tens of seconds in app-server
+// startup before the initialize response arrives, even for simple rollout
+// summary RPCs. Keep local/Linux coverage fast while giving slower runners
+// enough time to complete the MCP handshake.
+#[cfg(any(target_os = "macos", windows))]
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+#[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const FILENAME_TS: &str = "2025-01-02T12-00-00";
 const META_RFC3339: &str = "2025-01-02T12:00:00Z";
