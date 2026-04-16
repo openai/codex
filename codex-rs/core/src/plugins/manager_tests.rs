@@ -1097,13 +1097,12 @@ async fn install_plugin_supports_git_subdir_marketplace_sources() {
       "name": "toolkit",
       "source": {{
         "source": "git-subdir",
-        "url": "{}",
+        "url": "{remote_repo_url}",
         "path": "plugins/toolkit"
       }}
     }}
   ]
-}}"#,
-            remote_repo_url
+}}"#
         ),
     )
     .unwrap();
