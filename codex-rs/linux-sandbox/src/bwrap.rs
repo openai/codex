@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::fs::File;
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
@@ -26,6 +27,9 @@ use codex_protocol::error::Result;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use globset::GlobBuilder;
+use globset::GlobSet;
+use globset::GlobSetBuilder;
 
 /// Linux "platform defaults" that keep common system binaries and dynamic
 /// libraries readable when `ReadOnlyAccess::Restricted` requests them.
@@ -590,7 +594,13 @@ fn ripgrep_files(
     }
     command.arg("--").arg(search_root);
 
-    let output = command.output()?;
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return glob_files(search_root, globs, max_depth);
+        }
+        Err(err) => return Err(err.into()),
+    };
     if !output.status.success() {
         if output.status.code() == Some(1) && output.stderr.is_empty() {
             return Ok(Vec::new());
@@ -617,6 +627,65 @@ fn ripgrep_files(
         })
         .collect();
     Ok(paths)
+}
+
+fn glob_files(
+    search_root: &Path,
+    globs: &[String],
+    max_depth: Option<usize>,
+) -> Result<Vec<PathBuf>> {
+    let mut builder = GlobSetBuilder::new();
+    for glob in globs {
+        let glob = GlobBuilder::new(glob)
+            .literal_separator(true)
+            .allow_unclosed_class(true)
+            .build()
+            .map_err(|err| {
+                CodexErr::Fatal(format!(
+                    "unreadable glob pattern is invalid for {}: {err}",
+                    search_root.display()
+                ))
+            })?;
+        builder.add(glob);
+    }
+    let glob_set = builder.build().map_err(|err| {
+        CodexErr::Fatal(format!(
+            "unreadable glob matcher failed for {}: {err}",
+            search_root.display()
+        ))
+    })?;
+
+    let mut paths = Vec::new();
+    collect_glob_files(search_root, search_root, &glob_set, max_depth, &mut paths)?;
+    Ok(paths)
+}
+
+fn collect_glob_files(
+    search_root: &Path,
+    dir: &Path,
+    glob_set: &GlobSet,
+    max_depth: Option<usize>,
+    paths: &mut Vec<PathBuf>,
+) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        let relative = path.strip_prefix(search_root).unwrap_or(path.as_path());
+
+        if (file_type.is_file() || file_type.is_symlink()) && glob_set.is_match(relative) {
+            paths.push(path.clone());
+        }
+
+        if !file_type.is_dir() {
+            continue;
+        }
+        if max_depth.is_some_and(|max_depth| relative.components().count() >= max_depth) {
+            continue;
+        }
+        collect_glob_files(search_root, &path, glob_set, max_depth, paths)?;
+    }
+    Ok(())
 }
 
 fn path_to_string(path: &Path) -> String {

@@ -2322,6 +2322,7 @@ dependencies = [
  "codex-protocol",
  "codex-sandboxing",
  "codex-utils-absolute-path",
+ "globset",
  "landlock",
  "libc",
  "pkg-config",

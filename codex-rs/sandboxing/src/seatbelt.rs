@@ -398,7 +398,7 @@ fn build_seatbelt_unreadable_glob_policy(
         let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern) else {
             continue;
         };
-        let regex = escape_seatbelt_regex(&regex);
+        let regex = regex.replace('"', "\\\"");
         policy_components.push(format!(r#"(deny file-read* (regex #"{regex}"))"#));
         policy_components.push(format!(r#"(deny file-write-unlink (regex #"{regex}"))"#));
     }
@@ -488,10 +488,6 @@ fn seatbelt_regex_for_unreadable_glob(pattern: &str) -> Option<String> {
     }
     regex.push('$');
     Some(regex)
-}
-
-fn escape_seatbelt_regex(regex: &str) -> String {
-    regex.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
