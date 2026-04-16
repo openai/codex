@@ -454,19 +454,24 @@ impl AgentIdentityBinding {
             }
     }
 
-    fn from_auth(auth: &CodexAuth, forced_workspace_id: Option<String>) -> Option<Self> {
+    fn from_auth(auth: &CodexAuth, forced_workspace_id: Option<Vec<String>>) -> Option<Self> {
         if !auth.is_chatgpt_auth() {
             return None;
         }
 
         let token_data = auth.get_token_data().ok()?;
-        let resolved_account_id =
-            forced_workspace_id
-                .filter(|value| !value.is_empty())
-                .or(token_data
-                    .account_id
-                    .clone()
-                    .filter(|value| !value.is_empty()))?;
+        let token_account_id = token_data
+            .account_id
+            .clone()
+            .filter(|value| !value.is_empty());
+        let forced_account_id = forced_workspace_id.and_then(|values| {
+            let mut values = values.into_iter().filter(|value| !value.is_empty());
+            match token_account_id.as_ref() {
+                Some(account_id) => values.find(|value| value == account_id),
+                None => values.next(),
+            }
+        });
+        let resolved_account_id = forced_account_id.or(token_account_id)?;
 
         Some(Self {
             binding_id: format!("chatgpt-account-{resolved_account_id}"),

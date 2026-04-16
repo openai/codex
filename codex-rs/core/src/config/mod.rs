@@ -530,12 +530,11 @@ pub struct Config {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
-
     /// Experimental / do not use. When set, app-server uses a remote thread
     /// store at this endpoint instead of the local filesystem/SQLite store.
     pub experimental_thread_store_endpoint: Option<String>,
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
-    pub forced_chatgpt_workspace_id: Option<String>,
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
+    pub forced_chatgpt_workspace_id: Option<Vec<String>>,
 
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
@@ -634,7 +633,7 @@ impl AuthManagerConfig for Config {
         self.cli_auth_credentials_store_mode
     }
 
-    fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id.clone()
     }
 
@@ -1946,15 +1945,18 @@ impl Config {
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
 
-        let forced_chatgpt_workspace_id =
-            cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string())
-                }
-            });
+        let forced_chatgpt_workspace_id = cfg
+            .forced_chatgpt_workspace_id
+            .clone()
+            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty());
 
         let forced_login_method = cfg.forced_login_method;
 
