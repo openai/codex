@@ -488,6 +488,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            /*environment_id*/ None,
         ))
         .await
     }
@@ -500,6 +501,7 @@ impl ThreadManager {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
+        environment_id: Option<String>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
@@ -511,6 +513,7 @@ impl ThreadManager {
             metrics_service_name,
             parent_trace,
             /*user_shell_override*/ None,
+            environment_id,
         ))
         .await
     }
@@ -551,6 +554,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             /*user_shell_override*/ None,
+            /*environment_id*/ None,
         ))
         .await
     }
@@ -570,6 +574,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
+            /*environment_id*/ None,
         ))
         .await
     }
@@ -592,6 +597,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
+            /*environment_id*/ None,
         ))
         .await
     }
@@ -700,6 +706,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             /*user_shell_override*/ None,
+            /*environment_id*/ None,
         ))
         .await
     }
@@ -801,6 +808,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
+            /*environment_id*/ None,
         ))
         .await
     }
@@ -828,6 +836,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
+            /*environment_id*/ None,
         ))
         .await
     }
@@ -856,6 +865,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
+            /*environment_id*/ None,
         ))
         .await
     }
@@ -873,6 +883,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
+        environment_id: Option<String>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -887,6 +898,7 @@ impl ThreadManagerState {
             /*inherited_exec_policy*/ None,
             parent_trace,
             user_shell_override,
+            environment_id,
         ))
         .await
     }
@@ -906,10 +918,11 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
+        environment_id: Option<String>,
     ) -> CodexResult<NewThread> {
         let environment = self
             .environment_manager
-            .current()
+            .environment(environment_id.as_deref())
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
         let watch_registration = match environment.as_ref() {
@@ -932,6 +945,7 @@ impl ThreadManagerState {
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
+            environment_id,
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),

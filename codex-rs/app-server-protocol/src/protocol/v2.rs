@@ -2722,6 +2722,11 @@ pub struct ThreadStartParams {
     pub ephemeral: Option<bool>,
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
+    /// Optional environment id to use for this thread. Supported values are
+    /// `"local"` and `"remote"`. When omitted, the default environment is
+    /// used.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,

@@ -15,6 +15,15 @@ use crate::remote_process::RemoteProcess;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
+const LOCAL_ENVIRONMENT_ID: &str = "local";
+const REMOTE_ENVIRONMENT_ID: &str = "remote";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExplicitEnvironmentId {
+    Local,
+    Remote,
+}
+
 /// Lazily creates and caches the active environment for a session.
 ///
 /// The manager keeps the session's environment selection stable so subagents
@@ -25,6 +34,8 @@ pub struct EnvironmentManager {
     local_runtime_paths: Option<ExecServerRuntimePaths>,
     disabled: bool,
     current_environment: OnceCell<Option<Arc<Environment>>>,
+    local_environment: OnceCell<Arc<Environment>>,
+    remote_environment: OnceCell<Arc<Environment>>,
 }
 
 impl Default for EnvironmentManager {
@@ -51,6 +62,8 @@ impl EnvironmentManager {
             local_runtime_paths,
             disabled,
             current_environment: OnceCell::new(),
+            local_environment: OnceCell::new(),
+            remote_environment: OnceCell::new(),
         }
     }
 
@@ -79,12 +92,16 @@ impl EnvironmentManager {
                 local_runtime_paths: environment.local_runtime_paths().cloned(),
                 disabled: false,
                 current_environment: OnceCell::new(),
+                local_environment: OnceCell::new(),
+                remote_environment: OnceCell::new(),
             },
             None => Self {
                 exec_server_url: None,
                 local_runtime_paths: None,
                 disabled: true,
                 current_environment: OnceCell::new(),
+                local_environment: OnceCell::new(),
+                remote_environment: OnceCell::new(),
             },
         }
     }
@@ -118,6 +135,62 @@ impl EnvironmentManager {
             .await
             .map(Option::as_ref)
             .map(std::option::Option::<&Arc<Environment>>::cloned)
+    }
+
+    pub async fn environment(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Result<Option<Arc<Environment>>, ExecServerError> {
+        match parse_environment_id(environment_id)? {
+            None => self.current().await,
+            Some(ExplicitEnvironmentId::Local) => self.local_environment().await.map(Some),
+            Some(ExplicitEnvironmentId::Remote) => self.remote_environment().await.map(Some),
+        }
+    }
+
+    async fn local_environment(&self) -> Result<Arc<Environment>, ExecServerError> {
+        if self.disabled {
+            return Err(ExecServerError::Protocol(
+                "environments are disabled for this session".to_string(),
+            ));
+        }
+
+        self.local_environment
+            .get_or_try_init(|| async {
+                Environment::create_with_runtime_paths(
+                    /*exec_server_url*/ None,
+                    self.local_runtime_paths.clone(),
+                )
+                .await
+                .map(Arc::new)
+            })
+            .await
+            .map(Arc::clone)
+    }
+
+    async fn remote_environment(&self) -> Result<Arc<Environment>, ExecServerError> {
+        if self.disabled {
+            return Err(ExecServerError::Protocol(
+                "environments are disabled for this session".to_string(),
+            ));
+        }
+        let Some(exec_server_url) = &self.exec_server_url else {
+            return Err(ExecServerError::Protocol(
+                "remote environment is not configured".to_string(),
+            ));
+        };
+
+        self.remote_environment
+            .get_or_try_init(|| async {
+                Environment::create_with_runtime_paths(
+                    Some(exec_server_url.clone()),
+                    self.local_runtime_paths.clone(),
+                )
+                .await
+                .map(Arc::new)
+            })
+            .await
+            .map(Arc::clone)
     }
 }
 
@@ -236,6 +309,23 @@ fn normalize_exec_server_url(exec_server_url: Option<String>) -> (Option<String>
         Some(url) => (Some(url.to_string()), false),
     }
 }
+
+fn parse_environment_id(
+    environment_id: Option<&str>,
+) -> Result<Option<ExplicitEnvironmentId>, ExecServerError> {
+    match environment_id.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(environment_id) if environment_id.eq_ignore_ascii_case(LOCAL_ENVIRONMENT_ID) => {
+            Ok(Some(ExplicitEnvironmentId::Local))
+        }
+        Some(environment_id) if environment_id.eq_ignore_ascii_case(REMOTE_ENVIRONMENT_ID) => {
+            Ok(Some(ExplicitEnvironmentId::Remote))
+        }
+        Some(environment_id) => Err(ExecServerError::Protocol(format!(
+            "unknown environment id: {environment_id}"
+        ))),
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -330,6 +420,65 @@ mod tests {
                 .await
                 .expect("get current environment")
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_manager_explicit_local_selection_bypasses_remote_default() {
+        let manager = EnvironmentManager::new(Some("ws://127.0.0.1:8765".to_string()));
+
+        let environment = manager
+            .environment(Some("local"))
+            .await
+            .expect("get explicit local environment")
+            .expect("local environment");
+
+        assert!(!environment.is_remote());
+        assert_eq!(environment.exec_server_url(), None);
+    }
+
+    #[tokio::test]
+    async fn environment_manager_rejects_remote_selection_when_not_configured() {
+        let manager = EnvironmentManager::new(/*exec_server_url*/ None);
+
+        let err = manager
+            .environment(Some("remote"))
+            .await
+            .expect_err("remote selection should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "exec-server protocol error: remote environment is not configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_manager_rejects_explicit_selection_when_disabled() {
+        let manager = EnvironmentManager::new(Some("none".to_string()));
+
+        let err = manager
+            .environment(Some("local"))
+            .await
+            .expect_err("explicit local selection should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "exec-server protocol error: environments are disabled for this session"
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_manager_rejects_unknown_environment_id() {
+        let manager = EnvironmentManager::new(/*exec_server_url*/ None);
+
+        let err = manager
+            .environment(Some("mystery"))
+            .await
+            .expect_err("unknown environment should fail");
+
+        assert_eq!(
+            err.to_string(),
+            "exec-server protocol error: unknown environment id: mystery"
         );
     }
 
