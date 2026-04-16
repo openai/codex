@@ -1687,19 +1687,20 @@ impl App {
         self.backtrack_render_pending = false;
     }
 
-    async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
+    async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) -> Result<()> {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
-            Self::unsubscribe_thread_with_timeout(app_server, thread_id).await;
+            Self::unsubscribe_thread_with_timeout(app_server, thread_id).await?;
             self.abort_thread_event_listener(thread_id);
         }
+        Ok(())
     }
 
     async fn unsubscribe_thread_with_timeout(
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
-    ) {
+    ) -> Result<()> {
         match tokio::time::timeout(
             THREAD_UNSUBSCRIBE_TIMEOUT,
             app_server.thread_unsubscribe(thread_id),
@@ -1712,8 +1713,12 @@ impl App {
             }
             Err(_) => {
                 tracing::warn!("timed out unsubscribing thread {thread_id}");
+                return Err(color_eyre::eyre::eyre!(
+                    "timed out unsubscribing thread {thread_id}"
+                ));
             }
         }
+        Ok(())
     }
 
     fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
@@ -3500,11 +3505,19 @@ impl App {
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
         );
-        self.shutdown_current_thread(app_server).await;
+        if let Err(err) = self.shutdown_current_thread(app_server).await {
+            self.chat_widget
+                .add_error_message(format!("Failed to stop current thread: {err}"));
+            return;
+        }
         let tracked_thread_ids: Vec<ThreadId> =
             self.thread_event_channels.keys().copied().collect();
         for thread_id in tracked_thread_ids {
-            Self::unsubscribe_thread_with_timeout(app_server, thread_id).await;
+            if let Err(err) = Self::unsubscribe_thread_with_timeout(app_server, thread_id).await {
+                self.chat_widget
+                    .add_error_message(format!("Failed to stop thread {thread_id}: {err}"));
+                return;
+            }
         }
         self.config = config.clone();
         match app_server
@@ -4304,7 +4317,11 @@ impl App {
             .await
         {
             Ok(resumed) => {
-                self.shutdown_current_thread(app_server).await;
+                if let Err(err) = self.shutdown_current_thread(app_server).await {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to stop current thread: {err}"));
+                    return Ok(AppRunControl::Continue);
+                }
                 self.config = resume_config;
                 tui.set_notification_settings(
                     self.config.tui_notifications.method,
@@ -4513,7 +4530,12 @@ impl App {
                         .await;
                     match app_server.fork_thread(self.config.clone(), thread_id).await {
                         Ok(forked) => {
-                            self.shutdown_current_thread(app_server).await;
+                            if let Err(err) = self.shutdown_current_thread(app_server).await {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to stop current thread: {err}"
+                                ));
+                                return Ok(AppRunControl::Continue);
+                            }
                             match self
                                 .replace_chat_widget_with_app_server_thread(tui, app_server, forked)
                                 .await
@@ -5935,9 +5957,10 @@ impl App {
                 // its shutdown completion does not trigger agent failover.
                 self.pending_shutdown_exit_thread_id =
                     self.active_thread_id.or(self.chat_widget.thread_id());
-                if self.pending_shutdown_exit_thread_id.is_some() {
-                    self.shutdown_current_thread(app_server).await;
-                }
+                if self.pending_shutdown_exit_thread_id.is_some()
+                    && let Err(err) = self.shutdown_current_thread(app_server).await {
+                        tracing::warn!("failed to stop current thread during exit: {err}");
+                    }
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
             }
@@ -11484,7 +11507,9 @@ guardian_approval = true
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
                 .await
                 .expect("embedded app server");
-        app.shutdown_current_thread(&mut app_server).await;
+        app.shutdown_current_thread(&mut app_server)
+            .await
+            .expect("thread unsubscribe should succeed");
 
         assert!(
             op_rx.try_recv().is_err(),
