@@ -396,3 +396,70 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
 }
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_bootstraps_powershell_with_snapshot() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.ps1");
+    std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::PowerShell,
+        "pwsh.exe",
+        snapshot_path.clone(),
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "pwsh.exe".to_string(),
+        "-Command".to_string(),
+        "npm --version".to_string(),
+    ];
+
+    let rewritten =
+        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
+
+    assert_eq!(rewritten[0], "pwsh.exe");
+    assert_eq!(rewritten[1], "-NoProfile");
+    assert_eq!(rewritten[2], "-Command");
+    assert_eq!(rewritten[3], "param($snapshot) . $snapshot; & @args");
+    assert_eq!(rewritten[4], snapshot_path.to_string_lossy());
+    assert_eq!(rewritten[5], "pwsh.exe");
+    assert_eq!(rewritten[6], "-NoProfile");
+    assert_eq!(rewritten[7], "-Command");
+    assert_eq!(rewritten[8], "npm --version");
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_keeps_powershell_override_values_out_of_argv() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.ps1");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\n$env:OPENAI_API_KEY='snapshot-value'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::PowerShell,
+        "pwsh.exe",
+        snapshot_path,
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "pwsh.exe".to_string(),
+        "-Command".to_string(),
+        "Write-Output $env:OPENAI_API_KEY".to_string(),
+    ];
+    let explicit_env_overrides = HashMap::from([(
+        "OPENAI_API_KEY".to_string(),
+        "super-secret-value".to_string(),
+    )]);
+
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &explicit_env_overrides,
+    );
+
+    assert!(!rewritten[3].contains("super-secret-value"));
+    assert!(rewritten[3].contains("Set-Item -LiteralPath 'Env:OPENAI_API_KEY'"));
+}

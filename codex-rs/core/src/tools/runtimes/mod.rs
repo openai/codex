@@ -6,6 +6,7 @@ small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
 use crate::path_utils;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -36,28 +37,26 @@ pub(crate) fn build_sandbox_command(
     })
 }
 
-/// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
-/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
-/// when a snapshot is configured on the session shell, rewrite the argv
-/// to a single non-login shell that sources the snapshot before running
-/// the original script:
+/// For commands produced by `Shell::derive_exec_args`, and when a snapshot is
+/// configured on the session shell, rewrite the argv to a non-login shell that
+/// sources the snapshot before running the original command.
 ///
+/// POSIX shells:
 ///   shell -lc "<script>"
 ///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
 ///
-/// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
-/// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
-/// not match the snapshot cwd, this is a no-op.
+/// PowerShell:
+///   pwsh -Command "<script>"
+///   => pwsh -NoProfile -Command "param($snapshot) . $snapshot; & @args" SNAPSHOT pwsh -NoProfile -Command "<script>"
+///
+/// On non-matching commands, or when command cwd does not match the snapshot
+/// cwd, this is a no-op.
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
     cwd: &Path,
     explicit_env_overrides: &HashMap<String, String>,
 ) -> Vec<String> {
-    if cfg!(windows) {
-        return command.to_vec();
-    }
-
     let Some(snapshot) = session_shell.shell_snapshot() else {
         return command.to_vec();
     };
@@ -81,12 +80,34 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    let flag = command[1].as_str();
-    if flag != "-lc" {
+    match session_shell.shell_type {
+        ShellType::PowerShell => wrap_powershell_command_with_snapshot(
+            command,
+            session_shell,
+            explicit_env_overrides,
+            snapshot.path.as_path(),
+        ),
+        ShellType::Zsh | ShellType::Bash | ShellType::Sh => wrap_posix_command_with_snapshot(
+            command,
+            session_shell,
+            explicit_env_overrides,
+            snapshot.path.as_path(),
+        ),
+        ShellType::Cmd => command.to_vec(),
+    }
+}
+
+fn wrap_posix_command_with_snapshot(
+    command: &[String],
+    session_shell: &Shell,
+    explicit_env_overrides: &HashMap<String, String>,
+    snapshot_path: &Path,
+) -> Vec<String> {
+    if command.get(1).map(String::as_str) != Some("-lc") {
         return command.to_vec();
     }
 
-    let snapshot_path = snapshot.path.to_string_lossy();
+    let snapshot_path = snapshot_path.to_string_lossy();
     let shell_path = session_shell.shell_path.to_string_lossy();
     let original_shell = shell_single_quote(&command[0]);
     let original_script = shell_single_quote(&command[2]);
@@ -107,6 +128,30 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     };
 
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
+}
+
+fn wrap_powershell_command_with_snapshot(
+    command: &[String],
+    session_shell: &Shell,
+    explicit_env_overrides: &HashMap<String, String>,
+    snapshot_path: &Path,
+) -> Vec<String> {
+    if command.get(1).map(String::as_str) != Some("-Command") {
+        return command.to_vec();
+    }
+
+    let rewritten_script = build_powershell_snapshot_script(explicit_env_overrides);
+    let mut rewritten = vec![
+        session_shell.shell_path.to_string_lossy().to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        rewritten_script,
+        snapshot_path.to_string_lossy().to_string(),
+        command[0].clone(),
+        "-NoProfile".to_string(),
+    ];
+    rewritten.extend(command[1..].iter().cloned());
+    rewritten
 }
 
 fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {
@@ -157,6 +202,56 @@ fn is_valid_shell_variable_name(name: &str) -> bool {
 
 fn shell_single_quote(input: &str) -> String {
     input.replace('\'', r#"'"'"'"#)
+}
+
+fn build_powershell_snapshot_script(explicit_env_overrides: &HashMap<String, String>) -> String {
+    let (override_captures, override_restores) =
+        build_powershell_override_exports(explicit_env_overrides);
+    if override_captures.is_empty() {
+        "param($snapshot) . $snapshot; & @args".to_string()
+    } else {
+        format!("{override_captures}\n. $snapshot\n{override_restores}\n& @args")
+    }
+}
+
+fn build_powershell_override_exports(
+    explicit_env_overrides: &HashMap<String, String>,
+) -> (String, String) {
+    let mut keys = explicit_env_overrides.keys().collect::<Vec<_>>();
+    keys.sort_unstable();
+
+    if keys.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    let captures = keys
+        .iter()
+        .enumerate()
+        .map(|(idx, key)| {
+            let escaped_key = powershell_single_quote(key);
+            format!(
+                "$__codex_snapshot_override_set_{idx} = Test-Path -LiteralPath 'Env:{escaped_key}'\n$__codex_snapshot_override_{idx} = if ($__codex_snapshot_override_set_{idx}) {{ (Get-Item -LiteralPath 'Env:{escaped_key}').Value }} else {{ $null }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let restores = keys
+        .iter()
+        .enumerate()
+        .map(|(idx, key)| {
+            let escaped_key = powershell_single_quote(key);
+            format!(
+                "if ($__codex_snapshot_override_set_{idx}) {{ Set-Item -LiteralPath 'Env:{escaped_key}' -Value $__codex_snapshot_override_{idx} }} else {{ Remove-Item -LiteralPath 'Env:{escaped_key}' -ErrorAction SilentlyContinue }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    (captures, restores)
+}
+
+fn powershell_single_quote(input: &str) -> String {
+    input.replace('\'', "''")
 }
 
 #[cfg(all(test, unix))]
