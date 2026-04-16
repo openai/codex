@@ -3817,7 +3817,7 @@ impl CodexMessageProcessor {
     ) -> Result<Thread, ThreadReadViewError> {
         let loaded_thread = self.load_live_thread_for_read(thread_id).await;
         let mut thread = if let Some(thread) = self
-            .load_persisted_thread_for_read(thread_id, include_turns, loaded_thread.as_ref())
+            .load_persisted_thread_for_read(thread_id, include_turns)
             .await?
         {
             thread
@@ -3859,73 +3859,38 @@ impl CodexMessageProcessor {
         &self,
         thread_id: ThreadId,
         include_turns: bool,
-        loaded_thread: Option<&Arc<CodexThread>>,
     ) -> Result<Option<Thread>, ThreadReadViewError> {
-        let loaded_thread_state_db = loaded_thread.and_then(|thread| thread.state_db());
-        let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
-            read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_id).await
-        } else {
-            read_summary_from_state_db_by_thread_id(&self.config, thread_id).await
-        };
-        let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
-        if rollout_path.is_none() || include_turns {
-            rollout_path =
-                match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
-                    .await
-                {
-                    Ok(Some(path)) => Some(path),
-                    Ok(None) => {
-                        if include_turns {
-                            None
-                        } else {
-                            rollout_path
-                        }
-                    }
-                    Err(err) => {
-                        return Err(ThreadReadViewError::InvalidRequest(format!(
-                            "failed to locate thread id {thread_id}: {err}"
-                        )));
-                    }
-                };
-        }
-
-        if include_turns && rollout_path.is_none() && db_summary.is_some() {
-            return Err(ThreadReadViewError::Internal(format!(
-                "failed to locate rollout for thread {thread_id}"
-            )));
-        }
-
-        if let Some(summary) = db_summary {
-            let mut thread = summary_to_thread(summary, &self.config.cwd);
-            self.apply_thread_read_rollout_fields(
-                thread_id,
-                &mut thread,
-                rollout_path.as_deref(),
-                include_turns,
-            )
-            .await?;
-            return Ok(Some(thread));
-        }
-
-        let Some(rollout_path) = rollout_path else {
-            return Ok(None);
-        };
         let fallback_provider = self.config.model_provider_id.as_str();
-        match read_summary_from_rollout(&rollout_path, fallback_provider).await {
-            Ok(summary) => {
-                let mut thread = summary_to_thread(summary, &self.config.cwd);
-                self.apply_thread_read_rollout_fields(
-                    thread_id,
-                    &mut thread,
-                    Some(rollout_path.as_path()),
-                    include_turns,
-                )
-                .await?;
+        match self
+            .thread_store
+            .read_thread(StoreReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: include_turns,
+            })
+            .await
+        {
+            Ok(stored_thread) => {
+                let (mut thread, history) =
+                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+                if include_turns && let Some(history) = history {
+                    thread.turns = build_turns_from_rollout_items(&history.items);
+                }
                 Ok(Some(thread))
             }
+            Err(ThreadStoreError::InvalidRequest { message })
+                if message == format!("no rollout found for thread id {thread_id}") =>
+            {
+                Ok(None)
+            }
+            Err(ThreadStoreError::ThreadNotFound {
+                thread_id: missing_thread_id,
+            }) if missing_thread_id == thread_id => Ok(None),
+            Err(ThreadStoreError::InvalidRequest { message }) => {
+                Err(ThreadReadViewError::InvalidRequest(message))
+            }
             Err(err) => Err(ThreadReadViewError::Internal(format!(
-                "failed to load rollout `{}` for thread {thread_id}: {err}",
-                rollout_path.display()
+                "failed to read thread: {err}"
             ))),
         }
     }
@@ -3946,7 +3911,6 @@ impl CodexMessageProcessor {
                 "ephemeral threads do not support includeTurns".to_string(),
             ));
         }
-
         let mut thread =
             build_thread_from_snapshot(thread_id, &config_snapshot, loaded_rollout_path.clone());
         self.apply_thread_read_rollout_fields(
@@ -9289,6 +9253,56 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
             data: None,
         },
     }
+}
+
+fn thread_from_stored_thread(
+    thread: StoredThread,
+    fallback_provider: &str,
+    fallback_cwd: &AbsolutePathBuf,
+) -> (Thread, Option<codex_thread_store::StoredThreadHistory>) {
+    let path = thread.rollout_path;
+    let git_info = thread.git_info.map(|info| ApiGitInfo {
+        sha: info.commit_hash.map(|sha| sha.0),
+        branch: info.branch,
+        origin_url: info.repository_url,
+    });
+    let cwd = AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(
+        thread.cwd,
+    ))
+    .unwrap_or_else(|err| {
+        warn!("failed to normalize thread cwd while reading stored thread: {err}");
+        fallback_cwd.clone()
+    });
+    let source = with_thread_spawn_agent_metadata(
+        thread.source,
+        thread.agent_nickname.clone(),
+        thread.agent_role.clone(),
+    );
+    let history = thread.history;
+    let thread = Thread {
+        id: thread.thread_id.to_string(),
+        forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
+        preview: thread.first_user_message.unwrap_or(thread.preview),
+        ephemeral: false,
+        model_provider: if thread.model_provider.is_empty() {
+            fallback_provider.to_string()
+        } else {
+            thread.model_provider
+        },
+        created_at: thread.created_at.timestamp(),
+        updated_at: thread.updated_at.timestamp(),
+        status: ThreadStatus::NotLoaded,
+        path,
+        cwd,
+        cli_version: thread.cli_version,
+        agent_nickname: source.get_nickname(),
+        agent_role: source.get_agent_role(),
+        source: source.into(),
+        git_info,
+        name: thread.name,
+        turns: Vec::new(),
+    };
+    (thread, history)
 }
 
 fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
