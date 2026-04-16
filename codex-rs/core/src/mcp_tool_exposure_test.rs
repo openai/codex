@@ -11,6 +11,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_tools::ToolName;
 use codex_tools::ToolsConfig;
 use codex_tools::ToolsConfigParams;
 use pretty_assertions::assert_eq;
@@ -54,9 +55,18 @@ fn make_mcp_tool(
         format!("mcp__{server_name}__")
     };
 
+    let callable_name = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        connector_id
+            .and_then(|connector_id| tool_name.strip_prefix(connector_id))
+            .unwrap_or(tool_name)
+            .to_string()
+    } else {
+        tool_name.to_string()
+    };
+
     ToolInfo {
         server_name: server_name.to_string(),
-        callable_name: tool_name.to_string(),
+        callable_name,
         callable_namespace: tool_namespace,
         server_instructions: None,
         tool: Tool {
@@ -77,16 +87,14 @@ fn make_mcp_tool(
     }
 }
 
-fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
+fn numbered_mcp_tools(count: usize) -> HashMap<ToolName, ToolInfo> {
     (0..count)
         .map(|index| {
             let tool_name = format!("tool_{index}");
-            (
-                format!("mcp__rmcp__{tool_name}"),
-                make_mcp_tool(
-                    "rmcp", &tool_name, /*connector_id*/ None, /*connector_name*/ None,
-                ),
-            )
+            let tool = make_mcp_tool(
+                "rmcp", &tool_name, /*connector_id*/ None, /*connector_name*/ None,
+            );
+            (tool.canonical_tool_name(), tool)
         })
         .collect()
 }
@@ -127,9 +135,13 @@ async fn directly_exposes_small_effective_tool_sets() {
         &tools_config,
     );
 
-    let mut direct_tool_names: Vec<_> = exposure.direct_tools.keys().cloned().collect();
+    let mut direct_tool_names: Vec<_> = exposure
+        .direct_tools
+        .keys()
+        .map(ToolName::display)
+        .collect();
     direct_tool_names.sort();
-    let mut expected_tool_names: Vec<_> = mcp_tools.keys().cloned().collect();
+    let mut expected_tool_names: Vec<_> = mcp_tools.keys().map(ToolName::display).collect();
     expected_tool_names.sort();
     assert_eq!(direct_tool_names, expected_tool_names);
     assert!(exposure.deferred_tools.is_none());
@@ -154,9 +166,9 @@ async fn searches_large_effective_tool_sets() {
         .deferred_tools
         .as_ref()
         .expect("large tool sets should be discoverable through tool_search");
-    let mut deferred_tool_names: Vec<_> = deferred_tools.keys().cloned().collect();
+    let mut deferred_tool_names: Vec<_> = deferred_tools.keys().map(ToolName::display).collect();
     deferred_tool_names.sort();
-    let mut expected_tool_names: Vec<_> = mcp_tools.keys().cloned().collect();
+    let mut expected_tool_names: Vec<_> = mcp_tools.keys().map(ToolName::display).collect();
     expected_tool_names.sort();
     assert_eq!(deferred_tool_names, expected_tool_names);
 }
@@ -166,15 +178,13 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
     let config = test_config().await;
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
-    mcp_tools.extend([(
-        "mcp__codex_apps__calendar_create_event".to_string(),
-        make_mcp_tool(
-            CODEX_APPS_MCP_SERVER_NAME,
-            "calendar_create_event",
-            Some("calendar"),
-            Some("Calendar"),
-        ),
-    )]);
+    let calendar_tool = make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "calendar_create_event",
+        Some("calendar"),
+        Some("Calendar"),
+    );
+    mcp_tools.insert(calendar_tool.canonical_tool_name(), calendar_tool);
     let connectors = vec![make_connector("calendar", "Calendar")];
 
     let exposure = build_mcp_tool_exposure(
@@ -185,7 +195,11 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
         &tools_config,
     );
 
-    let mut tool_names: Vec<String> = exposure.direct_tools.into_keys().collect();
+    let mut tool_names: Vec<String> = exposure
+        .direct_tools
+        .into_keys()
+        .map(|name| name.display())
+        .collect();
     tool_names.sort();
     assert_eq!(
         tool_names,
@@ -200,13 +214,16 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
         .as_ref()
         .expect("large tool sets should be discoverable through tool_search");
     assert!(
-        tool_names
-            .iter()
-            .all(|direct_tool_name| !deferred_tools.contains_key(direct_tool_name)),
+        tool_names.iter().all(|direct_tool_name| !deferred_tools
+            .keys()
+            .any(|deferred_tool_name| deferred_tool_name.display() == *direct_tool_name)),
         "direct tools should not also be deferred: {tool_names:?}"
     );
-    assert!(!deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
-    assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
+    assert!(!deferred_tools.contains_key(&ToolName::namespaced(
+        "mcp__codex_apps__calendar",
+        "_create_event"
+    )));
+    assert!(deferred_tools.contains_key(&ToolName::namespaced("mcp__rmcp__", "tool_0")));
 }
 
 #[tokio::test]
@@ -217,22 +234,18 @@ async fn always_defer_feature_preserves_explicit_apps() {
         .enable(Feature::ToolSearchAlwaysDeferMcpTools)
         .expect("test config should allow feature update");
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
+    let rmcp_tool = make_mcp_tool(
+        "rmcp", "tool", /*connector_id*/ None, /*connector_name*/ None,
+    );
+    let calendar_tool = make_mcp_tool(
+        CODEX_APPS_MCP_SERVER_NAME,
+        "calendar_create_event",
+        Some("calendar"),
+        Some("Calendar"),
+    );
     let mcp_tools = HashMap::from([
-        (
-            "mcp__rmcp__tool".to_string(),
-            make_mcp_tool(
-                "rmcp", "tool", /*connector_id*/ None, /*connector_name*/ None,
-            ),
-        ),
-        (
-            "mcp__codex_apps__calendar_create_event".to_string(),
-            make_mcp_tool(
-                CODEX_APPS_MCP_SERVER_NAME,
-                "calendar_create_event",
-                Some("calendar"),
-                Some("Calendar"),
-            ),
-        ),
+        (rmcp_tool.canonical_tool_name(), rmcp_tool),
+        (calendar_tool.canonical_tool_name(), calendar_tool),
     ]);
     let connectors = vec![make_connector("calendar", "Calendar")];
 
@@ -244,7 +257,11 @@ async fn always_defer_feature_preserves_explicit_apps() {
         &tools_config,
     );
 
-    let mut direct_tool_names: Vec<String> = exposure.direct_tools.into_keys().collect();
+    let mut direct_tool_names: Vec<String> = exposure
+        .direct_tools
+        .into_keys()
+        .map(|name| name.display())
+        .collect();
     direct_tool_names.sort();
     assert_eq!(
         direct_tool_names,
@@ -254,6 +271,9 @@ async fn always_defer_feature_preserves_explicit_apps() {
         .deferred_tools
         .as_ref()
         .expect("MCP tools should be discoverable through tool_search");
-    assert!(deferred_tools.contains_key("mcp__rmcp__tool"));
-    assert!(!deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
+    assert!(deferred_tools.contains_key(&ToolName::namespaced("mcp__rmcp__", "tool")));
+    assert!(!deferred_tools.contains_key(&ToolName::namespaced(
+        "mcp__codex_apps__calendar",
+        "_create_event"
+    )));
 }

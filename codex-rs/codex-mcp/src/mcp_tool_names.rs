@@ -9,6 +9,7 @@ use tracing::warn;
 
 use crate::mcp::sanitize_responses_api_tool_name;
 use crate::mcp_connection_manager::ToolInfo;
+use codex_protocol::ToolName;
 
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
@@ -71,10 +72,10 @@ fn unique_callable_parts(
     tool_name: &str,
     raw_identity: &str,
     used_names: &mut HashSet<String>,
-) -> (String, String, String) {
-    let qualified_name = format!("{namespace}{tool_name}");
-    if qualified_name.len() <= MAX_TOOL_NAME_LENGTH && used_names.insert(qualified_name.clone()) {
-        return (namespace.to_string(), tool_name.to_string(), qualified_name);
+) -> (String, String) {
+    let display_name = ToolName::namespaced(namespace, tool_name).display();
+    if display_name.len() <= MAX_TOOL_NAME_LENGTH && used_names.insert(display_name) {
+        return (namespace.to_string(), tool_name.to_string());
     }
 
     let mut attempt = 0_u32;
@@ -86,9 +87,9 @@ fn unique_callable_parts(
         };
         let (namespace, tool_name) =
             fit_callable_parts_with_hash(namespace, tool_name, &hash_input);
-        let qualified_name = format!("{namespace}{tool_name}");
-        if used_names.insert(qualified_name.clone()) {
-            return (namespace, tool_name, qualified_name);
+        let display_name = ToolName::namespaced(&namespace, &tool_name).display();
+        if used_names.insert(display_name) {
+            return (namespace, tool_name);
         }
         attempt = attempt.saturating_add(1);
     }
@@ -103,12 +104,12 @@ struct CallableToolCandidate {
     callable_name: String,
 }
 
-/// Returns a qualified-name lookup for MCP tools.
+/// Returns a callable-name lookup for MCP tools.
 ///
 /// Raw MCP server/tool names are kept on each [`ToolInfo`] for protocol calls, while
 /// `callable_namespace` / `callable_name` are sanitized and, when necessary, hashed so
 /// every model-visible `mcp__namespace__tool` name is unique and <= 64 bytes.
-pub(crate) fn qualify_tools<I>(tools: I) -> HashMap<String, ToolInfo>
+pub(crate) fn qualify_tools<I>(tools: I) -> HashMap<ToolName, ToolInfo>
 where
     I: IntoIterator<Item = ToolInfo>,
 {
@@ -188,7 +189,7 @@ where
     let mut used_names = HashSet::new();
     let mut qualified_tools = HashMap::new();
     for mut candidate in candidates {
-        let (callable_namespace, callable_name, qualified_name) = unique_callable_parts(
+        let (callable_namespace, callable_name) = unique_callable_parts(
             &candidate.callable_namespace,
             &candidate.callable_name,
             &candidate.raw_tool_identity,
@@ -196,7 +197,7 @@ where
         );
         candidate.tool.callable_namespace = callable_namespace;
         candidate.tool.callable_name = callable_name;
-        qualified_tools.insert(qualified_name, candidate.tool);
+        qualified_tools.insert(candidate.tool.canonical_tool_name(), candidate.tool);
     }
     qualified_tools
 }

@@ -41,12 +41,12 @@ struct McpToolPlanInputs<'a> {
     tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
-fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs<'_> {
+fn map_mcp_tools_for_plan(mcp_tools: &HashMap<ToolName, ToolInfo>) -> McpToolPlanInputs<'_> {
     McpToolPlanInputs {
         mcp_tools: mcp_tools
-            .values()
-            .map(|tool| ToolRegistryPlanMcpTool {
-                name: tool.canonical_tool_name(),
+            .iter()
+            .map(|(name, tool)| ToolRegistryPlanMcpTool {
+                name: name.clone(),
                 tool: &tool.tool,
             })
             .collect(),
@@ -70,8 +70,8 @@ fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanI
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, ToolInfo>>,
-    deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tools: Option<HashMap<ToolName, ToolInfo>>,
+    deferred_mcp_tools: Option<HashMap<ToolName, ToolInfo>>,
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -113,9 +113,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
     let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
         tools
-            .values()
-            .map(|tool| ToolRegistryPlanDeferredTool {
-                name: tool.canonical_tool_name(),
+            .iter()
+            .map(|(name, tool)| ToolRegistryPlanDeferredTool {
+                name: name.clone(),
                 server_name: tool.server_name.as_str(),
                 connector_name: tool.connector_name.as_deref(),
                 connector_description: tool.connector_description.as_deref(),

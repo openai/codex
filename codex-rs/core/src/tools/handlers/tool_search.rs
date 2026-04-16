@@ -11,6 +11,7 @@ use bm25::SearchEngineBuilder;
 use codex_mcp::ToolInfo;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::ToolName;
 use codex_tools::ToolSearchResultSource;
 use codex_tools::collect_tool_search_output_tools;
 
@@ -18,14 +19,14 @@ const COMPUTER_USE_MCP_SERVER_NAME: &str = "computer-use";
 const COMPUTER_USE_TOOL_SEARCH_LIMIT: usize = 20;
 
 pub struct ToolSearchHandler {
-    entries: Vec<(String, ToolInfo)>,
+    entries: Vec<(ToolName, ToolInfo)>,
     search_engine: SearchEngine<usize>,
 }
 
 impl ToolSearchHandler {
-    pub fn new(tools: std::collections::HashMap<String, ToolInfo>) -> Self {
-        let mut entries: Vec<(String, ToolInfo)> = tools.into_iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+    pub fn new(tools: std::collections::HashMap<ToolName, ToolInfo>) -> Self {
+        let mut entries: Vec<(ToolName, ToolInfo)> = tools.into_iter().collect();
+        entries.sort_by_key(|entry| entry.0.display());
 
         let documents: Vec<Document<usize>> = entries
             .iter()
@@ -111,7 +112,7 @@ impl ToolSearchHandler {
         query: &str,
         limit: usize,
         use_default_limit: bool,
-    ) -> Vec<&(String, ToolInfo)> {
+    ) -> Vec<&(ToolName, ToolInfo)> {
         let mut results = self
             .search_engine
             .search(query, limit)
@@ -137,7 +138,7 @@ impl ToolSearchHandler {
     }
 }
 
-fn limit_results_per_server(results: Vec<&(String, ToolInfo)>) -> Vec<&(String, ToolInfo)> {
+fn limit_results_per_server(results: Vec<&(ToolName, ToolInfo)>) -> Vec<&(ToolName, ToolInfo)> {
     results
         .into_iter()
         .scan(
@@ -165,9 +166,9 @@ fn default_limit_for_server(server_name: &str) -> usize {
     }
 }
 
-fn build_search_text(name: &str, info: &ToolInfo) -> String {
+fn build_search_text(name: &ToolName, info: &ToolInfo) -> String {
     let mut parts = vec![
-        name.to_string(),
+        name.display(),
         info.callable_name.clone(),
         info.tool.name.to_string(),
         info.server_name.clone(),
@@ -320,12 +321,12 @@ mod tests {
         server_name: &str,
         description_prefix: &str,
         count: usize,
-    ) -> std::collections::HashMap<String, ToolInfo> {
+    ) -> std::collections::HashMap<ToolName, ToolInfo> {
         (0..count)
             .map(|index| {
                 let tool_name = format!("tool_{index:03}");
                 (
-                    format!("mcp__{server_name}__{tool_name}"),
+                    ToolName::namespaced(format!("mcp__{server_name}__"), tool_name.clone()),
                     tool_info(server_name, &tool_name, description_prefix),
                 )
             })
@@ -360,7 +361,7 @@ mod tests {
         }
     }
 
-    fn count_results_for_server(results: &[&(String, ToolInfo)], server_name: &str) -> usize {
+    fn count_results_for_server(results: &[&(ToolName, ToolInfo)], server_name: &str) -> usize {
         results
             .iter()
             .filter(|(_, tool)| tool.server_name == server_name)
