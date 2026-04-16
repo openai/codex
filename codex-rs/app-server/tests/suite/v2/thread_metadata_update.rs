@@ -46,6 +46,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -136,6 +137,7 @@ async fn thread_metadata_update_rejects_empty_git_info_patch() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

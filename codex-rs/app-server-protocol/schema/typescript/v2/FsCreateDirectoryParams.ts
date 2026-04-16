@@ -14,4 +14,9 @@ path: AbsolutePathBuf,
 /**
  * Whether parent directories should also be created. Defaults to `true`.
  */
-recursive?: boolean | null, };
+recursive?: boolean | null,
+/**
+ * Optional environment selection. Use `"local"` or `"remote"`, or omit
+ * the field to use the default environment.
+ */
+environmentId?: string | null, };

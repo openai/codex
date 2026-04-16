@@ -428,6 +428,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) environment_manager: Arc<EnvironmentManager>,
+    pub(crate) environment_id: Option<String>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
@@ -481,6 +482,7 @@ impl Codex {
             auth_manager,
             models_manager,
             environment_manager,
+            environment_id,
             skills_manager,
             plugins_manager,
             mcp_manager,
@@ -501,7 +503,7 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let environment = environment_manager
-            .current()
+            .environment(environment_id.as_deref())
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
         let fs = environment

@@ -202,6 +202,8 @@ pub struct TestCodexBuilder {
     workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
     user_shell_override: Option<Shell>,
+    environment_manager_override: Option<Arc<codex_exec_server::EnvironmentManager>>,
+    thread_environment_id: Option<String>,
 }
 
 impl TestCodexBuilder {
@@ -250,6 +252,19 @@ impl TestCodexBuilder {
 
     pub fn with_user_shell(mut self, user_shell: Shell) -> Self {
         self.user_shell_override = Some(user_shell);
+        self
+    }
+
+    pub fn with_environment_manager(
+        mut self,
+        environment_manager: Arc<codex_exec_server::EnvironmentManager>,
+    ) -> Self {
+        self.environment_manager_override = Some(environment_manager);
+        self
+    }
+
+    pub fn with_thread_environment_id(mut self, environment_id: impl Into<String>) -> Self {
+        self.thread_environment_id = Some(environment_id.into());
         self
     }
 
@@ -348,9 +363,17 @@ impl TestCodexBuilder {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
-        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            test_env.exec_server_url().map(str::to_owned),
-        ));
+        let environment_manager = self
+            .environment_manager_override
+            .clone()
+            .unwrap_or_else(|| {
+                Arc::new(codex_exec_server::EnvironmentManager::new(
+                    test_env.exec_server_url().map(str::to_owned),
+                ))
+            });
+        let selected_environment = environment_manager
+            .environment(self.thread_environment_id.as_deref())
+            .await?;
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
@@ -365,6 +388,7 @@ impl TestCodexBuilder {
             resume_from,
             test_env,
             environment_manager,
+            selected_environment,
         ))
         .await
     }
@@ -377,6 +401,7 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
         test_env: TestEnv,
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
+        selected_environment: Option<Arc<codex_exec_server::Environment>>,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
         let thread_manager = if config.model_catalog.is_some() {
@@ -398,8 +423,15 @@ impl TestCodexBuilder {
         };
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
+        let thread_environment_id = self.thread_environment_id.clone();
 
         let new_conversation = match (resume_from, user_shell_override) {
+            (Some(_), _) if thread_environment_id.is_some() => {
+                anyhow::bail!("test harness does not support resuming with thread_environment_id")
+            }
+            (_, Some(_)) if thread_environment_id.is_some() => anyhow::bail!(
+                "test harness does not support user_shell_override with thread_environment_id"
+            ),
             (Some(path), Some(user_shell_override)) => {
                 let auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
                 Box::pin(
@@ -433,7 +465,15 @@ impl TestCodexBuilder {
                 )
                 .await?
             }
-            (None, None) => Box::pin(thread_manager.start_thread(config.clone())).await?,
+            (None, None) => {
+                Box::pin(thread_manager.start_thread_with_tools(
+                    config.clone(),
+                    Vec::new(),
+                    /*persist_extended_history*/ false,
+                    thread_environment_id,
+                ))
+                .await?
+            }
         };
 
         Ok(TestCodex {
@@ -443,6 +483,7 @@ impl TestCodexBuilder {
             codex: new_conversation.thread,
             session_configured: new_conversation.session_configured,
             thread_manager,
+            selected_environment,
             _test_env: test_env,
         })
     }
@@ -533,6 +574,7 @@ pub struct TestCodex {
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
+    selected_environment: Option<Arc<codex_exec_server::Environment>>,
     _test_env: TestEnv,
 }
 
@@ -551,6 +593,10 @@ impl TestCodex {
 
     pub fn executor_environment(&self) -> &TestEnv {
         &self._test_env
+    }
+
+    pub fn selected_environment(&self) -> Option<&codex_exec_server::Environment> {
+        self.selected_environment.as_deref()
     }
 
     pub fn fs(&self) -> Arc<dyn ExecutorFileSystem> {
@@ -879,6 +925,8 @@ pub fn test_codex() -> TestCodexBuilder {
         workspace_setups: vec![],
         home: None,
         user_shell_override: None,
+        environment_manager_override: None,
+        thread_environment_id: None,
     }
 }
 

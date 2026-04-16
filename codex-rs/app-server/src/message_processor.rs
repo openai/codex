@@ -65,6 +65,7 @@ use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::RegisteredEnvironment;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
@@ -166,6 +167,7 @@ pub(crate) struct MessageProcessor {
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
+    environment_manager: Arc<EnvironmentManager>,
     auth_manager: Arc<AuthManager>,
     analytics_events_client: AnalyticsEventsClient,
     fs_watch_manager: FsWatchManager,
@@ -277,7 +279,7 @@ impl MessageProcessor {
                     .features
                     .enabled(Feature::DefaultModeRequestUserInput),
             },
-            environment_manager,
+            environment_manager.clone(),
             Some(analytics_events_client.clone()),
         ));
         thread_manager
@@ -316,8 +318,8 @@ impl MessageProcessor {
         );
         let external_agent_config_api =
             ExternalAgentConfigApi::new(config.codex_home.to_path_buf());
-        let fs_api = FsApi::default();
-        let fs_watch_manager = FsWatchManager::new(outgoing.clone());
+        let fs_api = FsApi::new(environment_manager.clone());
+        let fs_watch_manager = FsWatchManager::new(outgoing.clone(), environment_manager.clone());
 
         Self {
             outgoing,
@@ -325,6 +327,7 @@ impl MessageProcessor {
             config_api,
             external_agent_config_api,
             fs_api,
+            environment_manager,
             auth_manager,
             analytics_events_client,
             fs_watch_manager,

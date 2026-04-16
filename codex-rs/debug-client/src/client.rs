@@ -391,6 +391,7 @@ pub fn build_thread_start_params(
         cwd,
         approval_policy: Some(approval_policy),
         experimental_raw_events: false,
+        environment_id: None,
         ..Default::default()
     }
 }

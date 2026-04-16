@@ -8,6 +8,13 @@
   },
   "description": "List direct child names for a directory.",
   "properties": {
+    "environmentId": {
+      "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "path": {
       "allOf": [
         {

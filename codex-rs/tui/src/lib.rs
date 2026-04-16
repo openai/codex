@@ -2043,6 +2043,7 @@ mod tests {
                 request_id: RequestId::Integer(1),
                 params: ThreadStartParams {
                     ephemeral: Some(true),
+                    environment_id: None,
                     ..ThreadStartParams::default()
                 },
             })

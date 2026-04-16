@@ -18,4 +18,9 @@ destinationPath: AbsolutePathBuf,
 /**
  * Required for directory copies; ignored for file copies.
  */
-recursive?: boolean, };
+recursive?: boolean,
+/**
+ * Optional environment selection. Use `"local"` or `"remote"`, or omit
+ * the field to use the default environment.
+ */
+environmentId?: string | null, };

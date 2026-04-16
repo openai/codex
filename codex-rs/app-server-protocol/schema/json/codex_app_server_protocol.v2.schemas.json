@@ -4302,6 +4302,13 @@
           ],
           "description": "Absolute destination path."
         },
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "recursive": {
           "description": "Required for directory copies; ignored for file copies.",
           "type": "boolean"
@@ -4332,6 +4339,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Create a directory on the host filesystem.",
       "properties": {
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
           "allOf": [
             {
@@ -4364,6 +4378,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Request metadata for an absolute path.",
       "properties": {
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
           "allOf": [
             {
@@ -4443,6 +4464,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "List direct child names for a directory.",
       "properties": {
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
           "allOf": [
             {
@@ -4480,6 +4508,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Read a file from the host filesystem.",
       "properties": {
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
           "allOf": [
             {
@@ -4514,6 +4549,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Remove a file or directory tree from the host filesystem.",
       "properties": {
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "force": {
           "description": "Whether missing paths should be ignored. Defaults to `true`.",
           "type": [
@@ -4574,6 +4616,13 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Start filesystem watch notifications for an absolute path.",
       "properties": {
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
           "allOf": [
             {
@@ -4620,6 +4669,13 @@
         "dataBase64": {
           "description": "File contents encoded as base64.",
           "type": "string"
+        },
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "path": {
           "allOf": [
@@ -12395,6 +12451,13 @@
           ]
         },
         "developerInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environmentId": {
+          "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
           "type": [
             "string",
             "null"

@@ -10,4 +10,9 @@ export type FsReadFileParams = {
 /**
  * Absolute path to read.
  */
-path: AbsolutePathBuf, };
+path: AbsolutePathBuf,
+/**
+ * Optional environment selection. Use `"local"` or `"remote"`, or omit
+ * the field to use the default environment.
+ */
+environmentId?: string | null, };

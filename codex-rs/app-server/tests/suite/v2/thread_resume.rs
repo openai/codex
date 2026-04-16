@@ -122,6 +122,7 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -650,6 +651,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -757,6 +759,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -873,6 +876,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -979,6 +983,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1092,6 +1097,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1230,6 +1236,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1579,6 +1586,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1699,6 +1707,7 @@ async fn start_materialized_thread_and_restart(
     let start_id = first_mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1-codex-max".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -1773,6 +1782,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.2-codex".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
