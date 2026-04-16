@@ -1699,6 +1699,24 @@
         }
       ]
     },
+    "RemoteControlPairingMode": {
+      "enum": [
+        "session",
+        "server"
+      ],
+      "type": "string"
+    },
+    "RemoteControlPairingStartParams": {
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/RemoteControlPairingMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -4651,6 +4669,30 @@
         "params"
       ],
       "title": "ExperimentalFeature/enablement/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "remoteControl/pairing/start"
+          ],
+          "title": "RemoteControl/pairing/startRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RemoteControlPairingStartParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "RemoteControl/pairing/startRequest",
       "type": "object"
     },
     {

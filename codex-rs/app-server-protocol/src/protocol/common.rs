@@ -462,6 +462,10 @@ client_request_definitions! {
         params: v2::CollaborationModeListParams,
         response: v2::CollaborationModeListResponse,
     },
+    RemoteControlPairingStart => "remoteControl/pairing/start" {
+        params: v2::RemoteControlPairingStartParams,
+        response: v2::RemoteControlPairingStartResponse,
+    },
     #[experimental("mock/experimentalMethod")]
     /// Test-only method used to validate experimental gating.
     MockExperimentalMethod => "mock/experimentalMethod" {
@@ -1679,6 +1683,27 @@ mod tests {
                 "method": "collaborationMode/list",
                 "id": 7,
                 "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_remote_control_pairing_start() -> Result<()> {
+        let request = ClientRequest::RemoteControlPairingStart {
+            request_id: RequestId::Integer(8),
+            params: v2::RemoteControlPairingStartParams {
+                mode: v2::RemoteControlPairingMode::Session,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "remoteControl/pairing/start",
+                "id": 8,
+                "params": {
+                    "mode": "session"
+                }
             }),
             serde_json::to_value(&request)?,
         );

@@ -90,6 +90,9 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RemoteControlPairingMode;
+use codex_app_server_protocol::RemoteControlPairingStartParams;
+use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -2047,6 +2050,17 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+        });
+    }
+
+    fn start_remote_control_pairing(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_remote_control_pairing(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::RemoteControlPairingLoaded { result });
         });
     }
 
@@ -4721,6 +4735,12 @@ impl App {
             AppEvent::McpInventoryLoaded { result } => {
                 self.handle_mcp_inventory_result(result);
             }
+            AppEvent::StartRemoteControlPairing => {
+                self.start_remote_control_pairing(app_server);
+            }
+            AppEvent::RemoteControlPairingLoaded { result } => {
+                self.chat_widget.on_remote_control_pairing_result(result);
+            }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
             }
@@ -6399,6 +6419,21 @@ async fn fetch_account_rate_limits(
         .wrap_err("account/rateLimits/read failed in TUI")?;
 
     Ok(app_server_rate_limit_snapshots_to_core(response))
+}
+
+async fn fetch_remote_control_pairing(
+    request_handle: AppServerRequestHandle,
+) -> Result<RemoteControlPairingStartResponse> {
+    let request_id = RequestId::String(format!("remote-control-pairing-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::RemoteControlPairingStart {
+            request_id,
+            params: RemoteControlPairingStartParams {
+                mode: RemoteControlPairingMode::Session,
+            },
+        })
+        .await
+        .wrap_err("remoteControl/pairing/start failed in TUI")
 }
 
 async fn fetch_plugins_list(

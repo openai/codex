@@ -1903,6 +1903,34 @@ pub struct CollaborationModeListResponse {
     pub data: Vec<CollaborationModeMask>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum RemoteControlPairingMode {
+    Session,
+    Server,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlPairingStartParams {
+    pub mode: RemoteControlPairingMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlPairingStartResponse {
+    pub pairing_id: String,
+    pub pairing_code: String,
+    pub expires_at: i64,
+    pub server_id: String,
+    pub environment_id: String,
+    pub mode: RemoteControlPairingMode,
+    pub prompt: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

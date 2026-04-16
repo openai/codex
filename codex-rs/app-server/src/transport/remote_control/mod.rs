@@ -1,8 +1,10 @@
 mod client_tracker;
 mod enroll;
+mod pairing;
 mod protocol;
 mod websocket;
 
+use crate::transport::remote_control::pairing::start_remote_control_pairing;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
 
 pub use self::protocol::ClientId;
@@ -14,6 +16,8 @@ use super::TransportEvent;
 use super::next_connection_id;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
+pub(crate) use pairing::RemoteControlPairing;
+pub(crate) use pairing::RemoteControlPairingMode;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -32,6 +36,9 @@ pub(super) struct QueuedServerEnvelope {
 #[derive(Clone)]
 pub(crate) struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
+    remote_control_url: String,
+    state_db: Option<Arc<StateRuntime>>,
+    auth_manager: Arc<AuthManager>,
 }
 
 impl RemoteControlHandle {
@@ -41,6 +48,21 @@ impl RemoteControlHandle {
             *state = enabled;
             changed
         });
+    }
+
+    pub(crate) async fn start_pairing(
+        &self,
+        app_server_client_name: Option<&str>,
+        mode: RemoteControlPairingMode,
+    ) -> io::Result<RemoteControlPairing> {
+        start_remote_control_pairing(
+            &self.remote_control_url,
+            self.state_db.as_deref(),
+            &self.auth_manager,
+            app_server_client_name,
+            mode,
+        )
+        .await
     }
 }
 
@@ -60,6 +82,9 @@ pub(crate) async fn start_remote_control(
     };
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
+    let handle_remote_control_url = remote_control_url.clone();
+    let handle_state_db = state_db.clone();
+    let handle_auth_manager = auth_manager.clone();
     let join_handle = tokio::spawn(async move {
         RemoteControlWebsocket::new(
             remote_control_url,
@@ -78,6 +103,9 @@ pub(crate) async fn start_remote_control(
         join_handle,
         RemoteControlHandle {
             enabled_tx: Arc::new(enabled_tx),
+            remote_control_url: handle_remote_control_url,
+            state_db: handle_state_db,
+            auth_manager: handle_auth_manager,
         },
     ))
 }

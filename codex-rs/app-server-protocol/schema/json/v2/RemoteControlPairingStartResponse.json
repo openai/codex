@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RemoteControlPairingMode": {
+      "enum": [
+        "session",
+        "server"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "environmentId": {
+      "type": "string"
+    },
+    "expiresAt": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "mode": {
+      "$ref": "#/definitions/RemoteControlPairingMode"
+    },
+    "pairingCode": {
+      "type": "string"
+    },
+    "pairingId": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "serverId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "environmentId",
+    "expiresAt",
+    "mode",
+    "pairingCode",
+    "pairingId",
+    "prompt",
+    "serverId"
+  ],
+  "title": "RemoteControlPairingStartResponse",
+  "type": "object"
+}

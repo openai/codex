@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
+use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
@@ -20,6 +21,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
+use crate::transport::RemoteControlPairingMode as TransportRemoteControlPairingMode;
 use async_trait::async_trait;
 use axum::http::HeaderValue;
 use codex_analytics::AnalyticsEventsClient;
@@ -55,6 +57,9 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::RemoteControlPairingMode;
+use codex_app_server_protocol::RemoteControlPairingStartParams;
+use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
@@ -944,6 +949,17 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::RemoteControlPairingStart { request_id, params } => {
+                self.handle_remote_control_pairing_start(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                    app_server_client_name.as_deref(),
+                )
+                .await;
+            }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which
@@ -1224,6 +1240,83 @@ impl MessageProcessor {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
+    }
+
+    async fn handle_remote_control_pairing_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: RemoteControlPairingStartParams,
+        app_server_client_name: Option<&str>,
+    ) {
+        let result = match &self.remote_control_handle {
+            Some(remote_control_handle) => {
+                remote_control_handle
+                    .start_pairing(
+                        app_server_client_name,
+                        remote_control_pairing_mode(params.mode),
+                    )
+                    .await
+            }
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "remote control is not available for this app-server",
+            )),
+        };
+
+        match result {
+            Ok(pairing) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        RemoteControlPairingStartResponse {
+                            pairing_id: pairing.pairing_id,
+                            pairing_code: pairing.pairing_code,
+                            expires_at: pairing.expires_at,
+                            server_id: pairing.server_id,
+                            environment_id: pairing.environment_id,
+                            mode: match pairing.mode {
+                                TransportRemoteControlPairingMode::Session => {
+                                    RemoteControlPairingMode::Session
+                                }
+                                TransportRemoteControlPairingMode::Server => {
+                                    RemoteControlPairingMode::Server
+                                }
+                            },
+                            prompt: pairing.prompt,
+                        },
+                    )
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing
+                    .send_error(request_id, remote_control_pairing_start_error(error))
+                    .await;
+            }
+        }
+    }
+}
+
+fn remote_control_pairing_mode(
+    mode: RemoteControlPairingMode,
+) -> TransportRemoteControlPairingMode {
+    match mode {
+        RemoteControlPairingMode::Session => TransportRemoteControlPairingMode::Session,
+        RemoteControlPairingMode::Server => TransportRemoteControlPairingMode::Server,
+    }
+}
+
+fn remote_control_pairing_start_error(error: std::io::Error) -> JSONRPCErrorError {
+    let code = match error.kind() {
+        std::io::ErrorKind::InvalidInput
+        | std::io::ErrorKind::NotFound
+        | std::io::ErrorKind::PermissionDenied
+        | std::io::ErrorKind::WouldBlock => INVALID_REQUEST_ERROR_CODE,
+        _ => INTERNAL_ERROR_CODE,
+    };
+    JSONRPCErrorError {
+        code,
+        message: error.to_string(),
+        data: None,
     }
 }
 

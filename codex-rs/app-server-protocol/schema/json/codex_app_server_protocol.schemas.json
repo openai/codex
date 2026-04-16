@@ -1186,6 +1186,30 @@
             },
             "method": {
               "enum": [
+                "remoteControl/pairing/start"
+              ],
+              "title": "RemoteControl/pairing/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/RemoteControlPairingStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "RemoteControl/pairing/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "mcpServer/oauth/login"
               ],
               "title": "McpServer/oauth/loginRequestMethod",
@@ -11038,6 +11062,64 @@
           "turnId"
         ],
         "title": "ReasoningTextDeltaNotification",
+        "type": "object"
+      },
+      "RemoteControlPairingMode": {
+        "enum": [
+          "session",
+          "server"
+        ],
+        "type": "string"
+      },
+      "RemoteControlPairingStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "mode": {
+            "$ref": "#/definitions/v2/RemoteControlPairingMode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "RemoteControlPairingStartParams",
+        "type": "object"
+      },
+      "RemoteControlPairingStartResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "environmentId": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "mode": {
+            "$ref": "#/definitions/v2/RemoteControlPairingMode"
+          },
+          "pairingCode": {
+            "type": "string"
+          },
+          "pairingId": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "serverId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environmentId",
+          "expiresAt",
+          "mode",
+          "pairingCode",
+          "pairingId",
+          "prompt",
+          "serverId"
+        ],
+        "title": "RemoteControlPairingStartResponse",
         "type": "object"
       },
       "RequestId": {
