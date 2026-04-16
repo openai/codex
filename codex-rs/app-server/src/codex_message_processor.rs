@@ -213,6 +213,9 @@ use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCre
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
+use codex_config::ThreadConfigContext;
+use codex_config::ThreadConfigLoader;
+use codex_config::ThreadConfigSource;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::ForkSnapshot;
@@ -351,6 +354,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Error as IoError;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -478,6 +482,7 @@ pub(crate) struct CodexMessageProcessor {
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    thread_config_loader: Arc<dyn ThreadConfigLoader>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
@@ -638,6 +643,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     pub(crate) runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    pub(crate) thread_config_loader: Arc<dyn ThreadConfigLoader>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
 }
@@ -716,6 +722,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
+            thread_config_loader,
             feedback,
             log_db,
         } = args;
@@ -730,6 +737,7 @@ impl CodexMessageProcessor {
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
+            thread_config_loader,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
@@ -2423,12 +2431,14 @@ impl CodexMessageProcessor {
         };
         let request_trace = request_context.request_trace();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
+        let thread_config_loader = Arc::clone(&self.thread_config_loader);
         let thread_start_task = async move {
             Self::thread_start_task(
                 listener_task_context,
                 cli_overrides,
                 runtime_feature_enablement,
                 cloud_requirements,
+                thread_config_loader,
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
@@ -2505,6 +2515,7 @@ impl CodexMessageProcessor {
         cli_overrides: Vec<(String, TomlValue)>,
         runtime_feature_enablement: BTreeMap<String, bool>,
         cloud_requirements: CloudRequirementsLoader,
+        thread_config_loader: Arc<dyn ThreadConfigLoader>,
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
@@ -2518,10 +2529,32 @@ impl CodexMessageProcessor {
         request_trace: Option<W3cTraceContext>,
     ) {
         let requested_cwd = typesafe_overrides.cwd.clone();
+        let thread_config_sources = match thread_config_loader
+            .load(ThreadConfigContext {
+                thread_id: None,
+                cwd: requested_cwd.clone(),
+            })
+            .await
+        {
+            Ok(sources) => sources,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to load thread config: {err}"),
+                    data: None,
+                };
+                listener_task_context
+                    .outgoing
+                    .send_error(request_id, error)
+                    .await;
+                return;
+            }
+        };
         let mut config = match derive_config_from_params(
             &cli_overrides,
             config_overrides.clone(),
             typesafe_overrides.clone(),
+            &thread_config_sources,
             &cloud_requirements,
             &listener_task_context.codex_home,
             &runtime_feature_enablement,
@@ -2603,6 +2636,7 @@ impl CodexMessageProcessor {
                 cli_overrides_for_reload,
                 config_overrides,
                 typesafe_overrides,
+                &thread_config_sources,
                 &cloud_requirements,
                 &listener_task_context.codex_home,
                 &runtime_feature_enablement,
@@ -9346,15 +9380,18 @@ async fn sync_default_client_residency_requirement(
 ///   `typesafe_overrides` is a `ConfigOverrides` derived from the respective request object.
 ///   Because the overrides are defined explicitly in the `*Params`, this takes priority over
 ///   the more general "bag of config options" provided by `cli_overrides` and `request_overrides`.
+/// - `thread_config_sources`: typed config returned by session/user config loaders. The app-server
+///   owns source precedence and folds the supported values into the same ConfigBuilder inputs.
 async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
     request_overrides: Option<HashMap<String, serde_json::Value>>,
-    typesafe_overrides: ConfigOverrides,
+    mut typesafe_overrides: ConfigOverrides,
+    thread_config_sources: &[ThreadConfigSource],
     cloud_requirements: &CloudRequirementsLoader,
     codex_home: &Path,
     runtime_feature_enablement: &BTreeMap<String, bool>,
 ) -> std::io::Result<Config> {
-    let merged_cli_overrides = cli_overrides
+    let mut merged_cli_overrides = cli_overrides
         .iter()
         .cloned()
         .chain(
@@ -9364,6 +9401,11 @@ async fn derive_config_from_params(
                 .map(|(k, v)| (k, json_to_toml(v))),
         )
         .collect::<Vec<_>>();
+    apply_thread_config_sources(
+        &mut merged_cli_overrides,
+        &mut typesafe_overrides,
+        thread_config_sources,
+    )?;
 
     let mut config = codex_core::config::ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
@@ -9374,6 +9416,39 @@ async fn derive_config_from_params(
         .await?;
     apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
     Ok(config)
+}
+
+fn apply_thread_config_sources(
+    merged_cli_overrides: &mut Vec<(String, TomlValue)>,
+    typesafe_overrides: &mut ConfigOverrides,
+    thread_config_sources: &[ThreadConfigSource],
+) -> std::io::Result<()> {
+    for source in thread_config_sources {
+        match source {
+            ThreadConfigSource::Session(config) => {
+                for (provider_id, provider) in &config.model_providers {
+                    let value = TomlValue::try_from(provider.clone()).map_err(|err| {
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!(
+                                "failed to convert session model provider {provider_id:?}: {err}"
+                            ),
+                        )
+                    })?;
+                    merged_cli_overrides.push((format!("model_providers.{provider_id}"), value));
+                }
+                if let Some(model_provider) = &config.model_provider {
+                    typesafe_overrides.model_provider = Some(model_provider.clone());
+                }
+                for (feature, enabled) in &config.features {
+                    merged_cli_overrides
+                        .push((format!("features.{feature}"), TomlValue::Boolean(*enabled)));
+                }
+            }
+            ThreadConfigSource::User(_) => {}
+        }
+    }
+    Ok(())
 }
 
 async fn derive_config_for_cwd(
@@ -10245,6 +10320,9 @@ mod tests {
     use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_config::SessionThreadConfig;
+    use codex_model_provider_info::ModelProviderInfo;
+    use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
@@ -10407,6 +10485,64 @@ mod tests {
                 "detail": "failed to load your workspace-managed config",
             }))
         );
+    }
+
+    #[tokio::test]
+    async fn derive_config_from_params_uses_session_thread_config_model_provider() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let session_provider = ModelProviderInfo {
+            name: "session".to_string(),
+            base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: true,
+        };
+        let thread_config_sources = vec![ThreadConfigSource::Session(SessionThreadConfig {
+            model_provider: Some("session".to_string()),
+            model_providers: HashMap::from([("session".to_string(), session_provider.clone())]),
+            features: BTreeMap::from([("plugins".to_string(), false)]),
+        })];
+
+        let config = derive_config_from_params(
+            &[],
+            Some(HashMap::from([
+                ("model_provider".to_string(), json!("request")),
+                ("features.plugins".to_string(), json!(true)),
+                (
+                    "model_providers.session".to_string(),
+                    json!({
+                        "name": "request",
+                        "base_url": "http://127.0.0.1:9999/api/codex",
+                        "wire_api": "responses",
+                    }),
+                ),
+            ])),
+            ConfigOverrides {
+                model_provider: Some("request".to_string()),
+                ..Default::default()
+            },
+            &thread_config_sources,
+            &CloudRequirementsLoader::default(),
+            temp_dir.path(),
+            &BTreeMap::new(),
+        )
+        .await?;
+
+        assert_eq!(config.model_provider_id, "session");
+        assert_eq!(config.model_provider, session_provider);
+        assert!(!config.features.enabled(Feature::Plugins));
+        Ok(())
     }
 
     #[test]
