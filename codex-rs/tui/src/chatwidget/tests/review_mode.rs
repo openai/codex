@@ -1328,6 +1328,72 @@ async fn review_branch_picker_escape_navigates_back_then_dismisses() {
 }
 
 #[tokio::test]
+async fn review_branch_picker_submit_dismisses_parent_review_popup() {
+    use std::process::Command;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let repo = tempdir().expect("tempdir");
+
+    let run_git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo.path())
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git command failed: {args:?}");
+    };
+
+    run_git(&["init"]);
+    run_git(&["config", "user.name", "Codex Test"]);
+    run_git(&["config", "user.email", "codex-tests@example.com"]);
+    std::fs::write(repo.path().join("tracked.txt"), "tracked\n").expect("write tracked file");
+    run_git(&["add", "tracked.txt"]);
+    run_git(&["commit", "-m", "init"]);
+    run_git(&["checkout", "-b", "review-work"]);
+    run_git(&["branch", "review-base"]);
+
+    chat.open_review_popup();
+    chat.show_review_branch_picker(repo.path()).await;
+
+    let header = render_bottom_first_row(&chat, /*width*/ 60);
+    assert!(
+        header.contains("Select a base branch"),
+        "expected branch picker header: {header:?}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let review_event = rx.try_recv().expect("expected review event");
+    match review_event {
+        AppEvent::CodexOp(Op::Review { review_request }) => {
+            assert!(
+                matches!(
+                    review_request.target,
+                    ReviewTarget::BaseBranch { ref branch } if !branch.is_empty()
+                ),
+                "expected base-branch review request, got {review_request:?}"
+            );
+        }
+        other => panic!("unexpected first app event: {other:?}"),
+    }
+
+    let dismiss_event = rx.try_recv().expect("expected dismiss-all event");
+    assert!(
+        matches!(dismiss_event, AppEvent::DismissAllBottomPaneViews),
+        "unexpected second app event: {dismiss_event:?}"
+    );
+
+    // Simulate the app loop consuming the dismissal request after the picker
+    // submits its review operation.
+    chat.dismiss_all_bottom_pane_views();
+
+    assert!(
+        chat.is_normal_backtrack_mode(),
+        "expected branch submit to dismiss the full review popup stack"
+    );
+}
+
+#[tokio::test]
 async fn review_ended_keeps_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
