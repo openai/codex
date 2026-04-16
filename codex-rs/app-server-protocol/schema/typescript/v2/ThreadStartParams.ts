@@ -14,14 +14,9 @@ export type ThreadStartParams = {model?: string | null, modelProvider?: string |
  * and subsequent turns.
  */
 approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, sessionStartSource?: ThreadStartSource | null, /**
- * Optional environment id to use for this thread. Supported values are
- * `"local"` and `"remote"`. When omitted, the default environment is
- * used.
- */
-environmentId?: string | null, /**
  * Optional ordered environment ids to use for this thread. For now only
- * the first id is used. When omitted or empty, `environmentId` is used as
- * a fallback for compatibility.
+ * the first id is used. When omitted or empty, the default environment is
+ * used.
  */
 environmentIds?: Array<string> | null, /**
  * If true, opt into emitting raw Responses API items on the event stream.

@@ -3280,15 +3280,8 @@
             "null"
           ]
         },
-        "environmentId": {
-          "description": "Optional environment id to use for this thread. Supported values are `\"local\"` and `\"remote\"`. When omitted, the default environment is used.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "environmentIds": {
-          "description": "Optional ordered environment ids to use for this thread. For now only the first id is used. When omitted or empty, `environmentId` is used as a fallback for compatibility.",
+          "description": "Optional ordered environment ids to use for this thread. For now only the first id is used. When omitted or empty, the default environment is used.",
           "items": {
             "type": "string"
           },
