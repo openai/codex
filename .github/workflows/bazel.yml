@@ -95,8 +95,9 @@ jobs:
             # exclude the V8-dependent slice, which currently mixes Windows
             # GNU targets with Linux RBE-hosted V8 generators/toolchains.
             mapfile -t bazel_windows_smoke_targets < <(
-              bazel query \
+              bazel \
                 --noexperimental_remote_repo_contents_cache \
+                query \
                 'tests(//codex-rs/...) except rdeps(tests(//codex-rs/...), @v8_targets//:rusty_v8_archive_for_target)'
             )
 
