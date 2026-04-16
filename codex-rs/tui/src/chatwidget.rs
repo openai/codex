@@ -4759,6 +4759,7 @@ impl ChatWidget {
             invocation,
             duration,
             result,
+            ..
         } = ev;
 
         let extra_cell = match self
@@ -5943,6 +5944,7 @@ impl ChatWidget {
                 server,
                 tool,
                 arguments,
+                mcp_app_resource_uri,
                 result,
                 error,
                 duration_ms,
@@ -5955,15 +5957,19 @@ impl ChatWidget {
                         tool,
                         arguments: Some(arguments),
                     },
+                    mcp_app_resource_uri,
                     duration: Duration::from_millis(duration_ms.unwrap_or_default().max(0) as u64),
                     result: match (result, error) {
                         (_, Some(error)) => Err(error.message),
-                        (Some(result), None) => Ok(codex_protocol::mcp::CallToolResult {
-                            content: result.content,
-                            structured_content: result.structured_content,
-                            is_error: Some(false),
-                            meta: None,
-                        }),
+                        (Some(result), None) => {
+                            let result = *result;
+                            Ok(codex_protocol::mcp::CallToolResult {
+                                content: result.content,
+                                structured_content: result.structured_content,
+                                is_error: Some(false),
+                                meta: None,
+                            })
+                        }
                         (None, None) => Err("MCP tool call completed without a result".to_string()),
                     },
                 });
@@ -6454,6 +6460,7 @@ impl ChatWidget {
                 server,
                 tool,
                 arguments,
+                mcp_app_resource_uri,
                 ..
             } => {
                 self.on_mcp_tool_call_begin(McpToolCallBeginEvent {
@@ -6463,6 +6470,7 @@ impl ChatWidget {
                         tool,
                         arguments: Some(arguments),
                     },
+                    mcp_app_resource_uri,
                 });
             }
             ThreadItem::WebSearch { id, .. } => {
