@@ -2,10 +2,8 @@ use crate::codex::Session;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
-use crate::guardian::new_guardian_review_id;
-use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::denied_network_policy_message;
+use crate::tools::approval::request_approval_for_turn;
 use crate::tools::sandboxing::ToolError;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
@@ -370,46 +368,40 @@ impl NetworkApprovalService {
             protocol,
         };
         let owner_call = self.resolve_single_active_call().await;
-        let guardian_approval_id = Self::approval_id_for_key(&key);
-        let use_guardian = routes_approval_to_guardian(&turn_context);
-        let guardian_review_id = use_guardian.then(new_guardian_review_id);
-        let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
-            review_approval_request(
-                &session,
-                &turn_context,
-                review_id,
-                GuardianApprovalRequest::NetworkAccess {
-                    id: guardian_approval_id.clone(),
-                    turn_id: owner_call
-                        .as_ref()
-                        .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
-                    target,
-                    host: request.host,
-                    protocol,
-                    port: key.port,
-                },
-                Some(policy_denial_message.clone()),
-            )
-            .await
-        } else {
-            let approval_id = Self::approval_id_for_key(&key);
-            let prompt_command = vec!["network-access".to_string(), target.clone()];
-            let available_decisions = None;
-            session
-                .request_command_approval(
-                    turn_context.as_ref(),
-                    approval_id,
-                    /*approval_id*/ None,
-                    prompt_command,
-                    turn_context.cwd.clone(),
-                    Some(prompt_reason),
-                    Some(network_approval_context.clone()),
-                    /*proposed_execpolicy_amendment*/ None,
-                    /*additional_permissions*/ None,
-                    available_decisions,
-                )
-                .await
-        };
+        let approval_outcome = request_approval_for_turn(
+            &session,
+            &turn_context,
+            GuardianApprovalRequest::NetworkAccess {
+                id: Self::approval_id_for_key(&key),
+                turn_id: owner_call
+                    .as_ref()
+                    .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
+                target: target.clone(),
+                host: request.host.clone(),
+                protocol,
+                port: key.port,
+            },
+            Some(policy_denial_message.clone()),
+            || async {
+                session
+                    .request_command_approval(
+                        turn_context.as_ref(),
+                        Self::approval_id_for_key(&key),
+                        /*approval_id*/ None,
+                        vec!["network-access".to_string(), target.clone()],
+                        turn_context.cwd.clone(),
+                        Some(prompt_reason),
+                        Some(network_approval_context.clone()),
+                        /*proposed_execpolicy_amendment*/ None,
+                        /*additional_permissions*/ None,
+                        None,
+                    )
+                    .await
+            },
+        )
+        .await;
+        let guardian_review_id = approval_outcome.guardian_review_id;
+        let approval_decision = approval_outcome.decision;
 
         let mut cache_session_deny = false;
         let resolved = match approval_decision {

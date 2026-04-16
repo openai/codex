@@ -8,11 +8,12 @@ use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::approval::request_approval;
+use crate::tools::approval::with_cached_approval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -28,7 +29,6 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
-use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
@@ -129,16 +129,15 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
-        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
-            if let Some(review_id) = guardian_review_id {
-                return review_approval_request(
+            with_cached_approval(&session.services, "unified_exec", keys, || async {
+                request_approval(
                     session,
                     turn,
-                    review_id,
+                    ctx.guardian_review_id.clone(),
                     GuardianApprovalRequest::ExecCommand {
-                        id: call_id,
-                        command,
+                        id: call_id.clone(),
+                        command: command.clone(),
                         cwd: cwd.clone(),
                         sandbox_permissions: req.sandbox_permissions,
                         additional_permissions: req.additional_permissions.clone(),
@@ -146,27 +145,27 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         tty: req.tty,
                     },
                     retry_reason,
+                    || async move {
+                        session
+                            .request_command_approval(
+                                turn,
+                                call_id,
+                                /*approval_id*/ None,
+                                command,
+                                cwd.clone(),
+                                reason,
+                                ctx.network_approval_context.clone(),
+                                req.exec_approval_requirement
+                                    .proposed_execpolicy_amendment()
+                                    .cloned(),
+                                req.additional_permissions.clone(),
+                                None,
+                            )
+                            .await
+                    },
                 )
-                .await;
-            }
-            with_cached_approval(&session.services, "unified_exec", keys, || async move {
-                let available_decisions = None;
-                session
-                    .request_command_approval(
-                        turn,
-                        call_id,
-                        /*approval_id*/ None,
-                        command,
-                        cwd.clone(),
-                        reason,
-                        ctx.network_approval_context.clone(),
-                        req.exec_approval_requirement
-                            .proposed_execpolicy_amendment()
-                            .cloned(),
-                        req.additional_permissions.clone(),
-                        available_decisions,
-                    )
-                    .await
+                .await
+                .decision
             })
             .await
         })
