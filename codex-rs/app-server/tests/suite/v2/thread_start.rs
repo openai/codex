@@ -62,6 +62,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -180,6 +181,7 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -327,6 +329,7 @@ model_reasoning_effort = "high"
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().to_string_lossy().into_owned()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -357,6 +360,7 @@ async fn thread_start_accepts_flex_service_tier() -> Result<()> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             service_tier: Some(Some(ServiceTier::Flex)),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -385,6 +389,7 @@ async fn thread_start_accepts_metrics_service_name() -> Result<()> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             service_name: Some("my_app_server_client".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -401,6 +406,97 @@ async fn thread_start_accepts_metrics_service_name() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_start_accepts_named_local_environment_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("CODEX_EXEC_SERVER_URL", Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            environment_id: Some("local".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    assert!(!thread.id.is_empty(), "thread id should not be empty");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_rejects_unknown_environment_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            environment_id: Some("missing".to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+    let err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    assert!(
+        err.error
+            .message
+            .contains("unknown environment id: missing"),
+        "unexpected error message: {}",
+        err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_succeeds_when_default_environment_is_disabled() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("CODEX_EXEC_SERVER_URL", Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+    assert!(!thread.id.is_empty(), "thread id should not be empty");
+
+    Ok(())
+}
+#[tokio::test]
 async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -413,6 +509,7 @@ async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.1".to_string()),
             ephemeral: Some(true),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -686,6 +783,7 @@ model_reasoning_effort = "high"
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -698,6 +796,7 @@ model_reasoning_effort = "high"
     let second_request = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -743,6 +842,7 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(nested.display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -776,6 +876,7 @@ async fn thread_start_with_read_only_sandbox_does_not_persist_project_trust() ->
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -818,6 +919,7 @@ model_reasoning_effort = "high"
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(workspace.path().display().to_string()),
             sandbox: Some(SandboxMode::WorkspaceWrite),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

@@ -42,6 +42,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

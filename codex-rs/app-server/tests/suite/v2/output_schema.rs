@@ -37,6 +37,7 @@ async fn turn_start_accepts_output_schema_v2() -> Result<()> {
 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -119,6 +120,7 @@ async fn turn_start_output_schema_is_per_turn_v2() -> Result<()> {
 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             ..Default::default()
         })
         .await?;

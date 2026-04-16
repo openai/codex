@@ -209,6 +209,7 @@ async fn thread_list_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

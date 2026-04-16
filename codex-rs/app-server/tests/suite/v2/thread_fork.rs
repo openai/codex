@@ -239,6 +239,7 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
