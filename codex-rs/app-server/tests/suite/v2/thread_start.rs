@@ -48,6 +48,7 @@ use super::analytics::wait_for_analytics_payload;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
+const CODEX_EXEC_SERVER_CWD_ENV_VAR: &str = "CODEX_EXEC_SERVER_CWD";
 
 #[tokio::test]
 async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
@@ -195,6 +196,87 @@ async fn thread_start_accepts_explicit_local_environment_when_default_is_remote(
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
 
     assert!(!thread.id.is_empty(), "thread id should not be empty");
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_uses_remote_default_cwd_when_request_omits_cwd() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let remote_default_cwd = TempDir::new()?;
+    let remote_default_cwd = remote_default_cwd.path().to_string_lossy().into_owned();
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            (CODEX_EXEC_SERVER_URL_ENV_VAR, Some("ws://127.0.0.1:1")),
+            (
+                CODEX_EXEC_SERVER_CWD_ENV_VAR,
+                Some(remote_default_cwd.as_str()),
+            ),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(thread.cwd.as_path(), Path::new(&remote_default_cwd));
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_explicit_cwd_overrides_remote_default_cwd() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+
+    let remote_default_cwd = TempDir::new()?;
+    let remote_default_cwd = remote_default_cwd.path().to_string_lossy().into_owned();
+    let requested_cwd = TempDir::new()?;
+    let requested_cwd = requested_cwd.path().to_string_lossy().into_owned();
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            (CODEX_EXEC_SERVER_URL_ENV_VAR, Some("ws://127.0.0.1:1")),
+            (
+                CODEX_EXEC_SERVER_CWD_ENV_VAR,
+                Some(remote_default_cwd.as_str()),
+            ),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(requested_cwd.clone()),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(thread.cwd.as_path(), Path::new(&requested_cwd));
     Ok(())
 }
 

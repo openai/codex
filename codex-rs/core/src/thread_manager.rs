@@ -489,6 +489,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             /*environment_id*/ None,
+            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -502,6 +503,7 @@ impl ThreadManager {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         environment_id: Option<String>,
+        requested_cwd: Option<PathBuf>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
@@ -514,6 +516,7 @@ impl ThreadManager {
             parent_trace,
             /*user_shell_override*/ None,
             environment_id,
+            requested_cwd,
         ))
         .await
     }
@@ -555,6 +558,7 @@ impl ThreadManager {
             parent_trace,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
+            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -575,6 +579,7 @@ impl ThreadManager {
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
             /*environment_id*/ None,
+            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -598,6 +603,7 @@ impl ThreadManager {
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
             /*environment_id*/ None,
+            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -707,6 +713,7 @@ impl ThreadManager {
             parent_trace,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
+            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -809,6 +816,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
+            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -837,6 +845,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
+            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -866,6 +875,7 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
             /*environment_id*/ None,
+            /*requested_cwd*/ None,
         ))
         .await
     }
@@ -884,6 +894,7 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
         environment_id: Option<String>,
+        requested_cwd: Option<PathBuf>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -899,6 +910,7 @@ impl ThreadManagerState {
             parent_trace,
             user_shell_override,
             environment_id,
+            requested_cwd,
         ))
         .await
     }
@@ -919,6 +931,7 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
         environment_id: Option<String>,
+        requested_cwd: Option<PathBuf>,
     ) -> CodexResult<NewThread> {
         let environment = self
             .environment_manager
@@ -946,6 +959,7 @@ impl ThreadManagerState {
             models_manager: Arc::clone(&self.models_manager),
             environment_manager: Arc::clone(&self.environment_manager),
             environment_id,
+            requested_cwd,
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
