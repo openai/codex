@@ -146,12 +146,12 @@ async fn read_declared_role(
     declared_role_name: &str,
     role_toml: &AgentRoleToml,
 ) -> std::io::Result<(String, AgentRoleConfig)> {
-    let (mut role, config_file) =
-        agent_role_config_from_toml(fs, declared_role_name, role_toml).await?;
+    let mut role = agent_role_config_from_toml(fs, declared_role_name, role_toml).await?;
     let mut role_name = declared_role_name.to_string();
-    if let Some(config_file) = config_file.as_ref() {
+    if let Some(config_file) = role.config_file.as_deref() {
+        let config_file = AbsolutePathBuf::from_absolute_path(config_file)?;
         let parsed_file =
-            read_resolved_agent_role_file(fs, config_file, Some(declared_role_name)).await?;
+            read_resolved_agent_role_file(fs, &config_file, Some(declared_role_name)).await?;
         role_name = parsed_file.role_name;
         role.description = parsed_file.description.or(role.description);
         role.nickname_candidates = parsed_file.nickname_candidates.or(role.nickname_candidates);
@@ -185,7 +185,7 @@ async fn agent_role_config_from_toml(
     fs: &dyn ExecutorFileSystem,
     role_name: &str,
     role: &AgentRoleToml,
-) -> std::io::Result<(AgentRoleConfig, Option<AbsolutePathBuf>)> {
+) -> std::io::Result<AgentRoleConfig> {
     let config_file = role
         .config_file
         .as_ref()
@@ -201,14 +201,11 @@ async fn agent_role_config_from_toml(
         role.nickname_candidates.as_deref(),
     )?;
 
-    Ok((
-        AgentRoleConfig {
-            description,
-            config_file: config_file.as_ref().map(AbsolutePathBuf::to_path_buf),
-            nickname_candidates,
-        },
-        config_file,
-    ))
+    Ok(AgentRoleConfig {
+        description,
+        config_file: config_file.map(AbsolutePathBuf::into_path_buf),
+        nickname_candidates,
+    })
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]

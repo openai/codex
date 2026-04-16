@@ -6,7 +6,8 @@ use codex_git_utils::get_has_changes;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::recent_commits;
 use codex_git_utils::resolve_root_git_project_for_trust;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathBufExt;
+use core_test_support::PathExt;
 use core_test_support::skip_if_sandbox;
 use std::fs;
 use std::path::PathBuf;
@@ -431,9 +432,8 @@ async fn test_get_git_working_tree_state_branch_fallback() {
 #[tokio::test]
 async fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
     let tmp = TempDir::new().expect("tempdir");
-    let tmp = AbsolutePathBuf::from_absolute_path(tmp.path()).unwrap();
     assert!(
-        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &tmp)
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &tmp.path().abs())
             .await
             .is_none()
     );
@@ -442,8 +442,7 @@ async fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
 #[tokio::test]
 async fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let repo_path = create_test_git_repo(&temp_dir).await;
-    let repo_path = AbsolutePathBuf::from_absolute_path(&repo_path).unwrap();
+    let repo_path = create_test_git_repo(&temp_dir).await.abs();
 
     assert_eq!(
         resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &repo_path).await,
@@ -476,10 +475,8 @@ async fn resolve_root_git_project_for_trust_detects_worktree_and_returns_main_ro
         .output()
         .expect("git worktree add");
 
-    let expected = Some(
-        AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(&repo_path).unwrap()).unwrap(),
-    );
-    let wt_root = AbsolutePathBuf::from_absolute_path(&wt_root).unwrap();
+    let expected = Some(std::fs::canonicalize(&repo_path).unwrap().abs());
+    let wt_root = wt_root.abs();
     let got = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &wt_root).await;
     assert_eq!(got, expected);
     let nested = wt_root.join("nested/sub");
@@ -504,8 +501,8 @@ async fn resolve_root_git_project_for_trust_detects_worktree_pointer_without_git
     )
     .unwrap();
 
-    let expected = AbsolutePathBuf::from_absolute_path(&repo_root).unwrap();
-    let worktree_root = AbsolutePathBuf::from_absolute_path(&worktree_root).unwrap();
+    let expected = repo_root.abs();
+    let worktree_root = worktree_root.abs();
     assert_eq!(
         resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &worktree_root).await,
         Some(expected.clone())
@@ -533,7 +530,7 @@ async fn resolve_root_git_project_for_trust_non_worktrees_gitdir_returns_none() 
     )
     .unwrap();
 
-    let proj = AbsolutePathBuf::from_absolute_path(&proj).unwrap();
+    let proj = proj.abs();
     assert!(
         resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &proj)
             .await
