@@ -130,43 +130,49 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         Box::pin(async move {
-            with_cached_approval(&session.services, "unified_exec", keys, || async {
-                request_approval(
-                    session,
-                    turn,
-                    ctx.guardian_review_id.clone(),
-                    GuardianApprovalRequest::ExecCommand {
-                        id: call_id.clone(),
-                        command: command.clone(),
-                        cwd: cwd.clone(),
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
-                        tty: req.tty,
-                    },
-                    retry_reason,
-                    || async move {
-                        session
-                            .request_command_approval(
-                                turn,
-                                call_id,
-                                /*approval_id*/ None,
-                                command,
-                                cwd.clone(),
-                                reason,
-                                ctx.network_approval_context.clone(),
-                                req.exec_approval_requirement
-                                    .proposed_execpolicy_amendment()
-                                    .cloned(),
-                                req.additional_permissions.clone(),
-                                None,
-                            )
-                            .await
-                    },
-                )
-                .await
-                .decision
-            })
+            with_cached_approval(
+                &session.services,
+                "unified_exec",
+                ctx.guardian_review_id.as_deref(),
+                keys,
+                || async {
+                    request_approval(
+                        session,
+                        turn,
+                        ctx.guardian_review_id.clone(),
+                        GuardianApprovalRequest::ExecCommand {
+                            id: call_id.clone(),
+                            command: command.clone(),
+                            cwd: cwd.clone(),
+                            sandbox_permissions: req.sandbox_permissions,
+                            additional_permissions: req.additional_permissions.clone(),
+                            justification: req.justification.clone(),
+                            tty: req.tty,
+                        },
+                        retry_reason,
+                        || async move {
+                            session
+                                .request_command_approval(
+                                    turn,
+                                    call_id,
+                                    /*approval_id*/ None,
+                                    command,
+                                    cwd.clone(),
+                                    reason,
+                                    ctx.network_approval_context.clone(),
+                                    req.exec_approval_requirement
+                                        .proposed_execpolicy_amendment()
+                                        .cloned(),
+                                    req.additional_permissions.clone(),
+                                    None,
+                                )
+                                .await
+                        },
+                    )
+                    .await
+                    .decision
+                },
+            )
             .await
         })
     }

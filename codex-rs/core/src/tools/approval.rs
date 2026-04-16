@@ -51,6 +51,7 @@ pub(crate) fn guardian_review_id_for_turn(turn: &TurnContext) -> Option<String> 
 pub(crate) async fn with_cached_approval<K, F, Fut>(
     services: &SessionServices,
     tool_name: &str,
+    guardian_review_id: Option<&str>,
     keys: Vec<K>,
     fetch: F,
 ) -> ReviewDecision
@@ -69,7 +70,9 @@ where
             .all(|key| matches!(store.get(key), Some(ReviewDecision::ApprovedForSession)))
     };
 
-    if already_approved {
+    // Guardian-backed approval flows still need a fresh review for each action,
+    // even when the same request was previously approved for the session.
+    if already_approved && guardian_review_id.is_none() {
         return ReviewDecision::ApprovedForSession;
     }
 
@@ -146,4 +149,68 @@ where
         request_user,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_cached_approval;
+    use crate::codex::make_session_and_context;
+    use codex_protocol::protocol::ReviewDecision;
+    use pretty_assertions::assert_eq;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    #[tokio::test]
+    async fn cached_approval_short_circuits_when_reuse_is_allowed() {
+        let (session, _turn) = make_session_and_context().await;
+        let key = "shell";
+        session
+            .services
+            .tool_approvals
+            .lock()
+            .await
+            .put(key, ReviewDecision::ApprovedForSession);
+        let fetched = Arc::new(AtomicBool::new(false));
+        let fetched_for_closure = Arc::clone(&fetched);
+
+        let decision =
+            with_cached_approval(&session.services, "shell", None, vec![key], || async move {
+                fetched_for_closure.store(true, Ordering::SeqCst);
+                ReviewDecision::Approved
+            })
+            .await;
+
+        assert_eq!(decision, ReviewDecision::ApprovedForSession);
+        assert_eq!(fetched.load(Ordering::SeqCst), false);
+    }
+
+    #[tokio::test]
+    async fn cached_approval_still_fetches_when_fresh_approval_is_required() {
+        let (session, _turn) = make_session_and_context().await;
+        let key = "shell";
+        session
+            .services
+            .tool_approvals
+            .lock()
+            .await
+            .put(key, ReviewDecision::ApprovedForSession);
+        let fetched = Arc::new(AtomicBool::new(false));
+        let fetched_for_closure = Arc::clone(&fetched);
+
+        let decision = with_cached_approval(
+            &session.services,
+            "shell",
+            Some("guardian-review-id"),
+            vec![key],
+            || async move {
+                fetched_for_closure.store(true, Ordering::SeqCst);
+                ReviewDecision::Approved
+            },
+        )
+        .await;
+
+        assert_eq!(decision, ReviewDecision::Approved);
+        assert_eq!(fetched.load(Ordering::SeqCst), true);
+    }
 }

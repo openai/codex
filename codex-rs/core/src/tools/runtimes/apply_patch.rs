@@ -155,26 +155,32 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 .decision;
             }
 
-            with_cached_approval(&session.services, "apply_patch", approval_keys, || async {
-                request_approval(
-                    session,
-                    turn,
-                    ctx.guardian_review_id.clone(),
-                    ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id),
-                    retry_reason,
-                    || async move {
-                        let rx_approve = session
-                            .request_patch_approval(
-                                turn, call_id, changes, /*reason*/ None,
-                                /*grant_root*/ None,
-                            )
-                            .await;
-                        rx_approve.await.unwrap_or_default()
-                    },
-                )
-                .await
-                .decision
-            })
+            with_cached_approval(
+                &session.services,
+                "apply_patch",
+                ctx.guardian_review_id.as_deref(),
+                approval_keys,
+                || async {
+                    request_approval(
+                        session,
+                        turn,
+                        ctx.guardian_review_id.clone(),
+                        ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id),
+                        retry_reason,
+                        || async move {
+                            let rx_approve = session
+                                .request_patch_approval(
+                                    turn, call_id, changes, /*reason*/ None,
+                                    /*grant_root*/ None,
+                                )
+                                .await;
+                            rx_approve.await.unwrap_or_default()
+                        },
+                    )
+                    .await
+                    .decision
+                },
+            )
             .await
         })
     }

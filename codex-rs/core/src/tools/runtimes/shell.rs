@@ -152,42 +152,48 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
-            with_cached_approval(&session.services, "shell", keys, || async {
-                request_approval(
-                    session,
-                    turn,
-                    ctx.guardian_review_id.clone(),
-                    GuardianApprovalRequest::Shell {
-                        id: call_id.clone(),
-                        command: command.clone(),
-                        cwd: cwd.clone(),
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
-                    },
-                    retry_reason,
-                    || async move {
-                        session
-                            .request_command_approval(
-                                turn,
-                                call_id,
-                                /*approval_id*/ None,
-                                command,
-                                cwd,
-                                reason,
-                                ctx.network_approval_context.clone(),
-                                req.exec_approval_requirement
-                                    .proposed_execpolicy_amendment()
-                                    .cloned(),
-                                req.additional_permissions.clone(),
-                                None,
-                            )
-                            .await
-                    },
-                )
-                .await
-                .decision
-            })
+            with_cached_approval(
+                &session.services,
+                "shell",
+                ctx.guardian_review_id.as_deref(),
+                keys,
+                || async {
+                    request_approval(
+                        session,
+                        turn,
+                        ctx.guardian_review_id.clone(),
+                        GuardianApprovalRequest::Shell {
+                            id: call_id.clone(),
+                            command: command.clone(),
+                            cwd: cwd.clone(),
+                            sandbox_permissions: req.sandbox_permissions,
+                            additional_permissions: req.additional_permissions.clone(),
+                            justification: req.justification.clone(),
+                        },
+                        retry_reason,
+                        || async move {
+                            session
+                                .request_command_approval(
+                                    turn,
+                                    call_id,
+                                    /*approval_id*/ None,
+                                    command,
+                                    cwd,
+                                    reason,
+                                    ctx.network_approval_context.clone(),
+                                    req.exec_approval_requirement
+                                        .proposed_execpolicy_amendment()
+                                        .cloned(),
+                                    req.additional_permissions.clone(),
+                                    None,
+                                )
+                                .await
+                        },
+                    )
+                    .await
+                    .decision
+                },
+            )
             .await
         })
     }
