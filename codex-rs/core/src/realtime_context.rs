@@ -4,8 +4,10 @@ use crate::event_mapping::is_contextual_user_message_content;
 use chrono::Utc;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
-use codex_state::SortKey;
-use codex_state::ThreadMetadata;
+use codex_thread_store::ListThreadsParams;
+use codex_thread_store::StoredThread;
+use codex_thread_store::ThreadSortKey;
+use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use dirs::home_dir;
@@ -23,6 +25,8 @@ use tracing::info;
 use tracing::warn;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.\nThis is background context about recent work and machine/workspace layout. It may be incomplete or stale. Use it to inform responses, and do not repeat it back unless relevant.";
+const STARTUP_CONTEXT_OPEN_TAG: &str = "<startup_context>";
+const STARTUP_CONTEXT_CLOSE_TAG: &str = "</startup_context>";
 const CURRENT_THREAD_SECTION_TOKEN_BUDGET: usize = 1_200;
 const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 2_200;
 const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
@@ -98,13 +102,13 @@ pub(crate) async fn build_realtime_startup_context(
     }
     if let Some(section) = format_section(
         "Notes",
-        Some("Built at realtime startup from the current thread history, persisted thread metadata in the state DB, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
+        Some("Built at realtime startup from the current thread history, local thread metadata, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
         NOTES_SECTION_TOKEN_BUDGET,
     ) {
         parts.push(section);
     }
 
-    let context = truncate_text(&parts.join("\n\n"), TruncationPolicy::Tokens(budget_tokens));
+    let context = format_startup_context_blob(&parts.join("\n\n"), budget_tokens);
     debug!(
         approx_tokens = approx_token_count(&context),
         bytes = context.len(),
@@ -117,33 +121,31 @@ pub(crate) async fn build_realtime_startup_context(
     Some(context)
 }
 
-async fn load_recent_threads(sess: &Session) -> Vec<ThreadMetadata> {
-    let Some(state_db) = sess.services.state_db.as_ref() else {
-        return Vec::new();
-    };
-
-    match state_db
-        .list_threads(
-            MAX_RECENT_THREADS,
-            /*anchor*/ None,
-            SortKey::UpdatedAt,
-            &[],
-            /*model_providers*/ None,
-            /*archived_only*/ false,
-            /*search_term*/ None,
-        )
+async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
+    match sess
+        .services
+        .thread_store
+        .list_threads(ListThreadsParams {
+            page_size: MAX_RECENT_THREADS,
+            cursor: None,
+            sort_key: ThreadSortKey::UpdatedAt,
+            allowed_sources: Vec::new(),
+            model_providers: None,
+            archived: false,
+            search_term: None,
+        })
         .await
     {
         Ok(page) => page.items,
         Err(err) => {
-            warn!("failed to load realtime startup threads from state db: {err}");
+            warn!("failed to load realtime startup threads from thread store: {err}");
             Vec::new()
         }
     }
 }
 
-fn build_recent_work_section(cwd: &Path, recent_threads: &[ThreadMetadata]) -> Option<String> {
-    let mut groups: HashMap<PathBuf, Vec<&ThreadMetadata>> = HashMap::new();
+fn build_recent_work_section(cwd: &Path, recent_threads: &[StoredThread]) -> Option<String> {
+    let mut groups: HashMap<PathBuf, Vec<&StoredThread>> = HashMap::new();
     for entry in recent_threads {
         let group =
             resolve_root_git_project_for_trust(&entry.cwd).unwrap_or_else(|| entry.cwd.clone());
@@ -443,10 +445,31 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
     ))
 }
 
+fn format_startup_context_blob(body: &str, budget_tokens: usize) -> String {
+    let wrapper = format!("{STARTUP_CONTEXT_OPEN_TAG}\n\n{STARTUP_CONTEXT_CLOSE_TAG}");
+    let mut body_budget = budget_tokens.saturating_sub(approx_token_count(&wrapper));
+
+    loop {
+        let body = truncate_text(body, TruncationPolicy::Tokens(body_budget));
+        let wrapped = format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}");
+        let wrapped_tokens = approx_token_count(&wrapped);
+        if wrapped_tokens <= budget_tokens || body_budget == 0 {
+            return wrapped;
+        }
+
+        let excess_tokens = wrapped_tokens.saturating_sub(budget_tokens);
+        let next_budget = body_budget.saturating_sub(excess_tokens.max(1));
+        if next_budget == body_budget {
+            return wrapped;
+        }
+        body_budget = next_budget;
+    }
+}
+
 fn format_thread_group(
     current_group: &Path,
     group: &Path,
-    entries: Vec<&ThreadMetadata>,
+    entries: Vec<&StoredThread>,
 ) -> Option<String> {
     let latest = entries.first()?;
     let group_label = if resolve_root_git_project_for_trust(latest.cwd.as_path()).is_some() {
@@ -461,8 +484,9 @@ fn format_thread_group(
     ];
 
     if let Some(git_branch) = latest
-        .git_branch
-        .as_deref()
+        .git_info
+        .as_ref()
+        .and_then(|git| git.branch.as_deref())
         .filter(|git_branch| !git_branch.is_empty())
     {
         lines.push(format!("Latest branch: {git_branch}"));

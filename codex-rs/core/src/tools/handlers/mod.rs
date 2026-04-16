@@ -15,6 +15,7 @@ mod shell;
 mod test_sync;
 mod tool_search;
 mod tool_suggest;
+mod unavailable_tool;
 pub(crate) mod unified_exec;
 mod view_image;
 
@@ -49,6 +50,8 @@ pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
 pub use tool_suggest::ToolSuggestHandler;
+pub use unavailable_tool::UnavailableToolHandler;
+pub(crate) use unavailable_tool::unavailable_tool_message;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 

@@ -1461,6 +1461,7 @@ dependencies = [
  "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
+ "codex-thread-store",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -1938,6 +1939,7 @@ dependencies = [
  "codex-state",
  "codex-terminal-detection",
  "codex-test-binary-support",
+ "codex-thread-store",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
@@ -2251,6 +2253,15 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-install-context"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-home-dir",
+ "pretty_assertions",
+ "tempfile",
 ]
 
 [[package]]
@@ -2841,9 +2852,17 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "codex-git-utils",
  "codex-protocol",
+ "codex-rollout",
+ "codex-state",
+ "pretty_assertions",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2886,6 +2905,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-git-utils",
+ "codex-install-context",
  "codex-login",
  "codex-mcp",
  "codex-model-provider-info",

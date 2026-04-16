@@ -988,6 +988,7 @@ mod tests {
                 "https://chatgpt.com/backend-api/".to_string(),
             ),
             feedback: codex_feedback::CodexFeedback::new(),
+            log_db: None,
             environment_manager: Arc::new(codex_app_server_client::EnvironmentManager::new(
                 /*exec_server_url*/ None,
             )),

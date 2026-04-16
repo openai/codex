@@ -1152,6 +1152,46 @@ fn test_build_specs_mcp_tools_converted() {
 }
 
 #[test]
+fn test_build_specs_mcp_namespace_description_falls_back_when_missing() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            ToolName::namespaced("test_server/", "do_something_cool"),
+            mcp_tool(
+                "do_something_cool",
+                "Do something cool",
+                serde_json::json!({"type": "object"}),
+            ),
+        )])),
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let namespace_tool = find_tool(&tools, "test_server/");
+    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+        panic!("expected namespace tool");
+    };
+    assert_eq!(
+        namespace.description,
+        "Tools in the test_server/ namespace."
+    );
+}
+
+#[test]
 fn test_build_specs_mcp_tools_sorted_by_name() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
