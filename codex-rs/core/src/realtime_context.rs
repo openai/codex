@@ -65,8 +65,7 @@ pub(crate) async fn build_realtime_startup_context(
     let current_thread_section = build_current_thread_section(history.raw_items());
     let recent_threads = load_recent_threads(sess).await;
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads).await;
-    let user_root = home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
-    let workspace_section = build_workspace_section_with_user_root(&cwd, user_root).await;
+    let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir()).await;
 
     if current_thread_section.is_none()
         && recent_work_section.is_none()
@@ -111,9 +110,10 @@ pub(crate) async fn build_realtime_startup_context(
         parts.push(section);
     }
 
-    let context = format_startup_context_blob(&parts.join("\n\n"), budget_tokens);
+    let context = format_startup_context_blob(&parts.join("\n\n"));
     debug!(
         approx_tokens = approx_token_count(&context),
+        requested_budget_tokens = budget_tokens,
         bytes = context.len(),
         has_current_thread_section,
         has_recent_work_section,
@@ -151,54 +151,50 @@ async fn build_recent_work_section(
     cwd: &AbsolutePathBuf,
     recent_threads: &[StoredThread],
 ) -> Option<String> {
-    let mut groups: HashMap<PathBuf, (bool, Vec<&StoredThread>)> = HashMap::new();
+    let mut groups: HashMap<PathBuf, Vec<&StoredThread>> = HashMap::new();
     for entry in recent_threads {
-        let (group, is_git_group) = match AbsolutePathBuf::from_absolute_path(&entry.cwd) {
-            Ok(cwd) => match resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd).await {
-                Some(git_root) => (git_root.into_path_buf(), true),
-                None => (entry.cwd.clone(), false),
-            },
-            Err(_) => (entry.cwd.clone(), false),
+        let group = match AbsolutePathBuf::from_absolute_path(entry.cwd.as_path()) {
+            Ok(entry_cwd) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &entry_cwd)
+                .await
+                .map(AbsolutePathBuf::into_path_buf)
+                .unwrap_or_else(|| entry.cwd.clone()),
+            Err(_) => entry.cwd.clone(),
         };
-        let group_entries = groups.entry(group).or_default();
-        group_entries.0 |= is_git_group;
-        group_entries.1.push(entry);
+        groups.entry(group).or_default().push(entry);
     }
 
     let current_group = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd)
         .await
         .map(AbsolutePathBuf::into_path_buf)
-        .unwrap_or_else(|| cwd.to_path_buf());
+        .unwrap_or_else(|| cwd.clone().into_path_buf());
     let mut groups = groups.into_iter().collect::<Vec<_>>();
-    groups.sort_by(
-        |(left_group, (_, left_entries)), (right_group, (_, right_entries))| {
-            let left_latest = left_entries
-                .iter()
-                .map(|entry| entry.updated_at)
-                .max()
-                .unwrap_or_else(Utc::now);
-            let right_latest = right_entries
-                .iter()
-                .map(|entry| entry.updated_at)
-                .max()
-                .unwrap_or_else(Utc::now);
-            (
-                *left_group != current_group,
-                Reverse(left_latest),
-                left_group.as_os_str(),
-            )
-                .cmp(&(
-                    *right_group != current_group,
-                    Reverse(right_latest),
-                    right_group.as_os_str(),
-                ))
-        },
-    );
+    groups.sort_by(|(left_group, left_entries), (right_group, right_entries)| {
+        let left_latest = left_entries
+            .iter()
+            .map(|entry| entry.updated_at)
+            .max()
+            .unwrap_or_else(Utc::now);
+        let right_latest = right_entries
+            .iter()
+            .map(|entry| entry.updated_at)
+            .max()
+            .unwrap_or_else(Utc::now);
+        (
+            *left_group != current_group,
+            Reverse(left_latest),
+            left_group.as_os_str(),
+        )
+            .cmp(&(
+                *right_group != current_group,
+                Reverse(right_latest),
+                right_group.as_os_str(),
+            ))
+    });
 
     let mut sections = Vec::new();
-    for (group, (is_git_group, mut entries)) in groups.into_iter().take(MAX_RECENT_WORK_GROUPS) {
+    for (group, mut entries) in groups.into_iter().take(MAX_RECENT_WORK_GROUPS) {
         entries.sort_by_key(|entry| Reverse(entry.updated_at));
-        if let Some(section) = format_thread_group(&current_group, &group, is_git_group, entries) {
+        if let Some(section) = format_thread_group(&current_group, &group, entries).await {
             sections.push(section);
         }
     }
@@ -324,17 +320,18 @@ pub(crate) fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: 
 
 async fn build_workspace_section_with_user_root(
     cwd: &AbsolutePathBuf,
-    user_root: Option<AbsolutePathBuf>,
+    user_root: Option<PathBuf>,
 ) -> Option<String> {
+    let cwd_path = cwd.as_path();
     let git_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd).await;
-    let cwd_tree = render_tree(cwd.as_path());
+    let cwd_tree = render_tree(cwd_path);
     let git_root_tree = git_root
         .as_ref()
-        .filter(|git_root| git_root.as_path() != cwd.as_path())
+        .filter(|git_root| git_root.as_path() != cwd_path)
         .and_then(|git_root| render_tree(git_root.as_path()));
     let user_root_tree = user_root
         .as_ref()
-        .filter(|user_root| user_root.as_path() != cwd.as_path())
+        .filter(|user_root| user_root.as_path() != cwd_path)
         .filter(|user_root| {
             git_root
                 .as_ref()
@@ -347,19 +344,13 @@ async fn build_workspace_section_with_user_root(
     }
 
     let mut lines = vec![
-        format!("Current working directory: {}", cwd.display()),
-        format!(
-            "Working directory name: {}",
-            file_name_string(cwd.as_path())
-        ),
+        format!("Current working directory: {}", cwd_path.display()),
+        format!("Working directory name: {}", file_name_string(cwd_path)),
     ];
 
     if let Some(git_root) = &git_root {
         lines.push(format!("Git root: {}", git_root.display()));
-        lines.push(format!(
-            "Git project: {}",
-            file_name_string(git_root.as_path())
-        ));
+        lines.push(format!("Git project: {}", file_name_string(git_root)));
     }
     if let Some(user_root) = &user_root {
         lines.push(format!("User root: {}", user_root.display()));
@@ -461,45 +452,43 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
         return None;
     }
 
-    Some(format!(
-        "## {title}\n{}",
-        truncate_text(body, TruncationPolicy::Tokens(budget_tokens))
-    ))
-}
-
-fn format_startup_context_blob(body: &str, budget_tokens: usize) -> String {
-    let wrapper = format!("{STARTUP_CONTEXT_OPEN_TAG}\n\n{STARTUP_CONTEXT_CLOSE_TAG}");
-    let mut body_budget = budget_tokens.saturating_sub(approx_token_count(&wrapper));
-
-    loop {
-        let body = truncate_text(body, TruncationPolicy::Tokens(body_budget));
-        let wrapped = format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}");
-        let wrapped_tokens = approx_token_count(&wrapped);
-        if wrapped_tokens <= budget_tokens || body_budget == 0 {
-            return wrapped;
-        }
-
-        let excess_tokens = wrapped_tokens.saturating_sub(budget_tokens);
-        let next_budget = body_budget.saturating_sub(excess_tokens.max(1));
-        if next_budget == body_budget {
-            return wrapped;
-        }
-        body_budget = next_budget;
+    let heading = format!("## {title}\n");
+    let body_budget = budget_tokens.saturating_sub(approx_token_count(&heading));
+    if body_budget == 0 {
+        return None;
     }
+
+    let body = truncate_realtime_text_to_token_budget(body, body_budget);
+    if body.is_empty() {
+        return None;
+    }
+
+    Some(format!("{heading}{body}"))
 }
 
-fn format_thread_group(
+fn format_startup_context_blob(body: &str) -> String {
+    format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}")
+}
+
+async fn format_thread_group(
     current_group: &Path,
     group: &Path,
-    is_git_group: bool,
     entries: Vec<&StoredThread>,
 ) -> Option<String> {
     let latest = entries.first()?;
-    let group_label = if is_git_group {
-        format!("### Git repo: {}", group.display())
-    } else {
-        format!("### Directory: {}", group.display())
-    };
+    let group_label =
+        if let Ok(latest_cwd) = AbsolutePathBuf::from_absolute_path(latest.cwd.as_path()) {
+            if resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &latest_cwd)
+                .await
+                .is_some()
+            {
+                format!("### Git repo: {}", group.display())
+            } else {
+                format!("### Directory: {}", group.display())
+            }
+        } else {
+            format!("### Directory: {}", group.display())
+        };
     let mut lines = vec![
         group_label,
         format!("Recent sessions: {}", entries.len()),
