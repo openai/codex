@@ -454,15 +454,15 @@ mod tests {
             (
                 "cmd.exe".to_string(),
                 vec!["/D".to_string(), "/C".to_string()],
-                r#"echo {^"decision^":^"block^",^"reason^":^"slow down^",^"hookSpecificOutput^":{^"hookEventName^":^"UserPromptSubmit^",^"additionalContext^":^"trusted context^"}}"#.to_string(),
-                "type nul > project-ran && echo project context".to_string(),
+                r#"more > nul && echo {^"decision^":^"block^",^"reason^":^"slow down^",^"hookSpecificOutput^":{^"hookEventName^":^"UserPromptSubmit^",^"additionalContext^":^"trusted context^"}}"#.to_string(),
+                "more > nul && type nul > project-ran && echo project context".to_string(),
             )
         } else {
             (
                 "/bin/sh".to_string(),
                 vec!["-c".to_string()],
-                "printf '%s' '{\"decision\":\"block\",\"reason\":\"slow down\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"trusted context\"}}'".to_string(),
-                "touch project-ran && printf 'project context'".to_string(),
+                "cat >/dev/null; printf '%s' '{\"decision\":\"block\",\"reason\":\"slow down\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"trusted context\"}}'".to_string(),
+                "cat >/dev/null; touch project-ran && printf 'project context'".to_string(),
             )
         };
         let handlers = vec![
