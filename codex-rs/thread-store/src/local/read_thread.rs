@@ -114,6 +114,8 @@ async fn read_thread_from_rollout_path(
         }
         if let Some(git_info) = git_info_from_metadata(&metadata) {
             thread.git_info = Some(git_info);
+        } else if metadata.updated_at > thread.updated_at {
+            thread.git_info = None;
         }
     }
     if !found_sqlite_title

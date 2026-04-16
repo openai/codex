@@ -3208,6 +3208,9 @@ impl CodexMessageProcessor {
             Some(None) => Some(None),
             None => None,
         };
+        let clears_git_info = matches!(git_sha, Some(None))
+            || matches!(git_branch, Some(None))
+            || matches!(git_origin_url, Some(None));
 
         let updated = match state_db_ctx
             .update_thread_git_info(
@@ -3232,6 +3235,18 @@ impl CodexMessageProcessor {
             self.send_internal_error(
                 request_id,
                 format!("thread metadata disappeared before update completed: {thread_uuid}"),
+            )
+            .await;
+            return;
+        }
+        if clears_git_info
+            && let Err(err) = state_db_ctx
+                .touch_thread_updated_at(thread_uuid, Utc::now())
+                .await
+        {
+            self.send_internal_error(
+                request_id,
+                format!("failed to touch thread metadata for {thread_uuid}: {err}"),
             )
             .await;
             return;
