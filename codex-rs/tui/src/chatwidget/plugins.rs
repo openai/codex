@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -11,12 +12,14 @@ use crate::bottom_pane::SelectionRowDisplay;
 use crate::bottom_pane::SelectionTab;
 use crate::bottom_pane::SelectionToggle;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::history_cell;
 use crate::onboarding::mark_url_hyperlink;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
+use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -41,7 +44,9 @@ use unicode_width::UnicodeWidthStr;
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
 const ALL_PLUGINS_TAB_ID: &str = "all-plugins";
 const INSTALLED_PLUGINS_TAB_ID: &str = "installed-plugins";
+const MARKETPLACE_TAB_ID_PREFIX: &str = "marketplace:";
 const OPENAI_CURATED_TAB_ID: &str = "marketplace:openai-curated";
+const ADD_MARKETPLACE_TAB_ID: &str = "add-marketplace";
 const PLUGIN_ROW_PREFIX_WIDTH: usize = 6;
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
@@ -183,6 +188,14 @@ impl ChatWidget {
         match result {
             Ok(response) => {
                 self.plugins_fetch_state.cache_cwd = Some(cwd);
+                let active_tab_id = self
+                    .plugins_active_tab_id
+                    .as_deref()
+                    .and_then(|tab_id| {
+                        marketplace_tab_id_matching_saved_id(tab_id, &response.marketplaces)
+                    })
+                    .or_else(|| self.plugins_active_tab_id.clone());
+                self.plugins_active_tab_id = active_tab_id;
                 self.plugins_cache = PluginsCacheState::Ready(response.clone());
                 if !auth_flow_active {
                     self.refresh_plugins_popup_if_open(&response);
@@ -241,6 +254,44 @@ impl ChatWidget {
                 self.plugins_active_tab_id.clone(),
                 /*initial_selected_idx*/ None,
             ));
+    }
+
+    pub(crate) fn open_marketplace_add_prompt(&mut self) {
+        self.plugins_active_tab_id = Some(ADD_MARKETPLACE_TAB_ID.to_string());
+        let tx = self.app_event_tx.clone();
+        let cwd = self.config.cwd.to_path_buf();
+        let view = CustomPromptView::new(
+            "Add marketplace".to_string(),
+            "owner/repo, git URL, or local marketplace path".to_string(),
+            String::new(),
+            Some("Examples: owner/repo, git URL, ./marketplace".to_string()),
+            Box::new(move |source: String| {
+                let source = source.trim().to_string();
+                if source.is_empty() {
+                    return;
+                }
+                tx.send(AppEvent::OpenMarketplaceAddLoading {
+                    source: source.clone(),
+                });
+                tx.send(AppEvent::FetchMarketplaceAdd {
+                    cwd: cwd.clone(),
+                    source,
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_marketplace_add_loading_popup(&mut self, _source: &str) {
+        self.plugins_active_tab_id = Some(ADD_MARKETPLACE_TAB_ID.to_string());
+        let params = self.marketplace_add_loading_popup_params();
+        if !self
+            .bottom_pane
+            .replace_selection_view_if_active(PLUGINS_SELECTION_VIEW_ID, params)
+        {
+            self.bottom_pane
+                .show_selection_view(self.marketplace_add_loading_popup_params());
+        }
     }
 
     pub(crate) fn open_plugin_detail_loading_popup(&mut self, plugin_display_name: &str) {
@@ -357,6 +408,50 @@ impl ChatWidget {
                     self.plugin_detail_error_popup_params(&err, plugins_response.as_ref()),
                 );
                 true
+            }
+        }
+    }
+
+    pub(crate) fn on_marketplace_add_loaded(
+        &mut self,
+        cwd: PathBuf,
+        _source: String,
+        result: Result<MarketplaceAddResponse, String>,
+    ) {
+        if self.config.cwd.as_path() != cwd.as_path() {
+            return;
+        }
+
+        match result {
+            Ok(response) => {
+                self.plugins_active_tab_id =
+                    Some(marketplace_tab_id_from_path(&response.installed_root));
+                let message = if response.already_added {
+                    format!(
+                        "Marketplace {} is already added.",
+                        response.marketplace_name
+                    )
+                } else {
+                    format!("Added marketplace {}.", response.marketplace_name)
+                };
+                self.add_info_message(
+                    message,
+                    Some(format!(
+                        "Marketplace root: {}",
+                        response.installed_root.as_path().display()
+                    )),
+                );
+            }
+            Err(err) => {
+                self.plugins_active_tab_id = Some(ADD_MARKETPLACE_TAB_ID.to_string());
+                let params = self.marketplace_add_error_popup_params(&err);
+                if !self
+                    .bottom_pane
+                    .replace_selection_view_if_active(PLUGINS_SELECTION_VIEW_ID, params)
+                {
+                    self.bottom_pane
+                        .show_selection_view(self.marketplace_add_error_popup_params(&err));
+                }
             }
         }
     }
@@ -655,6 +750,27 @@ impl ChatWidget {
         }
     }
 
+    fn marketplace_add_loading_popup_params(&self) -> SelectionViewParams {
+        SelectionViewParams {
+            view_id: Some(PLUGINS_SELECTION_VIEW_ID),
+            header: Box::new(DelayedLoadingHeader::new(
+                self.frame_requester.clone(),
+                self.config.animations,
+                "Adding marketplace...".to_string(),
+                /*note*/ None,
+            )),
+            items: vec![SelectionItem {
+                name: "Adding marketplace...".to_string(),
+                description: Some(
+                    "This updates when marketplace installation completes.".to_string(),
+                ),
+                is_disabled: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
     fn plugin_detail_loading_popup_params(&self, plugin_display_name: &str) -> SelectionViewParams {
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
@@ -738,6 +854,54 @@ impl ChatWidget {
         }
     }
 
+    fn marketplace_add_error_popup_params(&self, err: &str) -> SelectionViewParams {
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Plugins".bold()));
+        header.push(Line::from("Failed to add marketplace.".dim()));
+
+        let mut items = vec![
+            SelectionItem {
+                name: "Marketplace add failed".to_string(),
+                description: Some(err.to_string()),
+                is_disabled: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Try again".to_string(),
+                description: Some("Enter a marketplace source.".to_string()),
+                selected_description: Some("Enter a marketplace source.".to_string()),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenMarketplaceAddPrompt);
+                })],
+                ..Default::default()
+            },
+        ];
+
+        if let PluginsCacheState::Ready(plugins_response) = self.plugins_cache_for_current_cwd() {
+            let cwd = self.config.cwd.to_path_buf();
+            items.push(SelectionItem {
+                name: "Back to plugins".to_string(),
+                description: Some("Return to the plugin list.".to_string()),
+                selected_description: Some("Return to the plugin list.".to_string()),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::PluginsLoaded {
+                        cwd: cwd.clone(),
+                        result: Ok(plugins_response.clone()),
+                    });
+                })],
+                ..Default::default()
+            });
+        }
+
+        SelectionViewParams {
+            view_id: Some(PLUGINS_SELECTION_VIEW_ID),
+            header: Box::new(header),
+            footer_hint: Some(plugin_detail_hint_line()),
+            items,
+            ..Default::default()
+        }
+    }
+
     fn plugin_detail_error_popup_params(
         &self,
         err: &str,
@@ -802,6 +966,7 @@ impl ChatWidget {
             .map(|(_, _, display_name)| {
                 PLUGIN_ROW_PREFIX_WIDTH + UnicodeWidthStr::width(display_name.as_str())
             })
+            .chain([UnicodeWidthStr::width("Add marketplace")])
             .max();
         let installed_entries = all_entries
             .iter()
@@ -911,6 +1076,8 @@ impl ChatWidget {
             });
         }
 
+        tabs.push(self.marketplace_add_tab());
+
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(()),
@@ -924,6 +1091,30 @@ impl ChatWidget {
             name_column_width,
             initial_selected_idx,
             ..Default::default()
+        }
+    }
+
+    fn marketplace_add_tab(&self) -> SelectionTab {
+        SelectionTab {
+            id: ADD_MARKETPLACE_TAB_ID.to_string(),
+            label: "Add Marketplace".to_string(),
+            header: plugins_header(
+                "Add a marketplace from a Git repo or local root.".to_string(),
+                "Enter a source to make its plugins available in this menu.".to_string(),
+            ),
+            items: vec![SelectionItem {
+                name: "Add marketplace".to_string(),
+                description: Some(
+                    "Enter owner/repo, a Git URL, or a local marketplace path.".to_string(),
+                ),
+                selected_description: Some(
+                    "Press Enter to enter a marketplace source.".to_string(),
+                ),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenMarketplaceAddPrompt);
+                })],
+                ..Default::default()
+            }],
         }
     }
 
@@ -1227,9 +1418,38 @@ fn sort_plugin_entries(entries: &mut [(&PluginMarketplaceEntry, &PluginSummary, 
 
 fn marketplace_tab_id(marketplace: &PluginMarketplaceEntry) -> String {
     match marketplace.path.as_ref() {
-        Some(path) => format!("marketplace:{}", path.display()),
+        Some(path) => marketplace_tab_id_from_path(path.as_path()),
         None => format!("marketplace:{}", marketplace.name),
     }
+}
+
+fn marketplace_tab_id_from_path(path: &Path) -> String {
+    format!("{MARKETPLACE_TAB_ID_PREFIX}{}", path.display())
+}
+
+fn marketplace_tab_id_matching_saved_id(
+    saved_tab_id: &str,
+    marketplaces: &[PluginMarketplaceEntry],
+) -> Option<String> {
+    if let Some(tab_id) = marketplaces.iter().find_map(|marketplace| {
+        let tab_id = marketplace_tab_id(marketplace);
+        (tab_id == saved_tab_id).then_some(tab_id)
+    }) {
+        return Some(tab_id);
+    }
+
+    let root = saved_tab_id.strip_prefix(MARKETPLACE_TAB_ID_PREFIX)?;
+    if root.is_empty() {
+        return None;
+    }
+    let root = Path::new(root);
+    marketplaces.iter().find_map(|marketplace| {
+        marketplace
+            .path
+            .as_ref()
+            .is_some_and(|path| path.as_path().starts_with(root))
+            .then(|| marketplace_tab_id(marketplace))
+    })
 }
 
 fn disambiguate_duplicate_tab_labels(labels: Vec<String>) -> Vec<String> {
