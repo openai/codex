@@ -52,6 +52,7 @@ pub(crate) enum GuardianApprovalRequest {
         host: String,
         protocol: NetworkApprovalProtocol,
         port: u16,
+        trigger: Option<GuardianNetworkAccessTrigger>,
     },
     McpToolCall {
         id: String,
@@ -65,6 +66,22 @@ pub(crate) enum GuardianApprovalRequest {
         tool_description: Option<String>,
         annotations: Option<GuardianMcpAnnotations>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GuardianNetworkAccessTrigger {
+    pub(crate) call_id: String,
+    pub(crate) tool_name: String,
+    pub(crate) command: Vec<String>,
+    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) sandbox_permissions: crate::sandboxing::SandboxPermissions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) additional_permissions: Option<PermissionProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) justification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tty: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -121,6 +138,18 @@ struct McpToolCallApprovalAction<'a> {
     tool_description: Option<&'a String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     annotations: Option<&'a GuardianMcpAnnotations>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkAccessApprovalAction<'a> {
+    tool: &'static str,
+    target: &'a str,
+    host: &'a str,
+    protocol: NetworkApprovalProtocol,
+    port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trigger: Option<&'a GuardianNetworkAccessTrigger>,
 }
 
 fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value> {
@@ -263,13 +292,15 @@ pub(crate) fn guardian_approval_request_to_json(
             host,
             protocol,
             port,
-        } => Ok(serde_json::json!({
-            "tool": "network_access",
-            "target": target,
-            "host": host,
-            "protocol": protocol,
-            "port": port,
-        })),
+            trigger,
+        } => serialize_guardian_action(NetworkAccessApprovalAction {
+            tool: "network_access",
+            target,
+            host,
+            protocol: *protocol,
+            port: *port,
+            trigger: trigger.as_ref(),
+        }),
         GuardianApprovalRequest::McpToolCall {
             id: _,
             server,
@@ -332,6 +363,7 @@ pub(crate) fn guardian_assessment_action(
             host,
             protocol,
             port,
+            trigger: _,
         } => GuardianAssessmentAction::NetworkAccess {
             target: target.clone(),
             host: host.clone(),
@@ -361,7 +393,9 @@ pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest)
         | GuardianApprovalRequest::ExecCommand { id, .. }
         | GuardianApprovalRequest::ApplyPatch { id, .. }
         | GuardianApprovalRequest::McpToolCall { id, .. } => Some(id),
-        GuardianApprovalRequest::NetworkAccess { .. } => None,
+        GuardianApprovalRequest::NetworkAccess { trigger, .. } => {
+            trigger.as_ref().map(|trigger| trigger.call_id.as_str())
+        }
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { id, .. } => Some(id),
     }

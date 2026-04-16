@@ -1,5 +1,6 @@
 use crate::codex::Session;
 use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::GuardianNetworkAccessTrigger;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
@@ -43,6 +44,7 @@ pub(crate) enum NetworkApprovalMode {
 pub(crate) struct NetworkApprovalSpec {
     pub network: Option<NetworkProxy>,
     pub mode: NetworkApprovalMode,
+    pub trigger: GuardianNetworkAccessTrigger,
 }
 
 #[derive(Clone, Debug)]
@@ -172,6 +174,7 @@ impl PendingHostApproval {
 struct ActiveNetworkApprovalCall {
     registration_id: String,
     turn_id: String,
+    trigger: GuardianNetworkAccessTrigger,
 }
 
 pub(crate) struct NetworkApprovalService {
@@ -204,7 +207,12 @@ impl NetworkApprovalService {
         other_approved_hosts.extend(approved_hosts.iter().cloned());
     }
 
-    async fn register_call(&self, registration_id: String, turn_id: String) {
+    async fn register_call(
+        &self,
+        registration_id: String,
+        turn_id: String,
+        trigger: GuardianNetworkAccessTrigger,
+    ) {
         let mut active_calls = self.active_calls.lock().await;
         let key = registration_id.clone();
         active_calls.insert(
@@ -212,6 +220,7 @@ impl NetworkApprovalService {
             Arc::new(ActiveNetworkApprovalCall {
                 registration_id,
                 turn_id,
+                trigger,
             }),
         );
     }
@@ -365,13 +374,18 @@ impl NetworkApprovalService {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
 
+        let guardian_approval_id = Self::approval_id_for_key(&key);
+        let use_guardian = routes_approval_to_guardian(&turn_context);
+        let owner_call = self.resolve_single_active_call().await;
+        let trigger = if use_guardian {
+            owner_call.as_ref().map(|call| call.trigger.clone())
+        } else {
+            None
+        };
         let network_approval_context = NetworkApprovalContext {
             host: request.host.clone(),
             protocol,
         };
-        let owner_call = self.resolve_single_active_call().await;
-        let guardian_approval_id = Self::approval_id_for_key(&key);
-        let use_guardian = routes_approval_to_guardian(&turn_context);
         let guardian_review_id = use_guardian.then(new_guardian_review_id);
         let approval_decision = if let Some(review_id) = guardian_review_id.clone() {
             review_approval_request(
@@ -387,6 +401,7 @@ impl NetworkApprovalService {
                     host: request.host,
                     protocol,
                     port: key.port,
+                    trigger,
                 },
                 Some(policy_denial_message.clone()),
             )
@@ -581,8 +596,12 @@ pub(crate) async fn begin_network_approval(
     managed_network_active: bool,
     spec: Option<NetworkApprovalSpec>,
 ) -> Option<ActiveNetworkApproval> {
-    let spec = spec?;
-    if !managed_network_active || spec.network.is_none() {
+    let NetworkApprovalSpec {
+        network,
+        mode,
+        trigger,
+    } = spec?;
+    if !managed_network_active || network.is_none() {
         return None;
     }
 
@@ -590,12 +609,12 @@ pub(crate) async fn begin_network_approval(
     session
         .services
         .network_approval
-        .register_call(registration_id.clone(), turn_id.to_string())
+        .register_call(registration_id.clone(), turn_id.to_string(), trigger)
         .await;
 
     Some(ActiveNetworkApproval {
         registration_id: Some(registration_id),
-        mode: spec.mode,
+        mode,
     })
 }
 
