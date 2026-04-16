@@ -24,7 +24,8 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+// These tests start full app-server processes; keep headroom for concurrent debug startup.
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[tokio::test]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {

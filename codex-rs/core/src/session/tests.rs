@@ -1329,6 +1329,17 @@ async fn record_initial_history_restores_latest_persisted_agent_task() {
 #[tokio::test]
 async fn record_initial_history_honors_cleared_persisted_agent_task() {
     let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        state.set_agent_task(
+            RegisteredAgentTask {
+                agent_runtime_id: "agent-fresh".to_string(),
+                task_id: "task-fresh".to_string(),
+                registered_at: "2026-03-23T12:01:00Z".to_string(),
+            }
+            .to_session_agent_task(),
+        );
+    }
     let rollout_items = vec![
         RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
             agent_task: Some(
