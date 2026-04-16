@@ -2272,6 +2272,7 @@ impl CodexMessageProcessor {
             personality,
             ephemeral,
             session_start_source,
+            environment_id,
             persist_extended_history,
         } = params;
         let mut typesafe_overrides = self.build_thread_config_overrides(
@@ -2319,6 +2320,7 @@ impl CodexMessageProcessor {
                 service_name,
                 experimental_raw_events,
                 request_trace,
+                environment_id,
             )
             .await;
         };
@@ -2395,6 +2397,7 @@ impl CodexMessageProcessor {
         service_name: Option<String>,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
+        environment_id: Option<String>,
     ) {
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = match derive_config_from_params(
@@ -2543,6 +2546,7 @@ impl CodexMessageProcessor {
                 persist_extended_history,
                 service_name,
                 request_trace,
+                environment_id,
             )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",

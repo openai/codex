@@ -12427,6 +12427,13 @@
             "null"
           ]
         },
+        "environmentId": {
+          "description": "Optional environment id to use for this thread. Supported values are `\"local\"` and `\"remote\"`. When omitted, the default environment is used.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ephemeral": {
           "type": [
             "boolean",
