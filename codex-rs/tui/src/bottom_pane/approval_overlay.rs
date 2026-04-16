@@ -21,6 +21,9 @@ use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::RequestId;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
@@ -798,27 +801,59 @@ pub(crate) fn format_additional_permissions_rule(
         parts.push("network".to_string());
     }
     if let Some(file_system) = additional_permissions.file_system.as_ref() {
-        if let Some(read) = file_system.read.as_ref() {
-            let reads = read
-                .iter()
-                .map(|path| format!("`{}`", path.display()))
-                .collect::<Vec<_>>()
-                .join(", ");
+        if let Some(reads) = format_file_system_permissions(file_system, FileSystemAccessMode::Read)
+        {
             parts.push(format!("read {reads}"));
         }
-        if let Some(write) = file_system.write.as_ref() {
-            let writes = write
-                .iter()
-                .map(|path| format!("`{}`", path.display()))
-                .collect::<Vec<_>>()
-                .join(", ");
+        if let Some(writes) =
+            format_file_system_permissions(file_system, FileSystemAccessMode::Write)
+        {
             parts.push(format!("write {writes}"));
+        }
+        if let Some(denies) =
+            format_file_system_permissions(file_system, FileSystemAccessMode::None)
+        {
+            parts.push(format!("deny {denies}"));
         }
     }
     if parts.is_empty() {
         None
     } else {
         Some(parts.join("; "))
+    }
+}
+
+fn format_file_system_permissions(
+    file_system: &codex_protocol::models::FileSystemPermissions,
+    access: FileSystemAccessMode,
+) -> Option<String> {
+    let values = file_system
+        .entries
+        .iter()
+        .filter(|entry| entry.access == access)
+        .map(|entry| format!("`{}`", format_file_system_path(&entry.path)))
+        .collect::<Vec<_>>();
+    (!values.is_empty()).then(|| values.join(", "))
+}
+
+fn format_file_system_path(path: &FileSystemPath) -> String {
+    match path {
+        FileSystemPath::Path { path } => path.display().to_string(),
+        FileSystemPath::Special { value } => match value {
+            FileSystemSpecialPath::Root => ":root".to_string(),
+            FileSystemSpecialPath::Minimal => ":minimal".to_string(),
+            FileSystemSpecialPath::CurrentWorkingDirectory => ":cwd".to_string(),
+            FileSystemSpecialPath::ProjectRoots { subpath } => subpath.as_ref().map_or_else(
+                || ":project_roots".to_string(),
+                |subpath| format!(":project_roots/{}", subpath.display()),
+            ),
+            FileSystemSpecialPath::Tmpdir => ":tmpdir".to_string(),
+            FileSystemSpecialPath::SlashTmp => "/tmp".to_string(),
+            FileSystemSpecialPath::Unknown { path, subpath } => subpath.as_ref().map_or_else(
+                || path.clone(),
+                |subpath| format!("{path}/{}", subpath.display()),
+            ),
+        },
     }
 }
 
@@ -903,6 +938,10 @@ mod tests {
     use crate::app_event::AppEvent;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::protocol::ExecPolicyAmendment;
     use codex_protocol::protocol::NetworkApprovalProtocol;
     use codex_protocol::protocol::NetworkPolicyAmendment;
@@ -935,6 +974,7 @@ mod tests {
         [
             (absolute_path("/tmp/readme.txt"), "/tmp/readme.txt"),
             (absolute_path("/tmp/out.txt"), "/tmp/out.txt"),
+            (absolute_path("/tmp/secret.txt"), "/tmp/secret.txt"),
         ]
         .into_iter()
         .fold(rendered, |rendered, (path, normalized)| {
@@ -965,10 +1005,10 @@ mod tests {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/readme.txt")]),
-                    write: Some(vec![absolute_path("/tmp/out.txt")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![absolute_path("/tmp/readme.txt")]),
+                    Some(vec![absolute_path("/tmp/out.txt")]),
+                )),
             },
         }
     }
@@ -1266,10 +1306,10 @@ mod tests {
     #[test]
     fn additional_permissions_exec_options_hide_execpolicy_amendment() {
         let additional_permissions = PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![absolute_path("/tmp/readme.txt")]),
-                write: Some(vec![absolute_path("/tmp/out.txt")]),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![absolute_path("/tmp/readme.txt")]),
+                Some(vec![absolute_path("/tmp/out.txt")]),
+            )),
             ..Default::default()
         };
         let options = exec_options(
@@ -1347,10 +1387,10 @@ mod tests {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/readme.txt")]),
-                    write: Some(vec![absolute_path("/tmp/out.txt")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![absolute_path("/tmp/readme.txt")]),
+                    Some(vec![absolute_path("/tmp/out.txt")]),
+                )),
             }),
         };
 
@@ -1397,16 +1437,56 @@ mod tests {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/readme.txt")]),
-                    write: Some(vec![absolute_path("/tmp/out.txt")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![absolute_path("/tmp/readme.txt")]),
+                    Some(vec![absolute_path("/tmp/out.txt")]),
+                )),
             }),
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
         assert_snapshot!(
             "approval_overlay_additional_permissions_prompt",
+            normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
+        );
+    }
+
+    #[test]
+    fn additional_permissions_special_entries_prompt_snapshot() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let exec_request = ApprovalRequest::Exec {
+            thread_id: ThreadId::new(),
+            thread_label: None,
+            id: "test".into(),
+            command: vec!["cat".into(), "/tmp/readme.txt".into()],
+            reason: Some("need broader filesystem access".into()),
+            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            network_approval_context: None,
+            additional_permissions: Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    entries: vec![
+                        FileSystemSandboxEntry {
+                            path: FileSystemPath::Special {
+                                value: FileSystemSpecialPath::Root,
+                            },
+                            access: FileSystemAccessMode::Write,
+                        },
+                        FileSystemSandboxEntry {
+                            path: FileSystemPath::Path {
+                                path: absolute_path("/tmp/secret.txt"),
+                            },
+                            access: FileSystemAccessMode::None,
+                        },
+                    ],
+                }),
+                ..Default::default()
+            }),
+        };
+
+        let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
+        assert_snapshot!(
+            "approval_overlay_additional_permissions_special_entries_prompt",
             normalize_snapshot_paths(render_overlay_lines(&view, /*width*/ 120))
         );
     }

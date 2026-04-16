@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -14,6 +15,12 @@ use ts_rs::TS;
 use crate::config_types::ApprovalsReviewer;
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
+use crate::permissions::FileSystemAccessMode;
+use crate::permissions::FileSystemPath;
+use crate::permissions::FileSystemSandboxEntry;
+use crate::permissions::FileSystemSandboxPolicy;
+use crate::permissions::FileSystemSpecialPath;
+use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
@@ -80,15 +87,119 @@ impl SandboxPermissions {
     }
 }
 
-#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, JsonSchema, TS)]
 pub struct FileSystemPermissions {
-    pub read: Option<Vec<AbsolutePathBuf>>,
-    pub write: Option<Vec<AbsolutePathBuf>>,
+    pub entries: Vec<FileSystemSandboxEntry>,
 }
 
 impl FileSystemPermissions {
     pub fn is_empty(&self) -> bool {
-        self.read.is_none() && self.write.is_none()
+        self.entries.is_empty()
+    }
+
+    pub fn from_read_write_roots(
+        read: Option<Vec<AbsolutePathBuf>>,
+        write: Option<Vec<AbsolutePathBuf>>,
+    ) -> Self {
+        let mut entries = Vec::new();
+        if let Some(read) = read {
+            entries.extend(read.into_iter().map(|path| FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path },
+                access: FileSystemAccessMode::Read,
+            }));
+        }
+        if let Some(write) = write {
+            entries.extend(write.into_iter().map(|path| FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path },
+                access: FileSystemAccessMode::Write,
+            }));
+        }
+        Self { entries }
+    }
+
+    pub fn explicit_path_entries(
+        &self,
+    ) -> impl Iterator<Item = (&AbsolutePathBuf, FileSystemAccessMode)> {
+        self.entries.iter().filter_map(|entry| match &entry.path {
+            FileSystemPath::Path { path } => Some((path, entry.access)),
+            FileSystemPath::Special { .. } => None,
+        })
+    }
+
+    fn as_legacy_permissions(&self) -> Option<LegacyFileSystemPermissions> {
+        let mut read = Vec::new();
+        let mut write = Vec::new();
+
+        for entry in &self.entries {
+            let FileSystemPath::Path { path } = &entry.path else {
+                return None;
+            };
+            match entry.access {
+                FileSystemAccessMode::Read => read.push(path.clone()),
+                FileSystemAccessMode::Write => write.push(path.clone()),
+                FileSystemAccessMode::None => return None,
+            }
+        }
+
+        Some(LegacyFileSystemPermissions {
+            read: (!read.is_empty()).then_some(read),
+            write: (!write.is_empty()).then_some(write),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyFileSystemPermissions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read: Option<Vec<AbsolutePathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    write: Option<Vec<AbsolutePathBuf>>,
+}
+
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalFileSystemPermissions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    entries: Vec<FileSystemSandboxEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum FileSystemPermissionsDe {
+    Canonical(CanonicalFileSystemPermissions),
+    Legacy(LegacyFileSystemPermissions),
+}
+
+impl Serialize for FileSystemPermissions {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if let Some(legacy) = self.as_legacy_permissions() {
+            legacy.serialize(serializer)
+        } else {
+            CanonicalFileSystemPermissions {
+                entries: self.entries.clone(),
+            }
+            .serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FileSystemPermissions {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match FileSystemPermissionsDe::deserialize(deserializer)? {
+            FileSystemPermissionsDe::Canonical(CanonicalFileSystemPermissions { entries }) => {
+                Ok(Self { entries })
+            }
+            FileSystemPermissionsDe::Legacy(LegacyFileSystemPermissions { read, write }) => {
+                Ok(Self::from_read_write_roots(read, write))
+            }
+        }
     }
 }
 
@@ -112,6 +223,80 @@ pub struct PermissionProfile {
 impl PermissionProfile {
     pub fn is_empty(&self) -> bool {
         self.network.is_none() && self.file_system.is_none()
+    }
+
+    pub fn from_runtime_permissions(
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
+    ) -> Self {
+        Self {
+            network: Some(network_sandbox_policy.into()),
+            file_system: Some(file_system_sandbox_policy.into()),
+        }
+    }
+
+    pub fn from_legacy_sandbox_policy(sandbox_policy: &SandboxPolicy, cwd: &Path) -> Self {
+        Self::from_runtime_permissions(
+            &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, cwd),
+            NetworkSandboxPolicy::from(sandbox_policy),
+        )
+    }
+
+    pub fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
+        self.file_system.as_ref().map_or_else(
+            || FileSystemSandboxPolicy::restricted(Vec::new()),
+            FileSystemSandboxPolicy::from,
+        )
+    }
+
+    pub fn network_sandbox_policy(&self) -> NetworkSandboxPolicy {
+        if self
+            .network
+            .as_ref()
+            .and_then(|network| network.enabled)
+            .unwrap_or(false)
+        {
+            NetworkSandboxPolicy::Enabled
+        } else {
+            NetworkSandboxPolicy::Restricted
+        }
+    }
+
+    pub fn to_legacy_sandbox_policy(&self, cwd: &Path) -> io::Result<SandboxPolicy> {
+        self.file_system_sandbox_policy()
+            .to_legacy_sandbox_policy(self.network_sandbox_policy(), cwd)
+    }
+}
+
+impl From<NetworkSandboxPolicy> for NetworkPermissions {
+    fn from(value: NetworkSandboxPolicy) -> Self {
+        Self {
+            enabled: Some(value.is_enabled()),
+        }
+    }
+}
+
+impl From<&FileSystemSandboxPolicy> for FileSystemPermissions {
+    fn from(value: &FileSystemSandboxPolicy) -> Self {
+        let entries = match value.kind {
+            crate::permissions::FileSystemSandboxKind::Restricted => value.entries.clone(),
+            crate::permissions::FileSystemSandboxKind::Unrestricted
+            | crate::permissions::FileSystemSandboxKind::ExternalSandbox => {
+                vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Write,
+                }]
+            }
+        };
+        Self { entries }
+    }
+}
+
+impl From<&FileSystemPermissions> for FileSystemSandboxPolicy {
+    fn from(value: &FileSystemPermissions) -> Self {
+        FileSystemSandboxPolicy::restricted(value.entries.clone())
     }
 }
 
@@ -1452,6 +1637,10 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::tempdir;
 
+    fn absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(path).expect("path must be absolute")
+    }
+
     #[test]
     fn sandbox_permissions_helpers_match_documented_semantics() {
         let cases = [
@@ -1562,6 +1751,58 @@ mod tests {
         assert_eq!(permission_profile.is_empty(), false);
     }
 
+    #[test]
+    fn file_system_permissions_deserialize_legacy_read_write_shape() {
+        let file_system = serde_json::from_value::<FileSystemPermissions>(serde_json::json!({
+            "read": [absolute_path("/tmp/read-only")],
+            "write": [absolute_path("/tmp/read-write")],
+        }))
+        .expect("deserialize legacy filesystem permissions");
+
+        assert_eq!(
+            file_system,
+            FileSystemPermissions::from_read_write_roots(
+                Some(vec![absolute_path("/tmp/read-only")]),
+                Some(vec![absolute_path("/tmp/read-write")]),
+            )
+        );
+    }
+
+    #[test]
+    fn file_system_permissions_serialize_explicit_paths_as_legacy_read_write_shape() {
+        let file_system = FileSystemPermissions::from_read_write_roots(
+            Some(vec![absolute_path("/tmp/read-only")]),
+            Some(vec![absolute_path("/tmp/read-write")]),
+        );
+
+        let value = serde_json::to_value(file_system).expect("serialize filesystem permissions");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "read": [absolute_path("/tmp/read-only")],
+                "write": [absolute_path("/tmp/read-write")],
+            })
+        );
+    }
+
+    #[test]
+    fn file_system_permissions_round_trip_special_entries_through_canonical_shape() {
+        let file_system = FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+        };
+
+        let value = serde_json::to_value(&file_system).expect("serialize filesystem permissions");
+        let reparsed = serde_json::from_value::<FileSystemPermissions>(value)
+            .expect("deserialize filesystem permissions");
+
+        assert_eq!(reparsed, file_system);
+    }
     #[test]
     fn convert_mcp_content_to_items_builds_data_urls_when_missing_prefix() {
         let contents = vec![serde_json::json!({
