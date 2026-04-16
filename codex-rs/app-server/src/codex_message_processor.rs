@@ -3497,9 +3497,7 @@ impl CodexMessageProcessor {
             // No ThreadRollback event will arrive if an error occurs.
             // Clean up and reply immediately.
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-            let mut thread_state = thread_state.lock().await;
-            thread_state.pending_rollbacks = None;
-            drop(thread_state);
+            thread_state.lock().await.pending_rollbacks = None;
 
             self.send_internal_error(request, format!("failed to start rollback: {err}"))
                 .await;
@@ -7969,8 +7967,10 @@ impl CodexMessageProcessor {
             start_fuzzy_file_search_session(session_id.clone(), roots, self.outgoing.clone());
         match session {
             Ok(session) => {
-                let mut sessions = self.fuzzy_search_sessions.lock().await;
-                sessions.insert(session_id, session);
+                self.fuzzy_search_sessions
+                    .lock()
+                    .await
+                    .insert(session_id, session);
                 self.outgoing
                     .send_response(request_id, FuzzyFileSearchSessionStartResponse {})
                     .await;
@@ -10297,13 +10297,9 @@ mod tests {
         assert_eq!(cancel_rx.await, Ok(()));
 
         let state = manager.thread_state(thread_id).await;
+        let subscribed_connection_ids = manager.subscribed_connection_ids(thread_id).await;
         let state = state.lock().await;
-        assert!(
-            manager
-                .subscribed_connection_ids(thread_id)
-                .await
-                .is_empty()
-        );
+        assert!(subscribed_connection_ids.is_empty());
         assert!(state.cancel_tx.is_none());
         assert!(state.active_turn_snapshot().is_none());
         Ok(())
