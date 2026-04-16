@@ -2406,7 +2406,7 @@ impl CodexMessageProcessor {
         request_trace: Option<W3cTraceContext>,
         environment_id: Option<String>,
     ) {
-        let explicit_cwd = typesafe_overrides.cwd.clone();
+        let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = match derive_config_from_params(
             &cli_overrides,
             config_overrides.clone(),
@@ -2441,7 +2441,7 @@ impl CodexMessageProcessor {
             )
         );
 
-        if explicit_cwd.is_some()
+        if requested_cwd.is_some()
             && !config.active_project.is_trusted()
             && (requested_sandbox_trusts_project
                 || matches!(
@@ -2510,7 +2510,7 @@ impl CodexMessageProcessor {
             };
         }
 
-        if explicit_cwd.is_none() {
+        if requested_cwd.is_none() {
             match listener_task_context
                 .thread_manager
                 .environment_manager()
