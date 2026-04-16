@@ -971,6 +971,7 @@ mod tests {
         match ConfigBuilder::default().build().await {
             Ok(config) => config,
             Err(_) => Config::load_default_with_cli_overrides(Vec::new())
+                .await
                 .expect("default config should load"),
         }
     }
