@@ -1400,9 +1400,18 @@ async fn run_ratatui_app(
     set_default_client_residency_requirement(config.enforce_residency.value());
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
-    let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
-        && trust_decision_was_made
-        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+    let startup_sandbox_mode = if cli.full_auto {
+        Some(SandboxMode::WorkspaceWrite)
+    } else if cli.dangerously_bypass_approvals_and_sandbox {
+        Some(SandboxMode::DangerFullAccess)
+    } else {
+        cli.sandbox_mode.map(Into::<SandboxMode>::into)
+    };
+    let should_prompt_windows_sandbox_nux_at_startup = should_prompt_windows_sandbox_nux_at_startup(
+        &config,
+        trust_decision_was_made,
+        startup_sandbox_mode,
+    );
 
     let Cli {
         prompt,
@@ -1724,6 +1733,17 @@ async fn load_config_or_exit_with_fallback_cwd(
 /// Determine if the user has decided whether to trust the current directory.
 fn should_show_trust_screen(config: &Config) -> bool {
     config.active_project.trust_level.is_none()
+}
+
+fn should_prompt_windows_sandbox_nux_at_startup(
+    config: &Config,
+    trust_decision_was_made: bool,
+    sandbox_mode: Option<SandboxMode>,
+) -> bool {
+    cfg!(target_os = "windows")
+        && trust_decision_was_made
+        && sandbox_mode != Some(SandboxMode::DangerFullAccess)
+        && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
 }
 
 fn should_show_onboarding(
@@ -2218,6 +2238,27 @@ mod tests {
         }
         Ok(())
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn yolo_mode_skips_windows_sandbox_startup_prompt() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.active_project = ProjectConfig { trust_level: None };
+        config.set_windows_sandbox_enabled(/*value*/ false);
+
+        let should_prompt = should_prompt_windows_sandbox_nux_at_startup(
+            &config,
+            /*trust_decision_was_made*/ true,
+            Some(SandboxMode::DangerFullAccess),
+        );
+        assert!(
+            !should_prompt,
+            "yolo mode should suppress the Windows sandbox startup prompt"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
         use codex_protocol::config_types::TrustLevel;
