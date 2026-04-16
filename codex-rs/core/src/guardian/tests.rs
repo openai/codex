@@ -918,7 +918,11 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         /*external_cancel*/ None,
     )
     .await;
-    let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
+    let GuardianReviewOutcome {
+        kind: GuardianReviewOutcomeKind::Completed(Ok(assessment)),
+        ..
+    } = outcome
+    else {
         panic!("expected guardian assessment");
     };
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
@@ -1127,13 +1131,25 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
 
-    let GuardianReviewOutcome::Completed(Ok(first_assessment)) = first_outcome else {
+    let GuardianReviewOutcome {
+        kind: GuardianReviewOutcomeKind::Completed(Ok(first_assessment)),
+        ..
+    } = first_outcome
+    else {
         panic!("expected first guardian assessment");
     };
-    let GuardianReviewOutcome::Completed(Ok(second_assessment)) = second_outcome else {
+    let GuardianReviewOutcome {
+        kind: GuardianReviewOutcomeKind::Completed(Ok(second_assessment)),
+        ..
+    } = second_outcome
+    else {
         panic!("expected second guardian assessment");
     };
-    let GuardianReviewOutcome::Completed(Ok(third_assessment)) = third_outcome else {
+    let GuardianReviewOutcome {
+        kind: GuardianReviewOutcomeKind::Completed(Ok(third_assessment)),
+        ..
+    } = third_outcome
+    else {
         panic!("expected third guardian assessment");
     };
     assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
