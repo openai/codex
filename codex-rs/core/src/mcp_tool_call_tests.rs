@@ -651,6 +651,35 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
 }
 
 #[test]
+fn mcp_tool_call_thread_id_meta_is_added_to_request_meta() {
+    assert_eq!(
+        with_mcp_tool_call_thread_id_meta(
+            Some(serde_json::json!({
+                "source": "test-client",
+                "threadId": "stale-thread",
+            })),
+            "thread-live",
+        ),
+        Some(serde_json::json!({
+            "source": "test-client",
+            "threadId": "thread-live",
+        }))
+    );
+
+    assert_eq!(
+        with_mcp_tool_call_thread_id_meta(None, "thread-live"),
+        Some(serde_json::json!({
+            "threadId": "thread-live",
+        }))
+    );
+
+    assert_eq!(
+        with_mcp_tool_call_thread_id_meta(Some(serde_json::json!("invalid-meta")), "thread-live"),
+        Some(serde_json::json!("invalid-meta"))
+    );
+}
+
+#[test]
 fn accepted_elicitation_content_converts_to_request_user_input_response() {
     let response = request_user_input_response_from_elicitation_content(Some(serde_json::json!(
         {

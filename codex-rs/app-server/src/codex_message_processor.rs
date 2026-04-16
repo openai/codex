@@ -5592,17 +5592,19 @@ impl CodexMessageProcessor {
         params: McpServerToolCallParams,
     ) {
         let outgoing = Arc::clone(&self.outgoing);
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
+        let thread_id = params.thread_id.clone();
+        let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(thread) => thread,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
+        let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
 
         tokio::spawn(async move {
             let result = thread
-                .call_mcp_tool(&params.server, &params.tool, params.arguments, params.meta)
+                .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
                 .await;
             match result {
                 Ok(result) => {
@@ -9180,6 +9182,32 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
             message: format!("failed to {operation} thread: {err}"),
             data: None,
         },
+    }
+}
+
+const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+
+fn with_mcp_tool_call_thread_id_meta(
+    meta: Option<serde_json::Value>,
+    thread_id: &str,
+) -> Option<serde_json::Value> {
+    match meta {
+        Some(serde_json::Value::Object(mut map)) => {
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        other => other,
     }
 }
 

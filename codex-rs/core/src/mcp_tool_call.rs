@@ -478,6 +478,8 @@ async fn execute_mcp_tool_call(
     )
     .await?;
     let request_meta =
+        with_mcp_tool_call_thread_id_meta(request_meta, &sess.conversation_id.to_string());
+    let request_meta =
         augment_mcp_tool_request_meta_with_sandbox_state(sess, turn_context, server, request_meta)
             .await
             .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
@@ -660,6 +662,7 @@ pub(crate) struct McpToolApprovalMetadata {
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
+const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
 fn custom_mcp_tool_approval_mode(
     turn_context: &TurnContext,
@@ -707,6 +710,30 @@ fn build_mcp_tool_call_request_meta(
     }
 
     (!request_meta.is_empty()).then_some(serde_json::Value::Object(request_meta))
+}
+
+fn with_mcp_tool_call_thread_id_meta(
+    meta: Option<serde_json::Value>,
+    thread_id: &str,
+) -> Option<serde_json::Value> {
+    match meta {
+        Some(serde_json::Value::Object(mut map)) => {
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                MCP_TOOL_THREAD_ID_META_KEY.to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+            Some(serde_json::Value::Object(map))
+        }
+        other => other,
+    }
 }
 
 #[derive(Clone, Copy)]
