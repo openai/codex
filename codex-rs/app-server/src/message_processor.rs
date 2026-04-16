@@ -752,7 +752,7 @@ impl MessageProcessor {
             | ClientRequest::TurnSteer { request_id, .. } = &codex_request
         {
             self.analytics_events_client.track_request(
-                connection_request_id.connection_id.0,
+                connection_id.0,
                 request_id.clone(),
                 codex_request.clone(),
             );
