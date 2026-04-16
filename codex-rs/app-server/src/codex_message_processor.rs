@@ -6108,6 +6108,7 @@ impl CodexMessageProcessor {
                 }
             };
             let config_layer_stack = match load_config_layers_state(
+                LOCAL_FS.as_ref(),
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
                 &cli_overrides,

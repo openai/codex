@@ -44,6 +44,7 @@ use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiNotificationSettings;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -2065,6 +2066,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
 
     let cwd = codex_home.path().abs();
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home.path(),
         Some(cwd),
         &Vec::new(),
@@ -2198,6 +2200,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
 
     let cwd = codex_home.path().abs();
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home.path(),
         Some(cwd),
         &[("model".to_string(), TomlValue::String("cli".to_string()))],

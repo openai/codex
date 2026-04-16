@@ -47,6 +47,7 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -689,6 +690,7 @@ impl ConfigBuilder {
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack = load_config_layers_state(
+            LOCAL_FS.as_ref(),
             &codex_home,
             Some(cwd),
             &cli_overrides,
@@ -849,6 +851,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home,
         cwd.cloned(),
         &cli_overrides,
@@ -1019,6 +1022,7 @@ pub async fn load_global_mcp_servers(
     // MCP servers defined in in-repo .codex/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home,
         cwd,
         &cli_overrides,
