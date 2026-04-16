@@ -14,12 +14,14 @@ use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
 use toml::Value;
 use wiremock::Mock;
@@ -2477,14 +2479,10 @@ enabled = true
     );
 
     assert_eq!(
-        curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
-            tmp.path(),
-            "failed to read user config while refreshing curated plugin cache",
-            "failed to parse user config while refreshing curated plugin cache",
-        ))
-        .into_iter()
-        .map(|plugin_id| plugin_id.as_key())
-        .collect::<Vec<_>>(),
+        configured_curated_plugin_ids_from_codex_home(tmp.path())
+            .into_iter()
+            .map(|plugin_id| plugin_id.as_key())
+            .collect::<Vec<_>>(),
         vec!["slack@openai-curated".to_string()]
     );
 
@@ -2496,11 +2494,7 @@ plugins = true
     );
 
     assert_eq!(
-        curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
-            tmp.path(),
-            "failed to read user config while refreshing curated plugin cache",
-            "failed to parse user config while refreshing curated plugin cache",
-        )),
+        configured_curated_plugin_ids_from_codex_home(tmp.path()),
         Vec::<PluginId>::new()
     );
 }
