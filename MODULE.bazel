@@ -1,8 +1,9 @@
 module(name = "codex")
 
-bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "llvm", version = "0.6.8")
+bazel_dep(name = "llvm", version = "0.7.0")
+
 # The upstream LLVM archive contains a few unix-only symlink entries and is
 # missing a couple of MinGW compatibility archives that windows-gnullvm needs
 # during extraction and linking, so patch it until upstream grows native support.
@@ -13,6 +14,7 @@ single_version_override(
         "//patches:llvm_windows_symlink_extract.patch",
     ],
 )
+
 # Abseil picks a MinGW pthread TLS path that does not match our hermetic
 # windows-gnullvm toolchain; force it onto the portable C++11 thread-local path.
 single_version_override(
@@ -79,21 +81,25 @@ bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.43")
+
 # `rules_rs` 0.0.43 does not model `windows-gnullvm` as a distinct Windows exec
-# platform, so patch it until upstream grows that support for both x86_64 and
-# aarch64.
-single_version_override(
+# platform, and it pins a `rules_rust` commit before stable hash-based test
+# sharding. Override it with hermeticbuild/rules_rs#94 while that is pending,
+# then keep the local Windows patches on top.
+archive_override(
     module_name = "rules_rs",
+    integrity = "sha256-hzxHW/XFJEAkbtQ1CswMHq2PYXp9DLbEdE5eTHiWlj0=",
     patch_strip = 1,
     patches = [
         "//patches:rules_rs_windows_gnullvm_exec.patch",
-        "//patches:rules_rs_delete_git_worktree_pointer.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
-    version = "0.0.43",
+    strip_prefix = "rules_rs-cc1e8d106622845d726a4fb3b21f7cdd61a0fa4b",
+    urls = ["https://github.com/bolinfest/rules_rs/archive/cc1e8d106622845d726a4fb3b21f7cdd61a0fa4b.tar.gz"],
 )
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
+
 # Build-script probe binaries inherit CFLAGS/CXXFLAGS from Bazel's C++
 # toolchain. On `windows-gnullvm`, llvm-mingw does not ship
 # `libssp_nonshared`, so strip the forwarded stack-protector flags there.
@@ -108,7 +114,6 @@ rules_rust.patch(
         "//patches:rules_rust_windows_exec_bin_target.patch",
         "//patches:rules_rust_windows_exec_std.patch",
         "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
-        "//patches:rules_rust_repository_set_exec_constraints.patch",
     ],
     strip = 1,
 )
@@ -119,22 +124,23 @@ nightly_rust = use_extension(
     "rust",
 )
 nightly_rust.toolchain(
-    versions = ["nightly/2025-09-18"],
     dev_components = True,
     edition = "2024",
+    versions = ["nightly/2025-09-18"],
 )
+
 # Keep Windows exec tools on MSVC so Bazel helper binaries link correctly, but
 # lint crate targets as `windows-gnullvm` to preserve the repo's actual cfgs.
 nightly_rust.repository_set(
     name = "rust_windows_x86_64",
     dev_components = True,
     edition = "2024",
-    exec_triple = "x86_64-pc-windows-msvc",
     exec_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
         "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
     ],
+    exec_triple = "x86_64-pc-windows-msvc",
     target_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
@@ -162,6 +168,7 @@ toolchains.toolchain(
 use_repo(toolchains, "default_rust_toolchains")
 
 register_toolchains("@default_rust_toolchains//:all")
+
 register_toolchains("@rust_toolchains//:all")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
@@ -233,7 +240,6 @@ crate.annotation(
         "//patches:aws-lc-sys_windows_msvc_memcmp_probe.patch",
     ],
 )
-
 crate.annotation(
     # The build script only validates embedded source/version metadata.
     crate = "rustc_apfloat",
@@ -241,6 +247,7 @@ crate.annotation(
 )
 
 inject_repo(crate, "zstd")
+
 use_repo(crate, "argument_comment_lint_crates")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
@@ -310,7 +317,9 @@ crate.annotation(
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
 new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
 
 new_local_repository(
