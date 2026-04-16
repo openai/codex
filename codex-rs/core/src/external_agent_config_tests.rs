@@ -5,13 +5,16 @@ use tempfile::TempDir;
 
 fn fixture_paths() -> (TempDir, PathBuf, PathBuf) {
     let root = TempDir::new().expect("create tempdir");
-    let claude_home = root.path().join(".claude");
+    let external_agent_home = root.path().join(".claude");
     let codex_home = root.path().join(".codex");
-    (root, claude_home, codex_home)
+    (root, external_agent_home, codex_home)
 }
 
-fn service_for_paths(claude_home: PathBuf, codex_home: PathBuf) -> ExternalAgentConfigService {
-    ExternalAgentConfigService::new_for_test(codex_home, claude_home)
+fn service_for_paths(
+    external_agent_home: PathBuf,
+    codex_home: PathBuf,
+) -> ExternalAgentConfigService {
+    ExternalAgentConfigService::new_for_test(codex_home, external_agent_home)
 }
 
 fn github_plugin_details() -> MigrationDetails {
@@ -25,20 +28,21 @@ fn github_plugin_details() -> MigrationDetails {
 
 #[test]
 fn detect_home_lists_config_skills_and_agents_md() {
-    let (_root, claude_home, codex_home) = fixture_paths();
+    let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
         .map(|parent| parent.join(".agents").join("skills"))
         .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
-    fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create skills");
-    fs::write(claude_home.join("CLAUDE.md"), "claude rules").expect("write claude md");
+    fs::create_dir_all(external_agent_home.join("skills").join("skill-a")).expect("create skills");
+    fs::write(external_agent_home.join("CLAUDE.md"), "claude rules")
+        .expect("write external agent md");
     fs::write(
-        claude_home.join("settings.json"),
+        external_agent_home.join("settings.json"),
         r#"{"model":"claude","env":{"FOO":"bar"}}"#,
     )
     .expect("write settings");
 
-    let items = service_for_paths(claude_home.clone(), codex_home.clone())
+    let items = service_for_paths(external_agent_home.clone(), codex_home.clone())
         .detect(ExternalAgentConfigDetectOptions {
             include_home: true,
             cwds: None,
@@ -50,7 +54,7 @@ fn detect_home_lists_config_skills_and_agents_md() {
             item_type: ExternalAgentConfigMigrationItemType::Config,
             description: format!(
                 "Migrate {} into {}",
-                claude_home.join("settings.json").display(),
+                external_agent_home.join("settings.json").display(),
                 codex_home.join("config.toml").display()
             ),
             cwd: None,
@@ -59,8 +63,8 @@ fn detect_home_lists_config_skills_and_agents_md() {
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Skills,
             description: format!(
-                "Copy skill folders from {} to {}",
-                claude_home.join("skills").display(),
+                "Migrate skills from {} to {}",
+                external_agent_home.join("skills").display(),
                 agents_skills.display()
             ),
             cwd: None,
@@ -70,7 +74,7 @@ fn detect_home_lists_config_skills_and_agents_md() {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
                 "Import {} to {}",
-                claude_home.join("CLAUDE.md").display(),
+                external_agent_home.join("CLAUDE.md").display(),
                 codex_home.join("AGENTS.md").display()
             ),
             cwd: None,
@@ -125,25 +129,32 @@ fn detect_repo_lists_agents_md_for_each_cwd() {
 
 #[tokio::test]
 async fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
-    let (_root, claude_home, codex_home) = fixture_paths();
+    let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
         .map(|parent| parent.join(".agents").join("skills"))
         .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
-    fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create skills");
+    fs::create_dir_all(external_agent_home.join("skills").join("skill-a")).expect("create skills");
     fs::write(
-            claude_home.join("settings.json"),
+            external_agent_home.join("settings.json"),
             r#"{"model":"claude","permissions":{"ask":["git push"]},"env":{"FOO":"bar","CI":false,"MAX_RETRIES":3,"MY_TEAM":"codex","IGNORED":null,"LIST":["a","b"],"MAP":{"x":1}},"sandbox":{"enabled":true,"network":{"allowLocalBinding":true}}}"#,
         )
         .expect("write settings");
     fs::write(
-        claude_home.join("skills").join("skill-a").join("SKILL.md"),
+        external_agent_home
+            .join("skills")
+            .join("skill-a")
+            .join("SKILL.md"),
         "Use Claude Code and CLAUDE utilities.",
     )
     .expect("write skill");
-    fs::write(claude_home.join("CLAUDE.md"), "Claude code guidance").expect("write agents");
+    fs::write(
+        external_agent_home.join("CLAUDE.md"),
+        "Claude code guidance",
+    )
+    .expect("write agents");
 
-    service_for_paths(claude_home, codex_home.clone())
+    service_for_paths(external_agent_home, codex_home.clone())
         .import(vec![
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
@@ -185,15 +196,15 @@ async fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
 
 #[tokio::test]
 async fn import_home_skips_empty_config_migration() {
-    let (_root, claude_home, codex_home) = fixture_paths();
-    fs::create_dir_all(&claude_home).expect("create claude home");
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::write(
-        claude_home.join("settings.json"),
+        external_agent_home.join("settings.json"),
         r#"{"model":"claude","sandbox":{"enabled":false}}"#,
     )
     .expect("write settings");
 
-    service_for_paths(claude_home, codex_home.clone())
+    service_for_paths(external_agent_home, codex_home.clone())
         .import(vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Config,
             description: String::new(),
@@ -208,11 +219,11 @@ async fn import_home_skips_empty_config_migration() {
 
 #[test]
 fn detect_home_skips_config_when_target_already_has_supported_fields() {
-    let (_root, claude_home, codex_home) = fixture_paths();
-    fs::create_dir_all(&claude_home).expect("create claude home");
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::create_dir_all(&codex_home).expect("create codex home");
     fs::write(
-        claude_home.join("settings.json"),
+        external_agent_home.join("settings.json"),
         r#"{"env":{"FOO":"bar"},"sandbox":{"enabled":true}}"#,
     )
     .expect("write settings");
@@ -230,7 +241,7 @@ fn detect_home_skips_config_when_target_already_has_supported_fields() {
     )
     .expect("write config");
 
-    let items = service_for_paths(claude_home, codex_home)
+    let items = service_for_paths(external_agent_home, codex_home)
         .detect(ExternalAgentConfigDetectOptions {
             include_home: true,
             cwds: None,
@@ -242,15 +253,15 @@ fn detect_home_skips_config_when_target_already_has_supported_fields() {
 
 #[test]
 fn detect_home_skips_skills_when_all_skill_directories_exist() {
-    let (_root, claude_home, codex_home) = fixture_paths();
+    let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
         .map(|parent| parent.join(".agents").join("skills"))
         .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
-    fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create source");
+    fs::create_dir_all(external_agent_home.join("skills").join("skill-a")).expect("create source");
     fs::create_dir_all(agents_skills.join("skill-a")).expect("create target");
 
-    let items = service_for_paths(claude_home, codex_home)
+    let items = service_for_paths(external_agent_home, codex_home)
         .detect(ExternalAgentConfigDetectOptions {
             include_home: true,
             cwds: None,
@@ -333,7 +344,7 @@ async fn import_repo_agents_md_overwrites_empty_targets() {
 }
 
 #[test]
-fn detect_repo_prefers_non_empty_dot_claude_agents_source() {
+fn detect_repo_prefers_non_empty_external_agent_agents_source() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).expect("create git");
@@ -368,7 +379,7 @@ fn detect_repo_prefers_non_empty_dot_claude_agents_source() {
 }
 
 #[tokio::test]
-async fn import_repo_uses_non_empty_dot_claude_agents_source() {
+async fn import_repo_uses_non_empty_external_agent_agents_source() {
     let root = TempDir::new().expect("create tempdir");
     let repo_root = root.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).expect("create git");
@@ -409,21 +420,26 @@ fn migration_metric_tags_for_skills_include_skills_count() {
 
 #[test]
 fn detect_home_lists_enabled_plugins_from_settings() {
-    let (_root, claude_home, codex_home) = fixture_paths();
-    fs::create_dir_all(&claude_home).expect("create claude home");
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::write(
-        claude_home.join("settings.json"),
+        external_agent_home.join("settings.json"),
         r#"{
           "enabledPlugins": {
             "formatter@acme-tools": true,
             "deployer@acme-tools": true,
             "analyzer@security-plugins": false
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/claude-plugins"
+            }
           }
         }"#,
     )
     .expect("write settings");
 
-    let items = service_for_paths(claude_home.clone(), codex_home)
+    let items = service_for_paths(external_agent_home.clone(), codex_home)
         .detect(ExternalAgentConfigDetectOptions {
             include_home: true,
             cwds: None,
@@ -436,7 +452,7 @@ fn detect_home_lists_enabled_plugins_from_settings() {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
                 "Import enabled plugins from {}",
-                claude_home.join("settings.json").display()
+                external_agent_home.join("settings.json").display()
             ),
             cwd: None,
             details: Some(MigrationDetails {
@@ -449,11 +465,153 @@ fn detect_home_lists_enabled_plugins_from_settings() {
     );
 }
 
+#[test]
+fn detect_repo_skips_plugins_that_are_already_configured_in_codex() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo external agent dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true,
+            "deployer@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/claude-plugins"
+            }
+          }
+        }"#,
+    )
+    .expect("write repo settings");
+    fs::write(
+        codex_home.join("config.toml"),
+        r#"
+[plugins."formatter@acme-tools"]
+enabled = true
+"#,
+    )
+    .expect("write codex config");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Import enabled plugins from {}",
+                repo_root.join(".claude").join("settings.json").display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["deployer".to_string()],
+                }],
+            }),
+        }]
+    );
+}
+
+#[test]
+fn detect_repo_skips_plugins_that_are_disabled_in_codex() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo external agent dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/claude-plugins"
+            }
+          }
+        }"#,
+    )
+    .expect("write repo settings");
+    fs::write(
+        codex_home.join("config.toml"),
+        r#"
+[plugins."formatter@acme-tools"]
+enabled = false
+"#,
+    )
+    .expect("write codex config");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root]),
+        })
+        .expect("detect");
+
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+}
+
+#[test]
+fn detect_repo_skips_plugins_without_explicit_enabled_in_codex() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo external agent dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/claude-plugins"
+            }
+          }
+        }"#,
+    )
+    .expect("write repo settings");
+    fs::write(
+        codex_home.join("config.toml"),
+        r#"
+[plugins."formatter@acme-tools"]
+"#,
+    )
+    .expect("write codex config");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root]),
+        })
+        .expect("detect");
+
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+}
+
 #[tokio::test]
 async fn import_plugins_requires_details() {
-    let (_root, claude_home, codex_home) = fixture_paths();
+    let (_root, external_agent_home, codex_home) = fixture_paths();
 
-    let err = service_for_paths(claude_home, codex_home)
+    let err = service_for_paths(external_agent_home, codex_home)
         .import_plugins(/*cwd*/ None, /*details*/ None)
         .await
         .expect_err("expected missing details error");
@@ -462,12 +620,248 @@ async fn import_plugins_requires_details() {
     assert_eq!(err.to_string(), "plugins migration item is missing details");
 }
 
+#[test]
+fn detect_repo_does_not_skip_plugins_only_configured_in_project_codex() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo external agent dir");
+    fs::create_dir_all(repo_root.join(".codex")).expect("create repo codex dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "acme-corp/claude-plugins"
+            }
+          }
+        }"#,
+    )
+    .expect("write repo settings");
+    fs::write(
+        repo_root.join(".codex").join("config.toml"),
+        r#"
+[plugins."formatter@acme-tools"]
+enabled = true
+"#,
+    )
+    .expect("write project codex config");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Import enabled plugins from {}",
+                repo_root.join(".claude").join("settings.json").display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["formatter".to_string()],
+                }],
+            }),
+        }]
+    );
+}
+
+#[test]
+fn detect_home_skips_plugins_without_marketplace_source() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .expect("detect");
+
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+}
+
+#[test]
+fn detect_home_skips_plugins_with_invalid_marketplace_source() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "github"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: true,
+            cwds: None,
+        })
+        .expect("detect");
+
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+}
+
+#[test]
+fn detect_repo_filters_plugins_against_installed_marketplace() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    let marketplace_root = codex_home.join(".tmp").join("marketplaces").join("debug");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo external agent dir");
+    fs::create_dir_all(marketplace_root.join(".agents").join("plugins"))
+        .expect("create marketplace manifest dir");
+    fs::create_dir_all(
+        marketplace_root
+            .join("plugins")
+            .join("sample")
+            .join(".codex-plugin"),
+    )
+    .expect("create sample plugin");
+    fs::create_dir_all(
+        marketplace_root
+            .join("plugins")
+            .join("available")
+            .join(".codex-plugin"),
+    )
+    .expect("create available plugin");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "sample@debug": true,
+            "available@debug": true,
+            "missing@debug": true
+          },
+          "extraKnownMarketplaces": {
+            "debug": {
+              "source": "owner/debug-marketplace"
+            }
+          }
+        }"#,
+    )
+    .expect("write repo settings");
+    fs::write(
+        codex_home.join("config.toml"),
+        r#"
+[marketplaces.debug]
+source_type = "git"
+source = "owner/debug-marketplace"
+"#,
+    )
+    .expect("write codex config");
+    fs::write(
+        marketplace_root
+            .join(".agents")
+            .join("plugins")
+            .join("marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample",
+      "source": {
+        "source": "local",
+        "path": "./plugins/sample"
+      },
+      "policy": {
+        "installation": "NOT_AVAILABLE"
+      }
+    },
+    {
+      "name": "available",
+      "source": {
+        "source": "local",
+        "path": "./plugins/available"
+      }
+    }
+  ]
+}"#,
+    )
+    .expect("write marketplace manifest");
+    fs::write(
+        marketplace_root
+            .join("plugins")
+            .join("sample")
+            .join(".codex-plugin")
+            .join("plugin.json"),
+        r#"{"name":"sample"}"#,
+    )
+    .expect("write sample plugin manifest");
+    fs::write(
+        marketplace_root
+            .join("plugins")
+            .join("available")
+            .join(".codex-plugin")
+            .join("plugin.json"),
+        r#"{"name":"available"}"#,
+    )
+    .expect("write available plugin manifest");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Import enabled plugins from {}",
+                repo_root.join(".claude").join("settings.json").display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "debug".to_string(),
+                    plugin_names: vec!["available".to_string()],
+                }],
+            }),
+        }]
+    );
+}
+
 #[tokio::test]
 async fn import_plugins_requires_source_marketplace_details() {
-    let (_root, claude_home, codex_home) = fixture_paths();
-    fs::create_dir_all(&claude_home).expect("create claude home");
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::write(
-        claude_home.join("settings.json"),
+        external_agent_home.join("settings.json"),
         r#"{
           "enabledPlugins": {
             "formatter@acme-tools": true
@@ -482,7 +876,7 @@ async fn import_plugins_requires_source_marketplace_details() {
     )
     .expect("write settings");
 
-    let outcome = service_for_paths(claude_home, codex_home)
+    let outcome = service_for_paths(external_agent_home, codex_home)
         .import_plugins(
             /*cwd*/ None,
             Some(MigrationDetails {
@@ -508,10 +902,10 @@ async fn import_plugins_requires_source_marketplace_details() {
 
 #[tokio::test]
 async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace() {
-    let (_root, claude_home, codex_home) = fixture_paths();
-    fs::create_dir_all(&claude_home).expect("create claude home");
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
     fs::write(
-        claude_home.join("settings.json"),
+        external_agent_home.join("settings.json"),
         r#"{
           "enabledPlugins": {
             "formatter@acme-tools": true
@@ -526,7 +920,7 @@ async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace(
     )
     .expect("write settings");
 
-    let outcome = service_for_paths(claude_home, codex_home)
+    let outcome = service_for_paths(external_agent_home, codex_home)
         .import_plugins(/*cwd*/ None, Some(github_plugin_details()))
         .await
         .expect("import plugins");
@@ -542,18 +936,96 @@ async fn import_plugins_defers_marketplace_source_validation_to_add_marketplace(
     );
 }
 
+#[tokio::test]
+async fn import_plugins_supports_external_agent_plugin_marketplace_layout() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    let marketplace_root = external_agent_home.join("my-marketplace");
+    let plugin_root = marketplace_root.join("plugins").join("cloudflare");
+    fs::create_dir_all(marketplace_root.join(".claude-plugin"))
+        .expect("create marketplace manifest dir");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        external_agent_home.join("settings.json"),
+        format!(
+            r#"{{
+              "enabledPlugins": {{
+                "cloudflare@my-plugins": true
+              }},
+              "extraKnownMarketplaces": {{
+                "my-plugins": {{
+                  "source": "local",
+                  "path": "{}"
+                }}
+              }}
+            }}"#,
+            marketplace_root.display()
+        ),
+    )
+    .expect("write settings");
+    fs::write(
+        marketplace_root
+            .join(".claude-plugin")
+            .join("marketplace.json"),
+        r#"{
+          "name": "my-plugins",
+          "plugins": [
+            {
+              "name": "cloudflare",
+              "source": "./plugins/cloudflare"
+            }
+          ]
+        }"#,
+    )
+    .expect("write marketplace manifest");
+    fs::write(
+        plugin_root.join(".codex-plugin").join("plugin.json"),
+        r#"{"name":"cloudflare","version":"0.1.0"}"#,
+    )
+    .expect("write plugin manifest");
+
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
+        .import_plugins(
+            /*cwd*/ None,
+            Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "my-plugins".to_string(),
+                    plugin_names: vec!["cloudflare".to_string()],
+                }],
+            }),
+        )
+        .await
+        .expect("import plugins");
+
+    assert_eq!(
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: vec!["my-plugins".to_string()],
+            succeeded_plugin_ids: vec!["cloudflare@my-plugins".to_string()],
+            failed_marketplaces: Vec::new(),
+            failed_plugin_ids: Vec::new(),
+        }
+    );
+    let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
+    assert!(config.contains(r#"[plugins."cloudflare@my-plugins"]"#));
+    assert!(config.contains("enabled = true"));
+}
+
 #[test]
 fn import_skills_returns_only_new_skill_directory_count() {
-    let (_root, claude_home, codex_home) = fixture_paths();
+    let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home
         .parent()
         .map(|parent| parent.join(".agents").join("skills"))
         .unwrap_or_else(|| PathBuf::from(".agents").join("skills"));
-    fs::create_dir_all(claude_home.join("skills").join("skill-a")).expect("create source a");
-    fs::create_dir_all(claude_home.join("skills").join("skill-b")).expect("create source b");
+    fs::create_dir_all(external_agent_home.join("skills").join("skill-a"))
+        .expect("create source a");
+    fs::create_dir_all(external_agent_home.join("skills").join("skill-b"))
+        .expect("create source b");
     fs::create_dir_all(agents_skills.join("skill-a")).expect("create existing target");
 
-    let copied_count = service_for_paths(claude_home, codex_home)
+    let copied_count = service_for_paths(external_agent_home, codex_home)
         .import_skills(/*cwd*/ None)
         .expect("import skills");
 
