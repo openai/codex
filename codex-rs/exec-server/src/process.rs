@@ -89,6 +89,14 @@ pub struct ExecProcessEventReceiver {
 }
 
 impl ExecProcessEventReceiver {
+    pub fn empty() -> Self {
+        let (_live_tx, live_rx) = broadcast::channel(1);
+        Self {
+            replay: VecDeque::new(),
+            live_rx,
+        }
+    }
+
     pub async fn recv(&mut self) -> Result<ExecProcessEvent, broadcast::error::RecvError> {
         if let Some(event) = self.replay.pop_front() {
             return Ok(event);
