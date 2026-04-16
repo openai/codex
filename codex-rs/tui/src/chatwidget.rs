@@ -96,6 +96,8 @@ use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
+#[cfg(test)]
+use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ToolRequestUserInputParams;
@@ -197,6 +199,8 @@ use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 #[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
+#[cfg(test)]
+use codex_protocol::protocol::ThreadGoalStatus as ProtocolThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
@@ -6702,7 +6706,25 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::ThreadGoalUpdated(_) => {}
+            EventMsg::ThreadGoalUpdated(event) => {
+                let goal = event.goal;
+                self.on_thread_goal_updated(AppThreadGoal {
+                    thread_id: goal.thread_id.to_string(),
+                    objective: goal.objective,
+                    status: match goal.status {
+                        ProtocolThreadGoalStatus::Active => AppThreadGoalStatus::Active,
+                        ProtocolThreadGoalStatus::Paused => AppThreadGoalStatus::Paused,
+                        ProtocolThreadGoalStatus::BudgetLimited => {
+                            AppThreadGoalStatus::BudgetLimited
+                        }
+                        ProtocolThreadGoalStatus::Complete => AppThreadGoalStatus::Complete,
+                    },
+                    token_budget: goal.token_budget,
+                    tokens_used: goal.tokens_used,
+                    created_at: goal.created_at,
+                    updated_at: goal.updated_at,
+                });
+            }
             // NOTE: All three AgentMessage arms feed `record_agent_markdown` even
             // when the message is otherwise not rendered (thread-snapshot replay,
             // non-review live messages). This ensures the copy source stays
