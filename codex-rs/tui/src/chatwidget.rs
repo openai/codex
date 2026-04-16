@@ -6836,10 +6836,7 @@ impl ChatWidget {
                     self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::BudgetLimited => {
-                    self.submit_pending_steers_after_interrupt = false;
-                    self.pending_steers.clear();
-                    self.refresh_pending_input_preview();
-                    self.on_error(self.interrupted_turn_message(ev.reason))
+                    self.on_interrupted_turn(ev.reason);
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),

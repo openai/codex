@@ -1290,6 +1290,40 @@ async fn direct_budget_limited_turn_uses_budget_message_snapshot() {
     assert_chatwidget_snapshot!("direct_budget_limited_turn_message", last);
 }
 
+#[tokio::test]
+async fn budget_limited_turn_restores_queued_input_without_submitting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.queued_user_messages
+        .push_back(UserMessage::from("follow-up after budget stop"));
+    chat.refresh_pending_input_preview();
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::BudgetLimited,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "follow-up after budget stop"
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
 // Snapshot test: interrupting specifically to submit pending steers shows an
 // informational banner instead of the generic "tell the model what to do
 // differently" error prompt.
