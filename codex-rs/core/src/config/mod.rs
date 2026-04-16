@@ -169,13 +169,14 @@ fn resolve_mcp_oauth_credentials_store_mode(
 }
 
 #[cfg(test)]
-pub(crate) fn test_config() -> Config {
+pub(crate) async fn test_config() -> Config {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
         AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("temp dir should resolve"),
     )
+    .await
     .expect("load default test config")
 }
 
@@ -726,6 +727,7 @@ impl ConfigBuilder {
             codex_home,
             config_layer_stack,
         )
+        .await
     }
 
     #[cfg(test)]
@@ -786,7 +788,7 @@ impl Config {
     }
 
     /// Load a default configuration when user config files are invalid.
-    pub fn load_default_with_cli_overrides(
+    pub async fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
@@ -794,11 +796,12 @@ impl Config {
             codex_home.to_path_buf(),
             cli_overrides,
         )
+        .await
     }
 
     /// Load a default configuration for a specific Codex home without reading
     /// user, project, or system config layers.
-    pub fn load_default_with_cli_overrides_for_codex_home(
+    pub async fn load_default_with_cli_overrides_for_codex_home(
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
@@ -818,6 +821,7 @@ impl Config {
             codex_home,
             ConfigLayerStack::default(),
         )
+        .await
     }
 
     /// This is a secondary way of creating [Config], which is appropriate when
@@ -1413,22 +1417,24 @@ pub(crate) fn resolve_web_search_mode_for_turn(
 
 impl Config {
     #[cfg(test)]
-    fn load_from_base_config_with_overrides(
+    async fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: AbsolutePathBuf,
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
+        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack).await
     }
 
-    pub(crate) fn load_config_with_layer_stack(
+    pub(crate) async fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        // Keep the large config-construction future off small test thread stacks.
+        Box::pin(async move {
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
@@ -1547,6 +1553,7 @@ impl Config {
             .collect();
         let active_project = cfg
             .get_active_project(resolved_cwd.as_path())
+            .await
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
@@ -1636,13 +1643,15 @@ impl Config {
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
-            let mut sandbox_policy = cfg.derive_sandbox_policy(
-                sandbox_mode,
-                config_profile.sandbox_mode,
-                windows_sandbox_level,
-                resolved_cwd.as_path(),
-                Some(&constrained_sandbox_policy),
-            );
+            let mut sandbox_policy = cfg
+                .derive_sandbox_policy(
+                    sandbox_mode,
+                    config_profile.sandbox_mode,
+                    windows_sandbox_level,
+                    resolved_cwd.as_path(),
+                    Some(&constrained_sandbox_policy),
+                )
+                .await;
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
                 for path in &additional_writable_roots {
                     if !writable_roots.iter().any(|existing| existing == path) {
@@ -2207,6 +2216,8 @@ impl Config {
             },
         };
         Ok(config)
+        })
+        .await
     }
 
     fn load_instructions(codex_dir: Option<&AbsolutePathBuf>) -> Option<LoadedUserInstructions> {
@@ -2282,7 +2293,11 @@ impl Config {
     }
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
-        self.config_layer_stack
+        !matches!(
+            self.permissions.sandbox_policy.get(),
+            SandboxPolicy::DangerFullAccess
+        ) && self
+            .config_layer_stack
             .requirements_toml()
             .network
             .is_some()

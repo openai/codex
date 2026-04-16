@@ -468,7 +468,7 @@ mod phase2 {
     impl DispatchHarness {
         async fn new() -> Self {
             let codex_home = tempfile::tempdir().expect("create temp codex home");
-            let mut config = test_config();
+            let mut config = test_config().await;
             config.codex_home =
                 codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(codex_home.path())
                     .expect("codex home is absolute");
@@ -895,7 +895,7 @@ mod phase2 {
     #[tokio::test]
     async fn dispatch_marks_job_for_retry_when_spawn_agent_fails() {
         let codex_home = tempfile::tempdir().expect("create temp codex home");
-        let mut config = test_config();
+        let mut config = test_config().await;
         config.codex_home =
             codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(codex_home.path())
                 .expect("codex home is absolute");
