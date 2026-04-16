@@ -59,6 +59,16 @@ commands that would enter the bubblewrap path.
   still win. For example, `/repo = write`, `/repo/a = none`, `/repo/a/b = write`
   keeps `/repo` writable, denies `/repo/a`, and reopens `/repo/a/b` as
   writable again.
+- When the default bubblewrap pipeline is active, unreadable glob entries are
+  expanded before launching the sandbox and matching files are masked in
+  bubblewrap:
+
+  ```text
+  Prefer:   rg --files --hidden --no-ignore --glob <pattern> -- <search-root>
+  Fallback: internal globset walker when rg is not installed
+  Failure:  any other rg failure aborts sandbox construction
+  ```
+
 - When the default bubblewrap pipeline is active, symlink-in-path and non-existent protected paths inside
   writable roots are blocked by mounting `/dev/null` on the symlink or first
   missing component.

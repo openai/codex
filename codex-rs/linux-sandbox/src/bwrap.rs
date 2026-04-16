@@ -594,6 +594,15 @@ fn ripgrep_files(
     }
     command.arg("--").arg(search_root);
 
+    /*
+     * Prefer ripgrep for unreadable glob expansion because it is fast and
+     * already implements the file-walking semantics we want here: include
+     * dotfiles, ignore ignore files, and do not recurse through symlinked
+     * directories. If `rg` is not installed in the runtime environment, fall
+     * back to the internal globset walker so sandbox construction still masks
+     * matching paths. Other ripgrep failures stay fatal so deny-read does not
+     * silently weaken.
+     */
     let output = match command.output() {
         Ok(output) => output,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
