@@ -1,15 +1,14 @@
+use crate::config::Config;
+use crate::config::ConfigBuilder;
 use crate::plugins::MarketplaceAddRequest;
-use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::PluginId;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::PluginsManager;
 use crate::plugins::add_marketplace;
+use crate::plugins::configured_plugins_from_stack;
 use crate::plugins::find_marketplace_manifest_path;
-use crate::plugins::load_marketplace;
-use crate::plugins::marketplace_install_root;
 use crate::plugins::parse_marketplace_source;
-use crate::plugins::resolve_configured_marketplace_root;
-use crate::plugins::validate_plugin_segment;
+use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -23,6 +22,8 @@ use toml::Value as TomlValue;
 
 const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.detect";
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
+const EXTERNAL_AGENT_DIR: &str = ".claude";
+const EXTERNAL_AGENT_CONFIG_MD: &str = "CLAUDE.md";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {
@@ -89,20 +90,21 @@ impl ExternalAgentConfigService {
         }
     }
 
-    pub fn detect(
+    pub async fn detect(
         &self,
         params: ExternalAgentConfigDetectOptions,
     ) -> io::Result<Vec<ExternalAgentConfigMigrationItem>> {
         let mut items = Vec::new();
         if params.include_home {
-            self.detect_migrations(/*repo_root*/ None, &mut items)?;
+            self.detect_migrations(/*repo_root*/ None, &mut items)
+                .await?;
         }
 
         for cwd in params.cwds.as_deref().unwrap_or(&[]) {
             let Some(repo_root) = find_repo_root(Some(cwd))? else {
                 continue;
             };
-            self.detect_migrations(Some(&repo_root), &mut items)?;
+            self.detect_migrations(Some(&repo_root), &mut items).await?;
         }
 
         Ok(items)
@@ -163,17 +165,15 @@ impl ExternalAgentConfigService {
         Ok(())
     }
 
-    fn detect_migrations(
+    async fn detect_migrations(
         &self,
         repo_root: Option<&Path>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<()> {
-        let configured_plugin_ids = configured_plugin_ids(&self.codex_home)?;
-        let configured_marketplace_plugins = configured_marketplace_plugins(&self.codex_home)?;
         let cwd = repo_root.map(Path::to_path_buf);
         let source_settings = repo_root.map_or_else(
             || self.external_agent_home.join("settings.json"),
-            |repo_root| repo_root.join(".claude").join("settings.json"),
+            |repo_root| repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
         );
         let settings = read_external_settings(&source_settings)?;
         let target_config = repo_root.map_or_else(
@@ -216,18 +216,9 @@ impl ExternalAgentConfigService {
             }
         }
 
-        self.detect_plugin_migration(
-            source_settings.as_path(),
-            cwd.clone(),
-            settings.as_ref(),
-            &configured_plugin_ids,
-            &configured_marketplace_plugins,
-            items,
-        );
-
         let source_skills = repo_root.map_or_else(
             || self.external_agent_home.join("skills"),
-            |repo_root| repo_root.join(".claude").join("skills"),
+            |repo_root| repo_root.join(EXTERNAL_AGENT_DIR).join("skills"),
         );
         let target_skills = repo_root.map_or_else(
             || self.home_target_skills_dir(),
@@ -255,7 +246,7 @@ impl ExternalAgentConfigService {
         let source_agents_md = if let Some(repo_root) = repo_root {
             find_repo_agents_md_source(repo_root)?
         } else {
-            let path = self.external_agent_home.join("CLAUDE.md");
+            let path = self.external_agent_home.join(EXTERNAL_AGENT_CONFIG_MD);
             is_non_empty_text_file(&path)?.then_some(path)
         };
         let target_agents_md = repo_root.map_or_else(
@@ -272,7 +263,7 @@ impl ExternalAgentConfigService {
                     source_agents_md.display(),
                     target_agents_md.display()
                 ),
-                cwd,
+                cwd: cwd.clone(),
                 details: None,
             });
             emit_migration_metric(
@@ -280,6 +271,43 @@ impl ExternalAgentConfigService {
                 ExternalAgentConfigMigrationItemType::AgentsMd,
                 /*skills_count*/ None,
             );
+        }
+
+        if let Some(settings) = settings.as_ref() {
+            match ConfigBuilder::default()
+                .codex_home(self.codex_home.clone())
+                .fallback_cwd(Some(self.codex_home.clone()))
+                .build()
+                .await
+            {
+                Ok(config) => {
+                    let configured_plugin_ids =
+                        configured_plugins_from_stack(&config.config_layer_stack)
+                            .into_keys()
+                            .collect::<HashSet<_>>();
+                    let configured_marketplace_plugins = configured_marketplace_plugins(
+                        &config,
+                        &PluginsManager::new(self.codex_home.clone()),
+                    )?;
+                    if let Some(item) = self.detect_plugin_migration(
+                        source_settings.as_path(),
+                        repo_root.unwrap_or(self.external_agent_home.as_path()),
+                        cwd.clone(),
+                        settings,
+                        &configured_plugin_ids,
+                        &configured_marketplace_plugins,
+                    ) {
+                        items.push(item);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        settings_path = %source_settings.display(),
+                        "skipping external agent plugin migration detection because config load failed"
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -295,33 +323,30 @@ impl ExternalAgentConfigService {
     fn detect_plugin_migration(
         &self,
         source_settings: &Path,
+        source_root: &Path,
         cwd: Option<PathBuf>,
-        settings: Option<&JsonValue>,
+        settings: &JsonValue,
         configured_plugin_ids: &HashSet<String>,
         configured_marketplace_plugins: &BTreeMap<String, HashSet<String>>,
-        items: &mut Vec<ExternalAgentConfigMigrationItem>,
-    ) {
-        let Some(plugin_details) = settings.and_then(|settings| {
-            extract_plugin_migration_details(
-                settings,
-                configured_plugin_ids,
-                configured_marketplace_plugins,
-            )
-        }) else {
-            return;
-        };
-
-        items.push(ExternalAgentConfigMigrationItem {
-            item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: format!("Import enabled plugins from {}", source_settings.display()),
-            cwd,
-            details: Some(plugin_details),
-        });
+    ) -> Option<ExternalAgentConfigMigrationItem> {
+        let plugin_details = extract_plugin_migration_details(
+            settings,
+            source_root,
+            configured_plugin_ids,
+            configured_marketplace_plugins,
+        )?;
         emit_migration_metric(
             EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
             ExternalAgentConfigMigrationItemType::Plugins,
             /*skills_count*/ None,
         );
+
+        Some(ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!("Import enabled plugins from {}", source_settings.display()),
+            cwd,
+            details: Some(plugin_details),
+        })
     }
 
     async fn import_plugins(
@@ -345,10 +370,11 @@ impl ExternalAgentConfigService {
                 .collect::<Vec<_>>();
             let source_settings = cwd.map_or_else(
                 || self.external_agent_home.join("settings.json"),
-                |cwd| cwd.join(".claude").join("settings.json"),
+                |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
             );
+            let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
             let import_source = read_external_settings(&source_settings)?.and_then(|settings| {
-                collect_marketplace_import_sources(&settings).remove(&marketplace_name)
+                collect_marketplace_import_sources(&settings, source_root).remove(&marketplace_name)
             });
             let Some(import_source) = import_source else {
                 outcome.failed_marketplaces.push(marketplace_name);
@@ -405,7 +431,7 @@ impl ExternalAgentConfigService {
     fn import_config(&self, cwd: Option<&Path>) -> io::Result<()> {
         let (source_settings, target_config) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
-                repo_root.join(".claude").join("settings.json"),
+                repo_root.join(EXTERNAL_AGENT_DIR).join("settings.json"),
                 repo_root.join(".codex").join("config.toml"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
@@ -457,7 +483,7 @@ impl ExternalAgentConfigService {
     fn import_skills(&self, cwd: Option<&Path>) -> io::Result<usize> {
         let (source_skills, target_skills) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
-                repo_root.join(".claude").join("skills"),
+                repo_root.join(EXTERNAL_AGENT_DIR).join("skills"),
                 repo_root.join(".agents").join("skills"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
@@ -504,7 +530,7 @@ impl ExternalAgentConfigService {
             return Ok(());
         } else {
             (
-                self.external_agent_home.join("CLAUDE.md"),
+                self.external_agent_home.join(EXTERNAL_AGENT_CONFIG_MD),
                 self.codex_home.join("AGENTS.md"),
             )
         };
@@ -525,10 +551,10 @@ impl ExternalAgentConfigService {
 
 fn default_external_agent_home() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        return PathBuf::from(home).join(".claude");
+        return PathBuf::from(home).join(EXTERNAL_AGENT_DIR);
     }
 
-    PathBuf::from(".claude")
+    PathBuf::from(EXTERNAL_AGENT_DIR)
 }
 
 fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
@@ -544,10 +570,11 @@ fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
 
 fn extract_plugin_migration_details(
     settings: &JsonValue,
+    source_root: &Path,
     configured_plugin_ids: &HashSet<String>,
     configured_marketplace_plugins: &BTreeMap<String, HashSet<String>>,
 ) -> Option<MigrationDetails> {
-    let loadable_marketplaces = collect_marketplace_import_sources(settings)
+    let loadable_marketplaces = collect_marketplace_import_sources(settings, source_root)
         .into_iter()
         .filter_map(|(marketplace_name, source)| {
             parse_marketplace_source(&source.source, source.ref_name)
@@ -620,99 +647,40 @@ fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
         .collect()
 }
 
-fn configured_plugin_ids(codex_home: &Path) -> io::Result<HashSet<String>> {
-    let config_path = codex_home.join("config.toml");
-    if !config_path.is_file() {
-        return Ok(HashSet::new());
-    }
-
-    let raw_config = fs::read_to_string(&config_path)?;
-    if raw_config.trim().is_empty() {
-        return Ok(HashSet::new());
-    }
-
-    let config = toml::from_str::<TomlValue>(&raw_config)
-        .map_err(|err| invalid_data_error(format!("invalid config.toml: {err}")))?;
-    let Some(plugins) = config.get("plugins").and_then(TomlValue::as_table) else {
-        return Ok(HashSet::new());
-    };
-
-    Ok(plugins.keys().cloned().collect())
-}
-
 fn configured_marketplace_plugins(
-    codex_home: &Path,
+    config: &Config,
+    plugins_manager: &PluginsManager,
 ) -> io::Result<BTreeMap<String, HashSet<String>>> {
-    let default_install_root = marketplace_install_root(codex_home);
-    let mut marketplace_roots = BTreeMap::new();
-    let config_path = codex_home.join("config.toml");
-    if !config_path.is_file() {
-        return Ok(BTreeMap::new());
-    }
-
-    let raw_config = fs::read_to_string(&config_path)?;
-    if raw_config.trim().is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    let config = toml::from_str::<TomlValue>(&raw_config)
-        .map_err(|err| invalid_data_error(format!("invalid config.toml: {err}")))?;
-    let Some(marketplaces) = config.get("marketplaces").and_then(TomlValue::as_table) else {
-        return Ok(BTreeMap::new());
-    };
-
-    for (marketplace_name, marketplace) in marketplaces {
-        if validate_plugin_segment(marketplace_name, "marketplace name").is_err()
-            || !marketplace.is_table()
-        {
-            continue;
-        }
-        let Some(root) = resolve_configured_marketplace_root(
-            marketplace_name,
-            marketplace,
-            &default_install_root,
-        ) else {
-            continue;
-        };
-        let root = if root.is_relative() {
-            config_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(root)
-        } else {
-            root
-        };
-        marketplace_roots.insert(marketplace_name.clone(), root);
-    }
-
+    let marketplaces = plugins_manager
+        .list_marketplaces_for_config(config, &[])
+        .map_err(|err| {
+            invalid_data_error(format!("failed to list configured marketplaces: {err}"))
+        })?;
     let mut marketplace_plugins = BTreeMap::new();
-    for (marketplace_name, root) in marketplace_roots {
-        let Some(manifest_path) = find_marketplace_manifest_path(&root) else {
-            continue;
-        };
-        let Ok(marketplace) = load_marketplace(&manifest_path) else {
-            continue;
-        };
-        let plugins =
-            marketplace
-                .plugins
-                .into_iter()
-                .filter(|plugin| {
-                    plugin.policy.installation != MarketplacePluginInstallPolicy::NotAvailable
-                        && plugin.policy.products.as_deref().is_none_or(|products| {
-                            Product::Codex.matches_product_restriction(products)
-                        })
-                })
-                .map(|plugin| plugin.name)
-                .collect::<HashSet<_>>();
-        marketplace_plugins.insert(marketplace_name, plugins);
+    for marketplace in marketplaces.marketplaces {
+        let plugins = marketplace
+            .plugins
+            .into_iter()
+            .filter(|plugin| {
+                plugin.policy.installation != MarketplacePluginInstallPolicy::NotAvailable
+            })
+            .filter(|plugin| {
+                plugin
+                    .policy
+                    .products
+                    .as_deref()
+                    .is_none_or(|products| Product::Codex.matches_product_restriction(products))
+            })
+            .map(|plugin| plugin.name)
+            .collect::<HashSet<_>>();
+        marketplace_plugins.insert(marketplace.name, plugins);
     }
-
     Ok(marketplace_plugins)
 }
 
 fn collect_marketplace_import_sources(
     settings: &JsonValue,
+    source_root: &Path,
 ) -> BTreeMap<String, MarketplaceImportSource> {
     let Some(extra_known_marketplaces) = settings
         .as_object()
@@ -743,6 +711,7 @@ fn collect_marketplace_import_sources(
             if source.is_empty() {
                 return None;
             }
+            let source = resolve_external_marketplace_source(&source, source_root);
 
             let ref_name = source_fields
                 .get("ref")
@@ -761,6 +730,18 @@ fn collect_marketplace_import_sources(
 struct MarketplaceImportSource {
     source: String,
     ref_name: Option<String>,
+}
+
+fn resolve_external_marketplace_source(source: &str, source_root: &Path) -> String {
+    if !looks_like_relative_local_path(source) {
+        return source.to_string();
+    }
+
+    source_root.join(source).display().to_string()
+}
+
+fn looks_like_relative_local_path(source: &str) -> bool {
+    source.starts_with("./") || source.starts_with("../") || source == "." || source == ".."
 }
 
 fn find_repo_root(cwd: Option<&Path>) -> io::Result<Option<PathBuf>> {
@@ -845,8 +826,10 @@ fn is_non_empty_text_file(path: &Path) -> io::Result<bool> {
 
 fn find_repo_agents_md_source(repo_root: &Path) -> io::Result<Option<PathBuf>> {
     for candidate in [
-        repo_root.join("CLAUDE.md"),
-        repo_root.join(".claude").join("CLAUDE.md"),
+        repo_root.join(EXTERNAL_AGENT_CONFIG_MD),
+        repo_root
+            .join(EXTERNAL_AGENT_DIR)
+            .join(EXTERNAL_AGENT_CONFIG_MD),
     ] {
         if is_non_empty_text_file(&candidate)? {
             return Ok(Some(candidate));
@@ -895,7 +878,11 @@ fn rewrite_and_copy_text_file(source: &Path, target: &Path) -> io::Result<()> {
 }
 
 fn rewrite_external_agent_terms(content: &str) -> String {
-    let mut rewritten = replace_case_insensitive_with_boundaries(content, "claude.md", "AGENTS.md");
+    let mut rewritten = replace_case_insensitive_with_boundaries(
+        content,
+        &EXTERNAL_AGENT_CONFIG_MD.to_ascii_lowercase(),
+        "AGENTS.md",
+    );
     for from in [
         "claude code",
         "claude-code",

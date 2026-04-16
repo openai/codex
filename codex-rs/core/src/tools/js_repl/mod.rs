@@ -1033,18 +1033,13 @@ impl JsReplManager {
         }
 
         let sandbox = SandboxManager::new();
-        let has_managed_network_requirements = turn
-            .config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some();
+        let managed_network_active = turn.network.is_some();
         let sandbox_type = sandbox.select_initial(
             &turn.file_system_sandbox_policy,
             turn.network_sandbox_policy,
             SandboxablePreference::Auto,
             turn.windows_sandbox_level,
-            has_managed_network_requirements,
+            managed_network_active,
         );
         let command = SandboxCommand {
             program: node_path.into_os_string(),
@@ -1067,7 +1062,7 @@ impl JsReplManager {
                 file_system_policy: &turn.file_system_sandbox_policy,
                 network_policy: turn.network_sandbox_policy,
                 sandbox: sandbox_type,
-                enforce_managed_network: has_managed_network_requirements,
+                enforce_managed_network: managed_network_active,
                 network: None,
                 sandbox_policy_cwd: &turn.cwd,
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_deref(),

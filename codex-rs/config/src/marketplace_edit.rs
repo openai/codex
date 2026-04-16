@@ -12,6 +12,7 @@ use crate::CONFIG_TOML_FILE;
 
 pub struct MarketplaceConfigUpdate<'a> {
     pub last_updated: &'a str,
+    pub last_revision: Option<&'a str>,
     pub source_type: &'a str,
     pub source: &'a str,
     pub ref_name: Option<&'a str>,
@@ -63,6 +64,9 @@ fn upsert_marketplace(
     let mut entry = TomlTable::new();
     entry.set_implicit(false);
     entry["last_updated"] = value(update.last_updated.to_string());
+    if let Some(last_revision) = update.last_revision {
+        entry["last_revision"] = value(last_revision.to_string());
+    }
     entry["source_type"] = value(update.source_type.to_string());
     entry["source"] = value(update.source.to_string());
     if let Some(ref_name) = update.ref_name {

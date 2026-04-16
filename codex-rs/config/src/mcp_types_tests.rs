@@ -259,6 +259,38 @@ fn deserialize_server_config_with_parallel_tool_calls() {
 }
 
 #[test]
+fn deserialize_server_config_with_default_tool_approval_mode() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            default_tools_approval_mode = "approve"
+
+            [tools.search]
+            approval_mode = "prompt"
+        "#,
+    )
+    .expect("should deserialize default tool approval mode");
+
+    assert_eq!(
+        cfg.default_tools_approval_mode,
+        Some(AppToolApproval::Approve)
+    );
+    assert_eq!(
+        cfg.tools.get("search"),
+        Some(&McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Prompt),
+        })
+    );
+
+    let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
+    assert!(serialized.contains("default_tools_approval_mode = \"approve\""));
+
+    let round_tripped: McpServerConfig =
+        toml::from_str(&serialized).expect("should deserialize serialized MCP config");
+    assert_eq!(round_tripped, cfg);
+}
+
+#[test]
 fn serialize_round_trips_server_config_with_parallel_tool_calls() {
     let cfg: McpServerConfig = toml::from_str(
         r#"
@@ -297,12 +329,14 @@ fn deserialize_ignores_unknown_server_fields() {
                 env_vars: Vec::new(),
                 cwd: None,
             },
+            experimental_environment: None,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,

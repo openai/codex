@@ -10,6 +10,7 @@ pub(super) async fn test_config() -> Config {
         .keep();
     let mut config =
         Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), Vec::new())
+            .await
             .expect("config");
     config.codex_home = codex_home.abs();
     config.sqlite_home = codex_home.clone();

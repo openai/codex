@@ -75,6 +75,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const V2_STEERING_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
+const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
+    "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
@@ -1359,7 +1361,8 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
             request["type"] == "conversation.item.create"
                 && request["item"]["type"] == "message"
                 && request["item"]["role"] == "user"
-                && request["item"]["content"][0]["text"] == "hello"
+                && request["item"]["content"][0]["type"] == "input_text"
+                && request["item"]["content"][0]["text"] == "[USER] hello"
         }),
         "sideband requests should include user text item: {requests:?}"
     );
@@ -1558,7 +1561,7 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
     assert_v2_progress_update(&progress, "delegated from v2");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_v2", "delegated from v2");
+    assert_v2_function_call_output(&tool_output, "call_v2", V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT);
     assert_eq!(
         function_call_output_sideband_requests(&harness.realtime_server).len(),
         1
@@ -1693,7 +1696,11 @@ async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() ->
     assert_v2_progress_update(&progress, "progress before final");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_progress_order", "progress before final");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_progress_order",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -1777,7 +1784,11 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     assert_v2_progress_update(&progress, "shell tool finished");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_shell", "shell tool finished");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_shell",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
     assert_eq!(
         function_call_output_sideband_requests(&harness.realtime_server).len(),
         1
@@ -1857,7 +1868,11 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
     assert_v2_progress_update(&progress, "late delegated result");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_audio", "late delegated result");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_audio",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -2090,7 +2105,7 @@ fn assert_v2_function_call_output(request: &Value, call_id: &str, expected_outpu
             "item": {
                 "type": "function_call_output",
                 "call_id": call_id,
-                "output": format!("\"Agent Final Message\":\n\n{expected_output}"),
+                "output": expected_output,
             }
         })
     );
@@ -2106,7 +2121,7 @@ fn assert_v2_progress_update(request: &Value, expected_text: &str) {
                 "role": "user",
                 "content": [{
                     "type": "input_text",
-                    "text": format!("{expected_text}\n\nUpdate from background agent (task hasn't finished yet):")
+                    "text": format!("[BACKEND] {expected_text}")
                 }]
             }
         })
@@ -2123,7 +2138,7 @@ fn assert_v2_user_text_item(request: &Value, expected_text: &str) {
                 "role": "user",
                 "content": [{
                     "type": "input_text",
-                    "text": expected_text
+                    "text": format!("[USER] {expected_text}")
                 }]
             }
         })

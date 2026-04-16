@@ -1,10 +1,10 @@
 use super::MarketplaceAddError;
 use super::MarketplaceSource;
 use crate::plugins::installed_marketplaces::resolve_configured_marketplace_root;
-use crate::plugins::validate_marketplace_root;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
+use codex_core_plugins::marketplace::validate_marketplace_root;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -38,6 +38,7 @@ pub(super) fn record_added_marketplace_entry(
     let timestamp = utc_timestamp_now()?;
     let update = MarketplaceConfigUpdate {
         last_updated: &timestamp,
+        last_revision: None,
         source_type: install_metadata.config_source_type(),
         source: &source,
         ref_name: install_metadata.ref_name(),
