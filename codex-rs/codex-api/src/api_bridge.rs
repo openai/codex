@@ -12,6 +12,7 @@ use codex_protocol::error::RetryLimitReachedError;
 use codex_protocol::error::UnexpectedResponseError;
 use codex_protocol::error::UsageLimitReachedError;
 use http::HeaderMap;
+use http::HeaderValue;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -178,6 +179,7 @@ struct UsageErrorBody {
 pub struct CoreAuthProvider {
     pub token: Option<String>,
     pub account_id: Option<String>,
+    pub is_fedramp_account: bool,
 }
 
 impl CoreAuthProvider {
@@ -195,16 +197,25 @@ impl CoreAuthProvider {
         Self {
             token: token.map(str::to_string),
             account_id: account_id.map(str::to_string),
+            is_fedramp_account: false,
         }
     }
 }
 
 impl ApiAuthProvider for CoreAuthProvider {
-    fn bearer_token(&self) -> Option<String> {
-        self.token.clone()
-    }
-
-    fn account_id(&self) -> Option<String> {
-        self.account_id.clone()
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        if let Some(token) = self.token.as_ref()
+            && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
+        {
+            let _ = headers.insert(http::header::AUTHORIZATION, header);
+        }
+        if let Some(account_id) = self.account_id.as_ref()
+            && let Ok(header) = HeaderValue::from_str(account_id)
+        {
+            let _ = headers.insert("ChatGPT-Account-ID", header);
+        }
+        if self.is_fedramp_account {
+            crate::auth::add_fedramp_routing_header(headers);
+        }
     }
 }

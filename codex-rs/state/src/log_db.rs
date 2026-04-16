@@ -384,9 +384,8 @@ mod tests {
     use std::io;
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::time::Duration;
 
-    use tokio::time::Instant;
+    use pretty_assertions::assert_eq;
     use tracing_subscriber::filter::Targets;
     use tracing_subscriber::fmt::writer::MakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
@@ -442,6 +441,7 @@ mod tests {
             .await
             .expect("initialize runtime");
         let writer = SharedWriter::default();
+        let layer = start(runtime.clone());
 
         let subscriber = tracing_subscriber::registry()
             .with(
@@ -452,7 +452,8 @@ mod tests {
                     .with_filter(Targets::new().with_default(tracing::Level::TRACE)),
             )
             .with(
-                start(runtime.clone())
+                layer
+                    .clone()
                     .with_filter(Targets::new().with_default(tracing::Level::TRACE)),
             );
         let guard = subscriber.set_default();
@@ -463,6 +464,7 @@ mod tests {
         });
         tracing::debug!("threadless-after");
 
+        layer.flush().await;
         drop(guard);
 
         let feedback_logs = writer.snapshot();
@@ -475,24 +477,17 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let sqlite_logs = String::from_utf8(
-                runtime
-                    .query_feedback_logs("thread-1")
-                    .await
-                    .expect("query feedback logs"),
-            )
-            .expect("valid utf-8");
-            if without_timestamps(&sqlite_logs) == without_timestamps(&feedback_logs) {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "sqlite feedback logs did not match feedback formatter output before timeout\nsqlite:\n{sqlite_logs}\nfeedback:\n{feedback_logs}"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        let sqlite_logs = String::from_utf8(
+            runtime
+                .query_feedback_logs("thread-1")
+                .await
+                .expect("query feedback logs"),
+        )
+        .expect("valid utf-8");
+        assert_eq!(
+            without_timestamps(&sqlite_logs),
+            without_timestamps(&feedback_logs)
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

@@ -563,15 +563,34 @@ sqlite = true
         /*git_info*/ None,
     )?;
 
-    // `thread/list` only applies `search_term` on the sqlite path. In this test we
-    // create rollouts manually, so we must also create the sqlite DB and mark backfill
-    // complete; otherwise app-server will permanently use filesystem fallback.
+    // `thread/list` applies `search_term` on the sqlite fast path. This test creates
+    // rollouts manually, so mark the DB backfill complete and then run an unsearched
+    // list large enough to repair every rollout the searched list should find.
     let state_db =
         codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
             .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
+    let rollout_config = codex_rollout::RolloutConfig {
+        codex_home: codex_home.path().to_path_buf(),
+        sqlite_home: codex_home.path().to_path_buf(),
+        cwd: codex_home.path().to_path_buf(),
+        model_provider_id: "mock_provider".to_string(),
+        generate_memories: false,
+    };
+    let repaired_page = codex_core::RolloutRecorder::list_threads(
+        &rollout_config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        codex_core::ThreadSortKey::CreatedAt,
+        &[],
+        /*model_providers*/ None,
+        "mock_provider",
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(repaired_page.items.len(), 3);
 
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp

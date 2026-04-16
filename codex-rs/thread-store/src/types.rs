@@ -135,6 +135,8 @@ pub struct ThreadPage {
 pub struct StoredThread {
     /// Thread id.
     pub thread_id: ThreadId,
+    /// Local rollout path when the backing store is filesystem-based.
+    pub rollout_path: Option<PathBuf>,
     /// Source thread id when this thread was forked from another thread.
     pub forked_from_id: Option<ThreadId>,
     /// Best available user-facing preview, usually the first user message.
@@ -155,6 +157,8 @@ pub struct StoredThread {
     pub archived_at: Option<DateTime<Utc>>,
     /// Working directory captured for the thread.
     pub cwd: PathBuf,
+    /// CLI version captured for the thread.
+    pub cli_version: String,
     /// Runtime source for the thread.
     pub source: SessionSource,
     /// Optional random nickname for thread-spawn sub-agents.

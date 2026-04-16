@@ -97,6 +97,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_context_size: None,
             search_content_types: None,
         },
+        create_image_generation_tool("png"),
         create_view_image_tool(ViewImageToolOptions {
             can_request_original_image_detail: config.can_request_original_image_detail,
         }),
@@ -1152,6 +1153,46 @@ fn test_build_specs_mcp_tools_converted() {
 }
 
 #[test]
+fn test_build_specs_mcp_namespace_description_falls_back_when_missing() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            ToolName::namespaced("test_server/", "do_something_cool"),
+            mcp_tool(
+                "do_something_cool",
+                "Do something cool",
+                serde_json::json!({"type": "object"}),
+            ),
+        )])),
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+
+    let namespace_tool = find_tool(&tools, "test_server/");
+    let ToolSpec::Namespace(namespace) = &namespace_tool.spec else {
+        panic!("expected namespace tool");
+    };
+    assert_eq!(
+        namespace.description,
+        "Tools in the test_server/ namespace."
+    );
+}
+
+#[test]
 fn test_build_specs_mcp_tools_sorted_by_name() {
     let model_info = model_info();
     let mut features = Features::with_defaults();
@@ -1294,7 +1335,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
 }
 
 #[test]
-fn search_tool_requires_model_capability_and_feature_flag() {
+fn search_tool_requires_model_capability_and_enabled_feature() {
     let model_info = search_capable_model_info();
     let deferred_mcp_tools = Some(vec![deferred_mcp_tool(
         "_create_event",
@@ -1327,10 +1368,12 @@ fn search_tool_requires_model_capability_and_feature_flag() {
     );
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
+    let mut features_without_tool_search = Features::with_defaults();
+    features_without_tool_search.disable(Feature::ToolSearch);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
         available_models: &available_models,
-        features: &features,
+        features: &features_without_tool_search,
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1345,8 +1388,6 @@ fn search_tool_requires_model_capability_and_feature_flag() {
     );
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
         available_models: &available_models,
