@@ -411,7 +411,7 @@ impl Session {
             let session = Arc::clone(self);
             tokio::spawn(async move {
                 session
-                    .abort_all_tasks_without_restart(TurnAbortReason::BudgetLimited)
+                    .abort_all_tasks_without_goal_accounting(TurnAbortReason::BudgetLimited)
                     .await;
             });
         }

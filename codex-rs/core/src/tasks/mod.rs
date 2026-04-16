@@ -413,15 +413,55 @@ impl Session {
     }
 
     pub(crate) async fn abort_all_tasks_without_restart(self: &Arc<Self>, reason: TurnAbortReason) {
-        let active_turn = self.take_active_turn().await;
+        let turn_contexts: Vec<_> = {
+            let active = self.active_turn.lock().await;
+            active
+                .as_ref()
+                .map(|active_turn| {
+                    active_turn
+                        .tasks
+                        .values()
+                        .map(|task| Arc::clone(&task.turn_context))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
 
-        if let Some(mut active_turn) = active_turn {
-            for task in active_turn.drain_tasks() {
+        for turn_context in turn_contexts {
+            if let Err(err) = self
+                .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
+                .await
+            {
+                warn!("failed to account thread goal progress before abort: {err}");
+            }
+        }
+
+        self.abort_all_tasks_without_goal_accounting(reason).await;
+    }
+
+    pub(crate) async fn abort_all_tasks_without_goal_accounting(
+        self: &Arc<Self>,
+        reason: TurnAbortReason,
+    ) {
+        let active_turn = {
+            let mut active = self.active_turn.lock().await;
+            active.as_mut().map(|active_turn| {
+                (
+                    active_turn.drain_tasks(),
+                    Arc::clone(&active_turn.turn_state),
+                )
+            })
+        };
+
+        if let Some((tasks, turn_state)) = active_turn {
+            for task in tasks {
                 self.handle_task_abort(task, reason.clone()).await;
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            active_turn.clear_pending().await;
+            turn_state.lock().await.clear_pending();
+            let mut active = self.active_turn.lock().await;
+            *active = None;
         }
 
         if reason == TurnAbortReason::Interrupted
@@ -589,11 +629,6 @@ impl Session {
                 idle_pending_work_scheduler(session).await;
             });
         }
-    }
-
-    async fn take_active_turn(&self) -> Option<ActiveTurn> {
-        let mut active = self.active_turn.lock().await;
-        active.take()
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {
