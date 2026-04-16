@@ -234,6 +234,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -255,6 +256,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
