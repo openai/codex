@@ -1,4 +1,6 @@
 use super::*;
+use codex_protocol::mcp::CallToolResult;
+use codex_protocol::protocol::McpInvocation;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -145,6 +147,73 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 
     assert!(!chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_widget().is_none());
+}
+
+#[tokio::test]
+async fn mcp_tool_call_hides_working_status_until_completion() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let invocation = McpInvocation {
+        server: "pap".to_string(),
+        tool: "get-info".to_string(),
+        arguments: Some(serde_json::json!({})),
+    };
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(0),
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(chat.bottom_pane.status_widget().is_some());
+
+    chat.handle_codex_event(Event {
+        id: "mcp-begin".into(),
+        msg: EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: "call-1".to_string(),
+            invocation: invocation.clone(),
+            mcp_app_resource_uri: None,
+        }),
+    });
+
+    assert!(
+        chat.bottom_pane.status_widget().is_none(),
+        "expected working status to hide while MCP call is active"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "mcp-end".into(),
+        msg: EventMsg::McpToolCallEnd(McpToolCallEndEvent {
+            call_id: "call-1".to_string(),
+            invocation,
+            mcp_app_resource_uri: None,
+            duration: std::time::Duration::from_secs(1),
+            result: Ok(CallToolResult {
+                content: vec![serde_json::json!({
+                    "type": "text",
+                    "text": "aaa",
+                })],
+                structured_content: None,
+                is_error: None,
+                meta: None,
+            }),
+        }),
+    });
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be restored after MCP call completion");
+    assert_eq!(status.header(), "Working");
 }
 
 #[tokio::test]

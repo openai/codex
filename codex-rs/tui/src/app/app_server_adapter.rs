@@ -165,7 +165,7 @@ impl App {
                     self.chat_widget.dismiss_app_server_request(&request);
                 }
             }
-            ServerNotification::McpServerStatusUpdated(_) => {
+            ServerNotification::McpServerStatusUpdated(_notification) => {
                 self.refresh_mcp_startup_expected_servers_from_config();
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {

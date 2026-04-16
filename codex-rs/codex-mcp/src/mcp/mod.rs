@@ -350,6 +350,8 @@ pub async fn collect_mcp_snapshot_with_detail(
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
+        config.mcp_oauth_callback_port,
+        config.mcp_oauth_callback_url.clone(),
         auth_status_entries.clone(),
         &config.approval_policy,
         submit_id,
@@ -416,6 +418,8 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
+        config.mcp_oauth_callback_port,
+        config.mcp_oauth_callback_url.clone(),
         auth_status_entries.clone(),
         &config.approval_policy,
         submit_id,

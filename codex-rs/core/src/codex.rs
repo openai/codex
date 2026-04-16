@@ -2265,6 +2265,8 @@ impl Session {
         let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
             &mcp_servers,
             config.mcp_oauth_credentials_store_mode,
+            config.mcp_oauth_callback_port,
+            config.mcp_oauth_callback_url.clone(),
             auth_statuses.clone(),
             &session_configuration.approval_policy,
             INITIAL_SUBMIT_ID.to_owned(),
@@ -4601,6 +4603,8 @@ impl Session {
         let (refreshed_manager, cancel_token) = McpConnectionManager::new(
             &mcp_servers,
             store_mode,
+            config.mcp_oauth_callback_port,
+            config.mcp_oauth_callback_url.clone(),
             auth_statuses,
             &turn_context.config.permissions.approval_policy,
             turn_context.sub_id.clone(),

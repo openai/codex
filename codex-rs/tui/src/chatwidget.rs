@@ -4743,6 +4743,7 @@ impl ChatWidget {
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
+        self.bottom_pane.hide_status_indicator();
         self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
             ev.call_id,
             ev.invocation,
@@ -4784,6 +4785,17 @@ impl ChatWidget {
         self.flush_active_cell();
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
+        }
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.ensure_status_indicator();
+            self.bottom_pane
+                .set_interrupt_hint_visible(/*visible*/ true);
+            self.set_status(
+                self.current_status.header.clone(),
+                self.current_status.details.clone(),
+                StatusDetailsCapitalization::Preserve,
+                self.current_status.details_max_lines,
+            );
         }
         // Mark that actual work was done (MCP tool call)
         self.had_work_activity = true;

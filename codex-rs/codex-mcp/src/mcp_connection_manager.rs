@@ -486,6 +486,8 @@ impl AsyncManagedClient {
         server_name: String,
         config: McpServerConfig,
         store_mode: OAuthCredentialsStoreMode,
+        mcp_oauth_callback_port: Option<u16>,
+        mcp_oauth_callback_url: Option<String>,
         cancel_token: CancellationToken,
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
@@ -507,16 +509,24 @@ impl AsyncManagedClient {
                     return Err(error.into());
                 }
 
-                let client =
-                    Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+                let startup_timeout = config.startup_timeout_sec.or(Some(DEFAULT_STARTUP_TIMEOUT));
+                let tool_timeout = config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT);
+                let client = Arc::new(
+                    make_rmcp_client(
+                        &server_name,
+                        config,
+                        store_mode,
+                        mcp_oauth_callback_port,
+                        mcp_oauth_callback_url,
+                    )
+                    .await?,
+                );
                 match start_server_task(
                     server_name,
                     client,
                     StartServerTaskParams {
-                        startup_timeout: config
-                            .startup_timeout_sec
-                            .or(Some(DEFAULT_STARTUP_TIMEOUT)),
-                        tool_timeout: config.tool_timeout_sec.unwrap_or(DEFAULT_TOOL_TIMEOUT),
+                        startup_timeout,
+                        tool_timeout,
                         tool_filter: startup_tool_filter,
                         tx_event,
                         elicitation_requests,
@@ -703,6 +713,8 @@ impl McpConnectionManager {
     pub async fn new(
         mcp_servers: &HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
+        mcp_oauth_callback_port: Option<u16>,
+        mcp_oauth_callback_url: Option<String>,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         approval_policy: &Constrained<AskForApproval>,
         submit_id: String,
@@ -747,6 +759,8 @@ impl McpConnectionManager {
                 server_name.clone(),
                 cfg,
                 store_mode,
+                mcp_oauth_callback_port,
+                mcp_oauth_callback_url.clone(),
                 cancel_token.clone(),
                 tx_event.clone(),
                 elicitation_requests.clone(),
@@ -1482,9 +1496,16 @@ struct StartServerTaskParams {
 
 async fn make_rmcp_client(
     server_name: &str,
-    transport: McpServerTransportConfig,
+    config: McpServerConfig,
     store_mode: OAuthCredentialsStoreMode,
+    mcp_oauth_callback_port: Option<u16>,
+    mcp_oauth_callback_url: Option<String>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
+    let McpServerConfig {
+        transport,
+        oauth_resource,
+        ..
+    } = config;
     match transport {
         McpServerTransportConfig::Stdio {
             command,
@@ -1521,6 +1542,9 @@ async fn make_rmcp_client(
                 resolved_bearer_token,
                 http_headers,
                 env_http_headers,
+                oauth_resource,
+                mcp_oauth_callback_port,
+                mcp_oauth_callback_url,
                 store_mode,
             )
             .await
