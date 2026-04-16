@@ -283,6 +283,9 @@ fn resolve_json_schema_reference(
     let reference = map.get("$ref")?.as_str()?;
     let pointer = reference.strip_prefix('#')?;
     let mut replacement = root_schema.pointer(pointer)?.clone();
+    if matches!(replacement, JsonValue::Bool(true)) {
+        replacement = JsonValue::Object(serde_json::Map::new());
+    }
     if let JsonValue::Object(replacement_map) = &mut replacement {
         merge_json_schema_objects(replacement_map, map);
     }
@@ -425,10 +428,13 @@ fn merge_schema_types(base_value: &mut JsonValue, overlay_value: &JsonValue) {
         return;
     }
 
-    let merged_types: Vec<String> = base_types
-        .into_iter()
-        .filter(|base_type| overlay_types.contains(base_type))
-        .collect();
+    let merged_types: Vec<String> = [
+        "string", "number", "boolean", "integer", "object", "array", "null",
+    ]
+    .into_iter()
+    .filter(|candidate| type_sets_overlap(&base_types, &overlay_types, candidate))
+    .map(str::to_string)
+    .collect();
     if merged_types.is_empty() {
         return;
     }
@@ -442,6 +448,26 @@ fn merge_schema_types(base_value: &mut JsonValue, overlay_value: &JsonValue) {
                 .collect::<Vec<_>>(),
         ),
     };
+}
+
+fn type_sets_overlap(base_types: &[String], overlay_types: &[String], candidate: &str) -> bool {
+    if base_types.iter().any(|base_type| base_type == candidate)
+        && overlay_types
+            .iter()
+            .any(|overlay_type| overlay_type == candidate)
+    {
+        return true;
+    }
+
+    candidate == "integer"
+        && ((base_types.iter().any(|base_type| base_type == "integer")
+            && overlay_types
+                .iter()
+                .any(|overlay_type| overlay_type == "number"))
+            || (base_types.iter().any(|base_type| base_type == "number")
+                && overlay_types
+                    .iter()
+                    .any(|overlay_type| overlay_type == "integer")))
 }
 
 fn json_schema_type_names(value: &JsonValue) -> Vec<String> {
@@ -499,13 +525,8 @@ fn unwrap_single_variant_combiner(map: &serde_json::Map<String, JsonValue>) -> O
 
         let mut replacement = variants[0].clone();
         if let JsonValue::Object(replacement_map) = &mut replacement {
-            for (key, value) in map {
-                if key != combiner {
-                    replacement_map
-                        .entry(key.clone())
-                        .or_insert_with(|| value.clone());
-                }
-            }
+            merge_json_schema_objects(replacement_map, map);
+            replacement_map.remove(combiner);
         }
         return Some(replacement);
     }

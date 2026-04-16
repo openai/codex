@@ -610,6 +610,119 @@ fn parse_tool_input_schema_handles_cyclic_local_refs_without_recursing_forever()
 }
 
 #[test]
+fn parse_tool_input_schema_merges_outer_constraints_when_unwrapping_single_variant_combiners() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "wrapped": {
+                "allOf": [{
+                    "type": "object",
+                    "properties": {
+                        "a": { "type": "string" }
+                    },
+                    "required": ["a"]
+                }],
+                "properties": {
+                    "b": { "type": "string" }
+                },
+                "required": ["b"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "wrapped".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([
+                        ("a".to_string(), JsonSchema::string(/*description*/ None)),
+                        ("b".to_string(), JsonSchema::string(/*description*/ None)),
+                    ]),
+                    Some(vec!["a".to_string(), "b".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_preserves_sibling_constraints_for_true_ref_targets() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "config": {
+                "$ref": "#/$defs/anything",
+                "type": "object",
+                "properties": {
+                    "dateTime": { "type": "string" }
+                },
+                "required": ["dateTime"]
+            }
+        },
+        "$defs": {
+            "anything": true
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "config".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([(
+                        "dateTime".to_string(),
+                        JsonSchema::string(/*description*/ None),
+                    )]),
+                    Some(vec!["dateTime".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_narrows_number_and_integer_type_intersections() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "count": {
+                "$ref": "#/$defs/number_like",
+                "type": "integer"
+            }
+        },
+        "$defs": {
+            "number_like": {
+                "type": "number"
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "count".to_string(),
+                JsonSchema::integer(/*description*/ None),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_unwraps_single_variant_all_of_objects() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
