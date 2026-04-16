@@ -397,6 +397,7 @@ mod tests {
     async fn pause_active_thread_goal_does_not_clobber_terminal_status() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
         let goal = runtime
             .replace_thread_goal(
                 thread_id,
@@ -642,6 +643,7 @@ mod tests {
     async fn usage_accounting_can_finalize_stopped_goal_for_stopping_turn() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
         runtime
             .replace_thread_goal(
                 thread_id,
