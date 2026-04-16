@@ -327,6 +327,53 @@ fn chatgpt_auth_with_tokens_is_not_agent_identity_only() {
 }
 
 #[test]
+#[serial(codex_agent_identity)]
+#[serial(codex_api_key)]
+fn load_auth_reads_agent_identity_from_env() {
+    let codex_home = tempdir().unwrap();
+    let expected_record = agent_identity_record("account-123");
+    let agent_identity = fake_agent_identity_jwt(&expected_record).expect("fake agent identity");
+    let _agent_guard = EnvVarGuard::set(CODEX_AGENT_IDENTITY_ENV_VAR, &agent_identity);
+    let _api_key_guard = EnvVarGuard::remove(CODEX_API_KEY_ENV_VAR);
+
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ true,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
+
+    assert!(auth.is_agent_identity_only());
+    assert_eq!(auth.agent_identity_record(), Some(expected_record));
+    assert!(
+        !get_auth_file(codex_home.path()).exists(),
+        "env auth should not write auth.json"
+    );
+}
+
+#[test]
+#[serial(codex_agent_identity)]
+#[serial(codex_api_key)]
+fn load_auth_keeps_codex_api_key_env_precedence() {
+    let codex_home = tempdir().unwrap();
+    let record = agent_identity_record("account-123");
+    let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
+    let _agent_guard = EnvVarGuard::set(CODEX_AGENT_IDENTITY_ENV_VAR, &agent_identity);
+    let _api_key_guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");
+
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ true,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
+
+    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
+}
+
+#[test]
 fn unauthorized_recovery_reports_mode_and_step_names() {
     let dir = tempdir().unwrap();
     let manager = AuthManager::shared(
@@ -739,6 +786,42 @@ fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<Str
     Ok(format!("{header_b64}.{payload_b64}.{signature_b64}"))
 }
 
+fn agent_identity_record(workspace_id: &str) -> AgentIdentityAuthRecord {
+    AgentIdentityAuthRecord {
+        workspace_id: workspace_id.to_string(),
+        chatgpt_user_id: Some("user-123".to_string()),
+        agent_runtime_id: "agent_123".to_string(),
+        agent_private_key: "pkcs8-base64".to_string(),
+        registered_at: "2026-04-13T12:00:00Z".to_string(),
+        background_task_id: None,
+    }
+}
+
+fn fake_agent_identity_jwt(record: &AgentIdentityAuthRecord) -> std::io::Result<String> {
+    #[derive(Serialize)]
+    struct Header {
+        alg: &'static str,
+        typ: &'static str,
+    }
+
+    let header = Header {
+        alg: "none",
+        typ: "JWT",
+    };
+    let payload = serde_json::json!({
+        "workspace_id": record.workspace_id.clone(),
+        "chatgpt_user_id": record.chatgpt_user_id.clone(),
+        "agent_runtime_id": record.agent_runtime_id.clone(),
+        "agent_private_key": record.agent_private_key.clone(),
+        "registered_at": record.registered_at.clone(),
+    });
+    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+    let header_b64 = b64(&serde_json::to_vec(&header)?);
+    let payload_b64 = b64(&serde_json::to_vec(&payload)?);
+    let signature_b64 = b64(b"sig");
+    Ok(format!("{header_b64}.{payload_b64}.{signature_b64}"))
+}
+
 async fn build_config(
     codex_home: &Path,
     forced_login_method: Option<ForcedLoginMethod>,
@@ -793,6 +876,14 @@ impl EnvVarGuard {
         }
         Self { key, original }
     }
+
+    fn remove(key: &'static str) -> Self {
+        let original = env::var_os(key);
+        unsafe {
+            env::remove_var(key);
+        }
+        Self { key, original }
+    }
 }
 
 #[cfg(test)]
@@ -808,6 +899,8 @@ impl Drop for EnvVarGuard {
 }
 
 #[tokio::test]
+#[serial(codex_agent_identity)]
+#[serial(codex_api_key)]
 async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
     let codex_home = tempdir().unwrap();
     login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
@@ -830,6 +923,7 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
 }
 
 #[tokio::test]
+#[serial(codex_agent_identity)]
 #[serial(codex_api_key)]
 async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
     let codex_home = tempdir().unwrap();
@@ -860,6 +954,7 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
 }
 
 #[tokio::test]
+#[serial(codex_agent_identity)]
 #[serial(codex_api_key)]
 async fn enforce_login_restrictions_allows_matching_workspace() {
     let codex_home = tempdir().unwrap();
@@ -888,6 +983,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
 }
 
 #[tokio::test]
+#[serial(codex_agent_identity)]
 #[serial(codex_api_key)]
 async fn enforce_login_restrictions_allows_matching_agent_identity_only_workspace() {
     let codex_home = tempdir().unwrap();
@@ -909,6 +1005,7 @@ async fn enforce_login_restrictions_allows_matching_agent_identity_only_workspac
 }
 
 #[tokio::test]
+#[serial(codex_agent_identity)]
 #[serial(codex_api_key)]
 async fn enforce_login_restrictions_logs_out_for_agent_identity_only_workspace_mismatch() {
     let codex_home = tempdir().unwrap();
@@ -932,6 +1029,51 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_only_workspace_m
 }
 
 #[tokio::test]
+#[serial(codex_agent_identity)]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_allows_matching_agent_identity_workspace_from_env() {
+    let codex_home = tempdir().unwrap();
+    let record = agent_identity_record("org_mine");
+    let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
+    let _agent_guard = EnvVarGuard::set(CODEX_AGENT_IDENTITY_ENV_VAR, &agent_identity);
+    let _api_key_guard = EnvVarGuard::remove(CODEX_API_KEY_ENV_VAR);
+
+    let config = build_config(
+        codex_home.path(),
+        Some(ForcedLoginMethod::Chatgpt),
+        Some("org_mine".to_string()),
+    )
+    .await;
+
+    super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+}
+
+#[tokio::test]
+#[serial(codex_agent_identity)]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_blocks_agent_identity_workspace_mismatch_from_env() {
+    let codex_home = tempdir().unwrap();
+    let record = agent_identity_record("org_another_org");
+    let agent_identity = fake_agent_identity_jwt(&record).expect("fake agent identity");
+    let _agent_guard = EnvVarGuard::set(CODEX_AGENT_IDENTITY_ENV_VAR, &agent_identity);
+    let _api_key_guard = EnvVarGuard::remove(CODEX_API_KEY_ENV_VAR);
+
+    let config = build_config(
+        codex_home.path(),
+        Some(ForcedLoginMethod::Chatgpt),
+        Some("org_mine".to_string()),
+    )
+    .await;
+
+    let err =
+        super::enforce_login_restrictions(&config).expect_err("workspace mismatch should fail");
+
+    assert!(err.to_string().contains("workspace org_mine"));
+}
+
+#[tokio::test]
+#[serial(codex_agent_identity)]
+#[serial(codex_api_key)]
 async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_forced_chatgpt_workspace_id_is_set()
  {
     let codex_home = tempdir().unwrap();
@@ -953,6 +1095,7 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
 }
 
 #[tokio::test]
+#[serial(codex_agent_identity)]
 #[serial(codex_api_key)]
 async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
     let _guard = EnvVarGuard::set(CODEX_API_KEY_ENV_VAR, "sk-env");

@@ -241,6 +241,21 @@ impl CodexAuth {
         )
     }
 
+    pub fn from_agent_identity_jwt(codex_home: &Path, jwt: &str) -> std::io::Result<Self> {
+        let auth_dot_json = AuthDotJson {
+            auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: Some(AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)?),
+        };
+        Self::from_auth_dot_json(
+            codex_home,
+            auth_dot_json,
+            AuthCredentialsStoreMode::Ephemeral,
+        )
+    }
+
     pub fn auth_mode(&self) -> AuthMode {
         match self {
             Self::ApiKey(_) => AuthMode::ApiKey,
@@ -492,6 +507,7 @@ impl ChatgptAuth {
 
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const CODEX_API_KEY_ENV_VAR: &str = "CODEX_API_KEY";
+pub const CODEX_AGENT_IDENTITY_ENV_VAR: &str = "CODEX_AGENT_IDENTITY";
 
 pub fn read_openai_api_key_from_env() -> Option<String> {
     env::var(OPENAI_API_KEY_ENV_VAR)
@@ -502,6 +518,13 @@ pub fn read_openai_api_key_from_env() -> Option<String> {
 
 pub fn read_codex_api_key_from_env() -> Option<String> {
     env::var(CODEX_API_KEY_ENV_VAR)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn read_codex_agent_identity_from_env() -> Option<String> {
+    env::var(CODEX_AGENT_IDENTITY_ENV_VAR)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -727,6 +750,10 @@ fn load_auth(
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
         return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
+    }
+
+    if enable_codex_api_key_env && let Some(agent_identity) = read_codex_agent_identity_from_env() {
+        return CodexAuth::from_agent_identity_jwt(codex_home, &agent_identity).map(Some);
     }
 
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
