@@ -1017,6 +1017,16 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
         }))
         .await?;
 
+    let started = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationStarted(started) => Some(Ok(started.clone())),
+        EventMsg::Error(err) => Some(Err(err.clone())),
+        _ => None,
+    })
+    .await
+    .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
+    assert!(started.session_id.is_some());
+    assert_eq!(started.version, RealtimeConversationVersion::V1);
+
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
             payload: RealtimeEvent::SessionUpdated { session_id, .. },

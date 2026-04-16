@@ -70,11 +70,10 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
     builder.build(server).await
 }
 
-fn assert_parallel_duration(actual: Duration) {
-    // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
+fn assert_parallel_duration_under(actual: Duration, limit: Duration) {
     assert!(
-        actual < Duration::from_secs(6),
-        "expected parallel execution to finish quickly, got {actual:?}"
+        actual < limit,
+        "expected parallel execution to finish under {limit:?}, got {actual:?}"
     );
 }
 
@@ -149,7 +148,7 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
     run_turn(&test, "warm up parallel tool").await?;
 
     let duration = run_turn_and_measure(&test, "exercise sync tool").await?;
-    assert_parallel_duration(duration);
+    assert_parallel_duration_under(duration, Duration::from_secs(6));
     let req = response_mock
         .last_request()
         .expect("parallel sync tool run should send a completion request");
@@ -180,16 +179,16 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
         "timeout_ms": 1_000,
     });
     let shell_args = json!({
-        "command": "sleep 3",
+        "command": "sleep 5",
         // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
         "login": false,
-        "timeout_ms": 10_000,
+        "timeout_ms": 15_000,
     });
     let shell_args_two = json!({
-        "command": "sleep 3",
+        "command": "sleep 5",
         // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
         "login": false,
-        "timeout_ms": 10_000,
+        "timeout_ms": 15_000,
     });
     let warmup_args_one = serde_json::to_string(&warmup_shell_args)?;
     let warmup_args_two = serde_json::to_string(&warmup_shell_args)?;
@@ -229,7 +228,7 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
 
     run_turn(&test, "warm up shell_command in parallel").await?;
     let duration = run_turn_and_measure(&test, "run shell_command twice").await?;
-    assert_parallel_duration(duration);
+    assert_parallel_duration_under(duration, Duration::from_millis(8_500));
     let req = response_mock
         .last_request()
         .expect("parallel shell run should send a completion request");
