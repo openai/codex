@@ -457,8 +457,8 @@ fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
         .collect()
 }
 
-fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
-    let config = test_config();
+async fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
+    let config = test_config().await;
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         "gpt-5-codex",
         &config.to_models_manager_config(),
@@ -870,7 +870,7 @@ async fn get_base_instructions_no_user_content() {
     ];
 
     let (session, _turn_context) = make_session_and_context().await;
-    let config = test_config();
+    let config = test_config().await;
 
     for test_case in test_cases {
         let model_info = model_info_for_slug(test_case.slug, &config);
@@ -1035,10 +1035,10 @@ fn collect_explicit_app_ids_from_skill_items_skips_plain_mentions_with_skill_con
     assert_eq!(connector_ids, HashSet::<String>::new());
 }
 
-#[test]
-fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
+#[tokio::test]
+async fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
 
     let exposure = build_mcp_tool_exposure(
@@ -1057,10 +1057,10 @@ fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
     assert!(exposure.deferred_tools.is_none());
 }
 
-#[test]
-fn mcp_tool_exposure_searches_large_effective_tool_sets() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
+#[tokio::test]
+async fn mcp_tool_exposure_searches_large_effective_tool_sets() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
 
     let exposure = build_mcp_tool_exposure(
@@ -1083,10 +1083,10 @@ fn mcp_tool_exposure_searches_large_effective_tool_sets() {
     assert_eq!(deferred_tool_names, expected_tool_names);
 }
 
-#[test]
-fn mcp_tool_exposure_directly_exposes_explicit_apps_without_deferred_overlap() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
+#[tokio::test]
+async fn mcp_tool_exposure_directly_exposes_explicit_apps_without_deferred_overlap() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
     mcp_tools.extend([(
         "mcp__codex_apps__calendar_create_event".to_string(),
