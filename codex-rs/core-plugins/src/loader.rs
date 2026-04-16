@@ -879,7 +879,10 @@ fn clone_git_plugin_source(
     sha: Option<&str>,
     destination: &Path,
 ) -> Result<(), String> {
-    run_git(&["clone", url, destination.to_string_lossy().as_ref()], None)?;
+    run_git(
+        &["clone", url, destination.to_string_lossy().as_ref()],
+        /*cwd*/ None,
+    )?;
     if let Some(target) = sha.or(ref_name) {
         run_git(&["checkout", target], Some(destination))?;
     }
