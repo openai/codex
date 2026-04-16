@@ -816,6 +816,7 @@ mod tests {
             bearer_token: None,
             user_agent: None,
             chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
             path_style: PathStyle::CodexApi,
         };
         assert_eq!(
@@ -829,6 +830,7 @@ mod tests {
             bearer_token: None,
             user_agent: None,
             chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
             path_style: PathStyle::ChatGptApi,
         };
         assert_eq!(
