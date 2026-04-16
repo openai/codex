@@ -89,6 +89,23 @@ prefix = "Bearer "
 # In paths, `*` and `?` do not match `/`; use `**` when crossing segments is intended.
 ```
 
+Matcher syntax example:
+
+```toml
+[permissions.workspace.network.mitm_hooks.match]
+# Literal path prefixes are the default.
+path_prefixes = [
+  "/repos/openai/",
+  "glob:/repos/*/codex/issues*",
+]
+
+[permissions.workspace.network.mitm_hooks.match.query]
+state = ["open", "glob:triage*", "literal:glob:*"]
+
+[permissions.workspace.network.mitm_hooks.match.headers]
+"x-github-api-version" = ["2022-11-28", "glob:2022*preview"]
+```
+
 ### 2) Run the proxy
 
 ```bash
