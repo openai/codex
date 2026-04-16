@@ -3,6 +3,7 @@ use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use codex_exec_server::Environment;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
@@ -142,6 +143,10 @@ impl CodexThread {
 
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         self.codex.session.total_token_usage().await
+    }
+
+    pub(crate) fn selected_environment(&self) -> Option<std::sync::Arc<Environment>> {
+        self.codex.session.services.environment.clone()
     }
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.

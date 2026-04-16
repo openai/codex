@@ -33,6 +33,19 @@ struct EnvironmentConfig {
     default_cwd: Option<PathBuf>,
 }
 
+/// Resolves the current or explicitly selected execution environment for a
+/// session.
+pub trait EnvironmentResolver: Send + Sync + std::fmt::Debug {
+    async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError>;
+
+    async fn environment(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Result<Option<Arc<Environment>>, ExecServerError>;
+
+    fn default_cwd(&self, environment_id: Option<&str>) -> Result<Option<&Path>, ExecServerError>;
+}
+
 /// Lazily creates and caches the active environment for a session.
 ///
 /// The manager keeps the session's environment selection stable so subagents
@@ -172,8 +185,47 @@ impl EnvironmentManager {
         self.exec_server_url().is_some()
     }
 
+    fn environment_config(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Result<Option<&EnvironmentConfig>, ExecServerError> {
+        match parse_environment_id(environment_id)? {
+            None => Ok(self.current_environment_config.as_ref()),
+            Some(ExplicitEnvironmentId::Local) => {
+                if self.disabled {
+                    return Err(ExecServerError::Protocol(
+                        "environments are disabled for this session".to_string(),
+                    ));
+                }
+                self.local_environment_config
+                    .as_ref()
+                    .ok_or_else(|| {
+                        ExecServerError::Protocol("local environment is not configured".to_string())
+                    })
+                    .map(Some)
+            }
+            Some(ExplicitEnvironmentId::Remote) => {
+                if self.disabled {
+                    return Err(ExecServerError::Protocol(
+                        "environments are disabled for this session".to_string(),
+                    ));
+                }
+                self.remote_environment_config
+                    .as_ref()
+                    .ok_or_else(|| {
+                        ExecServerError::Protocol(
+                            "remote environment is not configured".to_string(),
+                        )
+                    })
+                    .map(Some)
+            }
+        }
+    }
+}
+
+impl EnvironmentResolver for EnvironmentManager {
     /// Returns the cached environment, creating it on first access.
-    pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
+    async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
         self.current_environment
             .get_or_try_init(|| async {
                 if self.disabled {
@@ -196,7 +248,7 @@ impl EnvironmentManager {
             .map(std::option::Option::<&Arc<Environment>>::cloned)
     }
 
-    pub async fn environment(
+    async fn environment(
         &self,
         environment_id: Option<&str>,
     ) -> Result<Option<Arc<Environment>>, ExecServerError> {
@@ -205,6 +257,32 @@ impl EnvironmentManager {
             Some(ExplicitEnvironmentId::Local) => self.local_environment().await.map(Some),
             Some(ExplicitEnvironmentId::Remote) => self.remote_environment().await.map(Some),
         }
+    }
+
+    fn default_cwd(&self, environment_id: Option<&str>) -> Result<Option<&Path>, ExecServerError> {
+        Ok(self
+            .environment_config(environment_id)?
+            .and_then(|environment_config| environment_config.default_cwd.as_deref()))
+    }
+}
+
+impl EnvironmentManager {
+    pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
+        <Self as EnvironmentResolver>::current(self).await
+    }
+
+    pub async fn environment(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Result<Option<Arc<Environment>>, ExecServerError> {
+        <Self as EnvironmentResolver>::environment(self, environment_id).await
+    }
+
+    pub fn default_cwd(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Result<Option<&Path>, ExecServerError> {
+        <Self as EnvironmentResolver>::default_cwd(self, environment_id)
     }
 
     async fn local_environment(&self) -> Result<Arc<Environment>, ExecServerError> {
@@ -497,6 +575,7 @@ mod tests {
         .expect("runtime paths");
         let manager = EnvironmentManager::new_with_runtime_paths(
             /*exec_server_url*/ None,
+            /*exec_server_cwd*/ None,
             Some(runtime_paths.clone()),
         );
 
@@ -536,6 +615,25 @@ mod tests {
                 .default_cwd(),
             Some(Path::new("/tmp/session"))
         );
+    }
+
+    #[test]
+    fn environment_manager_reports_default_cwd_for_selected_environment() {
+        let manager = EnvironmentManager::new_with_runtime_paths(
+            Some("ws://127.0.0.1:8765".to_string()),
+            Some(PathBuf::from("/tmp/devbox")),
+            /*local_runtime_paths*/ None,
+        );
+
+        assert_eq!(
+            manager.default_cwd(/*environment_id*/ None),
+            Ok(Some(Path::new("/tmp/devbox")))
+        );
+        assert_eq!(
+            manager.default_cwd(Some("remote")),
+            Ok(Some(Path::new("/tmp/devbox")))
+        );
+        assert_eq!(manager.default_cwd(Some("local")), Ok(None));
     }
 
     #[tokio::test]

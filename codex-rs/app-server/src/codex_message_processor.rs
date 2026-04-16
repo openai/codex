@@ -2401,7 +2401,7 @@ impl CodexMessageProcessor {
         request_trace: Option<W3cTraceContext>,
         environment_id: Option<String>,
     ) {
-        let requested_cwd = typesafe_overrides.cwd.clone();
+        let explicit_cwd = typesafe_overrides.cwd.clone();
         let mut config = match derive_config_from_params(
             &cli_overrides,
             config_overrides.clone(),
@@ -2436,7 +2436,7 @@ impl CodexMessageProcessor {
             )
         );
 
-        if requested_cwd.is_some()
+        if explicit_cwd.is_some()
             && !config.active_project.is_trusted()
             && (requested_sandbox_trusts_project
                 || matches!(
@@ -2505,6 +2505,47 @@ impl CodexMessageProcessor {
             };
         }
 
+        if explicit_cwd.is_none() {
+            match listener_task_context
+                .thread_manager
+                .environment_manager()
+                .default_cwd(environment_id.as_deref())
+            {
+                Ok(Some(default_cwd)) => {
+                    config.cwd =
+                        match codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+                            default_cwd,
+                        ) {
+                            Ok(default_cwd) => default_cwd,
+                            Err(err) => {
+                                listener_task_context
+                                    .outgoing
+                                    .send_error(
+                                        request_id,
+                                        invalid_request(format!(
+                                            "failed to resolve environment default cwd {}: {err}",
+                                            default_cwd.display()
+                                        )),
+                                    )
+                                    .await;
+                                return;
+                            }
+                        };
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    listener_task_context
+                        .outgoing
+                        .send_error(
+                            request_id,
+                            invalid_request(format!("failed to resolve environment: {err}")),
+                        )
+                        .await;
+                    return;
+                }
+            }
+        }
+
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
@@ -2549,7 +2590,6 @@ impl CodexMessageProcessor {
                 service_name,
                 request_trace,
                 environment_id,
-                requested_cwd,
             )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",

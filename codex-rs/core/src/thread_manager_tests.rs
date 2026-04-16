@@ -10,6 +10,8 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::PathBufExt;
@@ -271,6 +273,68 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
     assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn spawned_subagent_thread_inherits_parent_environment_selection() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(Some(
+            "ws://127.0.0.1:8765".to_string(),
+        ))),
+    );
+    let parent_thread = manager
+        .start_thread_with_tools_and_service_name(
+            config.clone(),
+            InitialHistory::New,
+            Vec::new(),
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*parent_trace*/ None,
+            Some("local".to_string()),
+        )
+        .await
+        .expect("start parent thread");
+
+    let child_thread = manager
+        .state
+        .spawn_new_thread_with_source(
+            config,
+            manager.agent_control(),
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: parent_thread.thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
+        )
+        .await
+        .expect("start child thread");
+
+    let parent_environment = parent_thread
+        .thread
+        .selected_environment()
+        .expect("parent environment");
+    let child_environment = child_thread
+        .thread
+        .selected_environment()
+        .expect("child environment");
+
+    assert!(!parent_environment.is_remote());
+    assert!(!child_environment.is_remote());
 }
 
 #[tokio::test]
