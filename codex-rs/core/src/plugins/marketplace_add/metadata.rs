@@ -1,9 +1,10 @@
 use super::MarketplaceAddError;
 use super::MarketplaceSource;
-use crate::plugins::validate_marketplace_root;
+use crate::plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
+use codex_core_plugins::marketplace::validate_marketplace_root;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -23,6 +24,9 @@ enum InstalledMarketplaceSource {
         ref_name: Option<String>,
         sparse_paths: Vec<String>,
     },
+    Local {
+        path: String,
+    },
 }
 
 pub(super) fn record_added_marketplace_entry(
@@ -34,6 +38,7 @@ pub(super) fn record_added_marketplace_entry(
     let timestamp = utc_timestamp_now()?;
     let update = MarketplaceConfigUpdate {
         last_updated: &timestamp,
+        last_revision: None,
         source_type: install_metadata.config_source_type(),
         source: &source,
         ref_name: install_metadata.ref_name(),
@@ -77,13 +82,59 @@ pub(super) fn installed_marketplace_root_for_source(
         if !install_metadata.matches_config(marketplace) {
             continue;
         }
-        let root = install_root.join(marketplace_name);
+        let Some(root) =
+            resolve_configured_marketplace_root(marketplace_name, marketplace, install_root)
+        else {
+            continue;
+        };
         if validate_marketplace_root(&root).is_ok() {
             return Ok(Some(root));
         }
     }
 
     Ok(None)
+}
+
+pub(super) fn find_marketplace_root_by_name(
+    codex_home: &Path,
+    install_root: &Path,
+    marketplace_name: &str,
+) -> Result<Option<PathBuf>, MarketplaceAddError> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let config = match fs::read_to_string(&config_path) {
+        Ok(config) => config,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(MarketplaceAddError::Internal(format!(
+                "failed to read user config {}: {err}",
+                config_path.display()
+            )));
+        }
+    };
+    let config: toml::Value = toml::from_str(&config).map_err(|err| {
+        MarketplaceAddError::Internal(format!(
+            "failed to parse user config {}: {err}",
+            config_path.display()
+        ))
+    })?;
+    let Some(marketplace) = config
+        .get("marketplaces")
+        .and_then(toml::Value::as_table)
+        .and_then(|marketplaces| marketplaces.get(marketplace_name))
+    else {
+        return Ok(None);
+    };
+
+    let Some(root) =
+        resolve_configured_marketplace_root(marketplace_name, marketplace, install_root)
+    else {
+        return Ok(None);
+    };
+    if validate_marketplace_root(&root).is_ok() {
+        Ok(Some(root))
+    } else {
+        Ok(None)
+    }
 }
 
 impl MarketplaceInstallMetadata {
@@ -94,6 +145,9 @@ impl MarketplaceInstallMetadata {
                 ref_name: ref_name.clone(),
                 sparse_paths: sparse_paths.to_vec(),
             },
+            MarketplaceSource::Local { path } => InstalledMarketplaceSource::Local {
+                path: path.display().to_string(),
+            },
         };
         Self { source }
     }
@@ -101,24 +155,28 @@ impl MarketplaceInstallMetadata {
     fn config_source_type(&self) -> &'static str {
         match &self.source {
             InstalledMarketplaceSource::Git { .. } => "git",
+            InstalledMarketplaceSource::Local { .. } => "local",
         }
     }
 
     fn config_source(&self) -> String {
         match &self.source {
             InstalledMarketplaceSource::Git { url, .. } => url.clone(),
+            InstalledMarketplaceSource::Local { path } => path.clone(),
         }
     }
 
     fn ref_name(&self) -> Option<&str> {
         match &self.source {
             InstalledMarketplaceSource::Git { ref_name, .. } => ref_name.as_deref(),
+            InstalledMarketplaceSource::Local { .. } => None,
         }
     }
 
     fn sparse_paths(&self) -> &[String] {
         match &self.source {
             InstalledMarketplaceSource::Git { sparse_paths, .. } => sparse_paths,
+            InstalledMarketplaceSource::Local { .. } => &[],
         }
     }
 
@@ -226,5 +284,32 @@ mod tests {
             )),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn installed_marketplace_root_for_source_uses_local_source_root() {
+        let codex_home = TempDir::new().unwrap();
+        let install_root = codex_home.path().join("marketplaces");
+        let source_root = codex_home.path().join("source");
+        fs::create_dir_all(source_root.join(".agents/plugins")).unwrap();
+        fs::write(
+            source_root.join(".agents/plugins/marketplace.json"),
+            r#"{"name":"debug","plugins":[]}"#,
+        )
+        .unwrap();
+        let source = MarketplaceSource::Local {
+            path: source_root.clone(),
+        };
+        let install_metadata = MarketplaceInstallMetadata::from_source(&source, &[]);
+        record_added_marketplace_entry(codex_home.path(), "debug", &install_metadata).unwrap();
+
+        let root = installed_marketplace_root_for_source(
+            codex_home.path(),
+            &install_root,
+            &install_metadata,
+        )
+        .unwrap();
+
+        assert_eq!(root, Some(source_root));
     }
 }

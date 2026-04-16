@@ -15,6 +15,7 @@ use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
@@ -24,7 +25,11 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_output_truncation::approx_token_count;
 use core_test_support::responses;
@@ -57,12 +62,15 @@ use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
+const STARTUP_CONTEXT_OPEN_TAG: &str = "<startup_context>";
+const STARTUP_CONTEXT_CLOSE_TAG: &str = "</startup_context>";
 const REALTIME_BACKEND_PROMPT: &str = include_str!("../../templates/realtime/backend_prompt.md");
 const USER_FIRST_NAME_PLACEHOLDER: &str = "{{ user_first_name }}";
 const MEMORY_PROMPT_PHRASE: &str =
     "You have access to a memory folder with guidance from prior runs.";
 const REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR: &str =
     "CODEX_REALTIME_CONVERSATION_TEST_SUBPROCESS";
+const WEBSOCKET_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 struct RealtimeCallRequestCapture {
@@ -94,6 +102,11 @@ impl Match for RealtimeCallRequestCapture {
             .push(request.clone());
         true
     }
+}
+
+fn normalized_json_string(raw: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(raw).context("expected JSON fixture to parse")?;
+    serde_json::to_string(&value).context("expected JSON fixture to serialize")
 }
 
 fn websocket_request_text(
@@ -134,7 +147,7 @@ async fn wait_for_matching_websocket_request<F>(
 where
     F: Fn(&core_test_support::responses::WebSocketRequest) -> bool,
 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + WEBSOCKET_REQUEST_TIMEOUT;
     loop {
         if let Some(request) = server
             .connections()
@@ -189,10 +202,18 @@ async fn seed_recent_thread(
     let db = test.codex.state_db().context("state db enabled")?;
     let thread_id = ThreadId::new();
     let updated_at = Utc::now();
+    let rollout_dir = test
+        .codex_home_path()
+        .join("sessions")
+        .join(updated_at.format("%Y/%m/%d").to_string());
+    fs::create_dir_all(&rollout_dir)?;
+    let rollout_path = rollout_dir.join(format!(
+        "rollout-{}-{thread_id}.jsonl",
+        updated_at.format("%Y-%m-%dT%H-%M-%S")
+    ));
     let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
         thread_id,
-        test.codex_home_path()
-            .join(format!("rollout-{thread_id}.jsonl")),
+        rollout_path.clone(),
         updated_at,
         SessionSource::Cli,
     );
@@ -202,6 +223,45 @@ async fn seed_recent_thread(
     let mut metadata = metadata_builder.build("test-provider");
     metadata.title = title.to_string();
     metadata.first_user_message = Some(first_user_message.to_string());
+
+    let timestamp = updated_at.to_rfc3339();
+    let session_meta = RolloutLine {
+        timestamp: timestamp.clone(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                timestamp: timestamp.clone(),
+                cwd: metadata.cwd.clone(),
+                originator: "cli".to_string(),
+                cli_version: "0.0.0".to_string(),
+                source: SessionSource::Cli,
+                model_provider: Some("test-provider".to_string()),
+                ..Default::default()
+            },
+            git: Some(GitInfo {
+                commit_hash: None,
+                branch: metadata.git_branch.clone(),
+                repository_url: None,
+            }),
+        }),
+    };
+    let user_message = RolloutLine {
+        timestamp,
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: first_user_message.to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+    };
+    fs::write(
+        &rollout_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::to_string(&session_meta)?,
+            serde_json::to_string(&user_message)?
+        ),
+    )?;
     db.upsert_thread(&metadata).await?;
 
     Ok(())
@@ -518,6 +578,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
     let session = r#"{"audio":{"input":{"format":{"type":"audio/pcm","rate":24000}},"output":{"voice":"cove"}},"type":"quicksilver","model":"realtime-test-model","instructions":"backend prompt\n\nstartup context"}"#;
+    let session = normalized_json_string(session)?;
     assert_eq!(
         body,
         format!(
@@ -1518,6 +1579,8 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     let startup_context = websocket_request_instructions(&startup_context_request)
         .expect("startup context request should contain instructions");
 
+    assert!(startup_context.contains(STARTUP_CONTEXT_OPEN_TAG));
+    assert!(startup_context.contains(STARTUP_CONTEXT_CLOSE_TAG));
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
     assert!(!startup_context.contains("## User"));
     assert!(startup_context.contains("### "));
@@ -1735,6 +1798,8 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
     let startup_context = websocket_request_instructions(&startup_context_request)
         .expect("startup context request should contain instructions");
 
+    assert!(startup_context.contains(STARTUP_CONTEXT_OPEN_TAG));
+    assert!(startup_context.contains(STARTUP_CONTEXT_CLOSE_TAG));
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
     assert!(startup_context.contains("## Machine / Workspace Map"));
     assert!(startup_context.contains("notes.txt"));
@@ -1789,6 +1854,8 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
     .await;
     let startup_context = websocket_request_instructions(&startup_context_request)
         .expect("startup context request should contain instructions");
+    assert!(startup_context.contains(STARTUP_CONTEXT_OPEN_TAG));
+    assert!(startup_context.contains(STARTUP_CONTEXT_CLOSE_TAG));
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
     assert!(startup_context.len() <= 20_500);
 
@@ -1867,6 +1934,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
     assert_eq!(session_updated, "sess_user_text");
 
     let user_text = "typed follow-up for realtime";
+    let prefixed_user_text = format!("[USER] {user_text}");
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -1886,7 +1954,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
     let realtime_text_request = wait_for_matching_websocket_request(
         &realtime_server,
         "normal user turn text mirrored to realtime",
-        |request| websocket_request_text(request).as_deref() == Some(user_text),
+        |request| websocket_request_text(request).as_deref() == Some(prefixed_user_text.as_str()),
     )
     .await;
     let model_user_texts = response_mock.single_request().message_input_texts("user");
@@ -1895,7 +1963,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
             model_user_texts.iter().any(|text| text == user_text),
             websocket_request_text(&realtime_text_request),
         ),
-        (true, Some(user_text.to_string())),
+        (true, Some(prefixed_user_text)),
     );
     let realtime_response_create = timeout(Duration::from_millis(200), async {
         wait_for_matching_websocket_request(
@@ -2411,11 +2479,8 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
-    assert!(
-        user_texts
-            .iter()
-            .any(|text| text == "user: text from realtime")
-    );
+    assert!(user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: text from realtime</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2497,7 +2562,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
-        == "assistant: assistant context\nuser: delegated query\nassistant: assist confirm"));
+        == "<realtime_delegation>\n  <input>assistant: assistant context\nuser: delegated query\nassistant: assist confirm</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2611,23 +2676,14 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
     assert_eq!(requests.len(), 2);
 
     let first_user_texts = requests[0].message_input_texts("user");
-    assert!(
-        first_user_texts
-            .iter()
-            .any(|text| text == "user: first question")
-    );
+    assert!(first_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: first question</input>\n</realtime_delegation>"));
 
     let second_user_texts = requests[1].message_input_texts("user");
-    assert!(
-        second_user_texts
-            .iter()
-            .any(|text| text == "user: second question")
-    );
-    assert!(
-        !second_user_texts
-            .iter()
-            .any(|text| text == "user: first question\nuser: second question")
-    );
+    assert!(second_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: second question</input>\n</realtime_delegation>"));
+    assert!(!second_user_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: first question\nuser: second question</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -3150,14 +3206,12 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     assert!(
         !first_texts
             .iter()
-            .any(|text| text == "user: steer via realtime")
+            .any(|text| text
+                == "<realtime_delegation>\n  <input>user: steer via realtime</input>\n</realtime_delegation>")
     );
     assert!(second_texts.iter().any(|text| text == "first prompt"));
-    assert!(
-        second_texts
-            .iter()
-            .any(|text| text == "user: steer via realtime")
-    );
+    assert!(second_texts.iter().any(|text| text
+        == "<realtime_delegation>\n  <input>user: steer via realtime</input>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
@@ -3272,7 +3326,9 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     assert_eq!(requests.len(), 1);
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let first_texts = message_input_texts(&first_body, "user");
-    let expected_text = format!("user: {delegated_text}");
+    let expected_text = format!(
+        "<realtime_delegation>\n  <input>user: {delegated_text}</input>\n</realtime_delegation>"
+    );
     assert!(first_texts.iter().any(|text| text == &expected_text));
 
     realtime_server.shutdown().await;

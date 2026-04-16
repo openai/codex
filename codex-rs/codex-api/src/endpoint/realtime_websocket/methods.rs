@@ -45,6 +45,8 @@ use tracing::warn;
 use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
+const REALTIME_WIRE_LOG_TARGET: &str = "codex_api::realtime_websocket::wire";
+
 struct WsStream {
     tx_command: mpsc::Sender<WsCommand>,
     pump_task: tokio::task::JoinHandle<()>,
@@ -351,6 +353,7 @@ impl RealtimeWebsocketWriter {
             ));
         }
 
+        trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime websocket request: {payload}");
         self.stream
             .send(Message::Text(payload.into()))
             .await
@@ -384,6 +387,7 @@ impl RealtimeWebsocketEvents {
 
             match msg {
                 Message::Text(text) => {
+                    trace!(target: REALTIME_WIRE_LOG_TARGET, "realtime websocket event: {text}");
                     if let Some(mut event) = parse_realtime_event(&text, self.event_parser) {
                         self.update_active_transcript(&mut event).await;
                         debug!(?event, "realtime websocket parsed event");
@@ -1584,6 +1588,7 @@ mod tests {
                     "type": "server_vad",
                     "interrupt_response": true,
                     "create_response": true,
+                    "silence_duration_ms": 500,
                 })
             );
             assert_eq!(
@@ -1666,7 +1671,7 @@ mod tests {
             );
             assert_eq!(
                 third_json["item"]["output"],
-                Value::String("\"Agent Final Message\":\n\ndelegated result".to_string())
+                Value::String("delegated result".to_string())
             );
         });
 

@@ -1,5 +1,5 @@
-use super::load_plugin_manifest;
-use super::manifest::PluginManifest;
+use crate::manifest::PluginManifest;
+use crate::manifest::load_plugin_manifest;
 use codex_plugin::PluginId;
 use codex_plugin::validate_plugin_segment;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -11,8 +11,8 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(crate) const DEFAULT_PLUGIN_VERSION: &str = "local";
-pub(crate) const PLUGINS_CACHE_DIR: &str = "plugins/cache";
+pub const DEFAULT_PLUGIN_VERSION: &str = "local";
+pub const PLUGINS_CACHE_DIR: &str = "plugins/cache";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallResult {
@@ -157,7 +157,7 @@ impl PluginStoreError {
     }
 }
 
-pub(crate) fn plugin_version_for_source(source_path: &Path) -> Result<String, PluginStoreError> {
+pub fn plugin_version_for_source(source_path: &Path) -> Result<String, PluginStoreError> {
     let plugin_version = plugin_manifest_version_for_source(source_path)?
         .unwrap_or_else(|| DEFAULT_PLUGIN_VERSION.to_string());
     validate_plugin_version_segment(&plugin_version).map_err(PluginStoreError::Invalid)?;

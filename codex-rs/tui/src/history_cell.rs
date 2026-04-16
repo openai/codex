@@ -61,13 +61,16 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::user_input::TextElement;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::format_env_display;
 use image::DynamicImage;
 use image::ImageReader;
@@ -89,6 +92,7 @@ use std::time::Instant;
 use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+use url::Url;
 
 mod hook_cell;
 
@@ -1184,6 +1188,8 @@ pub(crate) fn new_session_info(
     let SessionConfiguredEvent {
         model,
         reasoning_effort,
+        approval_policy,
+        sandbox_policy,
         ..
     } = event;
     // Header box rendered as history (so it appears at the very top)
@@ -1193,7 +1199,8 @@ pub(crate) fn new_session_info(
         show_fast_status,
         config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
-    );
+    )
+    .with_yolo_mode(has_yolo_permissions(approval_policy, &sandbox_policy));
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
     if is_first_event {
@@ -1257,6 +1264,17 @@ pub(crate) fn new_session_info(
     SessionInfoCell(CompositeHistoryCell { parts })
 }
 
+pub(crate) fn is_yolo_mode(config: &Config) -> bool {
+    has_yolo_permissions(
+        config.permissions.approval_policy.value(),
+        config.permissions.sandbox_policy.get(),
+    )
+}
+
+fn has_yolo_permissions(approval_policy: AskForApproval, sandbox_policy: &SandboxPolicy) -> bool {
+    approval_policy == AskForApproval::Never && *sandbox_policy == SandboxPolicy::DangerFullAccess
+}
+
 pub(crate) fn new_user_prompt(
     message: String,
     text_elements: Vec<TextElement>,
@@ -1279,6 +1297,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     reasoning_effort: Option<ReasoningEffortConfig>,
     show_fast_status: bool,
     directory: PathBuf,
+    yolo_mode: bool,
 }
 
 impl SessionHeaderHistoryCell {
@@ -1314,7 +1333,13 @@ impl SessionHeaderHistoryCell {
             reasoning_effort,
             show_fast_status,
             directory,
+            yolo_mode: false,
         }
+    }
+
+    pub(crate) fn with_yolo_mode(mut self, yolo_mode: bool) -> Self {
+        self.yolo_mode = yolo_mode;
+        self
     }
 
     fn format_directory(&self, max_width: Option<usize>) -> String {
@@ -1375,7 +1400,12 @@ impl HistoryCell for SessionHeaderHistoryCell {
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
         const DIR_LABEL: &str = "directory:";
-        let label_width = DIR_LABEL.len();
+        const PERMISSIONS_LABEL: &str = "permissions:";
+        let label_width = if self.yolo_mode {
+            DIR_LABEL.len().max(PERMISSIONS_LABEL.len())
+        } else {
+            DIR_LABEL.len()
+        };
 
         let model_label = format!(
             "{model_label:<label_width$}",
@@ -1409,12 +1439,20 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
-        let lines = vec![
+        let mut lines = vec![
             make_row(title_spans),
             make_row(Vec::new()),
             make_row(model_spans),
             make_row(dir_spans),
         ];
+
+        if self.yolo_mode {
+            let permissions_label = format!("{PERMISSIONS_LABEL:<label_width$}");
+            lines.push(make_row(vec![
+                Span::from(format!("{permissions_label} ")).dim(),
+                "YOLO mode".magenta().bold(),
+            ]));
+        }
 
         with_border(lines)
     }
@@ -2575,8 +2613,8 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistoryCell {
-    let display_path = display_path_for(&path, cwd);
+pub(crate) fn new_view_image_tool_call(path: AbsolutePathBuf, cwd: &Path) -> PlainHistoryCell {
+    let display_path = display_path_for(path.as_path(), cwd);
 
     let lines: Vec<Line<'static>> = vec![
         vec!["• ".dim(), "Viewed Image".bold()].into(),
@@ -2589,7 +2627,7 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 pub(crate) fn new_image_generation_call(
     call_id: String,
     revised_prompt: Option<String>,
-    saved_path: Option<String>,
+    saved_path: Option<AbsolutePathBuf>,
 ) -> PlainHistoryCell {
     let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
 
@@ -2598,6 +2636,9 @@ pub(crate) fn new_image_generation_call(
         vec!["  └ ".dim(), detail.dim()].into(),
     ];
     if let Some(saved_path) = saved_path {
+        let saved_path = Url::from_file_path(saved_path.as_path())
+            .map(|url| url.to_string())
+            .unwrap_or_else(|_| saved_path.display().to_string());
         lines.push(vec!["  └ ".dim(), "Saved to: ".dim(), saved_path.into()].into());
     }
 
@@ -2987,11 +3028,16 @@ mod tests {
 
     #[test]
     fn image_generation_call_renders_saved_path() {
-        let saved_path = "file:///tmp/generated-image.png".to_string();
+        let saved_path = test_path_buf("/tmp/generated-image.png").abs();
+        let expected_saved_path = format!(
+            "  └ Saved to: {}",
+            Url::from_file_path(saved_path.as_path())
+                .expect("test path should convert to file URL")
+        );
         let cell = new_image_generation_call(
             "call-image-generation".to_string(),
             Some("A tiny blue square".to_string()),
-            Some(saved_path.clone()),
+            Some(saved_path),
         );
 
         assert_eq!(
@@ -2999,7 +3045,7 @@ mod tests {
             vec![
                 "• Generated Image:".to_string(),
                 "  └ A tiny blue square".to_string(),
-                format!("  └ Saved to: {saved_path}"),
+                expected_saved_path,
             ],
         );
     }
@@ -3015,7 +3061,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: test_path_buf("/tmp/project"),
+            cwd: test_path_buf("/tmp/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -3944,6 +3990,25 @@ mod tests {
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(!model_line.contains("fast"));
+    }
+
+    #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
+    fn session_header_indicates_yolo_mode() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-5".to_string(),
+            /*reasoning_effort*/ None,
+            /*show_fast_status*/ false,
+            test_path_buf("/tmp/project").abs().to_path_buf(),
+            "test",
+        )
+        .with_yolo_mode(/*yolo_mode*/ true);
+
+        let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]

@@ -72,9 +72,12 @@ use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DELEGATED_SHELL_TOOL_TIMEOUT_MS: u64 = 30_000;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const V2_STEERING_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
+const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
+    "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
@@ -112,6 +115,11 @@ impl Match for RealtimeCallRequestCapture {
             .push(request.clone());
         true
     }
+}
+
+fn normalized_json_string(raw: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(raw).context("expected JSON fixture to parse")?;
+    serde_json::to_string(&value).context("expected JSON fixture to serialize")
 }
 
 struct GatedSseResponse {
@@ -1134,7 +1142,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true,"silence_duration_ms":500}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = normalized_json_string(session)?;
     assert_eq!(
         body,
         format!(
@@ -1353,7 +1362,8 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
             request["type"] == "conversation.item.create"
                 && request["item"]["type"] == "message"
                 && request["item"]["role"] == "user"
-                && request["item"]["content"][0]["text"] == "hello"
+                && request["item"]["content"][0]["type"] == "input_text"
+                && request["item"]["content"][0]["text"] == "[USER] hello"
         }),
         "sideband requests should include user text item: {requests:?}"
     );
@@ -1552,7 +1562,7 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
     assert_v2_progress_update(&progress, "delegated from v2");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_v2", "delegated from v2");
+    assert_v2_function_call_output(&tool_output, "call_v2", V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT);
     assert_eq!(
         function_call_output_sideband_requests(&harness.realtime_server).len(),
         1
@@ -1687,7 +1697,11 @@ async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() ->
     assert_v2_progress_update(&progress, "progress before final");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_progress_order", "progress before final");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_progress_order",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -1704,7 +1718,9 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         create_shell_command_sse_response(
             realtime_tool_ok_command(),
             /*workdir*/ None,
-            Some(5000),
+            // Windows CI can spend several seconds starting the nested PowerShell command. This
+            // test verifies delegated shell-tool plumbing, not timeout enforcement.
+            Some(DELEGATED_SHELL_TOOL_TIMEOUT_MS),
             "shell_call",
         )?,
         create_final_assistant_message_sse_response("shell tool finished")?,
@@ -1771,7 +1787,11 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     assert_v2_progress_update(&progress, "shell tool finished");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_shell", "shell tool finished");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_shell",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
     assert_eq!(
         function_call_output_sideband_requests(&harness.realtime_server).len(),
         1
@@ -1851,7 +1871,11 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
     assert_v2_progress_update(&progress, "late delegated result");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_audio", "late delegated result");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_audio",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -2084,7 +2108,7 @@ fn assert_v2_function_call_output(request: &Value, call_id: &str, expected_outpu
             "item": {
                 "type": "function_call_output",
                 "call_id": call_id,
-                "output": format!("\"Agent Final Message\":\n\n{expected_output}"),
+                "output": expected_output,
             }
         })
     );
@@ -2100,7 +2124,7 @@ fn assert_v2_progress_update(request: &Value, expected_text: &str) {
                 "role": "user",
                 "content": [{
                     "type": "input_text",
-                    "text": format!("{expected_text}\n\nUpdate from background agent (task hasn't finished yet):")
+                    "text": format!("[BACKEND] {expected_text}")
                 }]
             }
         })
@@ -2117,7 +2141,7 @@ fn assert_v2_user_text_item(request: &Value, expected_text: &str) {
                 "role": "user",
                 "content": [{
                     "type": "input_text",
-                    "text": expected_text
+                    "text": format!("[USER] {expected_text}")
                 }]
             }
         })
@@ -2181,6 +2205,7 @@ fn assert_call_create_multipart(
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
+    let session = normalized_json_string(session)?;
     assert_eq!(
         body,
         format!(
