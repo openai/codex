@@ -19,6 +19,9 @@ codex_rust_crate(
         "src/**/*.rs",
         "src/**/snapshots/**",
     ]) + ["//codex-rs/core:model_availability_nux_fixtures"],
+    test_shard_counts = {
+        "tui-unit-tests": 8,
+    },
     integration_compile_data_extra = ["src/test_backend.rs"],
     extra_binaries = [
         "//codex-rs/cli:codex",
