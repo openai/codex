@@ -23,7 +23,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
-use codex_app_server_protocol::FileChangePatchDeltaNotification;
+use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -1921,7 +1921,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
 }
 
 #[tokio::test]
-async fn turn_start_does_not_stream_apply_patch_change_deltas_without_feature_v2() -> Result<()> {
+async fn turn_start_does_not_stream_apply_patch_change_updates_without_feature_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -2011,14 +2011,14 @@ async fn turn_start_does_not_stream_apply_patch_change_deltas_without_feature_v2
     assert!(
         !mcp.pending_notification_methods()
             .iter()
-            .any(|method| method == "item/fileChange/patchDelta")
+            .any(|method| method == "item/fileChange/patchUpdated")
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn turn_start_streams_apply_patch_change_deltas_v2() -> Result<()> {
+async fn turn_start_streams_apply_patch_change_updates_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let tmp = TempDir::new()?;
@@ -2084,7 +2084,13 @@ async fn turn_start_streams_apply_patch_change_deltas_v2() -> Result<()> {
         &codex_home,
         &server.uri(),
         "never",
-        &BTreeMap::from([(Feature::ApplyPatchStreamingEvents, true)]),
+        &BTreeMap::from([
+            (Feature::ApplyPatchFreeform, true),
+            (Feature::ApplyPatchStreamingEvents, true),
+            (Feature::Plugins, false),
+            (Feature::RemoteModels, false),
+            (Feature::ShellSnapshot, false),
+        ]),
     )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
@@ -2126,19 +2132,18 @@ async fn turn_start_streams_apply_patch_change_deltas_v2() -> Result<()> {
     while streamed_content != "live line\n" {
         let delta_notif = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("item/fileChange/patchDelta"),
+            mcp.read_stream_until_notification_message("item/fileChange/patchUpdated"),
         )
         .await??;
-        let delta: FileChangePatchDeltaNotification = serde_json::from_value(
+        let delta: FileChangePatchUpdatedNotification = serde_json::from_value(
             delta_notif
                 .params
                 .clone()
-                .expect("item/fileChange/patchDelta params"),
+                .expect("item/fileChange/patchUpdated params"),
         )?;
         assert_eq!(delta.thread_id, thread.id);
         assert_eq!(delta.turn_id, turn.id);
         assert_eq!(delta.item_id, call_id);
-        assert_eq!(delta.active_path.as_deref(), Some("live.txt"));
         let change = delta
             .changes
             .iter()

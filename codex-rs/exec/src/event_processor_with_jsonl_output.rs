@@ -485,7 +485,7 @@ impl EventProcessorWithJsonOutput {
                 }
                 CodexStatus::Running
             }
-            ServerNotification::FileChangePatchDelta(notification) => {
+            ServerNotification::FileChangePatchUpdated(notification) => {
                 let item_id = notification.item_id;
                 let item = ThreadItem::FileChange {
                     id: item_id.clone(),

@@ -329,12 +329,11 @@ fn should_process_notification_allows_file_change_input_events() {
     let turn_id = "turn-1";
 
     assert!(should_process_notification(
-        &ServerNotification::FileChangePatchDelta(
-            codex_app_server_protocol::FileChangePatchDeltaNotification {
+        &ServerNotification::FileChangePatchUpdated(
+            codex_app_server_protocol::FileChangePatchUpdatedNotification {
                 thread_id: thread_id.to_string(),
                 turn_id: turn_id.to_string(),
                 item_id: "call-1".to_string(),
-                active_path: Some("file.txt".to_string()),
                 changes: vec![codex_app_server_protocol::FileUpdateChange {
                     path: "file.txt".to_string(),
                     kind: codex_app_server_protocol::PatchChangeKind::Add,

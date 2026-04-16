@@ -1043,7 +1043,7 @@ There are additional item-specific events:
 
 #### fileChange
 
-- `item/fileChange/patchDelta` - when `features.apply_patch_streaming_events` is enabled, streams structured file-change snapshots parsed from the model-generated patch before it is executed. Each notification includes `changes` and `activePath`; it does not expose the raw provider tool input.
+- `item/fileChange/patchUpdated` - when `features.apply_patch_streaming_events` is enabled, streams structured file-change snapshots parsed from the model-generated patch before it is executed. Each notification includes `changes`; it does not expose the raw provider tool input.
 - `item/fileChange/outputDelta` - contains the tool call response of the underlying `apply_patch` tool call.
 
 ### Errors

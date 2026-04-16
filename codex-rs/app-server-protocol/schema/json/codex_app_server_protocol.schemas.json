@@ -4002,20 +4002,20 @@
           "properties": {
             "method": {
               "enum": [
-                "item/fileChange/patchDelta"
+                "item/fileChange/patchUpdated"
               ],
-              "title": "Item/fileChange/patchDeltaNotificationMethod",
+              "title": "Item/fileChange/patchUpdatedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/FileChangePatchDeltaNotification"
+              "$ref": "#/definitions/v2/FileChangePatchUpdatedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Item/fileChange/patchDeltaNotification",
+          "title": "Item/fileChange/patchUpdatedNotification",
           "type": "object"
         },
         {
@@ -7644,15 +7644,9 @@
         "title": "FileChangeOutputDeltaNotification",
         "type": "object"
       },
-      "FileChangePatchDeltaNotification": {
+      "FileChangePatchUpdatedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "activePath": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "changes": {
             "items": {
               "$ref": "#/definitions/v2/FileUpdateChange"
@@ -7675,7 +7669,7 @@
           "threadId",
           "turnId"
         ],
-        "title": "FileChangePatchDeltaNotification",
+        "title": "FileChangePatchUpdatedNotification",
         "type": "object"
       },
       "FileUpdateChange": {

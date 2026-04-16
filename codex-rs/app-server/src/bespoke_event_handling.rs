@@ -40,7 +40,7 @@ use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
-use codex_app_server_protocol::FileChangePatchDeltaNotification;
+use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
@@ -1622,18 +1622,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
-        EventMsg::PatchApplyDelta(event) => {
-            let notification = FileChangePatchDeltaNotification {
+        EventMsg::PatchApplyUpdated(event) => {
+            let notification = FileChangePatchUpdatedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
                 item_id: event.call_id,
-                active_path: event
-                    .active_path
-                    .map(|path| path.to_string_lossy().into_owned()),
                 changes: convert_patch_changes(&event.changes),
             };
             outgoing
-                .send_server_notification(ServerNotification::FileChangePatchDelta(notification))
+                .send_server_notification(ServerNotification::FileChangePatchUpdated(notification))
                 .await;
         }
         EventMsg::PatchApplyEnd(patch_end_event) => {

@@ -80,12 +80,6 @@
     }
   },
   "properties": {
-    "activePath": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "changes": {
       "items": {
         "$ref": "#/definitions/FileUpdateChange"
@@ -108,6 +102,6 @@
     "threadId",
     "turnId"
   ],
-  "title": "FileChangePatchDeltaNotification",
+  "title": "FileChangePatchUpdatedNotification",
   "type": "object"
 }

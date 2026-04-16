@@ -6,7 +6,7 @@ use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus as ApiCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
-use codex_app_server_protocol::FileChangePatchDeltaNotification;
+use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileUpdateChange as ApiFileUpdateChange;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -835,12 +835,11 @@ fn file_change_completion_maps_change_kinds() {
 fn file_change_progress_stream_maps_to_exec_item_events() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
-    let delta_1 = processor.collect_thread_events(ServerNotification::FileChangePatchDelta(
-        FileChangePatchDeltaNotification {
+    let delta_1 = processor.collect_thread_events(ServerNotification::FileChangePatchUpdated(
+        FileChangePatchUpdatedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "patch-1".to_string(),
-            active_path: Some("a/added.txt".to_string()),
             changes: vec![ApiFileUpdateChange {
                 path: "a/added.txt".to_string(),
                 kind: ApiPatchChangeKind::Add,
@@ -848,12 +847,11 @@ fn file_change_progress_stream_maps_to_exec_item_events() {
             }],
         },
     ));
-    let delta_2 = processor.collect_thread_events(ServerNotification::FileChangePatchDelta(
-        FileChangePatchDeltaNotification {
+    let delta_2 = processor.collect_thread_events(ServerNotification::FileChangePatchUpdated(
+        FileChangePatchUpdatedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "patch-1".to_string(),
-            active_path: Some("a/added.txt".to_string()),
             changes: vec![ApiFileUpdateChange {
                 path: "a/added.txt".to_string(),
                 kind: ApiPatchChangeKind::Add,

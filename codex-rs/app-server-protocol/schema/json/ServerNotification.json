@@ -990,14 +990,8 @@
       ],
       "type": "object"
     },
-    "FileChangePatchDeltaNotification": {
+    "FileChangePatchUpdatedNotification": {
       "properties": {
-        "activePath": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "changes": {
           "items": {
             "$ref": "#/definitions/FileUpdateChange"
@@ -4640,20 +4634,20 @@
       "properties": {
         "method": {
           "enum": [
-            "item/fileChange/patchDelta"
+            "item/fileChange/patchUpdated"
           ],
-          "title": "Item/fileChange/patchDeltaNotificationMethod",
+          "title": "Item/fileChange/patchUpdatedNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/FileChangePatchDeltaNotification"
+          "$ref": "#/definitions/FileChangePatchUpdatedNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Item/fileChange/patchDeltaNotification",
+      "title": "Item/fileChange/patchUpdatedNotification",
       "type": "object"
     },
     {

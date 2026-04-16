@@ -5659,11 +5659,10 @@ pub struct FileChangeOutputDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct FileChangePatchDeltaNotification {
+pub struct FileChangePatchUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    pub active_path: Option<String>,
     pub changes: Vec<FileUpdateChange>,
 }
 
