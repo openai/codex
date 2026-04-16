@@ -14,4 +14,9 @@ path: AbsolutePathBuf,
 /**
  * File contents encoded as base64.
  */
-dataBase64: string, };
+dataBase64: string,
+/**
+ * Optional environment selection. Use `"local"` or `"remote"`, or omit
+ * the field to use the default environment.
+ */
+environmentId?: string | null, };

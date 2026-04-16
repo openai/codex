@@ -2286,6 +2286,10 @@ pub struct FeedbackUploadResponse {
 pub struct FsReadFileParams {
     /// Absolute path to read.
     pub path: AbsolutePathBuf,
+    /// Optional environment selection. Use `"local"` or `"remote"`, or omit
+    /// the field to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Base64-encoded file contents returned by `fs/readFile`.
@@ -2306,6 +2310,10 @@ pub struct FsWriteFileParams {
     pub path: AbsolutePathBuf,
     /// File contents encoded as base64.
     pub data_base64: String,
+    /// Optional environment selection. Use `"local"` or `"remote"`, or omit
+    /// the field to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/writeFile`.
@@ -2324,6 +2332,10 @@ pub struct FsCreateDirectoryParams {
     /// Whether parent directories should also be created. Defaults to `true`.
     #[ts(optional = nullable)]
     pub recursive: Option<bool>,
+    /// Optional environment selection. Use `"local"` or `"remote"`, or omit
+    /// the field to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/createDirectory`.
@@ -2339,6 +2351,10 @@ pub struct FsCreateDirectoryResponse {}
 pub struct FsGetMetadataParams {
     /// Absolute path to inspect.
     pub path: AbsolutePathBuf,
+    /// Optional environment selection. Use `"local"` or `"remote"`, or omit
+    /// the field to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Metadata returned by `fs/getMetadata`.
@@ -2367,6 +2383,10 @@ pub struct FsGetMetadataResponse {
 pub struct FsReadDirectoryParams {
     /// Absolute directory path to read.
     pub path: AbsolutePathBuf,
+    /// Optional environment selection. Use `"local"` or `"remote"`, or omit
+    /// the field to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// A directory entry returned by `fs/readDirectory`.
@@ -2404,6 +2424,10 @@ pub struct FsRemoveParams {
     /// Whether missing paths should be ignored. Defaults to `true`.
     #[ts(optional = nullable)]
     pub force: Option<bool>,
+    /// Optional environment selection. Use `"local"` or `"remote"`, or omit
+    /// the field to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/remove`.
@@ -2424,6 +2448,10 @@ pub struct FsCopyParams {
     /// Required for directory copies; ignored for file copies.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recursive: bool,
+    /// Optional environment selection. Use `"local"` or `"remote"`, or omit
+    /// the field to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/copy`.
@@ -2441,6 +2469,10 @@ pub struct FsWatchParams {
     pub watch_id: String,
     /// Absolute file or directory path to watch.
     pub path: AbsolutePathBuf,
+    /// Optional environment selection. Use `"local"` or `"remote"`, or omit
+    /// the field to use the default environment.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 }
 
 /// Successful response for `fs/watch`.
@@ -6908,6 +6940,7 @@ mod tests {
     fn fs_read_file_params_round_trip() {
         let params = FsReadFileParams {
             path: absolute_path("tmp/example.txt"),
+            environment_id: Some("dev".to_string()),
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
@@ -6915,6 +6948,7 @@ mod tests {
             value,
             json!({
                 "path": absolute_path_string("tmp/example.txt"),
+                "environmentId": "dev",
             })
         );
 
@@ -6928,6 +6962,7 @@ mod tests {
         let params = FsCreateDirectoryParams {
             path: absolute_path("tmp/example"),
             recursive: None,
+            environment_id: Some("dev".to_string()),
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/createDirectory params");
@@ -6936,6 +6971,7 @@ mod tests {
             json!({
                 "path": absolute_path_string("tmp/example"),
                 "recursive": null,
+                "environmentId": "dev",
             })
         );
 
@@ -6949,6 +6985,7 @@ mod tests {
         let params = FsWriteFileParams {
             path: absolute_path("tmp/example.bin"),
             data_base64: "AAE=".to_string(),
+            environment_id: Some("dev".to_string()),
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/writeFile params");
@@ -6957,6 +6994,7 @@ mod tests {
             json!({
                 "path": absolute_path_string("tmp/example.bin"),
                 "dataBase64": "AAE=",
+                "environmentId": "dev",
             })
         );
 
@@ -6971,6 +7009,7 @@ mod tests {
             source_path: absolute_path("tmp/source"),
             destination_path: absolute_path("tmp/destination"),
             recursive: true,
+            environment_id: Some("dev".to_string()),
         };
 
         let value = serde_json::to_value(&params).expect("serialize fs/copy params");
@@ -6980,6 +7019,7 @@ mod tests {
                 "sourcePath": absolute_path_string("tmp/source"),
                 "destinationPath": absolute_path_string("tmp/destination"),
                 "recursive": true,
+                "environmentId": "dev",
             })
         );
 

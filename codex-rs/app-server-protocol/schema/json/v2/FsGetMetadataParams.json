@@ -8,6 +8,13 @@
   },
   "description": "Request metadata for an absolute path.",
   "properties": {
+    "environmentId": {
+      "description": "Optional environment selection. Use `\"local\"` or `\"remote\"`, or omit the field to use the default environment.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "path": {
       "allOf": [
         {

@@ -69,6 +69,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
     let request_id = mcp
         .send_fs_get_metadata_request(codex_app_server_protocol::FsGetMetadataParams {
             path: absolute_path(file_path.clone()),
+            environment_id: None,
         })
         .await?;
     let response = timeout(
@@ -126,6 +127,7 @@ async fn fs_get_metadata_reports_symlink() -> Result<()> {
     let request_id = mcp
         .send_fs_get_metadata_request(codex_app_server_protocol::FsGetMetadataParams {
             path: absolute_path(symlink_path),
+            environment_id: None,
         })
         .await?;
     let response = timeout(
@@ -158,6 +160,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_create_directory_request(codex_app_server_protocol::FsCreateDirectoryParams {
             path: absolute_path(nested_dir.clone()),
             recursive: None,
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -170,6 +173,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(nested_file.clone()),
             data_base64: STANDARD.encode("hello from app-server"),
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -182,6 +186,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(source_file.clone()),
             data_base64: STANDARD.encode("hello from source root"),
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -193,6 +198,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(nested_file.clone()),
+            environment_id: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -214,6 +220,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             source_path: absolute_path(nested_file.clone()),
             destination_path: absolute_path(copy_file_path.clone()),
             recursive: false,
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -231,6 +238,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -246,6 +254,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let read_directory_request_id = mcp
         .send_fs_read_directory_request(codex_app_server_protocol::FsReadDirectoryParams {
             path: absolute_path(source_dir.clone()),
+            environment_id: None,
         })
         .await?;
     let readdir_response = timeout(
@@ -278,6 +287,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
             path: absolute_path(copied_dir.clone()),
             recursive: None,
             force: None,
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -294,6 +304,79 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_methods_support_named_local_environment() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let file_path = codex_home.path().join("named-env.txt");
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("CODEX_EXEC_SERVER_URL", Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let write_request_id = mcp
+        .send_fs_write_file_request(FsWriteFileParams {
+            path: absolute_path(file_path.clone()),
+            data_base64: STANDARD.encode("hello from named env"),
+            environment_id: Some("local".to_string()),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(write_request_id)),
+    )
+    .await??;
+
+    let read_request_id = mcp
+        .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+            path: absolute_path(file_path.clone()),
+            environment_id: Some("local".to_string()),
+        })
+        .await?;
+    let read_response: FsReadFileResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+        )
+        .await??,
+    )?;
+    assert_eq!(
+        read_response,
+        FsReadFileResponse {
+            data_base64: STANDARD.encode("hello from named env"),
+        }
+    );
+    assert_eq!(std::fs::read_to_string(file_path)?, "hello from named env");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_methods_reject_disabled_default_environment() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let file_path = codex_home.path().join("disabled.txt");
+    std::fs::write(&file_path, "hello")?;
+
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[("CODEX_EXEC_SERVER_URL", Some("none"))],
+    )
+    .await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+            path: absolute_path(file_path),
+            environment_id: None,
+        })
+        .await?;
+    expect_error_message(&mut mcp, request_id, "the selected environment is disabled").await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
     let codex_home = TempDir::new()?;
     let file_path = codex_home.path().join("blob.bin");
@@ -304,6 +387,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(file_path.clone()),
             data_base64: STANDARD.encode(bytes),
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -316,6 +400,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
             path: absolute_path(file_path),
+            environment_id: None,
         })
         .await?;
     let read_response: FsReadFileResponse = to_response(
@@ -345,6 +430,7 @@ async fn fs_write_file_rejects_invalid_base64() -> Result<()> {
         .send_fs_write_file_request(FsWriteFileParams {
             path: absolute_path(file_path),
             data_base64: "%%%".to_string(),
+            environment_id: None,
         })
         .await?;
     let error = timeout(
@@ -500,6 +586,7 @@ async fn fs_copy_rejects_directory_without_recursive() -> Result<()> {
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(codex_home.path().join("dest")),
             recursive: false,
+            environment_id: None,
         })
         .await?;
     let error = timeout(
@@ -527,6 +614,7 @@ async fn fs_copy_rejects_copying_directory_into_descendant() -> Result<()> {
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(source_dir.join("nested").join("copy")),
             recursive: true,
+            environment_id: None,
         })
         .await?;
     let error = timeout(
@@ -558,6 +646,7 @@ async fn fs_copy_preserves_symlinks_in_recursive_copy() -> Result<()> {
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -598,6 +687,7 @@ async fn fs_copy_ignores_unknown_special_files_in_recursive_copy() -> Result<()>
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
+            environment_id: None,
         })
         .await?;
     timeout(
@@ -635,6 +725,7 @@ async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
             source_path: absolute_path(fifo_path),
             destination_path: absolute_path(codex_home.path().join("copied")),
             recursive: false,
+            environment_id: None,
         })
         .await?;
     expect_error_message(
@@ -662,6 +753,7 @@ async fn fs_watch_directory_reports_changed_child_paths_and_unwatch_stops_notifi
         .send_fs_watch_request(codex_app_server_protocol::FsWatchParams {
             watch_id: watch_id.clone(),
             path: absolute_path(git_dir.clone()),
+            environment_id: None,
         })
         .await?;
     let watch_response: FsWatchResponse = to_response(
@@ -730,6 +822,7 @@ async fn fs_watch_file_reports_atomic_replace_events() -> Result<()> {
         .send_fs_watch_request(codex_app_server_protocol::FsWatchParams {
             watch_id: watch_id.clone(),
             path: absolute_path(head_path.clone()),
+            environment_id: None,
         })
         .await?;
     let watch_response: FsWatchResponse = to_response(
@@ -769,6 +862,7 @@ async fn fs_watch_allows_missing_file_targets() -> Result<()> {
         .send_fs_watch_request(codex_app_server_protocol::FsWatchParams {
             watch_id: watch_id.clone(),
             path: absolute_path(fetch_head.clone()),
+            environment_id: None,
         })
         .await?;
     let watch_response: FsWatchResponse = to_response(
