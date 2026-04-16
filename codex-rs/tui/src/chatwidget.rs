@@ -4094,11 +4094,11 @@ impl ChatWidget {
     }
 
     fn interrupted_turn_message(&self, reason: TurnAbortReason) -> String {
-        if reason == TurnAbortReason::BudgetExceeded
+        if reason == TurnAbortReason::BudgetLimited
             || (reason == TurnAbortReason::Interrupted
                 && matches!(
                     self.current_goal_status_indicator,
-                    Some(GoalStatusIndicator::BudgetStopped { .. })
+                    Some(GoalStatusIndicator::BudgetLimited { .. })
                 ))
         {
             return "Goal budget reached - the turn was stopped.".to_string();
@@ -6154,7 +6154,6 @@ impl ChatWidget {
                     notification.token_usage,
                 )));
             }
-            ServerNotification::ThreadGoalUpdated(_) => {}
             ServerNotification::ThreadNameUpdated(notification) => {
                 match ThreadId::from_string(&notification.thread_id) {
                     Ok(thread_id) => self.on_thread_name_updated(
@@ -6805,7 +6804,7 @@ impl ChatWidget {
                 TurnAbortReason::ReviewEnded => {
                     self.on_interrupted_turn(ev.reason);
                 }
-                TurnAbortReason::BudgetExceeded => {
+                TurnAbortReason::BudgetLimited => {
                     self.submit_pending_steers_after_interrupt = false;
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();

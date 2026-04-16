@@ -1295,21 +1295,21 @@ fn goal_status_indicator_formats_statuses_and_budgets() {
     );
     assert_eq!(
         goal_status_indicator_from_app_goal(&test_thread_goal(
-            codex_app_server_protocol::ThreadGoalStatus::BudgetStopped,
+            codex_app_server_protocol::ThreadGoalStatus::BudgetLimited,
             /*token_budget*/ Some(50_000),
             /*tokens_used*/ 51_000,
         )),
-        Some(GoalStatusIndicator::BudgetStopped {
+        Some(GoalStatusIndicator::BudgetLimited {
             usage: Some("51K / 50K tokens".to_string()),
         })
     );
     assert_eq!(
         goal_status_indicator_from_app_goal(&test_thread_goal(
-            codex_app_server_protocol::ThreadGoalStatus::BudgetStopped,
+            codex_app_server_protocol::ThreadGoalStatus::BudgetLimited,
             /*token_budget*/ None,
             /*tokens_used*/ 0,
         )),
-        Some(GoalStatusIndicator::BudgetStopped { usage: None })
+        Some(GoalStatusIndicator::BudgetLimited { usage: None })
     );
     assert_eq!(
         goal_status_indicator_from_app_goal(&test_thread_goal(
@@ -1331,14 +1331,14 @@ fn goal_status_indicator_line_formats_goal_mode_text() {
             "Pursuing goal (4K / 5K)",
         ),
         (
-            GoalStatusIndicator::BudgetStopped {
+            GoalStatusIndicator::BudgetLimited {
                 usage: Some("4K / 5K tokens".to_string()),
             },
             "Goal unmet (4K / 5K tokens)",
         ),
         (GoalStatusIndicator::Paused, "Goal paused (/goal to toggle)"),
         (
-            GoalStatusIndicator::BudgetStopped { usage: None },
+            GoalStatusIndicator::BudgetLimited { usage: None },
             "Goal abandoned",
         ),
         (GoalStatusIndicator::Complete, "Goal achieved"),

@@ -1218,7 +1218,7 @@ async fn interrupted_turn_error_message_snapshot() {
 }
 
 #[tokio::test]
-async fn interrupted_turn_after_goal_budget_stopped_uses_budget_message_snapshot() {
+async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
 
@@ -1228,8 +1228,8 @@ async fn interrupted_turn_after_goal_budget_stopped_uses_budget_message_snapshot
                 thread_id: "thread-1".to_string(),
                 goal: codex_app_server_protocol::ThreadGoal {
                     thread_id: "thread-1".to_string(),
-                    objective: "Run until the token budget is stopped".to_string(),
-                    status: codex_app_server_protocol::ThreadGoalStatus::BudgetStopped,
+                    objective: "Run until the token budget is limited".to_string(),
+                    status: codex_app_server_protocol::ThreadGoalStatus::BudgetLimited,
                     token_budget: Some(10_000),
                     tokens_used: 10_500,
                     created_at: 0,
@@ -1259,11 +1259,11 @@ async fn interrupted_turn_after_goal_budget_stopped_uses_budget_message_snapshot
 
     let cells = drain_insert_history(&mut rx);
     let last = lines_to_single_string(cells.last().unwrap());
-    assert_chatwidget_snapshot!("interrupted_turn_goal_budget_stopped_message", last);
+    assert_chatwidget_snapshot!("interrupted_turn_goal_budget_limited_message", last);
 }
 
 #[tokio::test]
-async fn direct_budget_stopped_turn_uses_budget_message_snapshot() {
+async fn direct_budget_limited_turn_uses_budget_message_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_codex_event(Event {
@@ -1279,7 +1279,7 @@ async fn direct_budget_stopped_turn_uses_budget_message_snapshot() {
         id: "task-1".into(),
         msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
-            reason: TurnAbortReason::BudgetExceeded,
+            reason: TurnAbortReason::BudgetLimited,
             completed_at: None,
             duration_ms: None,
         }),
@@ -1287,7 +1287,7 @@ async fn direct_budget_stopped_turn_uses_budget_message_snapshot() {
 
     let cells = drain_insert_history(&mut rx);
     let last = lines_to_single_string(cells.last().unwrap());
-    assert_chatwidget_snapshot!("direct_budget_stopped_turn_message", last);
+    assert_chatwidget_snapshot!("direct_budget_limited_turn_message", last);
 }
 
 // Snapshot test: interrupting specifically to submit pending steers shows an

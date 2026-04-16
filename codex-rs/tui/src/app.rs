@@ -258,7 +258,7 @@ fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
     match status {
         ThreadGoalStatus::Active => "active",
         ThreadGoalStatus::Paused => "paused",
-        ThreadGoalStatus::BudgetStopped => "stopped due to budget",
+        ThreadGoalStatus::BudgetLimited => "limited by budget",
         ThreadGoalStatus::Complete => "complete",
     }
 }
@@ -4362,7 +4362,7 @@ impl App {
         let next_status = match goal.status {
             ThreadGoalStatus::Active => Some(ThreadGoalStatus::Paused),
             ThreadGoalStatus::Paused => Some(ThreadGoalStatus::Active),
-            ThreadGoalStatus::BudgetStopped | ThreadGoalStatus::Complete => None,
+            ThreadGoalStatus::BudgetLimited | ThreadGoalStatus::Complete => None,
         };
 
         if let Some(status) = next_status {
@@ -6712,7 +6712,7 @@ mod tests {
             thread_id: "thread-1".to_string(),
             objective: "Complete the task described in ../gameboy-long-running-prompt5.txt"
                 .to_string(),
-            status: ThreadGoalStatus::BudgetStopped,
+            status: ThreadGoalStatus::BudgetLimited,
             token_budget,
             tokens_used,
             created_at: 0,
