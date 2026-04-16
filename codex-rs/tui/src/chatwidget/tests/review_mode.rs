@@ -1226,6 +1226,23 @@ async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot
     chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
 
     chat.handle_server_notification(
+        codex_app_server_protocol::ServerNotification::TurnStarted(
+            codex_app_server_protocol::TurnStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn: codex_app_server_protocol::Turn {
+                    id: "turn-1".to_string(),
+                    items: Vec::new(),
+                    status: codex_app_server_protocol::TurnStatus::InProgress,
+                    error: None,
+                    started_at: None,
+                    completed_at: None,
+                    duration_ms: None,
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
         codex_app_server_protocol::ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
                 thread_id: "thread-1".to_string(),

@@ -96,7 +96,6 @@ use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
-#[cfg(test)]
 use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
@@ -871,6 +870,7 @@ pub(crate) struct ChatWidget {
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     last_turn_id: Option<String>,
+    budget_limited_turn_ids: HashSet<String>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
@@ -4283,13 +4283,7 @@ impl ChatWidget {
     }
 
     fn interrupted_turn_message(&self, reason: TurnAbortReason) -> String {
-        if reason == TurnAbortReason::BudgetLimited
-            || (reason == TurnAbortReason::Interrupted
-                && matches!(
-                    self.current_goal_status_indicator,
-                    Some(GoalStatusIndicator::BudgetLimited { .. })
-                ))
-        {
+        if reason == TurnAbortReason::BudgetLimited {
             return "Goal budget reached - the turn was stopped.".to_string();
         }
 
@@ -5135,6 +5129,7 @@ impl ChatWidget {
             suppress_queue_autosend: false,
             thread_id: None,
             last_turn_id: None,
+            budget_limited_turn_ids: HashSet::new(),
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -6635,7 +6630,15 @@ impl ChatWidget {
             }
             TurnStatus::Interrupted => {
                 self.last_non_retry_error = None;
-                self.on_interrupted_turn(TurnAbortReason::Interrupted);
+                let reason = if self
+                    .budget_limited_turn_ids
+                    .remove(notification.turn.id.as_str())
+                {
+                    TurnAbortReason::BudgetLimited
+                } else {
+                    TurnAbortReason::Interrupted
+                };
+                self.on_interrupted_turn(reason);
             }
             TurnStatus::Failed => {
                 if let Some(error) = notification.turn.error {
@@ -7009,7 +7012,16 @@ impl ChatWidget {
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn(ev.reason);
+                    let reason = if ev
+                        .turn_id
+                        .as_deref()
+                        .is_some_and(|turn_id| self.budget_limited_turn_ids.remove(turn_id))
+                    {
+                        TurnAbortReason::BudgetLimited
+                    } else {
+                        ev.reason
+                    };
+                    self.on_interrupted_turn(reason);
                 }
                 TurnAbortReason::Replaced => {
                     self.submit_pending_steers_after_interrupt = false;
@@ -7021,6 +7033,9 @@ impl ChatWidget {
                     self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::BudgetLimited => {
+                    if let Some(turn_id) = ev.turn_id.as_deref() {
+                        self.budget_limited_turn_ids.remove(turn_id);
+                    }
                     self.on_interrupted_turn(ev.reason);
                 }
             },
@@ -9914,6 +9929,12 @@ impl ChatWidget {
             self.update_collaboration_mode_indicator();
             return;
         }
+        if goal.status == AppThreadGoalStatus::BudgetLimited
+            && self.agent_turn_running
+            && let Some(turn_id) = &self.last_turn_id
+        {
+            self.budget_limited_turn_ids.insert(turn_id.clone());
+        }
         self.current_goal_status_indicator = goal_status_indicator_from_app_goal(&goal);
         self.update_collaboration_mode_indicator();
     }
@@ -10409,7 +10430,7 @@ impl ChatWidget {
                 if self.quit_shortcut_active_for(key) {
                     self.quit_shortcut_expires_at = None;
                     self.quit_shortcut_key = None;
-                    self.request_immediate_exit();
+                    self.request_quit_without_confirmation();
                 } else {
                     self.arm_quit_shortcut(key);
                     self.submit_op(AppCommand::interrupt());

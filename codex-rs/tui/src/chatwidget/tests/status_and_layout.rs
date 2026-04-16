@@ -526,7 +526,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
 #[tokio::test]
