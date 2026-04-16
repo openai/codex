@@ -1,14 +1,11 @@
 use crate::exec_command::relativize_to_home;
+use crate::legacy_core::config::Config;
 use crate::status::StatusAccountDisplay;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::config::Config;
-use codex_core::discover_project_doc_paths;
-use codex_exec_server::LOCAL_FS;
 use codex_protocol::account::PlanType;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use std::io;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -36,31 +33,24 @@ pub(crate) fn compose_model_display(
     (model_name.to_string(), details)
 }
 
-pub(crate) async fn discover_agents_summary(config: &Config) -> io::Result<String> {
-    let paths = discover_project_doc_paths(config, LOCAL_FS.as_ref()).await?;
-    Ok(compose_agents_summary(config, &paths))
-}
-
 pub(crate) fn compose_agents_summary(config: &Config, paths: &[AbsolutePathBuf]) -> String {
     let mut rels: Vec<String> = Vec::new();
-    if let Some(path) = config.user_instructions_path.as_deref() {
-        rels.push(format_directory_display(path, /*max_width*/ None));
-    }
 
     for p in paths {
+        let p = p.as_path();
         let file_name = p
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| "<unknown>".to_string());
         let display = if let Some(parent) = p.parent() {
-            if parent.as_path() == config.cwd.as_path() {
+            if parent == config.cwd.as_path() {
                 file_name.clone()
             } else {
                 let mut cur = config.cwd.as_path();
                 let mut ups = 0usize;
                 let mut reached = false;
                 while let Some(c) = cur.parent() {
-                    if cur == parent.as_path() {
+                    if cur == parent {
                         reached = true;
                         break;
                     }
@@ -100,6 +90,8 @@ pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
         "Business".to_string()
     } else if plan_type.is_business_like() {
         "Enterprise".to_string()
+    } else if plan_type == PlanType::ProLite {
+        "Pro Lite".to_string()
     } else {
         title_case(format!("{plan_type:?}").as_str())
     }
@@ -193,11 +185,11 @@ fn title_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
-    use codex_core::LOCAL_PROJECT_DOC_FILENAME;
-    use codex_core::config::ConfigBuilder;
+    use crate::legacy_core::DEFAULT_PROJECT_DOC_FILENAME;
+    use crate::legacy_core::LOCAL_PROJECT_DOC_FILENAME;
+    use crate::legacy_core::config::ConfigBuilder;
+    use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
-    use std::fs;
     use tempfile::TempDir;
 
     async fn test_config(codex_home: &TempDir, cwd: &TempDir) -> Config {
@@ -216,6 +208,7 @@ mod tests {
             (PlanType::Go, "Go"),
             (PlanType::Plus, "Plus"),
             (PlanType::Pro, "Pro"),
+            (PlanType::ProLite, "Pro Lite"),
             (PlanType::Team, "Business"),
             (PlanType::SelfServeBusinessUsageBased, "Business"),
             (PlanType::Business, "Enterprise"),
@@ -231,52 +224,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discover_agents_summary_includes_global_agents_path() {
+    async fn compose_agents_summary_includes_global_agents_path() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
         let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
-        fs::write(&global_agents_path, "global instructions").expect("write global agents");
         let config = test_config(&codex_home, &cwd).await;
 
         assert_eq!(
-            discover_agents_summary(&config).await.expect("summary"),
+            compose_agents_summary(&config, &[global_agents_path.abs()]),
             format_directory_display(&global_agents_path, /*max_width*/ None)
         );
     }
 
     #[tokio::test]
-    async fn discover_agents_summary_names_global_agents_override() {
+    async fn compose_agents_summary_names_global_agents_override() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
-        fs::write(
-            codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME),
-            "global instructions",
-        )
-        .expect("write global agents");
         let override_path = codex_home.path().join(LOCAL_PROJECT_DOC_FILENAME);
-        fs::write(&override_path, "override instructions").expect("write global override");
         let config = test_config(&codex_home, &cwd).await;
 
         assert_eq!(
-            discover_agents_summary(&config).await.expect("summary"),
+            compose_agents_summary(&config, &[override_path.abs()]),
             format_directory_display(&override_path, /*max_width*/ None)
         );
     }
 
     #[tokio::test]
-    async fn discover_agents_summary_orders_global_before_project_agents() {
+    async fn compose_agents_summary_orders_global_before_project_agents() {
         let codex_home = TempDir::new().expect("temp codex home");
         let cwd = TempDir::new().expect("temp cwd");
         let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
-        fs::write(&global_agents_path, "global instructions").expect("write global agents");
-        fs::write(
-            cwd.path().join(DEFAULT_PROJECT_DOC_FILENAME),
-            "project instructions",
-        )
-        .expect("write project agents");
+        let project_agents_path = cwd.path().join(DEFAULT_PROJECT_DOC_FILENAME);
         let config = test_config(&codex_home, &cwd).await;
 
-        let summary = discover_agents_summary(&config).await.expect("summary");
+        let summary = compose_agents_summary(
+            &config,
+            &[
+                global_agents_path.clone().abs(),
+                project_agents_path.clone().abs(),
+            ],
+        );
         let mut paths = summary.split(", ");
         assert_eq!(
             paths.next(),

@@ -2,6 +2,7 @@ use super::*;
 use crate::CodexThread;
 use crate::ThreadManager;
 use crate::codex::make_session_and_context;
+use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::function_tool::FunctionCallError;
 use crate::session_prefix::format_subagent_notification_message;
@@ -28,6 +29,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -67,8 +69,7 @@ fn invocation(
         turn,
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
         call_id: "call-1".to_string(),
-        tool_name: tool_name.to_string(),
-        tool_namespace: None,
+        tool_name: codex_tools::ToolName::plain(tool_name),
         payload,
     }
 }
@@ -88,6 +89,40 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
+}
+
+async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
+    let role_name = "fork-context-role".to_string();
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn
+        .config
+        .codex_home
+        .as_path()
+        .join("fork-context-role.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"model = "gpt-5-role-override"
+model_provider = "ollama"
+model_reasoning_effort = "minimal"
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Role with model overrides".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    role_name
 }
 
 fn history_contains_inter_agent_communication(
@@ -364,6 +399,215 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         .await;
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     assert_eq!(snapshot.model_provider_id, "ollama");
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_context_rejects_agent_type_override() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_with_model_override(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let err = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name,
+                "fork_context": true
+            })),
+        ))
+        .await
+        .expect_err("fork_context should reject agent_type overrides");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_context_rejects_child_model_overrides() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+
+    let err = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "model": "gpt-5-child-override",
+                "reasoning_effort": "low",
+                "fork_context": true
+            })),
+        ))
+        .await
+        .expect_err("forked spawn should reject child model overrides");
+
+    assert_eq!(
+        err,
+            FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_with_model_override(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let turn = TurnContext {
+        config: Arc::new(config),
+        ..turn
+    };
+
+    let err = SpawnAgentHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "fork_context_v2",
+                "agent_type": role_name,
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .expect_err("fork_turns=all should reject agent_type overrides");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_fork_turns_rejects_child_model_overrides() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let err = SpawnAgentHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "fork_context_v2",
+                "model": "gpt-5-child-override",
+                "reasoning_effort": "low",
+                "fork_turns": "all"
+            })),
+        ))
+        .await
+        .expect_err("forked spawn should reject child model overrides");
+
+    assert_eq!(
+        err,
+            FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let role_name = install_role_with_model_override(&mut turn).await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let turn = TurnContext {
+        config: Arc::new(config),
+        ..turn
+    };
+
+    let output = SpawnAgentHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "partial_fork",
+                "agent_type": role_name,
+                "fork_turns": "1"
+            })),
+        ))
+        .await
+        .expect("partial fork should allow agent_type overrides");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(result["task_name"], "/root/partial_fork");
+    let agent_id = manager
+        .captured_ops()
+        .into_iter()
+        .map(|(thread_id, _)| thread_id)
+        .find(|thread_id| *thread_id != root.thread_id)
+        .expect("spawned agent should receive an op");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5-role-override");
+    assert_eq!(snapshot.model_provider_id, "ollama");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
 }
 
 #[tokio::test]
@@ -1248,24 +1492,25 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
-        .handle(invocation(
-            session.clone(),
-            turn.clone(),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "boot worker",
-                "task_name": "worker"
-            })),
-        ))
-        .await
-        .expect("spawn worker");
+    let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
     let agent_id = session
         .services
         .agent_control
-        .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
+        .spawn_agent_with_metadata(
+            (*turn.config).clone(),
+            Op::CleanBackgroundTerminals,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: Some(worker_path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
         .await
-        .expect("worker should resolve");
+        .expect("worker spawn should succeed")
+        .thread_id;
     let thread = manager
         .get_thread(agent_id)
         .await
@@ -1322,7 +1567,7 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         &thread,
         &InterAgentCommunication::new(
             AgentPath::root(),
-            AgentPath::try_from("/root/worker").expect("agent path"),
+            worker_path,
             Vec::new(),
             "continue".to_string(),
             /*trigger_turn*/ true,

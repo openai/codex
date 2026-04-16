@@ -36,6 +36,7 @@ use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_config::Constrained;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_protocol::ToolName;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::CallToolResult;
@@ -153,6 +154,12 @@ pub struct ToolInfo {
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
     pub connector_description: Option<String>,
+}
+
+impl ToolInfo {
+    pub fn canonical_tool_name(&self) -> ToolName {
+        ToolName::namespaced(self.callable_namespace.clone(), self.callable_name.clone())
+    }
 }
 
 const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
@@ -432,7 +439,7 @@ struct ManagedClient {
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
     server_instructions: Option<String>,
-    server_supports_sandbox_state_capability: bool,
+    server_supports_sandbox_state_meta_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
 
@@ -460,22 +467,6 @@ impl ManagedClient {
         }
 
         self.tools.clone()
-    }
-
-    /// Returns once the server has ack'd the sandbox state update.
-    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        if !self.server_supports_sandbox_state_capability {
-            return Ok(());
-        }
-
-        let _response = self
-            .client
-            .send_custom_request(
-                MCP_SANDBOX_STATE_METHOD,
-                Some(serde_json::to_value(sandbox_state)?),
-            )
-            .await?;
-        Ok(())
     }
 }
 
@@ -634,18 +625,11 @@ impl AsyncManagedClient {
         };
         tools.map(annotate_tools)
     }
-
-    async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let managed = self.client().await?;
-        managed.notify_sandbox_state_change(sandbox_state).await
-    }
 }
 
-pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
-
-/// Custom MCP request to push sandbox state updates.
-/// When used, the `params` field of the notification is [`SandboxState`].
-pub const MCP_SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
+/// MCP server capability indicating that Codex should include [`SandboxState`]
+/// in tool-call request `_meta` under this key.
+pub const MCP_SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -723,7 +707,7 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
         submit_id: String,
         tx_event: Sender<Event>,
-        initial_sandbox_state: SandboxState,
+        initial_sandbox_policy: SandboxPolicy,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         tool_plugin_provenance: ToolPluginProvenance,
@@ -732,10 +716,8 @@ impl McpConnectionManager {
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
-        let elicitation_requests = ElicitationRequestManager::new(
-            approval_policy.value(),
-            initial_sandbox_state.sandbox_policy.clone(),
-        );
+        let elicitation_requests =
+            ElicitationRequestManager::new(approval_policy.value(), initial_sandbox_policy);
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
         let mcp_servers = mcp_servers.clone();
@@ -775,25 +757,13 @@ impl McpConnectionManager {
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
-            let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
                 let outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
                     return (server_name, Err(StartupOutcomeError::Cancelled));
                 }
                 let status = match &outcome {
-                    Ok(_) => {
-                        // Send sandbox state notification immediately after Ready
-                        if let Err(e) = async_managed_client
-                            .notify_sandbox_state_change(&sandbox_state)
-                            .await
-                        {
-                            warn!(
-                                "Failed to notify sandbox state to MCP server {server_name}: {e:#}",
-                            );
-                        }
-                        McpStartupStatus::Ready
-                    }
+                    Ok(_) => McpStartupStatus::Ready,
                     Err(error) => {
                         let error_str = mcp_init_error_display(
                             server_name.as_str(),
@@ -1142,6 +1112,16 @@ impl McpConnectionManager {
         })
     }
 
+    pub async fn server_supports_sandbox_state_meta_capability(
+        &self,
+        server: &str,
+    ) -> Result<bool> {
+        Ok(self
+            .client_by_name(server)
+            .await?
+            .server_supports_sandbox_state_meta_capability)
+    }
+
     /// List resources from the specified server.
     pub async fn list_resources(
         &self,
@@ -1191,39 +1171,11 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    pub async fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self.list_all_tools()
-            .await
-            .get(tool_name)
-            .map(|tool| (tool.server_name.clone(), tool.tool.name.to_string()))
-    }
-
-    pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let mut join_set = JoinSet::new();
-
-        for async_managed_client in self.clients.values() {
-            let sandbox_state = sandbox_state.clone();
-            let async_managed_client = async_managed_client.clone();
-            join_set.spawn(async move {
-                async_managed_client
-                    .notify_sandbox_state_change(&sandbox_state)
-                    .await
-            });
-        }
-
-        while let Some(join_res) = join_set.join_next().await {
-            match join_res {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    warn!("Failed to notify sandbox state change to MCP server: {err:#}");
-                }
-                Err(err) => {
-                    warn!("Task panic when notifying sandbox state change to MCP server: {err:#}");
-                }
-            }
-        }
-
-        Ok(())
+    pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
+        let all_tools = self.list_all_tools().await;
+        all_tools
+            .into_values()
+            .find(|tool| tool.canonical_tool_name() == *tool_name)
     }
 }
 
@@ -1470,11 +1422,11 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
-    let server_supports_sandbox_state_capability = initialize_result
+    let server_supports_sandbox_state_meta_capability = initialize_result
         .capabilities
         .experimental
         .as_ref()
-        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
+        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_META_CAPABILITY))
         .is_some();
     let list_start = Instant::now();
     let fetch_start = Instant::now();
@@ -1511,7 +1463,7 @@ async fn start_server_task(
         tool_timeout: Some(tool_timeout),
         tool_filter,
         server_instructions: initialize_result.instructions,
-        server_supports_sandbox_state_capability,
+        server_supports_sandbox_state_meta_capability,
         codex_apps_tools_cache_context,
     };
 

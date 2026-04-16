@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
@@ -29,6 +30,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -66,7 +68,7 @@ pub(crate) enum ApprovalRequest {
         thread_label: Option<String>,
         id: String,
         reason: Option<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         changes: HashMap<PathBuf, FileChange>,
     },
     McpElicitation {
@@ -94,6 +96,35 @@ impl ApprovalRequest {
             | ApprovalRequest::Permissions { thread_label, .. }
             | ApprovalRequest::ApplyPatch { thread_label, .. }
             | ApprovalRequest::McpElicitation { thread_label, .. } => thread_label.as_deref(),
+        }
+    }
+
+    fn matches_resolved_request(&self, request: &ResolvedAppServerRequest) -> bool {
+        match (self, request) {
+            (
+                ApprovalRequest::Exec { id, .. },
+                ResolvedAppServerRequest::ExecApproval { id: resolved_id },
+            ) => id == resolved_id,
+            (
+                ApprovalRequest::Permissions { call_id, .. },
+                ResolvedAppServerRequest::PermissionsApproval { id },
+            ) => call_id == id,
+            (
+                ApprovalRequest::ApplyPatch { id, .. },
+                ResolvedAppServerRequest::FileChangeApproval { id: resolved_id },
+            ) => id == resolved_id,
+            (
+                ApprovalRequest::McpElicitation {
+                    server_name,
+                    request_id,
+                    ..
+                },
+                ResolvedAppServerRequest::McpElicitation {
+                    server_name: resolved_server_name,
+                    request_id: resolved_request_id,
+                },
+            ) => server_name == resolved_server_name && request_id == resolved_request_id,
+            _ => false,
         }
     }
 }
@@ -128,6 +159,23 @@ impl ApprovalOverlay {
 
     pub fn enqueue_request(&mut self, req: ApprovalRequest) {
         self.queue.push(req);
+    }
+
+    fn dismiss_resolved_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        let queue_len = self.queue.len();
+        self.queue
+            .retain(|queued_request| !queued_request.matches_resolved_request(request));
+        if self
+            .current_request
+            .as_ref()
+            .is_some_and(|current_request| current_request.matches_resolved_request(request))
+        {
+            self.current_complete = true;
+            self.advance_queue();
+            return true;
+        }
+
+        self.queue.len() != queue_len
     }
 
     fn set_current(&mut self, request: ApprovalRequest) {
@@ -277,7 +325,9 @@ impl ApprovalOverlay {
         };
         let granted_permissions = match decision {
             ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
-            ReviewDecision::Denied | ReviewDecision::Abort => Default::default(),
+            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
+                Default::default()
+            }
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
         };
@@ -461,6 +511,10 @@ impl BottomPaneView for ApprovalOverlay {
     ) -> Option<ApprovalRequest> {
         self.enqueue_request(request);
         None
+    }
+
+    fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+        self.dismiss_resolved_request(request)
     }
 }
 
@@ -720,6 +774,7 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('d'))],
             }),
+            ReviewDecision::TimedOut => None,
             ReviewDecision::Abort => Some(ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),
@@ -945,6 +1000,27 @@ mod tests {
             }
         }
         assert!(saw_op, "expected approval decision to emit an op");
+    }
+
+    #[test]
+    fn resolved_request_dismisses_overlay_without_emitting_abort() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_exec_request(), tx, Features::with_defaults());
+
+        assert!(
+            view.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                id: "test".to_string(),
+            })
+        );
+        assert!(
+            view.is_complete(),
+            "resolved request should close the overlay"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "dismissing a stale request should not emit an approval op"
+        );
     }
 
     #[test]

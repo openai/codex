@@ -24,7 +24,7 @@ trap cleanup EXIT INT TERM HUP
 
 (
   cd "$cargo_root"
-  cargo run -p codex-exec-server -- --listen "$listen_url"
+  cargo run -p codex-cli --bin codex -- exec-server --listen "$listen_url"
 ) >"$stdout_log" 2>"$stderr_log" &
 server_pid="$!"
 
@@ -40,7 +40,7 @@ for _ in $(seq 1 "$((start_timeout_seconds * 20))"); do
   if ! kill -0 "$server_pid" >/dev/null 2>&1; then
     cat "$stderr_log" >&2 || true
     cat "$stdout_log" >&2 || true
-    echo "failed to start codex-exec-server" >&2
+    echo "failed to start codex exec-server" >&2
     exit 1
   fi
 
@@ -50,7 +50,7 @@ done
 if [[ -z "$exec_server_url" ]]; then
   cat "$stderr_log" >&2 || true
   cat "$stdout_log" >&2 || true
-  echo "timed out waiting ${start_timeout_seconds}s for codex-exec-server to report its websocket URL" >&2
+  echo "timed out waiting ${start_timeout_seconds}s for codex exec-server to report its websocket URL" >&2
   exit 1
 fi
 

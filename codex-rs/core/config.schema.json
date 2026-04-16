@@ -485,6 +485,9 @@
             "steer": {
               "type": "boolean"
             },
+            "telepathy": {
+              "type": "boolean"
+            },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
@@ -497,10 +500,16 @@
             "tui_app_server": {
               "type": "boolean"
             },
+            "unavailable_dummy_tools": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
             "unified_exec": {
+              "type": "boolean"
+            },
+            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -516,6 +525,9 @@
               "type": "boolean"
             },
             "web_search_request": {
+              "type": "boolean"
+            },
+            "workspace_dependencies": {
               "type": "boolean"
             }
           },
@@ -763,6 +775,51 @@
           "type": "string"
         }
       ]
+    },
+    "MarketplaceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "last_updated": {
+          "default": null,
+          "description": "Last time Codex successfully added or refreshed this marketplace.",
+          "type": "string"
+        },
+        "ref": {
+          "default": null,
+          "description": "Git ref to check out when `source_type` is `git`.",
+          "type": "string"
+        },
+        "source": {
+          "default": null,
+          "description": "Source location used when the marketplace was added.",
+          "type": "string"
+        },
+        "source_type": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MarketplaceSourceType"
+            }
+          ],
+          "default": null,
+          "description": "Source kind used to install this marketplace."
+        },
+        "sparse_paths": {
+          "default": null,
+          "description": "Sparse checkout paths used when `source_type` is `git`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "MarketplaceSourceType": {
+      "enum": [
+        "git",
+        "local"
+      ],
+      "type": "string"
     },
     "McpServerToolConfig": {
       "additionalProperties": false,
@@ -1474,6 +1531,10 @@
           "default": null,
           "format": "double",
           "type": "number"
+        },
+        "supports_parallel_tool_calls": {
+          "default": null,
+          "type": "boolean"
         },
         "tool_timeout_sec": {
           "default": null,
@@ -2287,6 +2348,9 @@
         "steer": {
           "type": "boolean"
         },
+        "telepathy": {
+          "type": "boolean"
+        },
         "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
@@ -2299,10 +2363,16 @@
         "tui_app_server": {
           "type": "boolean"
         },
+        "unavailable_dummy_tools": {
+          "type": "boolean"
+        },
         "undo": {
           "type": "boolean"
         },
         "unified_exec": {
+          "type": "boolean"
+        },
+        "use_agent_identity": {
           "type": "boolean"
         },
         "use_legacy_landlock": {
@@ -2318,6 +2388,9 @@
           "type": "boolean"
         },
         "web_search_request": {
+          "type": "boolean"
+        },
+        "workspace_dependencies": {
           "type": "boolean"
         }
       },
@@ -2413,6 +2486,14 @@
         }
       ],
       "description": "Directory where Codex writes log files, for example `codex-tui.log`. Defaults to `$CODEX_HOME/log`."
+    },
+    "marketplaces": {
+      "additionalProperties": {
+        "$ref": "#/definitions/MarketplaceConfig"
+      },
+      "default": {},
+      "description": "User-level marketplace entries keyed by marketplace name.",
+      "type": "object"
     },
     "mcp_oauth_callback_port": {
       "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",

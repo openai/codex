@@ -24,13 +24,17 @@ async fn approval_keys_include_move_destination() {
 +new content
 *** End Patch"#;
     let argv = vec!["apply_patch".to_string(), patch.to_string()];
-    let action =
-        match codex_apply_patch::maybe_parse_apply_patch_verified(&argv, &cwd, LOCAL_FS.as_ref())
-            .await
-        {
-            MaybeApplyPatchVerified::Body(action) => action,
-            other => panic!("expected patch body, got: {other:?}"),
-        };
+    let action = match codex_apply_patch::maybe_parse_apply_patch_verified(
+        &argv,
+        &cwd,
+        LOCAL_FS.as_ref(),
+        /*sandbox*/ None,
+    )
+    .await
+    {
+        MaybeApplyPatchVerified::Body(action) => action,
+        other => panic!("expected patch body, got: {other:?}"),
+    };
 
     let keys = file_paths_for_action(&action);
     assert_eq!(keys.len(), 2);

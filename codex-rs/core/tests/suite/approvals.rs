@@ -229,7 +229,7 @@ impl ActionKind {
                 let event = shell_event(
                     call_id,
                     &command,
-                    /*timeout_ms*/ 5_000,
+                    /*timeout_ms*/ 30_000,
                     sandbox_permissions,
                 )?;
                 Ok((event, Some(command)))
@@ -2799,6 +2799,169 @@ allow_local_binding = true
         output_contains: "",
     }
     .verify(&test, &second_output)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn network_approval_flow_survives_danger_full_access_session_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = true
+"#,
+    )?;
+    let approval_policy = AskForApproval::OnFailure;
+    let turn_sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: true,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        let layers = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut requirements = config.config_layer_stack.requirements().clone();
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            },
+            RequirementSource::CloudRequirements,
+        ));
+        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        requirements_toml.network = Some(NetworkRequirementsToml {
+            enabled: Some(true),
+            allow_local_binding: Some(true),
+            ..Default::default()
+        });
+        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+            .expect("rebuild config layer stack with network requirements");
+    });
+    let test = builder.build(&server).await?;
+    assert!(
+        !test.config.managed_network_requirements_enabled(),
+        "expected managed network requirements to stay inactive in danger-full-access"
+    );
+    assert!(
+        test.config.permissions.network.is_some(),
+        "expected managed network proxy config to be present"
+    );
+    assert!(
+        test.session_configured.network_proxy.is_none(),
+        "expected session configured event to hide managed network proxy in danger-full-access"
+    );
+
+    let call_id = "allow-network-after-yolo";
+    let fetch_command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=30).read().decode(errors='replace'))""#
+        .to_string();
+    let event = shell_event(
+        call_id,
+        &fetch_command,
+        /*timeout_ms*/ 30_000,
+        SandboxPermissions::UseDefault,
+    )?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-network-after-yolo-1"),
+            event,
+            ev_completed("resp-network-after-yolo-1"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-network-after-yolo-1", "done"),
+            ev_completed("resp-network-after-yolo-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow-network-after-yolo",
+        approval_policy,
+        turn_sandbox_policy,
+    )
+    .await?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let approval = loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .expect("timed out waiting for network approval request");
+        let event = wait_for_event_with_timeout(
+            &test.codex,
+            |event| {
+                matches!(
+                    event,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+                )
+            },
+            remaining,
+        )
+        .await;
+        match event {
+            EventMsg::ExecApprovalRequest(approval) => {
+                if approval.command.first().map(std::string::String::as_str)
+                    == Some("network-access")
+                {
+                    break approval;
+                }
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: None,
+                        decision: ReviewDecision::Approved,
+                    })
+                    .await?;
+            }
+            EventMsg::TurnComplete(_) => {
+                panic!("expected network approval request before completion");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    };
+
+    let network_context = approval
+        .network_approval_context
+        .clone()
+        .expect("expected network approval context");
+    assert_eq!(network_context.protocol, NetworkApprovalProtocol::Http);
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+    wait_for_completion(&test).await;
 
     Ok(())
 }

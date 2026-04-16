@@ -134,6 +134,8 @@ pub struct McpServerRefreshConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationStartParams {
+    /// Selects whether the realtime session should produce text or audio output.
+    pub output_modality: RealtimeOutputModality,
     #[serde(
         default,
         deserialize_with = "conversation_start_prompt_serde::deserialize",
@@ -155,6 +157,13 @@ pub struct ConversationStartParams {
 pub enum ConversationStartTransport {
     Websocket,
     Webrtc { sdp: String },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeOutputModality {
+    Text,
+    Audio,
 }
 
 mod conversation_start_prompt_serde {
@@ -291,6 +300,11 @@ pub struct RealtimeTranscriptDelta {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeTranscriptDone {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeTranscriptEntry {
     pub role: String,
     pub text: String,
@@ -332,7 +346,9 @@ pub enum RealtimeEvent {
     },
     InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
     InputTranscriptDelta(RealtimeTranscriptDelta),
+    InputTranscriptDone(RealtimeTranscriptDone),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
+    OutputTranscriptDone(RealtimeTranscriptDone),
     AudioOut(RealtimeAudioFrame),
     ResponseCreated(RealtimeResponseCreated),
     ResponseCancelled(RealtimeResponseCancelled),
@@ -636,6 +652,12 @@ pub enum Op {
     /// involve the model.
     SetThreadName { name: String },
 
+    /// Set whether the thread remains eligible for memory generation.
+    ///
+    /// This persists thread-level memory mode metadata without involving the
+    /// model.
+    SetThreadMemoryMode { mode: ThreadMemoryMode },
+
     /// Request Codex to undo a turn (turn are stacked so it is the same effect as CMD + Z).
     Undo,
 
@@ -663,6 +685,13 @@ pub enum Op {
 
     /// Request the list of available models.
     ListModels,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadMemoryMode {
+    Enabled,
+    Disabled,
 }
 
 impl From<Vec<UserInput>> for Op {
@@ -755,6 +784,7 @@ impl Op {
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",
+            Self::SetThreadMemoryMode { .. } => "set_thread_memory_mode",
             Self::Undo => "undo",
             Self::ThreadRollback { .. } => "thread_rollback",
             Self::Review { .. } => "review",
@@ -1636,7 +1666,7 @@ pub struct HookRunSummary {
     pub handler_type: HookHandlerType,
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
-    pub source_path: PathBuf,
+    pub source_path: AbsolutePathBuf,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
@@ -2332,6 +2362,9 @@ pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_resource_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq)]
@@ -2339,6 +2372,9 @@ pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
     pub invocation: McpInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_resource_uri: Option<String>,
     #[ts(type = "string")]
     pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
@@ -2402,7 +2438,7 @@ pub struct ImageGenerationEndEvent {
     pub result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub saved_path: Option<String>,
+    pub saved_path: Option<AbsolutePathBuf>,
 }
 
 // Conversation kept for backward compatibility.
@@ -2430,6 +2466,14 @@ pub enum InitialHistory {
 }
 
 impl InitialHistory {
+    pub fn scan_rollout_items(&self, mut predicate: impl FnMut(&RolloutItem) -> bool) -> bool {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => false,
+            InitialHistory::Resumed(resumed) => resumed.history.iter().any(&mut predicate),
+            InitialHistory::Forked(items) => items.iter().any(predicate),
+        }
+    }
+
     pub fn forked_from_id(&self) -> Option<ThreadId> {
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
@@ -2593,6 +2637,15 @@ impl SessionSource {
             "unknown" => SessionSource::Unknown,
             _ => SessionSource::Custom(normalized),
         })
+    }
+
+    /// Low cardinality thread source label for analytics.
+    pub fn thread_source_name(&self) -> Option<&'static str> {
+        match self {
+            SessionSource::Cli | SessionSource::VSCode | SessionSource::Exec => Some("user"),
+            SessionSource::SubAgent(_) => Some("subagent"),
+            SessionSource::Mcp | SessionSource::Custom(_) | SessionSource::Unknown => None,
+        }
     }
 
     pub fn get_nickname(&self) -> Option<String> {
@@ -2999,7 +3052,7 @@ pub struct ExecCommandBeginEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -3023,7 +3076,7 @@ pub struct ExecCommandEndEvent {
     /// The command that was executed.
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub parsed_cmd: Vec<ParsedCommand>,
     /// Where the command originated. Defaults to Agent for backward compatibility.
     #[serde(default)]
@@ -3056,7 +3109,7 @@ pub struct ViewImageToolCallEvent {
     /// Identifier for the originating tool call.
     pub call_id: String,
     /// Local filesystem path provided to the tool.
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -3332,7 +3385,7 @@ pub struct SkillMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dependencies: Option<SkillDependencies>,
-    pub path: PathBuf,
+    pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
 }
@@ -3344,9 +3397,9 @@ pub struct SkillInterface {
     #[ts(optional)]
     pub short_description: Option<String>,
     #[ts(optional)]
-    pub icon_small: Option<PathBuf>,
+    pub icon_small: Option<AbsolutePathBuf>,
     #[ts(optional)]
-    pub icon_large: Option<PathBuf>,
+    pub icon_large: Option<AbsolutePathBuf>,
     #[ts(optional)]
     pub brand_color: Option<String>,
     #[ts(optional)]
@@ -3430,7 +3483,7 @@ pub struct SessionConfiguredEvent {
 
     /// Working directory that should be treated as the *root* of the
     /// session.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
 
     /// The effort the model is putting into reasoning about the user's request.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3494,6 +3547,9 @@ pub enum ReviewDecision {
     #[default]
     Denied,
 
+    /// Automatic approval review timed out before reaching a decision.
+    TimedOut,
+
     /// User has denied this command and the agent should not do anything until
     /// the user's next command.
     Abort,
@@ -3514,6 +3570,7 @@ impl ReviewDecision {
                 NetworkPolicyRuleAction::Deny => "denied_with_network_policy_deny",
             },
             ReviewDecision::Denied => "denied",
+            ReviewDecision::TimedOut => "timed_out",
             ReviewDecision::Abort => "abort",
         }
     }
@@ -3767,6 +3824,8 @@ mod tests {
     use crate::permissions::NetworkSandboxPolicy;
     use anyhow::Result;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
@@ -3838,6 +3897,24 @@ mod tests {
             SessionSource::from_startup_arg(" Atlas ").unwrap(),
             SessionSource::Custom("atlas".to_string())
         );
+    }
+
+    #[test]
+    fn session_source_thread_source_name_classifies_user_and_subagent_sources() {
+        for (source, expected) in [
+            (SessionSource::Cli, Some("user")),
+            (SessionSource::VSCode, Some("user")),
+            (SessionSource::Exec, Some("user")),
+            (
+                SessionSource::SubAgent(SubAgentSource::Review),
+                Some("subagent"),
+            ),
+            (SessionSource::Mcp, None),
+            (SessionSource::Custom("atlas".to_string()), None),
+            (SessionSource::Unknown, None),
+        ] {
+            assert_eq!(source.thread_source_name(), expected);
+        }
     }
 
     #[test]
@@ -4509,7 +4586,7 @@ mod tests {
                 status: "completed".into(),
                 revised_prompt: Some("A tiny blue square".into()),
                 result: "Zm9v".into(),
-                saved_path: Some("/tmp/ig-1.png".into()),
+                saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
             }),
         };
 
@@ -4521,7 +4598,10 @@ mod tests {
                 assert_eq!(event.status, "completed");
                 assert_eq!(event.revised_prompt.as_deref(), Some("A tiny blue square"));
                 assert_eq!(event.result, "Zm9v");
-                assert_eq!(event.saved_path.as_deref(), Some("/tmp/ig-1.png"));
+                assert_eq!(
+                    event.saved_path.as_ref().map(AbsolutePathBuf::as_path),
+                    Some(test_path_buf("/tmp/ig-1.png").as_path())
+                );
             }
             _ => panic!("expected ImageGenerationEnd event"),
         }
@@ -4568,12 +4648,14 @@ mod tests {
             },
         });
         let start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
             transport: None,
             voice: None,
         });
         let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("be helpful".to_string())),
             session_id: Some("conv_1".to_string()),
             transport: Some(ConversationStartTransport::Webrtc {
@@ -4586,12 +4668,14 @@ mod tests {
         });
         let close = Op::RealtimeConversationClose;
         let default_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: None,
             session_id: None,
             transport: None,
             voice: None,
         });
         let null_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(None),
             session_id: None,
             transport: None,
@@ -4603,6 +4687,7 @@ mod tests {
             serde_json::to_value(&start).unwrap(),
             json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": "be helpful",
                 "session_id": "conv_1"
             })
@@ -4610,19 +4695,22 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&default_prompt_start).unwrap(),
             json!({
-                "type": "realtime_conversation_start"
+                "type": "realtime_conversation_start",
+                "output_modality": "audio"
             })
         );
         assert_eq!(
             serde_json::to_value(&null_prompt_start).unwrap(),
             json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": null
             })
         );
         assert_eq!(
             serde_json::from_value::<Op>(json!({
-                "type": "realtime_conversation_start"
+                "type": "realtime_conversation_start",
+                "output_modality": "audio"
             }))
             .unwrap(),
             default_prompt_start
@@ -4630,6 +4718,7 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<Op>(json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": null
             }))
             .unwrap(),
@@ -4675,6 +4764,7 @@ mod tests {
             serde_json::to_value(&webrtc_start).unwrap(),
             json!({
                 "type": "realtime_conversation_start",
+                "output_modality": "audio",
                 "prompt": "be helpful",
                 "session_id": "conv_1",
                 "transport": {
@@ -4871,7 +4961,7 @@ mod tests {
     #[test]
     fn turn_context_item_deserializes_without_network() -> Result<()> {
         let item: TurnContextItem = serde_json::from_value(json!({
-            "cwd": "/tmp",
+            "cwd": test_path_buf("/tmp"),
             "approval_policy": "never",
             "sandbox_policy": { "type": "danger-full-access" },
             "model": "gpt-5",
@@ -4888,7 +4978,7 @@ mod tests {
         let item = TurnContextItem {
             turn_id: None,
             trace_id: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp"),
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
@@ -4938,7 +5028,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/home/user/project"),
+                cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -4960,7 +5050,7 @@ mod tests {
                 "sandbox_policy": {
                     "type": "read-only"
                 },
-                "cwd": "/home/user/project",
+                "cwd": test_path_buf("/home/user/project"),
                 "reasoning_effort": "medium",
                 "history_log_id": 0,
                 "history_entry_count": 0,

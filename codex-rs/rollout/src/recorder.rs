@@ -279,6 +279,10 @@ impl RolloutRecorder {
         let codex_home = config.codex_home();
         let state_db_ctx = state_db::get_state_db(config).await;
 
+        // Search is the SQLite-optimized path and assumes a DB marked backfill-complete is
+        // actually populated enough to answer the query. If unmigrated rollout files still exist
+        // on disk, the repair path below may or may not run and catch them depending on whether
+        // SQLite already has another matching search hit.
         if search_term.is_some()
             && let Some(db_page) = state_db::list_threads_db(
                 state_db_ctx.as_deref(),
@@ -1252,7 +1256,7 @@ impl From<codex_state::ThreadsPage> for ThreadsPage {
                 model_provider: Some(item.model_provider),
                 cli_version: Some(item.cli_version),
                 created_at: Some(item.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
-                updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+                updated_at: Some(item.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)),
             })
             .collect();
         Self {
@@ -1342,13 +1346,7 @@ async fn select_resume_path_from_db_page(
 }
 
 fn cwd_matches(session_cwd: &Path, cwd: &Path) -> bool {
-    if let (Ok(ca), Ok(cb)) = (
-        path_utils::normalize_for_path_comparison(session_cwd),
-        path_utils::normalize_for_path_comparison(cwd),
-    ) {
-        return ca == cb;
-    }
-    session_cwd == cwd
+    path_utils::paths_match_after_normalization(session_cwd, cwd)
 }
 
 #[cfg(test)]

@@ -221,7 +221,7 @@ pub async fn process_exec_tool_call(
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_cwd: &Path,
+    sandbox_cwd: &AbsolutePathBuf,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
     stdout_stream: Option<StdoutStream>,
@@ -247,12 +247,28 @@ pub fn build_exec_request(
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_cwd: &Path,
+    sandbox_cwd: &AbsolutePathBuf,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
-    let windows_sandbox_level = params.windows_sandbox_level;
-    let enforce_managed_network = params.network.is_some();
+    let ExecParams {
+        command,
+        cwd,
+        mut env,
+        expiration,
+        capture_policy,
+        network,
+        windows_sandbox_level,
+        windows_sandbox_private_desktop,
+
+        // TODO: Should arg0 be set on the ExecRequest that is returned?
+        arg0: _,
+        // These fields are related to approvals, so can be ignored here.
+        justification: _,
+        sandbox_permissions: _,
+    } = params;
+
+    let enforce_managed_network = network.is_some();
     let sandbox_type = select_process_exec_tool_sandbox_type(
         file_system_sandbox_policy,
         network_sandbox_policy,
@@ -261,19 +277,6 @@ pub fn build_exec_request(
     );
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
-    let ExecParams {
-        command,
-        cwd,
-        mut env,
-        expiration,
-        capture_policy,
-        network,
-        sandbox_permissions: _,
-        windows_sandbox_level,
-        windows_sandbox_private_desktop,
-        justification: _,
-        arg0: _,
-    } = params;
     if let Some(network) = network.as_ref() {
         network.apply_to_env(&mut env);
     }
@@ -349,6 +352,7 @@ pub(crate) async fn execute_exec_request(
         command,
         cwd,
         env,
+        exec_server_env_config: _,
         network,
         expiration,
         capture_policy,
@@ -356,7 +360,8 @@ pub(crate) async fn execute_exec_request(
         windows_sandbox_level,
         windows_sandbox_private_desktop,
         sandbox_policy,
-        file_system_sandbox_policy,
+        // TODO(mbolin): Use file_system_sandbox_policy instead of sandbox_policy.
+        file_system_sandbox_policy: _,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides,
         arg0,
@@ -377,19 +382,38 @@ pub(crate) async fn execute_exec_request(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(
+    let raw_output_result = get_raw_output_result(
         params,
-        sandbox,
-        &sandbox_policy,
-        &file_system_sandbox_policy,
-        windows_sandbox_filesystem_overrides.as_ref(),
         network_sandbox_policy,
         stdout_stream,
         after_spawn,
+        sandbox,
+        &sandbox_policy,
+        windows_sandbox_filesystem_overrides.as_ref(),
     )
     .await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
+}
+
+async fn get_raw_output_result(
+    params: ExecParams,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    stdout_stream: Option<StdoutStream>,
+    after_spawn: Option<Box<dyn FnOnce() + Send>>,
+    #[cfg_attr(not(windows), allow(unused_variables))] sandbox: SandboxType,
+    #[cfg_attr(not(windows), allow(unused_variables))] sandbox_policy: &SandboxPolicy,
+    #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_filesystem_overrides: Option<
+        &WindowsSandboxFilesystemOverrides,
+    >,
+) -> Result<RawExecToolCallOutput> {
+    #[cfg(target_os = "windows")]
+    if sandbox == SandboxType::WindowsRestrictedToken {
+        return exec_windows_sandbox(params, sandbox_policy, windows_sandbox_filesystem_overrides)
+            .await;
+    }
+
+    exec(params, network_sandbox_policy, stdout_stream, after_spawn).await
 }
 
 #[cfg(target_os = "windows")]
@@ -798,26 +822,24 @@ fn aggregate_output(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// This is a general-purpose function for executing a command specified by
+/// [ExecParams]. Events are reported via `stdout_stream`, if specified, and
+/// `after_spawn` is invoked once the child process has been spawned, before
+/// output consumption begins.
+///
+/// `network_sandbox_policy` is used to determine whether
+/// CODEX_SANDBOX_NETWORK_DISABLED=1 is added to the environment of the spawned
+/// process.
+///
+/// Note this command does not apply any sandboxing logic. The caller is
+/// responsible for constructing [ExecParams::command] to include any sandboxing
+/// wrapper args, as appropriate.
 async fn exec(
     params: ExecParams,
-    _sandbox: SandboxType,
-    _sandbox_policy: &SandboxPolicy,
-    _file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    _windows_sandbox_filesystem_overrides: Option<&WindowsSandboxFilesystemOverrides>,
     network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
-    #[cfg(target_os = "windows")]
-    if _sandbox == SandboxType::WindowsRestrictedToken {
-        return exec_windows_sandbox(
-            params,
-            _sandbox_policy,
-            _windows_sandbox_filesystem_overrides,
-        )
-        .await;
-    }
     let ExecParams {
         command,
         cwd,
@@ -826,8 +848,14 @@ async fn exec(
         arg0,
         expiration,
         capture_policy,
+
+        // If applicable, these fields should have been honored upstream of
+        // this exec call.
         windows_sandbox_level: _,
-        ..
+        windows_sandbox_private_desktop: _,
+        // These fields are related to approvals, so can be ignored here.
+        sandbox_permissions: _,
+        justification: _,
     } = params;
     if let Some(network) = network.as_ref() {
         network.apply_to_env(&mut env);
@@ -844,7 +872,7 @@ async fn exec(
         program: PathBuf::from(program),
         args: args.into(),
         arg0: arg0_ref,
-        cwd: cwd.to_path_buf(),
+        cwd,
         network_sandbox_policy,
         // The environment already has attempt-scoped proxy settings from
         // apply_to_env_for_attempt above. Passing network here would reapply
@@ -880,7 +908,7 @@ pub(crate) fn unsupported_windows_restricted_token_sandbox_reason(
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_policy_cwd: &Path,
+    sandbox_policy_cwd: &AbsolutePathBuf,
     windows_sandbox_level: WindowsSandboxLevel,
 ) -> Option<String> {
     if windows_sandbox_level == WindowsSandboxLevel::Elevated {
@@ -911,7 +939,7 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overrides(
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_policy_cwd: &Path,
+    sandbox_policy_cwd: &AbsolutePathBuf,
     windows_sandbox_level: WindowsSandboxLevel,
 ) -> std::result::Result<Option<WindowsSandboxFilesystemOverrides>, String> {
     if sandbox != SandboxType::WindowsRestrictedToken
@@ -1047,7 +1075,7 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_policy_cwd: &Path,
+    sandbox_policy_cwd: &AbsolutePathBuf,
     use_windows_elevated_backend: bool,
 ) -> std::result::Result<Option<WindowsSandboxFilesystemOverrides>, String> {
     if sandbox != SandboxType::WindowsRestrictedToken || !use_windows_elevated_backend {

@@ -12,6 +12,7 @@ use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
 use crate::types::History;
+use crate::types::MarketplaceConfig;
 use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
 use crate::types::Notice;
@@ -325,6 +326,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
 
+    /// User-level marketplace entries keyed by marketplace name.
+    #[serde(default)]
+    pub marketplaces: HashMap<String, MarketplaceConfig>,
+
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.
@@ -591,7 +596,7 @@ pub struct GhostSnapshotToml {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    pub fn derive_sandbox_policy(
+    pub async fn derive_sandbox_policy(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
@@ -605,11 +610,13 @@ impl ConfigToml {
         let resolved_sandbox_mode = sandbox_mode_override
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
-            .or_else(|| {
+            .or(if sandbox_mode_was_explicit {
+                None
+            } else {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                self.get_active_project(resolved_cwd).and_then(|p| {
+                self.get_active_project(resolved_cwd).await.and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
@@ -671,7 +678,8 @@ impl ConfigToml {
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+    pub async fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+        let repo_root = resolve_root_git_project_for_trust(resolved_cwd).await;
         let projects = self.projects.clone().unwrap_or_default();
 
         let resolved_cwd_key = project_trust_key(resolved_cwd);
@@ -686,8 +694,8 @@ impl ConfigToml {
         // If cwd lives inside a git repo/worktree, check whether the root git project
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd) {
-            let repo_root_key = project_trust_key(repo_root.as_path());
+        if let Some(repo_root) = repo_root.as_deref() {
+            let repo_root_key = project_trust_key(repo_root);
             let repo_root_raw_key = repo_root.to_string_lossy().to_string();
             if let Some(project_config_for_root) = projects
                 .get(&repo_root_key)

@@ -10,8 +10,9 @@ pub(super) async fn test_config() -> Config {
         .keep();
     let mut config =
         Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), Vec::new())
+            .await
             .expect("config");
-    config.codex_home = codex_home.clone();
+    config.codex_home = codex_home.abs();
     config.sqlite_home = codex_home.clone();
     config.log_dir = codex_home.join("log");
     config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
@@ -109,7 +110,7 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
 }
 
 pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info = codex_core::test_support::construct_model_info_offline(model, config);
+    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
     SessionTelemetry::new(
         ThreadId::new(),
         model,
@@ -131,7 +132,7 @@ pub(super) fn test_model_catalog(config: &Config) -> Arc<ModelCatalog> {
             .enabled(Feature::DefaultModeRequestUserInput),
     };
     Arc::new(ModelCatalog::new(
-        codex_core::test_support::all_model_presets().clone(),
+        crate::legacy_core::test_support::all_model_presets().clone(),
         collaboration_modes_config,
     ))
 }
@@ -148,9 +149,9 @@ pub(super) async fn make_chatwidget_manual(
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
-    let resolved_model = model_override
-        .map(str::to_owned)
-        .unwrap_or_else(|| codex_core::test_support::get_model_offline(cfg.model.as_deref()));
+    let resolved_model = model_override.map(str::to_owned).unwrap_or_else(|| {
+        crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref())
+    });
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
@@ -244,6 +245,7 @@ pub(super) async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         thread_id: None,
+        last_turn_id: None,
         thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
@@ -274,6 +276,7 @@ pub(super) async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         current_cwd: None,
+        instruction_source_paths: Vec::new(),
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -479,7 +482,7 @@ pub(super) fn begin_exec_with_source(
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
     let parsed_cmd: Vec<ParsedCommand> =
         codex_shell_command::parse_command::parse_command(&command);
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     let interaction_input = None;
     let event = ExecCommandBeginEvent {
         call_id: call_id.to_string(),
@@ -505,7 +508,7 @@ pub(super) fn begin_unified_exec_startup(
     raw_cmd: &str,
 ) -> ExecCommandBeginEvent {
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     let event = ExecCommandBeginEvent {
         call_id: call_id.to_string(),
         process_id: Some(process_id.to_string()),
@@ -949,7 +952,7 @@ pub(super) fn plugins_test_detail(
                 description: format!("{name} description"),
                 short_description: None,
                 interface: None,
-                path: PathBuf::from(format!("/skills/{name}/SKILL.md")),
+                path: plugins_test_absolute_path(&format!("skills/{name}/SKILL.md")),
                 enabled: true,
             })
             .collect(),
@@ -997,7 +1000,7 @@ pub(super) async fn assert_hook_events_snapshot(
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 scope: codex_protocol::protocol::HookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Running,
                 status_message: Some(status_message.to_string()),
@@ -1031,7 +1034,7 @@ pub(super) async fn assert_hook_events_snapshot(
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 scope: codex_protocol::protocol::HookScope::Turn,
-                source_path: PathBuf::from("/tmp/hooks.json"),
+                source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Completed,
                 status_message: Some(status_message.to_string()),

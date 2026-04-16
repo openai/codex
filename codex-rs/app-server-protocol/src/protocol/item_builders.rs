@@ -78,7 +78,7 @@ pub fn build_command_execution_approval_request_item(
             .parsed_cmd
             .iter()
             .cloned()
-            .map(CommandAction::from)
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -98,7 +98,7 @@ pub fn build_command_execution_begin_item(payload: &ExecCommandBeginEvent) -> Th
             .parsed_cmd
             .iter()
             .cloned()
-            .map(CommandAction::from)
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
             .collect(),
         aggregated_output: None,
         exit_code: None,
@@ -125,7 +125,7 @@ pub fn build_command_execution_end_item(payload: &ExecCommandEndEvent) -> Thread
             .parsed_cmd
             .iter()
             .cloned()
-            .map(CommandAction::from)
+            .map(|parsed| CommandAction::from_core_with_cwd(parsed, &payload.cwd))
             .collect(),
         aggregated_output,
         exit_code: Some(payload.exit_code),
@@ -179,7 +179,10 @@ pub fn build_item_from_guardian_event(
                     command: command.clone(),
                 }]
             } else {
-                parsed_cmd.into_iter().map(CommandAction::from).collect()
+                parsed_cmd
+                    .into_iter()
+                    .map(|parsed| CommandAction::from_core_with_cwd(parsed, cwd))
+                    .collect()
             };
             Some(ThreadItem::CommandExecution {
                 id: id.clone(),
@@ -221,6 +224,9 @@ pub fn guardian_auto_approval_review_notification(
             codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
                 GuardianApprovalReviewStatus::Denied
             }
+            codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                GuardianApprovalReviewStatus::TimedOut
+            }
             codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
                 GuardianApprovalReviewStatus::Aborted
             }
@@ -245,6 +251,7 @@ pub fn guardian_auto_approval_review_notification(
         }
         codex_protocol::protocol::GuardianAssessmentStatus::Approved
         | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+        | codex_protocol::protocol::GuardianAssessmentStatus::TimedOut
         | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
             ServerNotification::ItemGuardianApprovalReviewCompleted(
                 ItemGuardianApprovalReviewCompletedNotification {

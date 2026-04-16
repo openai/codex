@@ -2,8 +2,9 @@ use super::*;
 use codex_protocol::protocol::SkillDependencies;
 use codex_protocol::protocol::SkillMetadata;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::test_support::PathBufExt as _;
+use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
-use std::path::PathBuf;
 
 fn skill_with_tools(tools: Vec<SkillToolDependency>) -> SkillMetadata {
     SkillMetadata {
@@ -12,7 +13,7 @@ fn skill_with_tools(tools: Vec<SkillToolDependency>) -> SkillMetadata {
         short_description: None,
         interface: None,
         dependencies: Some(SkillDependencies { tools }),
-        path: PathBuf::from("skill"),
+        path: test_path_buf("/tmp/skill").abs(),
         scope: SkillScope::User,
         enabled: true,
     }
@@ -40,6 +41,7 @@ fn collect_missing_respects_canonical_installed_key() {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -90,6 +92,7 @@ fn collect_missing_dedupes_by_canonical_key_but_preserves_original_name() {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
