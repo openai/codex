@@ -4541,6 +4541,7 @@ impl Session {
             if let Err(err) = self.pause_active_thread_goal_for_interrupt().await {
                 warn!("failed to pause active thread goal after interrupt: {err}");
             }
+            self.clear_queued_response_items_for_next_turn().await;
             self.cancel_mcp_startup().await;
         }
     }
