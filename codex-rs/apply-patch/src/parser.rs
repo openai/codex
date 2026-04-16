@@ -185,60 +185,23 @@ enum ParseMode {
     Streaming,
 }
 
-struct PatchScope<'a> {
-    lines: &'a [&'a str],
-    body_end_index: usize,
-    allow_incomplete_final_hunk: bool,
-}
-
-impl<'a> PatchScope<'a> {
-    fn complete(lines: &'a [&'a str]) -> Self {
-        Self {
-            lines,
-            body_end_index: lines.len().saturating_sub(1),
-            allow_incomplete_final_hunk: false,
-        }
-    }
-
-    fn streaming(lines: &'a [&'a str]) -> Self {
-        let body_end_index = if lines
-            .last()
-            .is_some_and(|line| line.trim() == END_PATCH_MARKER)
-        {
-            lines.len().saturating_sub(1)
-        } else {
-            lines.len()
-        };
-        Self {
-            lines,
-            body_end_index,
-            allow_incomplete_final_hunk: true,
-        }
-    }
-}
-
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
     let lines: Vec<&str> = patch.trim().lines().collect();
-    let scope = match check_patch_boundaries_strict(&lines) {
-        Ok(scope) => scope,
-        Err(e) => match mode {
-            ParseMode::Strict => {
-                return Err(e);
-            }
-            ParseMode::Lenient => check_patch_boundaries_lenient(&lines, e)?,
-            ParseMode::Streaming => check_patch_boundaries_streaming(&lines, e)?,
-        },
+    let (patch_lines, hunk_lines) = match mode {
+        ParseMode::Strict => check_patch_boundaries_strict(&lines)?,
+        ParseMode::Lenient => check_patch_boundaries_lenient(&lines)?,
+        ParseMode::Streaming => check_patch_boundaries_streaming(&lines)?,
     };
 
     let mut hunks: Vec<Hunk> = Vec::new();
-    let mut remaining_lines = &scope.lines[1..scope.body_end_index];
+    let mut remaining_lines = hunk_lines;
     let mut line_number = 2;
     while !remaining_lines.is_empty() {
         let parsed_hunk = parse_one_hunk(remaining_lines, line_number);
         let (hunk, hunk_lines) = match parsed_hunk {
             Ok(parsed) => parsed,
             // Return accumulated hunks even if parsing the last one failed in streaming mode.
-            Err(err) if scope.allow_incomplete_final_hunk => {
+            Err(err) if matches!(mode, ParseMode::Streaming) => {
                 if hunks.is_empty() {
                     return Err(err);
                 }
@@ -250,7 +213,7 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         line_number += hunk_lines;
         remaining_lines = &remaining_lines[hunk_lines..]
     }
-    let patch = scope.lines.join("\n");
+    let patch = patch_lines.join("\n");
     Ok(ApplyPatchArgs {
         hunks,
         patch,
@@ -260,26 +223,35 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
 
 fn check_patch_boundaries_streaming<'a>(
     original_lines: &'a [&'a str],
-    original_parse_error: ParseError,
-) -> Result<PatchScope<'a>, ParseError> {
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
     match original_lines {
         [first, ..] if first.trim() == BEGIN_PATCH_MARKER => {
-            Ok(PatchScope::streaming(original_lines))
+            let body_lines = if original_lines
+                .last()
+                .is_some_and(|line| line.trim() == END_PATCH_MARKER)
+            {
+                patch_body_lines_complete(original_lines)
+            } else {
+                &original_lines[1..]
+            };
+            Ok((original_lines, body_lines))
         }
-        _ => Err(original_parse_error),
+        _ => check_patch_boundaries_strict(original_lines),
     }
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
 /// returning an error if they do not match the expected markers.
-fn check_patch_boundaries_strict<'a>(lines: &'a [&'a str]) -> Result<PatchScope<'a>, ParseError> {
+fn check_patch_boundaries_strict<'a>(
+    lines: &'a [&'a str],
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
     let (first_line, last_line) = match lines {
         [] => (None, None),
         [first] => (Some(first), Some(first)),
         [first, .., last] => (Some(first), Some(last)),
     };
     check_start_and_end_lines_strict(first_line, last_line)?;
-    Ok(PatchScope::complete(lines))
+    Ok((lines, patch_body_lines_complete(lines)))
 }
 
 /// If we are in lenient mode, we check if the first line starts with `<<EOF`
@@ -291,8 +263,12 @@ fn check_patch_boundaries_strict<'a>(lines: &'a [&'a str]) -> Result<PatchScope<
 /// contents, excluding the heredoc markers.
 fn check_patch_boundaries_lenient<'a>(
     original_lines: &'a [&'a str],
-    original_parse_error: ParseError,
-) -> Result<PatchScope<'a>, ParseError> {
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
+    let original_parse_error = match check_patch_boundaries_strict(original_lines) {
+        Ok(lines) => return Ok(lines),
+        Err(e) => e,
+    };
+
     match original_lines {
         [first, .., last] => {
             if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
@@ -307,6 +283,10 @@ fn check_patch_boundaries_lenient<'a>(
         }
         _ => Err(original_parse_error),
     }
+}
+
+fn patch_body_lines_complete<'a>(lines: &'a [&'a str]) -> &'a [&'a str] {
+    &lines[1..lines.len().saturating_sub(1)]
 }
 
 fn check_start_and_end_lines_strict(
