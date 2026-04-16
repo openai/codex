@@ -17,6 +17,7 @@ use crate::StoredThreadHistory;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
+/// Reads a persisted thread by preferring discoverable rollout files, then SQLite metadata for external or legacy rows.
 pub(super) async fn read_thread(
     store: &LocalThreadStore,
     params: ReadThreadParams,
@@ -107,6 +108,9 @@ async fn read_thread_from_rollout_path(
         .ok()
         .and_then(|meta_line| meta_line.meta.forked_from_id);
     let mut found_sqlite_title = false;
+    // This overlay is different from the no-preview fallback above: the rollout
+    // summary was readable, so SQLite only supplies mutable metadata such as
+    // user-edited title, git fields, or explicit git-field clears.
     if let Ok(Some(metadata)) = read_sqlite_metadata(store, thread.thread_id).await {
         if let Some(title) = distinct_title(&metadata) {
             found_sqlite_title = true;

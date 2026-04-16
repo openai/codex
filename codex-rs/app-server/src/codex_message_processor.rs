@@ -3927,10 +3927,9 @@ impl CodexMessageProcessor {
         let mut thread =
             build_thread_from_snapshot(thread_id, &config_snapshot, loaded_rollout_path.clone());
 
-        // Temporary live-thread metadata shim: stored-thread metadata is owned by
-        // ThreadStore, but loaded threads that are not yet readable from the store may
-        // still have local metadata. Keep this compatibility path centralized here so
-        // future remote threadstore implementations have one app-server boundary to replace.
+        // Temporary live-thread metadata shim: loaded threads that are not yet
+        // readable from the store may still have local metadata, so use it to fill
+        // summary fields for the live fallback view.
         let loaded_state_db = loaded_thread.state_db();
         let summary = match loaded_state_db.as_ref() {
             Some(state_db) => {
