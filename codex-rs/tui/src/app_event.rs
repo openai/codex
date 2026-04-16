@@ -14,6 +14,7 @@ use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::MarketplaceAddResponse;
+use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -307,6 +308,32 @@ pub(crate) enum AppEvent {
         cwd: PathBuf,
         source: String,
         result: Result<MarketplaceAddResponse, String>,
+    },
+
+    /// Open the confirmation prompt for removing a marketplace.
+    OpenMarketplaceRemoveConfirm {
+        marketplace_name: String,
+        marketplace_display_name: String,
+    },
+
+    /// Replace the plugins popup with a marketplace-remove loading state.
+    OpenMarketplaceRemoveLoading {
+        marketplace_display_name: String,
+    },
+
+    /// Remove a marketplace by name.
+    FetchMarketplaceRemove {
+        cwd: PathBuf,
+        marketplace_name: String,
+        marketplace_display_name: String,
+    },
+
+    /// Result of removing a marketplace.
+    MarketplaceRemoveLoaded {
+        cwd: PathBuf,
+        marketplace_name: String,
+        marketplace_display_name: String,
+        result: Result<MarketplaceRemoveResponse, String>,
     },
 
     /// Replace the plugins popup with a plugin-detail loading state.

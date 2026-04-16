@@ -162,6 +162,7 @@ pub(crate) struct SelectionViewParams {
     pub subtitle: Option<String>,
     pub footer_note: Option<Line<'static>>,
     pub footer_hint: Option<Line<'static>>,
+    pub tab_footer_hints: Vec<(String, Line<'static>)>,
     pub items: Vec<SelectionItem>,
     pub tabs: Vec<SelectionTab>,
     pub initial_tab_id: Option<String>,
@@ -209,6 +210,7 @@ impl Default for SelectionViewParams {
             subtitle: None,
             footer_note: None,
             footer_hint: None,
+            tab_footer_hints: Vec::new(),
             items: Vec::new(),
             tabs: Vec::new(),
             initial_tab_id: None,
@@ -239,6 +241,7 @@ pub(crate) struct ListSelectionView {
     view_id: Option<&'static str>,
     footer_note: Option<Line<'static>>,
     footer_hint: Option<Line<'static>>,
+    tab_footer_hints: Vec<(String, Line<'static>)>,
     items: Vec<SelectionItem>,
     tabs: Vec<SelectionTab>,
     active_tab_idx: Option<usize>,
@@ -309,6 +312,7 @@ impl ListSelectionView {
             view_id: params.view_id,
             footer_note: params.footer_note,
             footer_hint: params.footer_hint,
+            tab_footer_hints: params.tab_footer_hints,
             items: params.items,
             tabs: params.tabs,
             active_tab_idx,
@@ -375,6 +379,16 @@ impl ListSelectionView {
             .and_then(|idx| self.tabs.get(idx))
             .map(|tab| tab.header.as_ref())
             .unwrap_or(self.header.as_ref())
+    }
+
+    fn active_footer_hint(&self) -> Option<&Line<'static>> {
+        self.active_tab_id()
+            .and_then(|active_tab_id| {
+                self.tab_footer_hints
+                    .iter()
+                    .find_map(|(tab_id, hint)| (tab_id.as_str() == active_tab_id).then_some(hint))
+            })
+            .or(self.footer_hint.as_ref())
     }
 
     fn active_tab_id(&self) -> Option<&str> {
@@ -1001,7 +1015,7 @@ impl Renderable for ListSelectionView {
             let note_lines = wrap_styled_line(note, note_width);
             height = height.saturating_add(note_lines.len() as u16);
         }
-        if self.footer_hint.is_some() {
+        if self.active_footer_hint().is_some() {
             height = height.saturating_add(1);
         }
         height
@@ -1018,7 +1032,7 @@ impl Renderable for ListSelectionView {
             .as_ref()
             .map(|note| wrap_styled_line(note, note_width));
         let note_height = note_lines.as_ref().map_or(0, |lines| lines.len() as u16);
-        let footer_rows = note_height + u16::from(self.footer_hint.is_some());
+        let footer_rows = note_height + u16::from(self.active_footer_hint().is_some());
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
 
@@ -1196,7 +1210,11 @@ impl Renderable for ListSelectionView {
         if footer_area.height > 0 {
             let [note_area, hint_area] = Layout::vertical([
                 Constraint::Length(note_height),
-                Constraint::Length(if self.footer_hint.is_some() { 1 } else { 0 }),
+                Constraint::Length(if self.active_footer_hint().is_some() {
+                    1
+                } else {
+                    0
+                }),
             ])
             .areas(footer_area);
 
@@ -1221,7 +1239,7 @@ impl Renderable for ListSelectionView {
                 }
             }
 
-            if let Some(hint) = &self.footer_hint {
+            if let Some(hint) = self.active_footer_hint() {
                 let hint_area = Rect {
                     x: hint_area.x + 2,
                     y: hint_area.y,

@@ -7,6 +7,8 @@
 use super::*;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
+use codex_app_server_protocol::MarketplaceRemoveParams;
+use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 impl App {
@@ -125,6 +127,30 @@ impl App {
             app_event_tx.send(AppEvent::MarketplaceAddLoaded {
                 cwd: cwd_for_event,
                 source: source_for_event,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn fetch_marketplace_remove(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        marketplace_name: String,
+        marketplace_display_name: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let marketplace_name_for_event = marketplace_name.clone();
+            let result = fetch_marketplace_remove(request_handle, marketplace_name)
+                .await
+                .map_err(|err| format!("Failed to remove marketplace: {err}"));
+            app_event_tx.send(AppEvent::MarketplaceRemoveLoaded {
+                cwd: cwd_for_event,
+                marketplace_name: marketplace_name_for_event,
+                marketplace_display_name,
                 result,
             });
         });
@@ -582,6 +608,19 @@ fn marketplace_add_source_for_request(cwd: &std::path::Path, source: String) -> 
     source
 }
 
+pub(super) async fn fetch_marketplace_remove(
+    request_handle: AppServerRequestHandle,
+    marketplace_name: String,
+) -> Result<MarketplaceRemoveResponse> {
+    let request_id = RequestId::String(format!("marketplace-remove-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::MarketplaceRemove {
+            request_id,
+            params: MarketplaceRemoveParams { marketplace_name },
+        })
+        .await
+        .wrap_err("marketplace/remove failed in TUI")
+}
 pub(super) async fn fetch_plugin_install(
     request_handle: AppServerRequestHandle,
     marketplace_path: AbsolutePathBuf,
