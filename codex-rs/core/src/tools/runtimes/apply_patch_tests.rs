@@ -1,5 +1,4 @@
 use super::*;
-use crate::guardian::GuardianApprovalRequest;
 use crate::tools::approval::ApprovalRequest;
 use crate::tools::approval::ApprovalRequestKind;
 use crate::tools::approval::PatchApprovalRequest;
@@ -66,9 +65,9 @@ fn guardian_review_request_includes_patch_context() {
         permissions_preapproved: false,
     };
 
-    let guardian_request = ApprovalRequest::new(
-        /*user_reason*/ None,
-        /*guardian_retry_reason*/ None,
+    let approval_request = ApprovalRequest::new(
+        /*prompt_reason*/ None,
+        /*review_reason*/ None,
         ApprovalRequestKind::Patch(PatchApprovalRequest {
             id: "call-1".to_string(),
             cwd: request.action.cwd.clone(),
@@ -77,17 +76,18 @@ fn guardian_review_request_includes_patch_context() {
             changes: request.changes.clone(),
             grant_root: None,
         }),
-    )
-    .into_guardian_request();
+    );
 
     assert_eq!(
-        guardian_request,
-        GuardianApprovalRequest::ApplyPatch {
+        approval_request.kind,
+        ApprovalRequestKind::Patch(PatchApprovalRequest {
             id: "call-1".to_string(),
             cwd: expected_cwd,
             files: request.file_paths,
             patch: expected_patch,
-        }
+            changes: request.changes,
+            grant_root: None,
+        })
     );
 }
 

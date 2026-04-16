@@ -19,8 +19,6 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::load_global_mcp_servers;
 use crate::connectors;
-use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
@@ -30,6 +28,10 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::tools::approval::ApprovalRequest;
+use crate::tools::approval::ApprovalRequestKind;
+use crate::tools::approval::McpToolApprovalAnnotations;
+use crate::tools::approval::McpToolApprovalRequest;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -847,8 +849,7 @@ async fn maybe_request_mcp_tool_approval(
             sess,
             turn_context,
             review_id.clone(),
-            build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
-            monitor_reason.clone(),
+            build_mcp_tool_approval_request(call_id, invocation, metadata, monitor_reason.clone()),
         )
         .await;
         let decision = mcp_tool_approval_decision_from_guardian(sess, &review_id, decision).await;
@@ -975,7 +976,7 @@ fn prepare_arc_request_action(
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> serde_json::Value {
-    let request = build_guardian_mcp_tool_review_request("arc-monitor", invocation, metadata);
+    let request = build_mcp_tool_approval_request("arc-monitor", invocation, metadata, None);
     match guardian_approval_request_to_json(&request) {
         Ok(action) => action,
         Err(error) => {
@@ -1014,29 +1015,35 @@ fn persistent_mcp_tool_approval_key(
     session_mcp_tool_approval_key(invocation, metadata, approval_mode)
 }
 
-pub(crate) fn build_guardian_mcp_tool_review_request(
+pub(crate) fn build_mcp_tool_approval_request(
     call_id: &str,
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
-) -> GuardianApprovalRequest {
-    GuardianApprovalRequest::McpToolCall {
-        id: call_id.to_string(),
-        server: invocation.server.clone(),
-        tool_name: invocation.tool.clone(),
-        arguments: invocation.arguments.clone(),
-        connector_id: metadata.and_then(|metadata| metadata.connector_id.clone()),
-        connector_name: metadata.and_then(|metadata| metadata.connector_name.clone()),
-        connector_description: metadata.and_then(|metadata| metadata.connector_description.clone()),
-        tool_title: metadata.and_then(|metadata| metadata.tool_title.clone()),
-        tool_description: metadata.and_then(|metadata| metadata.tool_description.clone()),
-        annotations: metadata
-            .and_then(|metadata| metadata.annotations.as_ref())
-            .map(|annotations| GuardianMcpAnnotations {
-                destructive_hint: annotations.destructive_hint,
-                open_world_hint: annotations.open_world_hint,
-                read_only_hint: annotations.read_only_hint,
-            }),
-    }
+    review_reason: Option<String>,
+) -> ApprovalRequest {
+    ApprovalRequest::new(
+        /*prompt_reason*/ None,
+        review_reason,
+        ApprovalRequestKind::McpToolCall(McpToolApprovalRequest {
+            id: call_id.to_string(),
+            server: invocation.server.clone(),
+            tool_name: invocation.tool.clone(),
+            arguments: invocation.arguments.clone(),
+            connector_id: metadata.and_then(|metadata| metadata.connector_id.clone()),
+            connector_name: metadata.and_then(|metadata| metadata.connector_name.clone()),
+            connector_description: metadata
+                .and_then(|metadata| metadata.connector_description.clone()),
+            tool_title: metadata.and_then(|metadata| metadata.tool_title.clone()),
+            tool_description: metadata.and_then(|metadata| metadata.tool_description.clone()),
+            annotations: metadata
+                .and_then(|metadata| metadata.annotations.as_ref())
+                .map(|annotations| McpToolApprovalAnnotations {
+                    destructive_hint: annotations.destructive_hint,
+                    open_world_hint: annotations.open_world_hint,
+                    read_only_hint: annotations.read_only_hint,
+                }),
+        }),
+    )
 }
 
 async fn mcp_tool_approval_decision_from_guardian(

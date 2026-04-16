@@ -3,6 +3,10 @@ use crate::codex::make_session_and_context;
 use crate::codex::make_session_and_context_with_rx;
 use crate::config::ConfigBuilder;
 use crate::state::ActiveTurn;
+use crate::tools::approval::ApprovalRequest;
+use crate::tools::approval::ApprovalRequestKind;
+use crate::tools::approval::McpToolApprovalAnnotations;
+use crate::tools::approval::McpToolApprovalRequest;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::AppConfig;
@@ -732,7 +736,7 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
         })),
     };
 
-    let request = build_guardian_mcp_tool_review_request(
+    let request = build_mcp_tool_approval_request(
         "call-1",
         &invocation,
         Some(&approval_metadata(
@@ -742,24 +746,29 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
             Some("Navigate"),
             Some("Open a page"),
         )),
+        None,
     );
 
     assert_eq!(
         request,
-        GuardianApprovalRequest::McpToolCall {
-            id: "call-1".to_string(),
-            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            tool_name: "browser_navigate".to_string(),
-            arguments: Some(serde_json::json!({
-                "url": "https://example.com",
-            })),
-            connector_id: Some("playwright".to_string()),
-            connector_name: Some("Playwright".to_string()),
-            connector_description: Some("Browser automation".to_string()),
-            tool_title: Some("Navigate".to_string()),
-            tool_description: Some("Open a page".to_string()),
-            annotations: None,
-        }
+        ApprovalRequest::new(
+            /*prompt_reason*/ None,
+            /*review_reason*/ None,
+            ApprovalRequestKind::McpToolCall(McpToolApprovalRequest {
+                id: "call-1".to_string(),
+                server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                tool_name: "browser_navigate".to_string(),
+                arguments: Some(serde_json::json!({
+                    "url": "https://example.com",
+                })),
+                connector_id: Some("playwright".to_string()),
+                connector_name: Some("Playwright".to_string()),
+                connector_description: Some("Browser automation".to_string()),
+                tool_title: Some("Navigate".to_string()),
+                tool_description: Some("Open a page".to_string()),
+                annotations: None,
+            }),
+        )
     );
 }
 
@@ -782,26 +791,30 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         openai_file_input_params: None,
     };
 
-    let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
+    let request = build_mcp_tool_approval_request("call-1", &invocation, Some(&metadata), None);
 
     assert_eq!(
         request,
-        GuardianApprovalRequest::McpToolCall {
-            id: "call-1".to_string(),
-            server: "custom_server".to_string(),
-            tool_name: "dangerous_tool".to_string(),
-            arguments: None,
-            connector_id: None,
-            connector_name: None,
-            connector_description: None,
-            tool_title: None,
-            tool_description: None,
-            annotations: Some(GuardianMcpAnnotations {
-                destructive_hint: Some(true),
-                open_world_hint: Some(true),
-                read_only_hint: Some(false),
+        ApprovalRequest::new(
+            /*prompt_reason*/ None,
+            /*review_reason*/ None,
+            ApprovalRequestKind::McpToolCall(McpToolApprovalRequest {
+                id: "call-1".to_string(),
+                server: "custom_server".to_string(),
+                tool_name: "dangerous_tool".to_string(),
+                arguments: None,
+                connector_id: None,
+                connector_name: None,
+                connector_description: None,
+                tool_title: None,
+                tool_description: None,
+                annotations: Some(McpToolApprovalAnnotations {
+                    destructive_hint: Some(true),
+                    open_world_hint: Some(true),
+                    read_only_hint: Some(false),
+                }),
             }),
-        }
+        )
     );
 }
 

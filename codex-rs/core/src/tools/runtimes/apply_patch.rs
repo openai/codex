@@ -4,6 +4,7 @@
 //! selected turn environment filesystem for both local and remote turns, with
 //! sandboxing enforced by the explicit filesystem sandbox context.
 use crate::exec::is_likely_sandbox_denied;
+use crate::tools::approval::ApprovalOutcome;
 use crate::tools::approval::ApprovalRequest;
 use crate::tools::approval::ApprovalRequestKind;
 use crate::tools::approval::PatchApprovalRequest;
@@ -109,7 +110,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         &'a mut self,
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision> {
+    ) -> BoxFuture<'a, ApprovalOutcome> {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -121,7 +122,10 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let patch = req.action.patch.clone();
         Box::pin(async move {
             if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
+                return ApprovalOutcome {
+                    decision: ReviewDecision::Approved,
+                    guardian_review_id: None,
+                };
             }
 
             let request = ApprovalRequest::new(
@@ -142,9 +146,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 request.with_session_cache("apply_patch", approval_keys)
             };
 
-            request_approval(session, turn, ctx.guardian_review_id.clone(), request)
-                .await
-                .decision
+            request_approval(session, turn, request).await
         })
     }
 

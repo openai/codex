@@ -5,7 +5,7 @@ use crate::network_policy_decision::denied_network_policy_message;
 use crate::tools::approval::ApprovalRequest;
 use crate::tools::approval::ApprovalRequestKind;
 use crate::tools::approval::NetworkAccessApprovalRequest;
-use crate::tools::approval::request_approval_for_turn;
+use crate::tools::approval::request_approval;
 use crate::tools::sandboxing::ToolError;
 use codex_network_proxy::BlockedRequest;
 use codex_network_proxy::BlockedRequestObserver;
@@ -370,7 +370,7 @@ impl NetworkApprovalService {
             protocol,
         };
         let owner_call = self.resolve_single_active_call().await;
-        let approval_outcome = request_approval_for_turn(
+        let approval_outcome = request_approval(
             &session,
             &turn_context,
             ApprovalRequest::new(

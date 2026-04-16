@@ -39,12 +39,12 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
-use super::GuardianApprovalRequest;
 use super::prompt::GuardianPromptMode;
 use super::prompt::GuardianTranscriptCursor;
 use super::prompt::build_guardian_prompt_items;
 use super::prompt::guardian_policy_prompt;
 use super::prompt::guardian_policy_prompt_with_config;
+use crate::tools::approval::ApprovalRequest;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const GUARDIAN_FOLLOWUP_REVIEW_REMINDER: &str = concat!(
@@ -66,8 +66,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_turn: Arc<TurnContext>,
     pub(crate) spawn_config: Config,
-    pub(crate) request: GuardianApprovalRequest,
-    pub(crate) retry_reason: Option<String>,
+    pub(crate) request: ApprovalRequest,
     pub(crate) schema: Value,
     pub(crate) model: String,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -578,7 +577,6 @@ async fn run_review_on_session(
 
             let prompt_items = build_guardian_prompt_items(
                 params.parent_session.as_ref(),
-                params.retry_reason.clone(),
                 params.request.clone(),
                 prompt_mode,
             )

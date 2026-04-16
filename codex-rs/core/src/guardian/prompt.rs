@@ -7,6 +7,7 @@ use serde_json::Value;
 use crate::codex::Session;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::tools::approval::ApprovalRequest;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
@@ -16,7 +17,6 @@ use super::GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS;
 use super::GUARDIAN_MAX_TOOL_ENTRY_TOKENS;
 use super::GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS;
 use super::GUARDIAN_RECENT_ENTRY_LIMIT;
-use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
 use super::TRUNCATION_TAG;
 use super::approval_request::format_guardian_action_pretty;
@@ -81,8 +81,7 @@ pub(crate) enum GuardianPromptMode {
 /// prompt text through trailing newlines.
 pub(crate) async fn build_guardian_prompt_items(
     session: &Session,
-    retry_reason: Option<String>,
-    request: GuardianApprovalRequest,
+    request: ApprovalRequest,
     mode: GuardianPromptMode,
 ) -> serde_json::Result<GuardianPromptItems> {
     let history = session.clone_history().await;
@@ -91,6 +90,7 @@ pub(crate) async fn build_guardian_prompt_items(
         parent_history_version: history.history_version(),
         transcript_entry_count: transcript_entries.len(),
     };
+    let retry_reason = request.review_reason.clone();
     let planned_action_json = format_guardian_action_pretty(&request)?;
 
     let prompt_shape = match mode {

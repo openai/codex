@@ -11,6 +11,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::approval::ApprovalOutcome;
 use crate::tools::approval::ApprovalRequest;
 use crate::tools::approval::ApprovalRequestKind;
 use crate::tools::approval::CommandApprovalRequest;
@@ -39,7 +40,6 @@ use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
@@ -122,7 +122,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         &'b mut self,
         req: &'b UnifiedExecRequest,
         ctx: ApprovalCtx<'b>,
-    ) -> BoxFuture<'b, ReviewDecision> {
+    ) -> BoxFuture<'b, ApprovalOutcome> {
         let keys = self.approval_keys(req);
         let session = ctx.session;
         let turn = ctx.turn;
@@ -135,7 +135,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             request_approval(
                 session,
                 turn,
-                ctx.guardian_review_id.clone(),
                 ApprovalRequest::new(
                     reason,
                     retry_reason,
@@ -160,7 +159,6 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                 .with_session_cache("unified_exec", keys),
             )
             .await
-            .decision
         })
     }
 

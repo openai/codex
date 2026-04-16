@@ -11,7 +11,7 @@ use crate::shell::ShellType;
 use crate::tools::approval::ApprovalRequest;
 use crate::tools::approval::ApprovalRequestKind;
 use crate::tools::approval::ExecveApprovalRequest;
-use crate::tools::approval::request_approval_for_turn;
+use crate::tools::approval::request_approval;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -394,12 +394,12 @@ impl CoreShellActionProvider {
         let source = self.tool_name;
         Ok(stopwatch
             .pause_for(async move {
-                let outcome = request_approval_for_turn(
+                let outcome = request_approval(
                     &session,
                     &turn,
                     ApprovalRequest::new(
-                        /*user_reason*/ None,
-                        /*guardian_retry_reason*/ None,
+                        /*prompt_reason*/ None,
+                        /*review_reason*/ None,
                         ApprovalRequestKind::Execve(ExecveApprovalRequest {
                             id: call_id,
                             approval_id,

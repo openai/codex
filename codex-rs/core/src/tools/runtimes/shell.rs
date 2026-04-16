@@ -14,6 +14,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
+use crate::tools::approval::ApprovalOutcome;
 use crate::tools::approval::ApprovalRequest;
 use crate::tools::approval::ApprovalRequestKind;
 use crate::tools::approval::CommandApprovalRequest;
@@ -36,7 +37,6 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -144,7 +144,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         &'a mut self,
         req: &'a ShellRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision> {
+    ) -> BoxFuture<'a, ApprovalOutcome> {
         let keys = self.approval_keys(req);
         let command = req.command.clone();
         let cwd = req.cwd.clone();
@@ -157,7 +157,6 @@ impl Approvable<ShellRequest> for ShellRuntime {
             request_approval(
                 session,
                 turn,
-                ctx.guardian_review_id.clone(),
                 ApprovalRequest::new(
                     reason,
                     retry_reason,
@@ -182,7 +181,6 @@ impl Approvable<ShellRequest> for ShellRuntime {
                 .with_session_cache("shell", keys),
             )
             .await
-            .decision
         })
     }
 

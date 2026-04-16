@@ -1,8 +1,6 @@
 use std::path::Path;
 
 use codex_protocol::approvals::GuardianAssessmentAction;
-use codex_protocol::approvals::GuardianCommandSource;
-use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
@@ -10,72 +8,9 @@ use serde_json::Value;
 
 use super::GUARDIAN_MAX_ACTION_STRING_TOKENS;
 use super::prompt::guardian_truncate_text;
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum GuardianApprovalRequest {
-    Shell {
-        id: String,
-        command: Vec<String>,
-        cwd: AbsolutePathBuf,
-        sandbox_permissions: crate::sandboxing::SandboxPermissions,
-        additional_permissions: Option<PermissionProfile>,
-        justification: Option<String>,
-    },
-    ExecCommand {
-        id: String,
-        command: Vec<String>,
-        cwd: AbsolutePathBuf,
-        sandbox_permissions: crate::sandboxing::SandboxPermissions,
-        additional_permissions: Option<PermissionProfile>,
-        justification: Option<String>,
-        tty: bool,
-    },
-    #[cfg(unix)]
-    Execve {
-        id: String,
-        source: GuardianCommandSource,
-        program: String,
-        argv: Vec<String>,
-        cwd: AbsolutePathBuf,
-        additional_permissions: Option<PermissionProfile>,
-    },
-    ApplyPatch {
-        id: String,
-        cwd: AbsolutePathBuf,
-        files: Vec<AbsolutePathBuf>,
-        patch: String,
-    },
-    NetworkAccess {
-        id: String,
-        turn_id: String,
-        target: String,
-        host: String,
-        protocol: NetworkApprovalProtocol,
-        port: u16,
-    },
-    McpToolCall {
-        id: String,
-        server: String,
-        tool_name: String,
-        arguments: Option<Value>,
-        connector_id: Option<String>,
-        connector_name: Option<String>,
-        connector_description: Option<String>,
-        tool_title: Option<String>,
-        tool_description: Option<String>,
-        annotations: Option<GuardianMcpAnnotations>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct GuardianMcpAnnotations {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) destructive_hint: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) open_world_hint: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) read_only_hint: Option<bool>,
-}
+use crate::tools::approval::ApprovalRequest;
+use crate::tools::approval::ApprovalRequestKind;
+use crate::tools::approval::McpToolApprovalAnnotations;
 
 #[derive(Serialize)]
 struct CommandApprovalAction<'a> {
@@ -120,7 +55,7 @@ struct McpToolCallApprovalAction<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_description: Option<&'a String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    annotations: Option<&'a GuardianMcpAnnotations>,
+    annotations: Option<&'a McpToolApprovalAnnotations>,
 }
 
 fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value> {
@@ -148,7 +83,7 @@ fn serialize_command_guardian_action(
 }
 
 fn command_assessment_action(
-    source: GuardianCommandSource,
+    source: codex_protocol::approvals::GuardianCommandSource,
     command: &[String],
     cwd: &AbsolutePathBuf,
 ) -> GuardianAssessmentAction {
@@ -160,10 +95,12 @@ fn command_assessment_action(
 }
 
 #[cfg(unix)]
-fn guardian_command_source_tool_name(source: GuardianCommandSource) -> &'static str {
+fn guardian_command_source_tool_name(
+    source: codex_protocol::approvals::GuardianCommandSource,
+) -> &'static str {
     match source {
-        GuardianCommandSource::Shell => "shell",
-        GuardianCommandSource::UnifiedExec => "exec_command",
+        codex_protocol::approvals::GuardianCommandSource::Shell => "shell",
+        codex_protocol::approvals::GuardianCommandSource::UnifiedExec => "exec_command",
     }
 }
 
@@ -194,196 +131,136 @@ fn truncate_guardian_action_value(value: Value) -> Value {
 }
 
 pub(crate) fn guardian_approval_request_to_json(
-    action: &GuardianApprovalRequest,
+    action: &ApprovalRequest,
 ) -> serde_json::Result<Value> {
-    match action {
-        GuardianApprovalRequest::Shell {
-            id: _,
-            command,
-            cwd,
-            sandbox_permissions,
-            additional_permissions,
-            justification,
-        } => serialize_command_guardian_action(
-            "shell",
-            command,
-            cwd,
-            *sandbox_permissions,
-            additional_permissions.as_ref(),
-            justification.as_ref(),
-            /*tty*/ None,
-        ),
-        GuardianApprovalRequest::ExecCommand {
-            id: _,
-            command,
-            cwd,
-            sandbox_permissions,
-            additional_permissions,
-            justification,
-            tty,
-        } => serialize_command_guardian_action(
-            "exec_command",
-            command,
-            cwd,
-            *sandbox_permissions,
-            additional_permissions.as_ref(),
-            justification.as_ref(),
-            Some(*tty),
-        ),
+    match &action.kind {
+        ApprovalRequestKind::Command(request) => {
+            let tool = match request.source {
+                codex_protocol::approvals::GuardianCommandSource::Shell => "shell",
+                codex_protocol::approvals::GuardianCommandSource::UnifiedExec => "exec_command",
+            };
+            let tty = match request.source {
+                codex_protocol::approvals::GuardianCommandSource::Shell => None,
+                codex_protocol::approvals::GuardianCommandSource::UnifiedExec => Some(request.tty),
+            };
+            serialize_command_guardian_action(
+                tool,
+                &request.command,
+                &request.cwd,
+                request.sandbox_permissions,
+                request.additional_permissions.as_ref(),
+                request.justification.as_ref(),
+                tty,
+            )
+        }
         #[cfg(unix)]
-        GuardianApprovalRequest::Execve {
-            id: _,
-            source,
-            program,
-            argv,
-            cwd,
-            additional_permissions,
-        } => serialize_guardian_action(ExecveApprovalAction {
-            tool: guardian_command_source_tool_name(*source),
-            program,
-            argv,
-            cwd,
-            additional_permissions: additional_permissions.as_ref(),
+        ApprovalRequestKind::Execve(request) => serialize_guardian_action(ExecveApprovalAction {
+            tool: guardian_command_source_tool_name(request.source),
+            program: &request.program,
+            argv: &request.argv,
+            cwd: &request.cwd,
+            additional_permissions: request.additional_permissions.as_ref(),
         }),
-        GuardianApprovalRequest::ApplyPatch {
-            id: _,
-            cwd,
-            files,
-            patch,
-        } => Ok(serde_json::json!({
-            "tool": "apply_patch",
-            "cwd": cwd,
-            "files": files,
-            "patch": patch,
-        })),
-        GuardianApprovalRequest::NetworkAccess {
-            id: _,
-            turn_id: _,
-            target,
-            host,
-            protocol,
-            port,
-        } => Ok(serde_json::json!({
-            "tool": "network_access",
-            "target": target,
-            "host": host,
-            "protocol": protocol,
-            "port": port,
-        })),
-        GuardianApprovalRequest::McpToolCall {
-            id: _,
-            server,
-            tool_name,
-            arguments,
-            connector_id,
-            connector_name,
-            connector_description,
-            tool_title,
-            tool_description,
-            annotations,
-        } => serialize_guardian_action(McpToolCallApprovalAction {
-            tool: "mcp_tool_call",
-            server,
-            tool_name,
-            arguments: arguments.as_ref(),
-            connector_id: connector_id.as_ref(),
-            connector_name: connector_name.as_ref(),
-            connector_description: connector_description.as_ref(),
-            tool_title: tool_title.as_ref(),
-            tool_description: tool_description.as_ref(),
-            annotations: annotations.as_ref(),
-        }),
+        ApprovalRequestKind::Patch(request) => {
+            let cwd = &request.cwd;
+            let files = &request.files;
+            let patch = &request.patch;
+            Ok(serde_json::json!({
+                "tool": "apply_patch",
+                "cwd": cwd,
+                "files": files,
+                "patch": patch,
+            }))
+        }
+        ApprovalRequestKind::NetworkAccess(request) => {
+            let target = &request.target;
+            let host = &request.host;
+            let protocol = request.protocol;
+            let port = request.port;
+            Ok(serde_json::json!({
+                "tool": "network_access",
+                "target": target,
+                "host": host,
+                "protocol": protocol,
+                "port": port,
+            }))
+        }
+        ApprovalRequestKind::McpToolCall(request) => {
+            serialize_guardian_action(McpToolCallApprovalAction {
+                tool: "mcp_tool_call",
+                server: &request.server,
+                tool_name: &request.tool_name,
+                arguments: request.arguments.as_ref(),
+                connector_id: request.connector_id.as_ref(),
+                connector_name: request.connector_name.as_ref(),
+                connector_description: request.connector_description.as_ref(),
+                tool_title: request.tool_title.as_ref(),
+                tool_description: request.tool_description.as_ref(),
+                annotations: request.annotations.as_ref(),
+            })
+        }
     }
 }
 
-pub(crate) fn guardian_assessment_action(
-    action: &GuardianApprovalRequest,
-) -> GuardianAssessmentAction {
-    match action {
-        GuardianApprovalRequest::Shell { command, cwd, .. } => {
-            command_assessment_action(GuardianCommandSource::Shell, command, cwd)
-        }
-        GuardianApprovalRequest::ExecCommand { command, cwd, .. } => {
-            command_assessment_action(GuardianCommandSource::UnifiedExec, command, cwd)
+pub(crate) fn guardian_assessment_action(action: &ApprovalRequest) -> GuardianAssessmentAction {
+    match &action.kind {
+        ApprovalRequestKind::Command(request) => {
+            command_assessment_action(request.source, &request.command, &request.cwd)
         }
         #[cfg(unix)]
-        GuardianApprovalRequest::Execve {
-            source,
-            program,
-            argv,
-            cwd,
-            ..
-        } => GuardianAssessmentAction::Execve {
-            source: *source,
-            program: program.clone(),
-            argv: argv.clone(),
-            cwd: cwd.clone(),
+        ApprovalRequestKind::Execve(request) => GuardianAssessmentAction::Execve {
+            source: request.source,
+            program: request.program.clone(),
+            argv: request.argv.clone(),
+            cwd: request.cwd.clone(),
         },
-        GuardianApprovalRequest::ApplyPatch { cwd, files, .. } => {
-            GuardianAssessmentAction::ApplyPatch {
-                cwd: cwd.clone(),
-                files: files.clone(),
-            }
-        }
-        GuardianApprovalRequest::NetworkAccess {
-            id: _,
-            turn_id: _,
-            target,
-            host,
-            protocol,
-            port,
-        } => GuardianAssessmentAction::NetworkAccess {
-            target: target.clone(),
-            host: host.clone(),
-            protocol: *protocol,
-            port: *port,
+        ApprovalRequestKind::Patch(request) => GuardianAssessmentAction::ApplyPatch {
+            cwd: request.cwd.clone(),
+            files: request.files.clone(),
         },
-        GuardianApprovalRequest::McpToolCall {
-            server,
-            tool_name,
-            connector_id,
-            connector_name,
-            tool_title,
-            ..
-        } => GuardianAssessmentAction::McpToolCall {
-            server: server.clone(),
-            tool_name: tool_name.clone(),
-            connector_id: connector_id.clone(),
-            connector_name: connector_name.clone(),
-            tool_title: tool_title.clone(),
+        ApprovalRequestKind::NetworkAccess(request) => GuardianAssessmentAction::NetworkAccess {
+            target: request.target.clone(),
+            host: request.host.clone(),
+            protocol: request.protocol,
+            port: request.port,
+        },
+        ApprovalRequestKind::McpToolCall(request) => GuardianAssessmentAction::McpToolCall {
+            server: request.server.clone(),
+            tool_name: request.tool_name.clone(),
+            connector_id: request.connector_id.clone(),
+            connector_name: request.connector_name.clone(),
+            tool_title: request.tool_title.clone(),
         },
     }
 }
 
-pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest) -> Option<&str> {
-    match request {
-        GuardianApprovalRequest::Shell { id, .. }
-        | GuardianApprovalRequest::ExecCommand { id, .. }
-        | GuardianApprovalRequest::ApplyPatch { id, .. }
-        | GuardianApprovalRequest::McpToolCall { id, .. } => Some(id),
-        GuardianApprovalRequest::NetworkAccess { .. } => None,
+pub(crate) fn guardian_request_target_item_id(request: &ApprovalRequest) -> Option<&str> {
+    match &request.kind {
+        ApprovalRequestKind::Command(request) => Some(&request.id),
+        ApprovalRequestKind::Patch(request) => Some(&request.id),
+        ApprovalRequestKind::McpToolCall(request) => Some(&request.id),
+        ApprovalRequestKind::NetworkAccess(_) => None,
         #[cfg(unix)]
-        GuardianApprovalRequest::Execve { id, .. } => Some(id),
+        ApprovalRequestKind::Execve(request) => Some(&request.id),
     }
 }
 
 pub(crate) fn guardian_request_turn_id<'a>(
-    request: &'a GuardianApprovalRequest,
+    request: &'a ApprovalRequest,
     default_turn_id: &'a str,
 ) -> &'a str {
-    match request {
-        GuardianApprovalRequest::NetworkAccess { turn_id, .. } => turn_id,
-        GuardianApprovalRequest::Shell { .. }
-        | GuardianApprovalRequest::ExecCommand { .. }
-        | GuardianApprovalRequest::ApplyPatch { .. }
-        | GuardianApprovalRequest::McpToolCall { .. } => default_turn_id,
+    match &request.kind {
+        ApprovalRequestKind::NetworkAccess(request) => &request.turn_id,
+        ApprovalRequestKind::Command(_)
+        | ApprovalRequestKind::Patch(_)
+        | ApprovalRequestKind::McpToolCall(_) => default_turn_id,
         #[cfg(unix)]
-        GuardianApprovalRequest::Execve { .. } => default_turn_id,
+        ApprovalRequestKind::Execve(_) => default_turn_id,
     }
 }
 
 pub(crate) fn format_guardian_action_pretty(
-    action: &GuardianApprovalRequest,
+    action: &ApprovalRequest,
 ) -> serde_json::Result<String> {
     let mut value = guardian_approval_request_to_json(action)?;
     value = truncate_guardian_action_value(value);

@@ -783,8 +783,13 @@ async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> an
             &'a mut self,
             _req: &'a (),
             _ctx: crate::tools::sandboxing::ApprovalCtx<'a>,
-        ) -> futures::future::BoxFuture<'a, ReviewDecision> {
-            Box::pin(async { ReviewDecision::Approved })
+        ) -> futures::future::BoxFuture<'a, crate::tools::approval::ApprovalOutcome> {
+            Box::pin(async {
+                crate::tools::approval::ApprovalOutcome {
+                    decision: ReviewDecision::Approved,
+                    guardian_review_id: None,
+                }
+            })
         }
     }
 

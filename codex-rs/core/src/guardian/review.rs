@@ -15,9 +15,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::tools::approval::ApprovalRequest;
 
 use super::GUARDIAN_REVIEWER_NAME;
-use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
 use super::GuardianAssessmentOutcome;
 use super::GuardianRejection;
@@ -114,8 +114,7 @@ async fn run_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     review_id: String,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
+    request: ApprovalRequest,
     external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
     let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
@@ -167,7 +166,6 @@ async fn run_guardian_review(
         session.clone(),
         turn.clone(),
         request,
-        retry_reason,
         schema,
         external_cancel,
     ))
@@ -300,8 +298,7 @@ pub(crate) async fn review_approval_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     review_id: String,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
+    request: ApprovalRequest,
 ) -> ReviewDecision {
     // Box the delegated review future so callers do not inline the entire
     // guardian session state machine into their own async stack.
@@ -310,7 +307,6 @@ pub(crate) async fn review_approval_request(
         Arc::clone(turn),
         review_id,
         request,
-        retry_reason,
         /*external_cancel*/ None,
     ))
     .await
@@ -320,8 +316,7 @@ pub(crate) async fn review_approval_request_with_cancel(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     review_id: String,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
+    request: ApprovalRequest,
     cancel_token: CancellationToken,
 ) -> ReviewDecision {
     Box::pin(run_guardian_review(
@@ -329,7 +324,6 @@ pub(crate) async fn review_approval_request_with_cancel(
         Arc::clone(turn),
         review_id,
         request,
-        retry_reason,
         Some(cancel_token),
     ))
     .await
@@ -352,8 +346,7 @@ pub(crate) async fn review_approval_request_with_cancel(
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
+    request: ApprovalRequest,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
 ) -> GuardianReviewOutcome {
@@ -421,7 +414,6 @@ pub(super) async fn run_guardian_review_session(
                 parent_turn: turn.clone(),
                 spawn_config: guardian_config,
                 request,
-                retry_reason,
                 schema,
                 model: guardian_model,
                 reasoning_effort: guardian_reasoning_effort,

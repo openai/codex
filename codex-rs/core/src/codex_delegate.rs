@@ -38,16 +38,19 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
-use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
-use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
+use crate::mcp_tool_call::build_mcp_tool_approval_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
+use crate::tools::approval::ApprovalRequest;
+use crate::tools::approval::ApprovalRequestKind;
+use crate::tools::approval::CommandApprovalRequest;
+use crate::tools::approval::PatchApprovalRequest;
 use codex_login::AuthManager;
 use codex_models_manager::manager::ModelsManager;
 use codex_protocol::error::CodexErr;
@@ -461,19 +464,28 @@ async fn handle_exec_approval(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
             new_guardian_review_id(),
-            GuardianApprovalRequest::Shell {
-                id: call_id.clone(),
-                command,
-                cwd,
-                sandbox_permissions: if additional_permissions.is_some() {
-                    crate::sandboxing::SandboxPermissions::WithAdditionalPermissions
-                } else {
-                    crate::sandboxing::SandboxPermissions::UseDefault
-                },
-                additional_permissions,
-                justification: None,
-            },
-            reason,
+            ApprovalRequest::new(
+                /*prompt_reason*/ reason.clone(),
+                reason,
+                ApprovalRequestKind::Command(CommandApprovalRequest {
+                    id: call_id.clone(),
+                    approval_id: approval_id.clone(),
+                    source: codex_protocol::approvals::GuardianCommandSource::Shell,
+                    command,
+                    cwd,
+                    sandbox_permissions: if additional_permissions.is_some() {
+                        crate::sandboxing::SandboxPermissions::WithAdditionalPermissions
+                    } else {
+                        crate::sandboxing::SandboxPermissions::UseDefault
+                    },
+                    additional_permissions,
+                    justification: None,
+                    network_approval_context,
+                    proposed_execpolicy_amendment,
+                    available_decisions,
+                    tty: false,
+                }),
+            ),
             review_cancel.clone(),
         );
         await_approval_with_cancel(
@@ -569,13 +581,18 @@ async fn handle_patch_approval(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
             new_guardian_review_id(),
-            GuardianApprovalRequest::ApplyPatch {
-                id: approval_id.clone(),
-                cwd: parent_ctx.cwd.clone(),
-                files,
-                patch,
-            },
-            reason.clone(),
+            ApprovalRequest::new(
+                reason.clone(),
+                reason.clone(),
+                ApprovalRequestKind::Patch(PatchApprovalRequest {
+                    id: approval_id.clone(),
+                    cwd: parent_ctx.cwd.clone(),
+                    files,
+                    patch,
+                    changes: changes.clone(),
+                    grant_root: grant_root.clone(),
+                }),
+            ),
             review_cancel.clone(),
         );
         Some(
@@ -690,8 +707,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         Arc::clone(parent_session),
         Arc::clone(parent_ctx),
         new_guardian_review_id(),
-        build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
-        /*retry_reason*/ None,
+        build_mcp_tool_approval_request(&event.call_id, &invocation, metadata.as_ref(), None),
         review_cancel.clone(),
     );
     let decision = await_approval_with_cancel(
@@ -734,8 +750,7 @@ fn spawn_guardian_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     review_id: String,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
+    request: ApprovalRequest,
     cancel_token: CancellationToken,
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
@@ -752,7 +767,6 @@ fn spawn_guardian_review(
             &turn,
             review_id,
             request,
-            retry_reason,
             cancel_token,
         ));
         let _ = tx.send(decision);

@@ -2,7 +2,6 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -17,6 +16,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ pub(crate) struct ApprovalCacheKey {
     value: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ApprovalCacheKeys {
     pub tool_name: &'static str,
     pub keys: Vec<ApprovalCacheKey>,
@@ -39,23 +39,23 @@ pub(crate) struct ApprovalOutcome {
     pub guardian_review_id: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ApprovalRequest {
-    pub user_reason: Option<String>,
-    pub guardian_retry_reason: Option<String>,
+    pub prompt_reason: Option<String>,
+    pub review_reason: Option<String>,
     pub kind: ApprovalRequestKind,
     cache: Option<ApprovalCacheKeys>,
 }
 
 impl ApprovalRequest {
     pub(crate) fn new(
-        user_reason: Option<String>,
-        guardian_retry_reason: Option<String>,
+        prompt_reason: Option<String>,
+        review_reason: Option<String>,
         kind: ApprovalRequestKind,
     ) -> Self {
         Self {
-            user_reason,
-            guardian_retry_reason,
+            prompt_reason,
+            review_reason,
             kind,
             cache: None,
         }
@@ -81,65 +81,19 @@ impl ApprovalRequest {
             .map(|keys| ApprovalCacheKeys { tool_name, keys });
         self
     }
-
-    pub(crate) fn into_guardian_request(self) -> GuardianApprovalRequest {
-        match self.kind {
-            ApprovalRequestKind::Command(request) => match request.source {
-                GuardianCommandSource::Shell => GuardianApprovalRequest::Shell {
-                    id: request.id,
-                    command: request.command,
-                    cwd: request.cwd,
-                    sandbox_permissions: request.sandbox_permissions,
-                    additional_permissions: request.additional_permissions,
-                    justification: request.justification,
-                },
-                GuardianCommandSource::UnifiedExec => GuardianApprovalRequest::ExecCommand {
-                    id: request.id,
-                    command: request.command,
-                    cwd: request.cwd,
-                    sandbox_permissions: request.sandbox_permissions,
-                    additional_permissions: request.additional_permissions,
-                    justification: request.justification,
-                    tty: request.tty,
-                },
-            },
-            #[cfg(unix)]
-            ApprovalRequestKind::Execve(request) => GuardianApprovalRequest::Execve {
-                id: request.id,
-                source: request.source,
-                program: request.program,
-                argv: request.argv,
-                cwd: request.cwd,
-                additional_permissions: request.additional_permissions,
-            },
-            ApprovalRequestKind::Patch(request) => GuardianApprovalRequest::ApplyPatch {
-                id: request.id,
-                cwd: request.cwd,
-                files: request.files,
-                patch: request.patch,
-            },
-            ApprovalRequestKind::NetworkAccess(request) => GuardianApprovalRequest::NetworkAccess {
-                id: request.id,
-                turn_id: request.turn_id,
-                target: request.target,
-                host: request.host,
-                protocol: request.protocol,
-                port: request.port,
-            },
-        }
-    }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ApprovalRequestKind {
     Command(CommandApprovalRequest),
     #[cfg(unix)]
     Execve(ExecveApprovalRequest),
     Patch(PatchApprovalRequest),
     NetworkAccess(NetworkAccessApprovalRequest),
+    McpToolCall(McpToolApprovalRequest),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CommandApprovalRequest {
     pub id: String,
     pub approval_id: Option<String>,
@@ -156,7 +110,7 @@ pub(crate) struct CommandApprovalRequest {
 }
 
 #[cfg(unix)]
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ExecveApprovalRequest {
     pub id: String,
     pub approval_id: String,
@@ -168,7 +122,7 @@ pub(crate) struct ExecveApprovalRequest {
     pub additional_permissions: Option<PermissionProfile>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PatchApprovalRequest {
     pub id: String,
     pub cwd: AbsolutePathBuf,
@@ -178,7 +132,7 @@ pub(crate) struct PatchApprovalRequest {
     pub grant_root: Option<PathBuf>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NetworkAccessApprovalRequest {
     pub id: String,
     pub turn_id: String,
@@ -189,8 +143,28 @@ pub(crate) struct NetworkAccessApprovalRequest {
     pub cwd: AbsolutePathBuf,
 }
 
-pub(crate) fn guardian_review_id_for_turn(turn: &TurnContext) -> Option<String> {
-    routes_approval_to_guardian(turn).then(new_guardian_review_id)
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct McpToolApprovalRequest {
+    pub id: String,
+    pub server: String,
+    pub tool_name: String,
+    pub arguments: Option<Value>,
+    pub connector_id: Option<String>,
+    pub connector_name: Option<String>,
+    pub connector_description: Option<String>,
+    pub tool_title: Option<String>,
+    pub tool_description: Option<String>,
+    pub annotations: Option<McpToolApprovalAnnotations>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct McpToolApprovalAnnotations {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) destructive_hint: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) open_world_hint: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) read_only_hint: Option<bool>,
 }
 
 async fn dispatch_user_approval(
@@ -199,7 +173,9 @@ async fn dispatch_user_approval(
     request: ApprovalRequest,
 ) -> ReviewDecision {
     let ApprovalRequest {
-        user_reason, kind, ..
+        prompt_reason,
+        kind,
+        ..
     } = request;
     match kind {
         ApprovalRequestKind::Command(request) => {
@@ -210,7 +186,7 @@ async fn dispatch_user_approval(
                     request.approval_id,
                     request.command,
                     request.cwd,
-                    user_reason,
+                    prompt_reason,
                     request.network_approval_context,
                     request.proposed_execpolicy_amendment,
                     request.additional_permissions,
@@ -227,7 +203,7 @@ async fn dispatch_user_approval(
                     Some(request.approval_id),
                     request.command,
                     request.cwd,
-                    user_reason,
+                    prompt_reason,
                     /*network_approval_context*/ None,
                     /*proposed_execpolicy_amendment*/ None,
                     request.additional_permissions,
@@ -241,7 +217,7 @@ async fn dispatch_user_approval(
                     turn.as_ref(),
                     request.id,
                     request.changes,
-                    user_reason,
+                    prompt_reason,
                     request.grant_root,
                 )
                 .await;
@@ -255,7 +231,7 @@ async fn dispatch_user_approval(
                     /*approval_id*/ None,
                     vec!["network-access".to_string(), request.target],
                     request.cwd,
-                    user_reason,
+                    prompt_reason,
                     Some(NetworkApprovalContext {
                         host: request.host,
                         protocol: request.protocol,
@@ -266,6 +242,7 @@ async fn dispatch_user_approval(
                 )
                 .await
         }
+        ApprovalRequestKind::McpToolCall(_) => ReviewDecision::Abort,
     }
 }
 
@@ -287,21 +264,13 @@ async fn request_user_approval(
 pub(crate) async fn request_approval(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
-    guardian_review_id: Option<String>,
     request: ApprovalRequest,
 ) -> ApprovalOutcome {
-    let guardian_retry_reason = request.guardian_retry_reason.clone();
-    if let Some(review_id) = guardian_review_id.clone() {
+    if routes_approval_to_guardian(turn) {
+        let review_id = new_guardian_review_id();
         return ApprovalOutcome {
-            decision: review_approval_request(
-                session,
-                turn,
-                review_id,
-                request.into_guardian_request(),
-                guardian_retry_reason,
-            )
-            .await,
-            guardian_review_id,
+            decision: review_approval_request(session, turn, review_id.clone(), request).await,
+            guardian_review_id: Some(review_id),
         };
     }
 
@@ -309,12 +278,4 @@ pub(crate) async fn request_approval(
         decision: request_user_approval(session, turn, request).await,
         guardian_review_id: None,
     }
-}
-
-pub(crate) async fn request_approval_for_turn(
-    session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
-    request: ApprovalRequest,
-) -> ApprovalOutcome {
-    request_approval(session, turn, guardian_review_id_for_turn(turn), request).await
 }
