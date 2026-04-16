@@ -2618,37 +2618,44 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let mut state = self.state.lock().await;
-
-        match state.session_configuration.apply(&updates) {
-            Ok(updated) => {
-                let previous_cwd = state.session_configuration.cwd.clone();
-                let sandbox_policy_changed =
-                    state.session_configuration.sandbox_policy != updated.sandbox_policy;
-                let next_cwd = updated.cwd.clone();
-                let codex_home = updated.codex_home.clone();
-                let session_source = updated.session_source.clone();
-                state.session_configuration = updated;
-                drop(state);
-
-                self.maybe_refresh_shell_snapshot_for_cwd(
-                    &previous_cwd,
-                    &next_cwd,
-                    &codex_home,
-                    &session_source,
-                );
-                if sandbox_policy_changed {
-                    self.refresh_managed_network_proxy_for_current_sandbox_policy()
-                        .await;
+        let (previous_cwd, sandbox_policy_changed, next_cwd, codex_home, session_source) = {
+            let mut state = self.state.lock().await;
+            let updated = match state.session_configuration.apply(&updates) {
+                Ok(updated) => updated,
+                Err(err) => {
+                    warn!("rejected session settings update: {err}");
+                    return Err(err);
                 }
+            };
 
-                Ok(())
-            }
-            Err(err) => {
-                warn!("rejected session settings update: {err}");
-                Err(err)
-            }
+            let previous_cwd = state.session_configuration.cwd.clone();
+            let sandbox_policy_changed =
+                state.session_configuration.sandbox_policy != updated.sandbox_policy;
+            let next_cwd = updated.cwd.clone();
+            let codex_home = updated.codex_home.clone();
+            let session_source = updated.session_source.clone();
+            state.session_configuration = updated;
+            (
+                previous_cwd,
+                sandbox_policy_changed,
+                next_cwd,
+                codex_home,
+                session_source,
+            )
+        };
+
+        self.maybe_refresh_shell_snapshot_for_cwd(
+            &previous_cwd,
+            &next_cwd,
+            &codex_home,
+            &session_source,
+        );
+        if sandbox_policy_changed {
+            self.refresh_managed_network_proxy_for_current_sandbox_policy()
+                .await;
         }
+
+        Ok(())
     }
 
     pub(crate) async fn new_turn_with_sub_id(
@@ -2656,13 +2663,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (
-            session_configuration,
-            sandbox_policy_changed,
-            previous_cwd,
-            codex_home,
-            session_source,
-        ) = {
+        let update_result = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
@@ -2672,26 +2673,35 @@ impl Session {
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
                     state.session_configuration = next.clone();
-                    (
+                    Ok((
                         next,
                         sandbox_policy_changed,
                         previous_cwd,
                         codex_home,
                         session_source,
-                    )
+                    ))
                 }
-                Err(err) => {
-                    drop(state);
-                    self.send_event_raw(Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: err.to_string(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
-                    })
-                    .await;
-                    return Err(err);
-                }
+                Err(err) => Err(err),
+            }
+        };
+        let (
+            session_configuration,
+            sandbox_policy_changed,
+            previous_cwd,
+            codex_home,
+            session_source,
+        ) = match update_result {
+            Ok(update) => update,
+            Err(err) => {
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(err);
             }
         };
 
