@@ -21,6 +21,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
@@ -42,6 +43,18 @@ const NETWORK_TIMEOUT_MS: u64 = 2_000;
 const NETWORK_TIMEOUT_MS: u64 = 10_000;
 
 const BWRAP_UNAVAILABLE_ERR: &str = "build-time bubblewrap is not available in this build.";
+
+#[expect(clippy::expect_used)]
+fn codex_linux_sandbox_exe() -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .expect("cwd should exist")
+            .join(path)
+    }
+}
 
 fn create_env_from_core_vars() -> HashMap<String, String> {
     let policy = ShellEnvironmentPolicy::default();
@@ -75,9 +88,30 @@ async fn run_cmd_output(
     .expect("sandboxed command should execute")
 }
 
+#[expect(clippy::expect_used)]
 async fn run_cmd_result_with_writable_roots(
     cmd: &[&str],
     writable_roots: &[PathBuf],
+    timeout_ms: u64,
+    use_legacy_landlock: bool,
+    network_access: bool,
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
+    let cwd = std::env::current_dir().expect("cwd should exist");
+    run_cmd_result_with_writable_roots_in_cwd(
+        cmd,
+        writable_roots,
+        cwd.as_path(),
+        timeout_ms,
+        use_legacy_landlock,
+        network_access,
+    )
+    .await
+}
+
+async fn run_cmd_result_with_writable_roots_in_cwd(
+    cmd: &[&str],
+    writable_roots: &[PathBuf],
+    cwd: &Path,
     timeout_ms: u64,
     use_legacy_landlock: bool,
     network_access: bool,
@@ -97,11 +131,12 @@ async fn run_cmd_result_with_writable_roots(
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
     let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-    run_cmd_result_with_policies(
+    run_cmd_result_with_policies_in_cwd(
         cmd,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        cwd,
         timeout_ms,
         use_legacy_landlock,
     )
@@ -117,7 +152,29 @@ async fn run_cmd_result_with_policies(
     timeout_ms: u64,
     use_legacy_landlock: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
-    let cwd = AbsolutePathBuf::current_dir().expect("cwd should exist");
+    let cwd = std::env::current_dir().expect("cwd should exist");
+    run_cmd_result_with_policies_in_cwd(
+        cmd,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        cwd.as_path(),
+        timeout_ms,
+        use_legacy_landlock,
+    )
+    .await
+}
+
+async fn run_cmd_result_with_policies_in_cwd(
+    cmd: &[&str],
+    sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    cwd: &Path,
+    timeout_ms: u64,
+    use_legacy_landlock: bool,
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
+    let cwd = AbsolutePathBuf::from_absolute_path(cwd)?;
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
@@ -132,8 +189,7 @@ async fn run_cmd_result_with_policies(
         justification: None,
         arg0: None,
     };
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
+    let codex_linux_sandbox_exe = Some(codex_linux_sandbox_exe());
 
     process_exec_tool_call(
         params,
@@ -256,6 +312,45 @@ async fn bwrap_populates_minimal_dev_nodes() {
     .expect("sandboxed command should execute");
 
     assert_eq!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn bwrap_dev_nodes_work_and_missing_workspace_dot_codex_stays_blocked() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let writable_roots = vec![tmpdir.path().to_path_buf()];
+    let output = run_cmd_result_with_writable_roots_in_cwd(
+        &[
+            "bash",
+            "-lc",
+            concat!(
+                ": >/dev/null && ",
+                "if mkdir .codex 2>/dev/null; then exit 42; fi && ",
+                "head -c 8 /dev/zero | od -An -tx1"
+            ),
+        ],
+        &writable_roots,
+        tmpdir.path(),
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(
+        output.stdout.text.split_whitespace().collect::<Vec<_>>(),
+        vec!["00", "00", "00", "00", "00", "00", "00", "00"]
+    );
+    assert!(
+        !tmpdir.path().join(".codex").exists(),
+        "bwrap-created .codex mountpoint should be cleaned up after command exit"
+    );
 }
 
 #[tokio::test]
@@ -394,8 +489,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     };
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
-    let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
+    let codex_linux_sandbox_exe: Option<PathBuf> = Some(codex_linux_sandbox_exe());
     let result = process_exec_tool_call(
         params,
         &sandbox_policy,
@@ -554,7 +648,7 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
     let blocked_target = blocked.join("secret.txt");
     // These tests bypass the usual legacy-policy bridge, so explicitly keep
     // the sandbox helper binary and minimal runtime paths readable.
-    let sandbox_helper_dir = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"))
+    let sandbox_helper_dir = codex_linux_sandbox_exe()
         .parent()
         .expect("sandbox helper should have a parent")
         .to_path_buf();
@@ -627,7 +721,7 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
     let allowed_target = allowed.join("note.txt");
     // These tests bypass the usual legacy-policy bridge, so explicitly keep
     // the sandbox helper binary and minimal runtime paths readable.
-    let sandbox_helper_dir = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"))
+    let sandbox_helper_dir = codex_linux_sandbox_exe()
         .parent()
         .expect("sandbox helper should have a parent")
         .to_path_buf();

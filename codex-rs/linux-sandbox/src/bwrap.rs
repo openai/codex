@@ -83,6 +83,7 @@ impl BwrapNetworkMode {
 pub(crate) struct BwrapArgs {
     pub args: Vec<String>,
     pub preserved_files: Vec<File>,
+    pub cleanup_mount_points: Vec<PathBuf>,
 }
 
 /// Wrap a command with bubblewrap so the filesystem is read-only by default,
@@ -104,6 +105,7 @@ pub(crate) fn create_bwrap_command_args(
             Ok(BwrapArgs {
                 args: command,
                 preserved_files: Vec::new(),
+                cleanup_mount_points: Vec::new(),
             })
         } else {
             Ok(create_bwrap_flags_full_filesystem(command, options))
@@ -143,6 +145,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
     BwrapArgs {
         args,
         preserved_files: Vec::new(),
+        cleanup_mount_points: Vec::new(),
     }
 }
 
@@ -157,6 +160,7 @@ fn create_bwrap_flags(
     let BwrapArgs {
         args: filesystem_args,
         preserved_files,
+        cleanup_mount_points,
     } = create_filesystem_args(file_system_sandbox_policy, sandbox_policy_cwd)?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
@@ -188,6 +192,7 @@ fn create_bwrap_flags(
     Ok(BwrapArgs {
         args,
         preserved_files,
+        cleanup_mount_points,
     })
 }
 
@@ -295,6 +300,7 @@ fn create_filesystem_args(
         args
     };
     let mut preserved_files = Vec::new();
+    let mut cleanup_mount_points = Vec::new();
     let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
     for writable_root in &writable_roots {
         let root = writable_root.root.as_path();
@@ -331,6 +337,7 @@ fn create_filesystem_args(
         append_unreadable_root_args(
             &mut args,
             &mut preserved_files,
+            &mut cleanup_mount_points,
             unreadable_root,
             &allowed_write_paths,
         )?;
@@ -366,7 +373,12 @@ fn create_filesystem_args(
         }
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
-            append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
+            append_read_only_subpath_args(
+                &mut args,
+                &mut cleanup_mount_points,
+                &subpath,
+                &allowed_write_paths,
+            );
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -382,6 +394,7 @@ fn create_filesystem_args(
             append_unreadable_root_args(
                 &mut args,
                 &mut preserved_files,
+                &mut cleanup_mount_points,
                 &unreadable_root,
                 &allowed_write_paths,
             )?;
@@ -403,6 +416,7 @@ fn create_filesystem_args(
         append_unreadable_root_args(
             &mut args,
             &mut preserved_files,
+            &mut cleanup_mount_points,
             &unreadable_root,
             &allowed_write_paths,
         )?;
@@ -411,6 +425,7 @@ fn create_filesystem_args(
     Ok(BwrapArgs {
         args,
         preserved_files,
+        cleanup_mount_points,
     })
 }
 
@@ -496,6 +511,7 @@ fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Pa
 
 fn append_read_only_subpath_args(
     args: &mut Vec<String>,
+    cleanup_mount_points: &mut Vec<PathBuf>,
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
 ) {
@@ -512,17 +528,36 @@ fn append_read_only_subpath_args(
     }
 
     if !subpath.exists() {
+        // Mask the first missing component so the process cannot create a
+        // protected subtree under a writable root before reaching the leaf.
         if let Some(first_missing_component) = find_first_non_existent_component(subpath)
             && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
         {
-            args.push("--ro-bind".to_string());
-            args.push("/dev/null".to_string());
-            args.push(path_to_string(&first_missing_component));
+            append_bwrap_mount_point_read_only_bind_args(
+                args,
+                cleanup_mount_points,
+                &first_missing_component,
+            );
         }
         return;
     }
 
     if is_within_allowed_write_paths(subpath, allowed_write_paths) {
+        if subpath.file_name().is_some_and(|name| name == ".codex") && subpath.is_dir() {
+            let subpath = path_to_string(subpath);
+            args.push("--dir".to_string());
+            args.push(subpath.clone());
+            args.push("--ro-bind-try".to_string());
+            args.push(subpath.clone());
+            args.push(subpath.clone());
+            args.push("--remount-ro".to_string());
+            args.push(subpath);
+            return;
+        }
+        if fs::canonicalize(subpath).is_err() {
+            append_bwrap_mount_point_read_only_bind_args(args, cleanup_mount_points, subpath);
+            return;
+        }
         args.push("--ro-bind".to_string());
         args.push(path_to_string(subpath));
         args.push(path_to_string(subpath));
@@ -532,6 +567,7 @@ fn append_read_only_subpath_args(
 fn append_unreadable_root_args(
     args: &mut Vec<String>,
     preserved_files: &mut Vec<File>,
+    cleanup_mount_points: &mut Vec<PathBuf>,
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
@@ -551,9 +587,11 @@ fn append_unreadable_root_args(
         if let Some(first_missing_component) = find_first_non_existent_component(unreadable_root)
             && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
         {
-            args.push("--ro-bind".to_string());
-            args.push("/dev/null".to_string());
-            args.push(path_to_string(&first_missing_component));
+            append_bwrap_mount_point_read_only_bind_args(
+                args,
+                cleanup_mount_points,
+                &first_missing_component,
+            );
         }
         return Ok(());
     }
@@ -602,16 +640,36 @@ fn append_existing_unreadable_path_args(
         return Ok(());
     }
 
+    args.push("--perms".to_string());
+    args.push("000".to_string());
+    append_empty_file_read_only_bind_args(args, preserved_files, unreadable_root)?;
+    Ok(())
+}
+
+fn append_empty_file_read_only_bind_args(
+    args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    mount_target: &Path,
+) -> Result<()> {
     if preserved_files.is_empty() {
         preserved_files.push(File::open("/dev/null")?);
     }
     let null_fd = preserved_files[0].as_raw_fd().to_string();
-    args.push("--perms".to_string());
-    args.push("000".to_string());
     args.push("--ro-bind-data".to_string());
     args.push(null_fd);
-    args.push(path_to_string(unreadable_root));
+    args.push(path_to_string(mount_target));
     Ok(())
+}
+
+fn append_bwrap_mount_point_read_only_bind_args(
+    args: &mut Vec<String>,
+    cleanup_mount_points: &mut Vec<PathBuf>,
+    mount_target: &Path,
+) {
+    args.push("--ro-bind".to_string());
+    args.push("/dev/null".to_string());
+    args.push(path_to_string(mount_target));
+    cleanup_mount_points.push(mount_target.to_path_buf());
 }
 
 /// Returns true when `path` is under any allowed writable root.
@@ -1054,32 +1112,121 @@ mod tests {
             Path::new("/"),
         )
         .expect("bwrap fs args");
+        assert_eq!(args.preserved_files.len(), 0);
+        assert_eq!(args.cleanup_mount_points, vec![PathBuf::from("/.codex")]);
         assert_eq!(
-            args.args,
-            vec![
+            &args.args[..8],
+            [
                 // Start from a read-only view of the full filesystem.
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
+                "--ro-bind",
+                "/",
+                "/",
                 // Recreate a writable /dev inside the sandbox.
-                "--dev".to_string(),
-                "/dev".to_string(),
+                "--dev",
+                "/dev",
                 // Make the writable root itself writable again.
-                "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                // Mask the default protected .codex subpath under that writable
-                // root. Because the root is `/` in this test, the carveout path
-                // appears as `/.codex`.
-                "--ro-bind".to_string(),
-                "/dev/null".to_string(),
-                "/.codex".to_string(),
-                // Rebind /dev after the root bind so device nodes remain
-                // writable/usable inside the writable root.
-                "--bind".to_string(),
-                "/dev".to_string(),
-                "/dev".to_string(),
+                "--bind",
+                "/",
+                "/",
             ]
+        );
+        let codex_mask_index = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--ro-bind", "/dev/null", "/.codex"])
+            .expect("missing protected .codex should be masked under bwrap");
+        let dev_rebind_index = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", "/dev", "/dev"])
+            .expect("expected /dev to be rebound after the writable root");
+        assert!(codex_mask_index < dev_rebind_index);
+    }
+
+    #[test]
+    fn masks_first_missing_component_for_nested_read_only_subpaths() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let protected_path = temp_dir.path().join("missing").join("protected");
+        let first_missing_component = temp_dir.path().join("missing");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(temp_dir.path()).expect("absolute temp dir"),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(protected_path.as_path())
+                        .expect("absolute protected path"),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        assert!(
+            args.cleanup_mount_points.contains(&first_missing_component),
+            "missing protected subtree should be registered for cleanup: {:#?}",
+            args.cleanup_mount_points
+        );
+        let first_missing_component = path_to_string(&first_missing_component);
+        let protected_path = path_to_string(&protected_path);
+
+        assert_eq!(args.preserved_files.len(), 0);
+        assert!(
+            args.args.windows(3).any(|window| {
+                window == ["--ro-bind", "/dev/null", first_missing_component.as_str()]
+            }),
+            "missing protected subtree should be masked at first missing component: {:#?}",
+            args.args
+        );
+        assert!(
+            !args
+                .args
+                .windows(3)
+                .any(|window| window == ["--ro-bind", "/dev/null", protected_path.as_str()]),
+            "mask should target the first missing component, not the unreachable leaf: {:#?}",
+            args.args
+        );
+    }
+
+    #[test]
+    fn existing_dot_codex_uses_try_bind_fallback_without_cleanup() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let dot_codex = temp_dir.path().join(".codex");
+        std::fs::create_dir(&dot_codex).expect("create .codex");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(temp_dir.path()).expect("absolute temp dir"),
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+
+        assert!(!args.cleanup_mount_points.contains(&dot_codex));
+        let dot_codex = path_to_string(&dot_codex);
+        assert!(
+            args.args
+                .windows(2)
+                .any(|window| window == ["--dir", dot_codex.as_str()])
+        );
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| window == ["--ro-bind-try", dot_codex.as_str(), dot_codex.as_str()])
+        );
+        assert!(
+            args.args
+                .windows(2)
+                .any(|window| window == ["--remount-ro", dot_codex.as_str()])
         );
     }
 
