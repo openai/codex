@@ -112,6 +112,8 @@ impl SessionState {
             generation,
             model_slug,
             base_history,
+            captured_context: Vec::new(),
+            captured_reference_context_item: None,
         })
     }
 
@@ -301,6 +303,8 @@ pub(crate) struct PrefixCompactStart {
     pub(crate) generation: u64,
     pub(crate) model_slug: String,
     pub(crate) base_history: Vec<ResponseItem>,
+    pub(crate) captured_context: Vec<ResponseItem>,
+    pub(crate) captured_reference_context_item: Option<TurnContextItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -309,6 +313,8 @@ pub(crate) struct PrefixCompactCandidate {
     pub(crate) model_slug: String,
     pub(crate) base_history: Vec<ResponseItem>,
     pub(crate) replacement_prefix: Vec<ResponseItem>,
+    pub(crate) captured_context: Vec<ResponseItem>,
+    pub(crate) captured_reference_context_item: Option<TurnContextItem>,
 }
 
 // Sometimes new snapshots don't include credits or plan information.

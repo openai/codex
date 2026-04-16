@@ -1379,7 +1379,7 @@ async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()
         .count();
     assert_eq!(
         stale_context_count, 1,
-        "prefix compaction should strip stale retained suffix context before current context is reinjected"
+        "prefix compaction should preserve context updates in the retained suffix"
     );
 
     Ok(())

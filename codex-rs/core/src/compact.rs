@@ -481,80 +481,20 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
     compacted_history
 }
 
-/// Builds prefix-compaction replacement history from a processed compacted prefix and the live
-/// retained suffix, then inserts canonical context at the active suffix boundary.
+/// Builds prefix-compaction replacement history from a processed compacted prefix, the context
+/// captured when that prefix snapshot was taken, and the live retained suffix.
 ///
 /// The prefix has already gone through the same retention filtering as classic remote compaction.
-/// The suffix has not been summarized by `/compact`, so callers should only remove stale injected
-/// context from it and preserve live transcript/tool state.
-///
-/// Placement rules:
-/// - If the suffix has a real user message, inject immediately before the last such suffix message.
-/// - If the suffix has no real user message, inject immediately after the compacted prefix.
+/// The captured context is inserted immediately after the prefix so the untouched suffix remains
+/// under the same chronological context state that existed when the suffix began.
 pub(crate) fn build_prefix_compacted_history(
     mut processed_prefix: Vec<ResponseItem>,
+    captured_context: Vec<ResponseItem>,
     retained_suffix: Vec<ResponseItem>,
-    initial_context: Vec<ResponseItem>,
 ) -> Vec<ResponseItem> {
-    let prefix_len = processed_prefix.len();
-    let insertion_index = retained_suffix
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(i, item)| is_real_user_message(item).then_some(prefix_len + i))
-        .unwrap_or(prefix_len);
-
+    processed_prefix.extend(captured_context);
     processed_prefix.extend(retained_suffix);
-    processed_prefix.splice(insertion_index..insertion_index, initial_context);
     processed_prefix
-}
-
-fn is_real_user_message(item: &ResponseItem) -> bool {
-    let Some(TurnItem::UserMessage(user)) = crate::event_mapping::parse_turn_item(item) else {
-        return false;
-    };
-    !is_summary_message(&user.message())
-}
-
-/// Removes client-injected context scaffolding from retained, uncompacted suffix history.
-///
-/// Prefix compaction replaces only an earlier prefix and appends the still-live suffix. The suffix
-/// can contain context items that were injected before a later turn and are now stale after we
-/// re-inject canonical current context. Unlike compacted prefix cleanup, this intentionally keeps
-/// live model/tool state such as reasoning, function calls, and tool outputs.
-pub(crate) fn strip_injected_context_from_retained_suffix<I>(items: I) -> Vec<ResponseItem>
-where
-    I: IntoIterator<Item = ResponseItem>,
-{
-    items
-        .into_iter()
-        .filter(|item| !is_injected_context_item(item))
-        .collect()
-}
-
-fn is_injected_context_item(item: &ResponseItem) -> bool {
-    match item {
-        ResponseItem::Message { role, content, .. } if role == "developer" => {
-            crate::event_mapping::is_contextual_dev_message_content(content)
-        }
-        ResponseItem::Message { role, content, .. } if role == "user" => {
-            is_regenerable_contextual_user_message(content)
-        }
-        _ => false,
-    }
-}
-
-fn is_regenerable_contextual_user_message(content: &[ContentItem]) -> bool {
-    !content.is_empty() && content.iter().all(is_regenerable_contextual_user_fragment)
-}
-
-fn is_regenerable_contextual_user_fragment(content_item: &ContentItem) -> bool {
-    let ContentItem::InputText { text } = content_item else {
-        return false;
-    };
-
-    codex_instructions::AGENTS_MD_FRAGMENT.matches_text(text)
-        || crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT.matches_text(text)
 }
 
 pub(crate) fn build_compacted_history(

@@ -2,9 +2,6 @@ use super::*;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
-use codex_protocol::items::HookPromptFragment;
-use codex_protocol::items::build_hook_prompt_message;
-use codex_protocol::models::FunctionCallOutputPayload;
 use pretty_assertions::assert_eq;
 
 async fn process_compacted_history_with_test_session(
@@ -172,123 +169,6 @@ do things
     let collected = collect_user_messages(&items);
 
     assert_eq!(vec!["real user message".to_string()], collected);
-}
-
-#[test]
-fn strip_injected_context_from_retained_suffix_preserves_live_history() {
-    let contextual_developer = input_message("developer", "<permissions instructions>\nread only");
-    let mixed_developer = ResponseItem::Message {
-        id: None,
-        role: "developer".to_string(),
-        content: vec![
-            ContentItem::InputText {
-                text: "Persistent developer instruction.".to_string(),
-            },
-            ContentItem::InputText {
-                text: "<permissions instructions>\nworkspace-write".to_string(),
-            },
-        ],
-        end_turn: None,
-        phase: None,
-    };
-    let user_instructions = input_message(
-        "user",
-        r#"# AGENTS.md instructions for /repo
-
-<INSTRUCTIONS>
-Use cargo test.
-</INSTRUCTIONS>"#,
-    );
-    let contextual_user = input_message(
-        "user",
-        r#"<environment_context>
-  <cwd>/repo</cwd>
-  <shell>zsh</shell>
-</environment_context>"#,
-    );
-    let skill_payload = input_message(
-        "user",
-        r#"<skill>
-<name>fix-ci</name>
-<path>/skills/fix-ci/SKILL.md</path>
-Debug the failing check.
-</skill>"#,
-    );
-    let user_shell_command = input_message(
-        "user",
-        r#"<user_shell_command>
-<command>
-echo hi
-</command>
-<result>
-Exit code: 0
-Output:
-hi
-</result>
-</user_shell_command>"#,
-    );
-    let subagent_notification = input_message(
-        "user",
-        r#"<subagent_notification>{"agent_path":"agent-1","status":"completed"}</subagent_notification>"#,
-    );
-    let turn_aborted = input_message("user", "<turn_aborted>interrupted</turn_aborted>");
-    let real_user = input_message("user", "please continue");
-    let assistant = ResponseItem::Message {
-        id: None,
-        role: "assistant".to_string(),
-        content: vec![ContentItem::OutputText {
-            text: "continuing".to_string(),
-        }],
-        end_turn: None,
-        phase: None,
-    };
-    let function_call = ResponseItem::FunctionCall {
-        id: None,
-        name: "read_file".to_string(),
-        namespace: None,
-        arguments: "{}".to_string(),
-        call_id: "call-1".to_string(),
-    };
-    let function_output = ResponseItem::FunctionCallOutput {
-        call_id: "call-1".to_string(),
-        output: FunctionCallOutputPayload::from_text("ok".to_string()),
-    };
-    let hook_prompt = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
-        "Retry with tests.",
-        "hook-run-1",
-    )])
-    .expect("hook prompt message");
-
-    let cleaned = strip_injected_context_from_retained_suffix(vec![
-        contextual_developer,
-        mixed_developer,
-        user_instructions,
-        contextual_user,
-        skill_payload.clone(),
-        user_shell_command.clone(),
-        subagent_notification.clone(),
-        turn_aborted.clone(),
-        real_user.clone(),
-        assistant.clone(),
-        function_call.clone(),
-        function_output.clone(),
-        hook_prompt.clone(),
-    ]);
-
-    assert_eq!(
-        cleaned,
-        vec![
-            skill_payload,
-            user_shell_command,
-            subagent_notification,
-            turn_aborted,
-            real_user,
-            assistant,
-            function_call,
-            function_output,
-            hook_prompt,
-        ]
-    );
 }
 
 #[test]
@@ -743,54 +623,63 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last
 }
 
 #[test]
-fn build_prefix_compacted_history_injects_before_last_suffix_user() {
+fn build_prefix_compacted_history_inserts_captured_context_after_prefix() {
     let prefix_user = input_message("user", "older user in compacted prefix");
+    let captured_developer = input_message("developer", "captured permissions");
+    let captured_user = input_message("user", "captured environment");
     let suffix_assistant = output_message("working through suffix");
     let suffix_user = input_message("user", "latest user in retained suffix");
-    let suffix_after_user = output_message("assistant after suffix user");
-    let initial_context = input_message("developer", "fresh current context");
 
     let refreshed = build_prefix_compacted_history(
         vec![prefix_user.clone()],
-        vec![
-            suffix_assistant.clone(),
-            suffix_user.clone(),
-            suffix_after_user.clone(),
-        ],
-        vec![initial_context.clone()],
+        vec![captured_developer.clone(), captured_user.clone()],
+        vec![suffix_assistant.clone(), suffix_user.clone()],
     );
 
     assert_eq!(
         refreshed,
         vec![
             prefix_user,
+            captured_developer,
+            captured_user,
             suffix_assistant,
-            initial_context,
             suffix_user,
-            suffix_after_user,
         ]
     );
 }
 
 #[test]
-fn build_prefix_compacted_history_injects_after_prefix_when_suffix_has_no_user() {
+fn build_prefix_compacted_history_preserves_suffix_context_items() {
     let prefix_user = input_message("user", "older user in compacted prefix");
-    let suffix_assistant = output_message("continuing without user");
-    let hook_prompt = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
-        "Retry with tests.",
-        "hook-run-1",
-    )])
-    .expect("hook prompt message");
-    let initial_context = input_message("developer", "fresh current context");
+    let captured_context = input_message("developer", "captured permissions");
+    let suffix_developer = input_message("developer", "<permissions instructions>\nnew sandbox");
+    let suffix_user_context = input_message(
+        "user",
+        r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>zsh</shell>
+</environment_context>"#,
+    );
+    let suffix_assistant = output_message("continuing after context change");
 
     let refreshed = build_prefix_compacted_history(
         vec![prefix_user.clone()],
-        vec![suffix_assistant.clone(), hook_prompt.clone()],
-        vec![initial_context.clone()],
+        vec![captured_context.clone()],
+        vec![
+            suffix_developer.clone(),
+            suffix_user_context.clone(),
+            suffix_assistant.clone(),
+        ],
     );
 
     assert_eq!(
         refreshed,
-        vec![prefix_user, initial_context, suffix_assistant, hook_prompt]
+        vec![
+            prefix_user,
+            captured_context,
+            suffix_developer,
+            suffix_user_context,
+            suffix_assistant,
+        ]
     );
 }

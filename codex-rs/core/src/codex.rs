@@ -6760,9 +6760,7 @@ async fn run_auto_compact(
         .take_ready_prefix_compact(&turn_context.model_info.slug)
         .await;
     if let Some(candidate) = prefix_candidate {
-        if apply_prefix_compact_candidate(sess, turn_context, initial_context_injection, candidate)
-            .await?
-        {
+        if apply_prefix_compact_candidate(sess, turn_context, candidate).await? {
             return Ok(());
         }
         debug!(
@@ -6803,7 +6801,6 @@ async fn run_auto_compact(
 async fn apply_prefix_compact_candidate(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    initial_context_injection: InitialContextInjection,
     candidate: PrefixCompactCandidate,
 ) -> CodexResult<bool> {
     let current_history = sess.clone_history().await;
@@ -6826,24 +6823,19 @@ async fn apply_prefix_compact_candidate(
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
 
-    let retained_suffix = compact::strip_injected_context_from_retained_suffix(
-        current_items[candidate.base_history.len()..]
-            .iter()
-            .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
-            .cloned(),
-    );
-    let initial_context = if matches!(
-        initial_context_injection,
-        InitialContextInjection::BeforeLastUserMessage
-    ) {
-        sess.build_initial_context(turn_context.as_ref()).await
-    } else {
-        Vec::new()
-    };
+    let retained_suffix: Vec<ResponseItem> = current_items[candidate.base_history.len()..]
+        .iter()
+        .filter(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .cloned()
+        .collect();
+    let reference_context_item = sess
+        .reference_context_item()
+        .await
+        .or(candidate.captured_reference_context_item);
     let mut new_history = compact::build_prefix_compacted_history(
         candidate.replacement_prefix,
+        candidate.captured_context,
         retained_suffix,
-        initial_context,
     );
 
     new_history.extend(
@@ -6853,10 +6845,6 @@ async fn apply_prefix_compact_candidate(
             .cloned(),
     );
 
-    let reference_context_item = match initial_context_injection {
-        InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
-    };
     let compacted_item = CompactedItem {
         message: String::new(),
         replacement_history: Some(new_history.clone()),
@@ -6917,7 +6905,7 @@ async fn maybe_start_prefix_compact(
         return;
     }
 
-    let Some(start) = sess
+    let Some(mut start) = sess
         .begin_prefix_compact(turn_context.model_info.slug.clone())
         .await
     else {
@@ -6930,6 +6918,8 @@ async fn maybe_start_prefix_compact(
         );
         return;
     };
+    start.captured_context = sess.build_initial_context(turn_context.as_ref()).await;
+    start.captured_reference_context_item = Some(turn_context.to_turn_context_item());
 
     debug!(
         turn_id = %turn_context.sub_id,
@@ -6939,6 +6929,7 @@ async fn maybe_start_prefix_compact(
         prefix_compact_limit,
         auto_compact_limit,
         base_history_len = start.base_history.len(),
+        captured_context_len = start.captured_context.len(),
         "starting background prefix compaction"
     );
     spawn_prefix_compact_task(Arc::clone(sess), Arc::clone(turn_context), start);
@@ -6954,6 +6945,8 @@ fn spawn_prefix_compact_task(
             generation,
             model_slug,
             base_history,
+            captured_context,
+            captured_reference_context_item,
         } = start;
         let compacted = run_remote_prefix_compact_task(
             Arc::clone(&sess),
@@ -6969,6 +6962,7 @@ fn spawn_prefix_compact_task(
                     model_slug = %model_slug,
                     base_history_len = base_history.len(),
                     replacement_prefix_len = replacement_prefix.len(),
+                    captured_context_len = captured_context.len(),
                     "background prefix compaction ready"
                 );
                 sess.finish_prefix_compact(PrefixCompactCandidate {
@@ -6976,6 +6970,8 @@ fn spawn_prefix_compact_task(
                     model_slug,
                     base_history,
                     replacement_prefix,
+                    captured_context,
+                    captured_reference_context_item,
                 })
                 .await;
             }
