@@ -1332,8 +1332,8 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     Ok(())
 }
 
-#[test]
-fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
+#[tokio::test]
+async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
     const TEST_STACK_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
     let handle =
@@ -1569,9 +1569,9 @@ fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow:
         )),
     }
 }
-#[test]
-fn guardian_review_session_config_preserves_parent_network_proxy() {
-    let mut parent_config = test_config();
+#[tokio::test]
+async fn guardian_review_session_config_preserves_parent_network_proxy() {
+    let mut parent_config = test_config().await;
     let network = NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
         Some(NetworkConstraints {
@@ -1616,9 +1616,9 @@ fn guardian_review_session_config_preserves_parent_network_proxy() {
     );
 }
 
-#[test]
-fn guardian_review_session_config_overrides_parent_developer_instructions() {
-    let mut parent_config = test_config();
+#[tokio::test]
+async fn guardian_review_session_config_overrides_parent_developer_instructions() {
+    let mut parent_config = test_config().await;
     parent_config.developer_instructions =
         Some("parent or managed config should not replace guardian policy".to_string());
 
@@ -1636,9 +1636,9 @@ fn guardian_review_session_config_overrides_parent_developer_instructions() {
     );
 }
 
-#[test]
-fn guardian_review_session_config_uses_live_network_proxy_state() {
-    let mut parent_config = test_config();
+#[tokio::test]
+async fn guardian_review_session_config_uses_live_network_proxy_state() {
+    let mut parent_config = test_config().await;
     let mut parent_network = NetworkProxyConfig::default();
     parent_network.network.enabled = true;
     parent_network
@@ -1680,9 +1680,9 @@ fn guardian_review_session_config_uses_live_network_proxy_state() {
     );
 }
 
-#[test]
-fn guardian_review_session_config_rejects_pinned_collab_feature() {
-    let mut parent_config = test_config();
+#[tokio::test]
+async fn guardian_review_session_config_rejects_pinned_collab_feature() {
+    let mut parent_config = test_config().await;
     parent_config.features = ManagedFeatures::from_configured(
         parent_config.features.get().clone(),
         Some(Sourced {
@@ -1708,9 +1708,9 @@ fn guardian_review_session_config_rejects_pinned_collab_feature() {
     );
 }
 
-#[test]
-fn guardian_review_session_config_uses_parent_active_model_instead_of_hardcoded_slug() {
-    let mut parent_config = test_config();
+#[tokio::test]
+async fn guardian_review_session_config_uses_parent_active_model_instead_of_hardcoded_slug() {
+    let mut parent_config = test_config().await;
     parent_config.model = Some("configured-model".to_string());
 
     let guardian_config = build_guardian_review_session_config_for_test(
@@ -1724,8 +1724,8 @@ fn guardian_review_session_config_uses_parent_active_model_instead_of_hardcoded_
     assert_eq!(guardian_config.model, Some("active-model".to_string()));
 }
 
-#[test]
-fn guardian_review_session_config_uses_requirements_guardian_policy_config() {
+#[tokio::test]
+async fn guardian_review_session_config_uses_requirements_guardian_policy_config() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let workspace = tempfile::tempdir().expect("create temp dir");
     let config_layer_stack = ConfigLayerStack::new(
@@ -1748,6 +1748,7 @@ fn guardian_review_session_config_uses_requirements_guardian_policy_config() {
         codex_home.abs(),
         config_layer_stack,
     )
+    .await
     .expect("load config");
 
     let guardian_config = build_guardian_review_session_config_for_test(
@@ -1766,8 +1767,9 @@ fn guardian_review_session_config_uses_requirements_guardian_policy_config() {
     );
 }
 
-#[test]
-fn guardian_review_session_config_uses_default_guardian_policy_without_requirements_override() {
+#[tokio::test]
+async fn guardian_review_session_config_uses_default_guardian_policy_without_requirements_override()
+{
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let workspace = tempfile::tempdir().expect("create temp dir");
     let config_layer_stack =
@@ -1782,6 +1784,7 @@ fn guardian_review_session_config_uses_default_guardian_policy_without_requireme
         codex_home.abs(),
         config_layer_stack,
     )
+    .await
     .expect("load config");
 
     let guardian_config = build_guardian_review_session_config_for_test(

@@ -1,5 +1,5 @@
-use super::PluginManifestInterface;
-use super::load_plugin_manifest;
+use crate::manifest::PluginManifestInterface;
+use crate::manifest::load_plugin_manifest;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_git_utils::get_git_repo_root;
@@ -9,6 +9,8 @@ use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
 use serde::Deserialize;
+use serde::Deserializer;
+use serde_json::Value as JsonValue;
 use std::fs;
 use std::io;
 use std::path::Component;
@@ -16,7 +18,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
 
-const MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
+const MARKETPLACE_MANIFEST_RELATIVE_PATHS: &[&str] = &[
+    ".agents/plugins/marketplace.json",
+    ".claude-plugin/marketplace.json",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedMarketplacePlugin {
@@ -162,46 +167,50 @@ pub fn resolve_marketplace_plugin(
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(marketplace_path)?;
     let marketplace_name = marketplace.name;
-    let plugin = marketplace
-        .plugins
-        .into_iter()
-        .find(|plugin| plugin.name == plugin_name);
-
-    let Some(plugin) = plugin else {
-        return Err(MarketplaceError::PluginNotFound {
-            plugin_name: plugin_name.to_string(),
-            marketplace_name,
-        });
-    };
-
-    let RawMarketplaceManifestPlugin {
-        name,
-        source,
-        policy,
-        ..
-    } = plugin;
-    let install_policy = policy.installation;
-    let product_allowed = match policy.products.as_deref() {
-        None => true,
-        Some([]) => false,
-        Some(products) => {
-            restriction_product.is_some_and(|product| product.matches_product_restriction(products))
+    let marketplace_name_for_not_found = marketplace_name.clone();
+    for plugin in marketplace.plugins {
+        if plugin.name != plugin_name {
+            continue;
         }
-    };
-    if install_policy == MarketplacePluginInstallPolicy::NotAvailable || !product_allowed {
-        return Err(MarketplaceError::PluginNotAvailable {
-            plugin_name: name,
-            marketplace_name,
+
+        let RawMarketplaceManifestPlugin {
+            name,
+            source,
+            policy,
+            ..
+        } = plugin;
+        let install_policy = policy.installation;
+        let product_allowed = match policy.products.as_deref() {
+            None => true,
+            Some([]) => false,
+            Some(products) => restriction_product
+                .is_some_and(|product| product.matches_product_restriction(products)),
+        };
+        if install_policy == MarketplacePluginInstallPolicy::NotAvailable || !product_allowed {
+            return Err(MarketplaceError::PluginNotAvailable {
+                plugin_name: name,
+                marketplace_name,
+            });
+        }
+
+        let Some(source_path) =
+            resolve_supported_plugin_source_path(marketplace_path, &name, source)
+        else {
+            continue;
+        };
+
+        return Ok(ResolvedMarketplacePlugin {
+            plugin_id: PluginId::new(name, marketplace_name).map_err(|err| match err {
+                PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+            })?,
+            source_path,
+            auth_policy: policy.authentication,
         });
     }
 
-    let plugin_id = PluginId::new(name, marketplace_name).map_err(|err| match err {
-        PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
-    })?;
-    Ok(ResolvedMarketplacePlugin {
-        plugin_id,
-        source_path: resolve_plugin_source_path(marketplace_path, source)?,
-        auth_policy: policy.authentication,
+    Err(MarketplaceError::PluginNotFound {
+        plugin_name: plugin_name.to_string(),
+        marketplace_name: marketplace_name_for_not_found,
     })
 }
 
@@ -212,17 +221,51 @@ pub fn list_marketplaces(
 }
 
 pub fn validate_marketplace_root(root: &Path) -> Result<String, MarketplaceError> {
-    let path = AbsolutePathBuf::try_from(root.join(MARKETPLACE_RELATIVE_PATH)).map_err(|err| {
-        MarketplaceError::InvalidMarketplaceFile {
-            path: root.join(MARKETPLACE_RELATIVE_PATH),
-            message: format!("marketplace path must resolve to an absolute path: {err}"),
-        }
-    })?;
+    let Some(path) = find_marketplace_manifest_path(root) else {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: root.to_path_buf(),
+            message: "marketplace root does not contain a supported manifest".to_string(),
+        });
+    };
     let marketplace = load_marketplace(&path)?;
     Ok(marketplace.name)
 }
 
-pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
+pub fn find_marketplace_manifest_path(root: &Path) -> Option<AbsolutePathBuf> {
+    MARKETPLACE_MANIFEST_RELATIVE_PATHS
+        .iter()
+        .find_map(|relative_path| {
+            let path = root.join(relative_path);
+            if !path.is_file() {
+                return None;
+            }
+            AbsolutePathBuf::try_from(path).ok()
+        })
+}
+
+fn invalid_marketplace_layout_error(path: &AbsolutePathBuf) -> MarketplaceError {
+    MarketplaceError::InvalidMarketplaceFile {
+        path: path.to_path_buf(),
+        message: "marketplace file is not in a supported location".to_string(),
+    }
+}
+
+fn marketplace_root_from_layout(marketplace_path: &Path, relative_path: &str) -> Option<PathBuf> {
+    let mut current = marketplace_path;
+    for component in Path::new(relative_path).components().rev() {
+        let expected = match component {
+            Component::Normal(expected) => expected,
+            _ => return None,
+        };
+        if current.file_name() != Some(expected) {
+            return None;
+        }
+        current = current.parent()?;
+    }
+    Some(current.to_path_buf())
+}
+
+pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(path)?;
     let mut plugins = Vec::new();
 
@@ -233,7 +276,9 @@ pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Ma
             policy,
             category,
         } = plugin;
-        let source_path = resolve_plugin_source_path(path, source)?;
+        let Some(source_path) = resolve_supported_plugin_source_path(path, &name, source) else {
+            continue;
+        };
         let source = MarketplacePluginSource::Local {
             path: source_path.clone(),
         };
@@ -266,7 +311,8 @@ pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Ma
     })
 }
 
-fn list_marketplaces_with_home(
+#[doc(hidden)]
+pub fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
@@ -298,30 +344,27 @@ fn discover_marketplace_paths_from_roots(
 ) -> Vec<AbsolutePathBuf> {
     let mut paths = Vec::new();
 
-    if let Some(home) = home_dir {
-        let path = home.join(MARKETPLACE_RELATIVE_PATH);
-        if path.is_file()
-            && let Ok(path) = AbsolutePathBuf::try_from(path)
-        {
-            paths.push(path);
-        }
+    if let Some(home) = home_dir
+        && let Some(path) = find_marketplace_manifest_path(home)
+    {
+        paths.push(path);
     }
 
     for root in additional_roots {
         // Curated marketplaces can now come from an HTTP-downloaded directory that is not a git
         // checkout, so check the root directly before falling back to repo-root discovery.
-        let path = root.join(MARKETPLACE_RELATIVE_PATH);
-        if path.as_path().is_file() && !paths.contains(&path) {
+        if let Some(path) = find_marketplace_manifest_path(root.as_path())
+            && !paths.contains(&path)
+        {
             paths.push(path);
             continue;
         }
         if let Some(repo_root) = get_git_repo_root(root.as_path())
             && let Ok(repo_root) = AbsolutePathBuf::try_from(repo_root)
+            && let Some(path) = find_marketplace_manifest_path(repo_root.as_path())
+            && !paths.contains(&path)
         {
-            let path = repo_root.join(MARKETPLACE_RELATIVE_PATH);
-            if path.as_path().is_file() && !paths.contains(&path) {
-                paths.push(path);
-            }
+            paths.push(path);
         }
     }
 
@@ -346,80 +389,83 @@ fn load_raw_marketplace_manifest(
     })
 }
 
-fn resolve_plugin_source_path(
+fn resolve_supported_plugin_source_path(
     marketplace_path: &AbsolutePathBuf,
+    plugin_name: &str,
     source: RawMarketplaceManifestPluginSource,
-) -> Result<AbsolutePathBuf, MarketplaceError> {
+) -> Option<AbsolutePathBuf> {
     match source {
         RawMarketplaceManifestPluginSource::Local { path } => {
-            let Some(path) = path.strip_prefix("./") else {
-                return Err(MarketplaceError::InvalidMarketplaceFile {
-                    path: marketplace_path.to_path_buf(),
-                    message: "local plugin source path must start with `./`".to_string(),
-                });
-            };
-            if path.is_empty() {
-                return Err(MarketplaceError::InvalidMarketplaceFile {
-                    path: marketplace_path.to_path_buf(),
-                    message: "local plugin source path must not be empty".to_string(),
-                });
+            match resolve_local_plugin_source_path(marketplace_path, &path) {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    warn!(
+                        path = %marketplace_path.display(),
+                        plugin = plugin_name,
+                        error = %err,
+                        "skipping marketplace plugin that failed to resolve"
+                    );
+                    None
+                }
             }
-
-            let relative_source_path = Path::new(path);
-            if relative_source_path
-                .components()
-                .any(|component| !matches!(component, Component::Normal(_)))
-            {
-                return Err(MarketplaceError::InvalidMarketplaceFile {
-                    path: marketplace_path.to_path_buf(),
-                    message: "local plugin source path must stay within the marketplace root"
-                        .to_string(),
-                });
-            }
-
-            // `marketplace.json` lives under `<root>/.agents/plugins/`, but local plugin paths
-            // are resolved relative to `<root>`, not relative to the `plugins/` directory.
-            Ok(marketplace_root_dir(marketplace_path)?.join(relative_source_path))
+        }
+        RawMarketplaceManifestPluginSource::Unsupported => {
+            warn!(
+                path = %marketplace_path.display(),
+                plugin = plugin_name,
+                "skipping marketplace plugin with unsupported source"
+            );
+            None
         }
     }
+}
+
+fn resolve_local_plugin_source_path(
+    marketplace_path: &AbsolutePathBuf,
+    source_path: &str,
+) -> Result<AbsolutePathBuf, MarketplaceError> {
+    let Some(source_path) = source_path.strip_prefix("./") else {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "local plugin source path must start with `./`".to_string(),
+        });
+    };
+    if source_path.is_empty() {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "local plugin source path must not be empty".to_string(),
+        });
+    }
+
+    let relative_source_path = Path::new(source_path);
+    if relative_source_path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message: "local plugin source path must stay within the marketplace root".to_string(),
+        });
+    }
+
+    // `marketplace.json` lives under a supported marketplace layout beneath `<root>`,
+    // but local plugin paths are resolved relative to `<root>`.
+    Ok(marketplace_root_dir(marketplace_path)?.join(relative_source_path))
 }
 
 fn marketplace_root_dir(
     marketplace_path: &AbsolutePathBuf,
 ) -> Result<AbsolutePathBuf, MarketplaceError> {
-    let Some(plugins_dir) = marketplace_path.parent() else {
-        return Err(MarketplaceError::InvalidMarketplaceFile {
-            path: marketplace_path.to_path_buf(),
-            message: "marketplace file must live under `<root>/.agents/plugins/`".to_string(),
-        });
-    };
-    let Some(dot_agents_dir) = plugins_dir.parent() else {
-        return Err(MarketplaceError::InvalidMarketplaceFile {
-            path: marketplace_path.to_path_buf(),
-            message: "marketplace file must live under `<root>/.agents/plugins/`".to_string(),
-        });
-    };
-    let Some(marketplace_root) = dot_agents_dir.parent() else {
-        return Err(MarketplaceError::InvalidMarketplaceFile {
-            path: marketplace_path.to_path_buf(),
-            message: "marketplace file must live under `<root>/.agents/plugins/`".to_string(),
-        });
-    };
-
-    if plugins_dir.as_path().file_name().and_then(|s| s.to_str()) != Some("plugins")
-        || dot_agents_dir
-            .as_path()
-            .file_name()
-            .and_then(|s| s.to_str())
-            != Some(".agents")
-    {
-        return Err(MarketplaceError::InvalidMarketplaceFile {
-            path: marketplace_path.to_path_buf(),
-            message: "marketplace file must live under `<root>/.agents/plugins/`".to_string(),
-        });
+    for relative_path in MARKETPLACE_MANIFEST_RELATIVE_PATHS {
+        if let Some(marketplace_root) =
+            marketplace_root_from_layout(marketplace_path.as_path(), relative_path)
+        {
+            return AbsolutePathBuf::try_from(marketplace_root)
+                .map_err(|_| invalid_marketplace_layout_error(marketplace_path));
+        }
     }
 
-    Ok(marketplace_root)
+    Err(invalid_marketplace_layout_error(marketplace_path))
 }
 
 #[derive(Debug, Deserialize)]
@@ -459,10 +505,33 @@ struct RawMarketplaceManifestPluginPolicy {
     products: Option<Vec<Product>>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "source", rename_all = "lowercase")]
+#[derive(Debug)]
 enum RawMarketplaceManifestPluginSource {
     Local { path: String },
+    // Mixed-source marketplaces should still contribute the local plugins we can load.
+    Unsupported,
+}
+
+impl<'de> Deserialize<'de> for RawMarketplaceManifestPluginSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let source = JsonValue::deserialize(deserializer)?;
+        Ok(match source {
+            JsonValue::String(path) => Self::Local { path },
+            JsonValue::Object(object) => match object.get("source").and_then(JsonValue::as_str) {
+                Some("local") => match object.get("path").and_then(JsonValue::as_str) {
+                    Some(path) => Self::Local {
+                        path: path.to_string(),
+                    },
+                    None => Self::Unsupported,
+                },
+                _ => Self::Unsupported,
+            },
+            _ => Self::Unsupported,
+        })
+    }
 }
 
 fn resolve_marketplace_interface(

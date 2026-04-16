@@ -377,9 +377,11 @@ async fn file_system_copy_rejects_directory_without_recursive(use_remote: bool) 
     Ok(())
 }
 
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_sandboxed_read_allows_readable_root() -> Result<()> {
-    let context = create_file_system_context(/*use_remote*/ false).await?;
+async fn file_system_sandboxed_read_allows_readable_root(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
     let tmp = TempDir::new()?;
@@ -391,7 +393,8 @@ async fn file_system_sandboxed_read_allows_readable_root() -> Result<()> {
 
     let contents = file_system
         .read_file(&absolute_path(file_path), Some(&sandbox))
-        .await?;
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"sandboxed hello");
 
     Ok(())
@@ -520,9 +523,13 @@ async fn file_system_sandboxed_read_rejects_symlink_escape(use_remote: bool) -> 
     Ok(())
 }
 
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_sandboxed_read_rejects_symlink_parent_dotdot_escape() -> Result<()> {
-    let context = create_file_system_context(/*use_remote*/ false).await?;
+async fn file_system_sandboxed_read_rejects_symlink_parent_dotdot_escape(
+    use_remote: bool,
+) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
     let tmp = TempDir::new()?;
@@ -680,9 +687,11 @@ async fn file_system_copy_rejects_symlink_escape_destination(use_remote: bool) -
     Ok(())
 }
 
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_remove_removes_symlink_not_target() -> Result<()> {
-    let context = create_file_system_context(/*use_remote*/ false).await?;
+async fn file_system_remove_removes_symlink_not_target(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
     let tmp = TempDir::new()?;
@@ -705,7 +714,8 @@ async fn file_system_remove_removes_symlink_not_target() -> Result<()> {
             },
             Some(&sandbox),
         )
-        .await?;
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
 
     assert!(!symlink_path.exists());
     assert!(outside_file.exists());
@@ -714,9 +724,11 @@ async fn file_system_remove_removes_symlink_not_target() -> Result<()> {
     Ok(())
 }
 
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_copy_preserves_symlink_source() -> Result<()> {
-    let context = create_file_system_context(/*use_remote*/ false).await?;
+async fn file_system_copy_preserves_symlink_source(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
     let file_system = context.file_system;
 
     let tmp = TempDir::new()?;
@@ -738,7 +750,8 @@ async fn file_system_copy_preserves_symlink_source() -> Result<()> {
             CopyOptions { recursive: false },
             Some(&sandbox),
         )
-        .await?;
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
 
     let copied_metadata = std::fs::symlink_metadata(&copied_symlink)?;
     assert!(copied_metadata.file_type().is_symlink());

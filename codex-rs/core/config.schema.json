@@ -500,6 +500,9 @@
             "tui_app_server": {
               "type": "boolean"
             },
+            "unavailable_dummy_tools": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -2358,6 +2361,9 @@
           "type": "boolean"
         },
         "tui_app_server": {
+          "type": "boolean"
+        },
+        "unavailable_dummy_tools": {
           "type": "boolean"
         },
         "undo": {

@@ -109,7 +109,20 @@ pub(super) fn image_callback(
     } else {
         args.get(0)
     };
-    let image_item = match normalize_output_image(scope, value) {
+    let detail_override = if args.length() < 2 {
+        None
+    } else {
+        let detail = args.get(1);
+        if detail.is_string() {
+            Some(detail.to_rust_string_lossy(scope))
+        } else if detail.is_null() || detail.is_undefined() {
+            None
+        } else {
+            throw_type_error(scope, "image detail must be a string when provided");
+            return;
+        }
+    };
+    let image_item = match normalize_output_image(scope, value, detail_override) {
         Ok(image_item) => image_item,
         Err(()) => return,
     };
