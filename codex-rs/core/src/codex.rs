@@ -4769,6 +4769,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     false
                 }
                 Op::OverrideTurnContext {
+                    environments: _,
                     cwd,
                     approval_policy,
                     approvals_reviewer,
