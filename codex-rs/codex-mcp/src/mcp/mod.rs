@@ -35,7 +35,6 @@ use codex_protocol::protocol::SandboxPolicy;
 use serde_json::Value;
 
 use crate::mcp_connection_manager::McpConnectionManager;
-use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 pub type McpManager = McpConnectionManager;
 
@@ -272,6 +271,7 @@ fn codex_apps_mcp_server_config(config: &McpConfig, auth: Option<&CodexAuth>) ->
         },
         enabled: true,
         required: false,
+        supports_parallel_tool_calls: false,
         disabled_reason: None,
         startup_timeout_sec: Some(Duration::from_secs(30)),
         tool_timeout_sec: None,
@@ -346,14 +346,6 @@ pub async fn collect_mcp_snapshot_with_detail(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    // Use ReadOnly sandbox policy for MCP snapshot collection (safest default)
-    let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-        sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        use_legacy_landlock: config.use_legacy_landlock,
-    };
-
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -361,7 +353,7 @@ pub async fn collect_mcp_snapshot_with_detail(
         &config.approval_policy,
         submit_id,
         tx_event,
-        sandbox_state,
+        SandboxPolicy::new_read_only_policy(),
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,
@@ -420,13 +412,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     let (tx_event, rx_event) = unbounded();
     drop(rx_event);
 
-    let sandbox_state = SandboxState {
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-        sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        use_legacy_landlock: config.use_legacy_landlock,
-    };
-
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
         &mcp_servers,
         config.mcp_oauth_credentials_store_mode,
@@ -434,7 +419,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         &config.approval_policy,
         submit_id,
         tx_event,
-        sandbox_state,
+        SandboxPolicy::new_read_only_policy(),
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth),
         tool_plugin_provenance,

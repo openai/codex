@@ -256,20 +256,14 @@ fn authorized_request(
     method: reqwest::Method,
     url: &str,
 ) -> reqwest::RequestBuilder {
+    let mut headers = http::HeaderMap::new();
+    auth.add_auth_headers(&mut headers);
+
     let client = build_reqwest_client();
-    let mut request = client
+    client
         .request(method, url)
-        .timeout(OPENAI_FILE_REQUEST_TIMEOUT);
-    if let Some(token) = auth.bearer_token() {
-        request = request.bearer_auth(token);
-    }
-    if let Some(account_id) = auth.account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
-    if auth.is_fedramp_account() {
-        request = request.header("X-OpenAI-Fedramp", "true");
-    }
-    request
+        .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
+        .headers(headers)
 }
 
 fn build_reqwest_client() -> reqwest::Client {

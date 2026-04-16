@@ -30,6 +30,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
+use crate::legacy_core::plugins::PluginCapabilitySummary;
 
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -270,6 +271,14 @@ pub(crate) enum AppEvent {
         result: Result<PluginUninstallResponse, String>,
     },
 
+    /// Refresh plugin mention bindings from the current config.
+    RefreshPluginMentions,
+
+    /// Result of refreshing plugin mention bindings.
+    PluginMentionsLoaded {
+        plugins: Option<Vec<PluginCapabilitySummary>>,
+    },
+
     /// Advance the post-install plugin app-auth flow.
     PluginInstallAuthAdvance {
         refresh_connectors: bool,
@@ -454,6 +463,15 @@ pub(crate) enum AppEvent {
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
     },
+
+    /// Update memory settings and persist them to config.toml.
+    UpdateMemorySettings {
+        use_memories: bool,
+        generate_memories: bool,
+    },
+
+    /// Clear all persisted local memory artifacts via the app-server.
+    ResetMemories,
 
     /// Update whether the full access warning prompt has been acknowledged.
     UpdateFullAccessWarningAcknowledged(bool),

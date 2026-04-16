@@ -5,6 +5,7 @@ use app_test_support::create_fake_rollout_with_source;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::rollout_path;
+use app_test_support::test_absolute_path;
 use app_test_support::to_response;
 use chrono::DateTime;
 use chrono::Utc;
@@ -37,7 +38,6 @@ use std::fs;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -372,7 +372,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
         assert_eq!(thread.updated_at, thread.created_at);
-        assert_eq!(thread.cwd, PathBuf::from("/"));
+        assert_eq!(thread.cwd, test_absolute_path("/"));
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
@@ -399,7 +399,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
         assert_eq!(thread.updated_at, thread.created_at);
-        assert_eq!(thread.cwd, PathBuf::from("/"));
+        assert_eq!(thread.cwd, test_absolute_path("/"));
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
@@ -455,7 +455,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     let expected_ts = chrono::DateTime::parse_from_rfc3339("2025-01-02T11:00:00Z")?.timestamp();
     assert_eq!(thread.created_at, expected_ts);
     assert_eq!(thread.updated_at, expected_ts);
-    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cwd, test_absolute_path("/"));
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
@@ -518,7 +518,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, filtered_id);
     assert_ne!(data[0].id, unfiltered_id);
-    assert_eq!(data[0].cwd, target_cwd);
+    assert_eq!(data[0].cwd.as_path(), target_cwd.as_path());
 
     Ok(())
 }
@@ -563,15 +563,34 @@ sqlite = true
         /*git_info*/ None,
     )?;
 
-    // `thread/list` only applies `search_term` on the sqlite path. In this test we
-    // create rollouts manually, so we must also create the sqlite DB and mark backfill
-    // complete; otherwise app-server will permanently use filesystem fallback.
+    // `thread/list` applies `search_term` on the sqlite fast path. This test creates
+    // rollouts manually, so mark the DB backfill complete and then run an unsearched
+    // list large enough to repair every rollout the searched list should find.
     let state_db =
         codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
             .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
+    let rollout_config = codex_rollout::RolloutConfig {
+        codex_home: codex_home.path().to_path_buf(),
+        sqlite_home: codex_home.path().to_path_buf(),
+        cwd: codex_home.path().to_path_buf(),
+        model_provider_id: "mock_provider".to_string(),
+        generate_memories: false,
+    };
+    let repaired_page = codex_core::RolloutRecorder::list_threads(
+        &rollout_config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        codex_core::ThreadSortKey::CreatedAt,
+        &[],
+        /*model_providers*/ None,
+        "mock_provider",
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(repaired_page.items.len(), 3);
 
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
@@ -1032,7 +1051,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
     };
     assert_eq!(thread.git_info, Some(expected_git));
     assert_eq!(thread.source, SessionSource::Cli);
-    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cwd, test_absolute_path("/"));
     assert_eq!(thread.cli_version, "0.0.0");
 
     Ok(())

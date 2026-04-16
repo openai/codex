@@ -384,7 +384,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     assert_command(&begin_event.command, "-lc", "/bin/echo hello unified exec");
 
-    assert_eq!(begin_event.cwd, cwd);
+    assert_eq!(begin_event.cwd.as_path(), cwd.as_path());
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -449,7 +449,8 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
     .await;
 
     assert_eq!(
-        begin_event.cwd, workdir,
+        begin_event.cwd.as_path(),
+        workdir.as_path(),
         "exec_command cwd should resolve relative workdir against turn cwd",
     );
 
@@ -511,7 +512,8 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     .await;
 
     assert_eq!(
-        begin_event.cwd, workdir,
+        begin_event.cwd.as_path(),
+        workdir.as_path(),
         "exec_command cwd should reflect the requested workdir override"
     );
 

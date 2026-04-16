@@ -42,9 +42,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use url::Url;
-
 use self::realtime::PendingSteerCompareKey;
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
@@ -62,7 +61,6 @@ use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
 use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
 use crate::legacy_core::find_thread_name_by_id;
-use crate::legacy_core::plugins::PluginsManager;
 use crate::legacy_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -254,6 +252,11 @@ const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
 const MULTI_AGENT_ENABLE_NOTICE: &str = "Subagents will be enabled in the next session.";
+const MEMORIES_DOC_URL: &str = "https://developers.openai.com/codex/memories";
+const MEMORIES_ENABLE_TITLE: &str = "Enable memories?";
+const MEMORIES_ENABLE_YES: &str = "Yes, enable";
+const MEMORIES_ENABLE_NO: &str = "Not now";
+const MEMORIES_ENABLE_NOTICE: &str = "Memories will be enabled in the next session.";
 const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
@@ -314,6 +317,7 @@ use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::McpServerElicitationFormRequest;
+use crate::bottom_pane::MemoriesSettingsView;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
@@ -943,7 +947,7 @@ pub(crate) struct ChatWidget {
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
     // Instruction source files loaded for the current session, supplied by app-server.
-    instruction_source_paths: Vec<PathBuf>,
+    instruction_source_paths: Vec<AbsolutePathBuf>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -1371,6 +1375,7 @@ fn app_server_request_id_to_mcp_request_id(
 
 fn exec_approval_request_from_params(
     params: CommandExecutionRequestApprovalParams,
+    fallback_cwd: &AbsolutePathBuf,
 ) -> ExecApprovalRequestEvent {
     ExecApprovalRequestEvent {
         call_id: params.item_id,
@@ -1379,7 +1384,7 @@ fn exec_approval_request_from_params(
             .as_deref()
             .map(split_command_string)
             .unwrap_or_default(),
-        cwd: params.cwd.unwrap_or_default(),
+        cwd: params.cwd.unwrap_or_else(|| fallback_cwd.clone()),
         reason: params.reason,
         network_approval_context: params
             .network_approval_context
@@ -1973,13 +1978,8 @@ impl ChatWidget {
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
-        self.current_cwd = Some(event.cwd.clone());
-        match AbsolutePathBuf::try_from(event.cwd.clone()) {
-            Ok(cwd) => self.config.cwd = cwd,
-            Err(err) => {
-                tracing::warn!(path = %event.cwd.display(), %err, "session cwd should be absolute");
-            }
-        }
+        self.current_cwd = Some(event.cwd.to_path_buf());
+        self.config.cwd = event.cwd.clone();
         if let Err(err) = self
             .config
             .permissions
@@ -2040,10 +2040,7 @@ impl ChatWidget {
             self.replay_initial_messages(messages);
         }
         self.saw_copy_source_this_turn = false;
-        self.submit_op(AppCommand::list_skills(
-            Vec::new(),
-            /*force_reload*/ true,
-        ));
+        self.refresh_skills_for_current_cwd(/*force_reload*/ true);
         if self.connectors_enabled() {
             self.prefetch_connectors();
         }
@@ -2165,6 +2162,16 @@ impl ChatWidget {
         let view = crate::bottom_pane::AppLinkView::new(params, self.app_event_tx.clone());
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
+    }
+
+    pub(crate) fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) {
+        // A remotely resolved request must not remain user-actionable. It may be
+        // materialized in the bottom pane or still deferred behind active streaming.
+        let removed_deferred = self.interrupts.remove_resolved_prompt(request);
+        let removed_visible = self.bottom_pane.dismiss_app_server_request(request);
+        if removed_deferred || removed_visible {
+            self.request_redraw();
+        }
     }
 
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
@@ -2596,6 +2603,61 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    pub(crate) fn open_memories_popup(&mut self) {
+        if !self.config.features.enabled(Feature::MemoryTool) {
+            self.open_memories_enable_prompt();
+            return;
+        }
+
+        let view = MemoriesSettingsView::new(
+            self.config.memories.use_memories,
+            self.config.memories.generate_memories,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn open_memories_enable_prompt(&mut self) {
+        let items = vec![
+            SelectionItem {
+                name: MEMORIES_ENABLE_YES.to_string(),
+                description: Some(
+                    "Save the setting now. You will need a new session to use it.".to_string(),
+                ),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::UpdateFeatureFlags {
+                        updates: vec![(Feature::MemoryTool, true)],
+                    });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: MEMORIES_ENABLE_NO.to_string(),
+                description: Some("Keep memories disabled.".to_string()),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(MEMORIES_ENABLE_TITLE.to_string()),
+            subtitle: Some("Memories are currently disabled in your config.".to_string()),
+            footer_note: Some(Line::from(vec![
+                "Learn more: ".dim(),
+                MEMORIES_DOC_URL.cyan().underlined(),
+            ])),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn set_memory_settings(&mut self, use_memories: bool, generate_memories: bool) {
+        self.config.memories.use_memories = use_memories;
+        self.config.memories.generate_memories = generate_memories;
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -3423,6 +3485,42 @@ impl ChatWidget {
             return;
         }
 
+        if ev.status == GuardianAssessmentStatus::TimedOut {
+            let cell = if let Some(command) = guardian_command(&ev.action) {
+                history_cell::new_approval_decision_cell(
+                    command,
+                    codex_protocol::protocol::ReviewDecision::TimedOut,
+                    history_cell::ApprovalDecisionActor::Guardian,
+                )
+            } else {
+                match &ev.action {
+                    GuardianAssessmentAction::ApplyPatch { files, .. } => {
+                        let files = files
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>();
+                        history_cell::new_guardian_timed_out_patch_request(files)
+                    }
+                    GuardianAssessmentAction::McpToolCall {
+                        server, tool_name, ..
+                    } => history_cell::new_guardian_timed_out_action_request(format!(
+                        "codex could call MCP tool {server}.{tool_name}"
+                    )),
+                    GuardianAssessmentAction::NetworkAccess { target, .. } => {
+                        history_cell::new_guardian_timed_out_action_request(format!(
+                            "codex could access {target}"
+                        ))
+                    }
+                    GuardianAssessmentAction::Command { .. } => unreachable!(),
+                    GuardianAssessmentAction::Execve { .. } => unreachable!(),
+                }
+            };
+
+            self.add_boxed_history(cell);
+            self.request_redraw();
+            return;
+        }
+
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
@@ -3597,15 +3695,10 @@ impl ChatWidget {
 
     fn on_image_generation_end(&mut self, event: ImageGenerationEndEvent) {
         self.flush_answer_stream_with_separator();
-        let saved_path = event.saved_path.map(|saved_path| {
-            Url::from_file_path(Path::new(&saved_path))
-                .map(|url| url.to_string())
-                .unwrap_or(saved_path)
-        });
         self.add_to_history(history_cell::new_image_generation_call(
             event.call_id,
             event.revised_prompt,
-            saved_path,
+            event.saved_path,
         ));
         self.request_redraw();
     }
@@ -4503,7 +4596,7 @@ impl ChatWidget {
             id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
-            cwd: self.config.cwd.to_path_buf(),
+            cwd: self.config.cwd.clone(),
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -4666,6 +4759,7 @@ impl ChatWidget {
             invocation,
             duration,
             result,
+            ..
         } = ev;
 
         let extra_cell = match self
@@ -4697,14 +4791,6 @@ impl ChatWidget {
 
     pub(crate) fn new_with_app_event(common: ChatWidgetInit) -> Self {
         Self::new_with_op_target(common, CodexOpTarget::AppEvent)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn new_with_op_sender(
-        common: ChatWidgetInit,
-        codex_op_tx: UnboundedSender<Op>,
-    ) -> Self {
-        Self::new_with_op_target(common, CodexOpTarget::Direct(codex_op_tx))
     }
 
     fn new_with_op_target(common: ChatWidgetInit, codex_op_target: CodexOpTarget) -> Self {
@@ -5858,6 +5944,7 @@ impl ChatWidget {
                 server,
                 tool,
                 arguments,
+                mcp_app_resource_uri,
                 result,
                 error,
                 duration_ms,
@@ -5870,15 +5957,19 @@ impl ChatWidget {
                         tool,
                         arguments: Some(arguments),
                     },
+                    mcp_app_resource_uri,
                     duration: Duration::from_millis(duration_ms.unwrap_or_default().max(0) as u64),
                     result: match (result, error) {
                         (_, Some(error)) => Err(error.message),
-                        (Some(result), None) => Ok(codex_protocol::mcp::CallToolResult {
-                            content: result.content,
-                            structured_content: result.structured_content,
-                            is_error: Some(false),
-                            meta: None,
-                        }),
+                        (Some(result), None) => {
+                            let result = *result;
+                            Ok(codex_protocol::mcp::CallToolResult {
+                                content: result.content,
+                                structured_content: result.structured_content,
+                                is_error: Some(false),
+                                meta: None,
+                            })
+                        }
                         (None, None) => Err("MCP tool call completed without a result".to_string()),
                     },
                 });
@@ -5896,10 +5987,7 @@ impl ChatWidget {
                 });
             }
             ThreadItem::ImageView { id, path } => {
-                self.on_view_image_tool_call(ViewImageToolCallEvent {
-                    call_id: id,
-                    path: path.into(),
-                });
+                self.on_view_image_tool_call(ViewImageToolCallEvent { call_id: id, path });
             }
             ThreadItem::ImageGeneration {
                 id,
@@ -5965,7 +6053,11 @@ impl ChatWidget {
         let id = request.id().to_string();
         match request {
             ServerRequest::CommandExecutionRequestApproval { params, .. } => {
-                self.on_exec_approval_request(id, exec_approval_request_from_params(params));
+                let fallback_cwd = self.config.cwd.clone();
+                self.on_exec_approval_request(
+                    id,
+                    exec_approval_request_from_params(params, &fallback_cwd),
+                );
             }
             ServerRequest::FileChangeRequestApproval { params, .. } => {
                 self.on_apply_patch_approval_request(
@@ -6129,10 +6221,7 @@ impl ChatWidget {
                 }
             }
             ServerNotification::SkillsChanged(_) => {
-                self.submit_op(AppCommand::list_skills(
-                    Vec::new(),
-                    /*force_reload*/ true,
-                ));
+                self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
             ServerNotification::ModelRerouted(_) => {}
             ServerNotification::DeprecationNotice(notification) => {
@@ -6245,7 +6334,8 @@ impl ChatWidget {
             | ServerNotification::FsChanged(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
-            | ServerNotification::ThreadRealtimeTranscriptUpdated(_)
+            | ServerNotification::ThreadRealtimeTranscriptDelta(_)
+            | ServerNotification::ThreadRealtimeTranscriptDone(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
@@ -6369,6 +6459,7 @@ impl ChatWidget {
                 server,
                 tool,
                 arguments,
+                mcp_app_resource_uri,
                 ..
             } => {
                 self.on_mcp_tool_call_begin(McpToolCallBeginEvent {
@@ -6378,6 +6469,7 @@ impl ChatWidget {
                         tool,
                         arguments: Some(arguments),
                     },
+                    mcp_app_resource_uri,
                 });
             }
             ThreadItem::WebSearch { id, .. } => {
@@ -6703,10 +6795,7 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
-                self.submit_op(AppCommand::list_skills(
-                    Vec::new(),
-                    /*force_reload*/ true,
-                ));
+                self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
@@ -9641,14 +9730,17 @@ impl ChatWidget {
     /// Build a placeholder header cell while the session is configuring.
     fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
-        Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
-            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
-            placeholder_style,
-            /*reasoning_effort*/ None,
-            /*show_fast_status*/ false,
-            config.cwd.to_path_buf(),
-            CODEX_CLI_VERSION,
-        ))
+        Box::new(
+            history_cell::SessionHeaderHistoryCell::new_with_style(
+                DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+                placeholder_style,
+                /*reasoning_effort*/ None,
+                /*show_fast_status*/ false,
+                config.cwd.to_path_buf(),
+                CODEX_CLI_VERSION,
+            )
+            .with_yolo_mode(history_cell::is_yolo_mode(config)),
+        )
     }
 
     /// Merge the real session info cell with any placeholder header to avoid double boxes.
@@ -9681,6 +9773,13 @@ impl ChatWidget {
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_memories_enable_notice(&mut self) {
+        self.add_to_history(history_cell::new_warning_event(
+            MEMORIES_ENABLE_NOTICE.to_string(),
+        ));
         self.request_redraw();
     }
 
@@ -10201,6 +10300,14 @@ impl ChatWidget {
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
+
+    fn refresh_skills_for_current_cwd(&mut self, force_reload: bool) {
+        self.submit_op(AppCommand::list_skills(
+            vec![self.config.cwd.to_path_buf()],
+            force_reload,
+        ));
+    }
+
     /// Forward a command directly to codex.
     pub(crate) fn submit_op<T>(&mut self, op: T) -> bool
     where
@@ -10341,17 +10448,21 @@ impl ChatWidget {
             return;
         }
 
-        let plugins = PluginsManager::new(self.config.codex_home.to_path_buf())
-            .plugins_for_config(&self.config)
-            .capability_summaries()
-            .to_vec();
-        self.bottom_pane.set_plugin_mentions(Some(plugins));
+        self.app_event_tx.send(AppEvent::RefreshPluginMentions);
+    }
+
+    pub(crate) fn on_plugin_mentions_loaded(
+        &mut self,
+        plugins: Option<Vec<crate::legacy_core::plugins::PluginCapabilitySummary>>,
+    ) {
+        self.bottom_pane.set_plugin_mentions(plugins);
     }
 
     pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
         self.config.features = config.features.clone();
         self.config.config_layer_stack = config.config_layer_stack.clone();
         self.config.realtime = config.realtime.clone();
+        self.config.memories = config.memories.clone();
     }
 
     pub(crate) fn open_review_popup(&mut self) {

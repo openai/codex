@@ -19,6 +19,7 @@ use serde_json::to_string;
 use serde_json::to_value;
 use std::sync::Arc;
 use tracing::instrument;
+use tracing::trace;
 
 const MULTIPART_BOUNDARY: &str = "codex-realtime-call-boundary";
 const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data; boundary=codex-realtime-call-boundary";
@@ -118,6 +119,7 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
         session_config: RealtimeSessionConfig,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
+        trace!(target: "codex_api::realtime_websocket::wire", "realtime call request SDP: {sdp}");
         // WebRTC can begin inference as soon as the peer connection comes up, so the initial
         // session payload is sent with call creation. The sideband WebSocket still sends its normal
         // session.update after it joins.
@@ -200,6 +202,7 @@ fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError>
         .ok_or_else(|| ApiError::Stream("realtime call response missing Location".to_string()))?
         .to_str()
         .map_err(|err| ApiError::Stream(format!("invalid realtime call Location: {err}")))?;
+    trace!("realtime call Location: {location}");
 
     location
         .split('?')
@@ -219,6 +222,7 @@ fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError>
 mod tests {
     use super::*;
     use crate::endpoint::realtime_websocket::RealtimeEventParser;
+    use crate::endpoint::realtime_websocket::RealtimeOutputModality;
     use crate::endpoint::realtime_websocket::RealtimeSessionMode;
     use crate::provider::RetryConfig;
     use async_trait::async_trait;
@@ -280,8 +284,11 @@ mod tests {
     struct DummyAuth;
 
     impl AuthProvider for DummyAuth {
-        fn bearer_token(&self) -> Option<String> {
-            Some("test-token".to_string())
+        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            headers.insert(
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer test-token"),
+            );
         }
     }
 
@@ -309,6 +316,7 @@ mod tests {
             session_id: Some(session_id.to_string()),
             event_parser: RealtimeEventParser::RealtimeV2,
             session_mode: RealtimeSessionMode::Conversational,
+            output_modality: RealtimeOutputModality::Audio,
             voice: RealtimeVoice::Marin,
         }
     }

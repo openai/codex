@@ -24,8 +24,8 @@ fn normalize_absolute_path_for_platform_simplifies_windows_verbatim_paths() {
     assert_eq!(parsed, PathBuf::from(r"D:\c\x\worktrees\2508\swift-base"));
 }
 
-#[test]
-fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()> {
+#[tokio::test]
+async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()> {
     let temp_dir = TempDir::new()?;
     let cwd = temp_dir.path().join("workspace");
     let codex_home = temp_dir.path().join(".codex");
@@ -64,7 +64,8 @@ fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()>
             ..Default::default()
         },
         AbsolutePathBuf::from_absolute_path(&codex_home)?,
-    )?;
+    )
+    .await?;
 
     let expected_zsh = AbsolutePathBuf::try_from(zsh_path)?;
     let expected_allowed_arg0_dir = AbsolutePathBuf::try_from(allowed_arg0_dir)?;

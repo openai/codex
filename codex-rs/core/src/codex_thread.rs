@@ -24,6 +24,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,7 +41,7 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
@@ -197,6 +198,29 @@ impl CodexThread {
         }
 
         Ok(submission_id)
+    }
+
+    /// Append raw Responses API items to the thread's model-visible history.
+    pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+        if items.is_empty() {
+            return Err(CodexErr::InvalidRequest(
+                "items must not be empty".to_string(),
+            ));
+        }
+
+        let turn_context = self.codex.session.new_default_turn().await;
+        if self.codex.session.reference_context_item().await.is_none() {
+            self.codex
+                .session
+                .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+                .await;
+        }
+        self.codex
+            .session
+            .record_conversation_items(turn_context.as_ref(), &items)
+            .await;
+        self.codex.session.flush_rollout().await?;
+        Ok(())
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {

@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::DateTime;
@@ -6,6 +5,7 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::models::SandboxPermissions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use serde::Serialize;
 use serde::Serializer;
@@ -64,7 +64,7 @@ impl Hook {
 #[serde(rename_all = "snake_case")]
 pub struct HookPayload {
     pub session_id: ThreadId,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client: Option<String>,
     #[serde(serialize_with = "serialize_triggered_at")]
@@ -159,12 +159,12 @@ pub enum HookEvent {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use chrono::TimeZone;
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::models::SandboxPermissions;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -180,9 +180,10 @@ mod tests {
     fn hook_payload_serializes_stable_wire_shape() {
         let session_id = ThreadId::new();
         let thread_id = ThreadId::new();
+        let cwd = test_path_buf("/tmp").abs();
         let payload = HookPayload {
             session_id,
-            cwd: PathBuf::from("tmp"),
+            cwd: cwd.clone(),
             client: None,
             triggered_at: Utc
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
@@ -201,7 +202,7 @@ mod tests {
         let actual = serde_json::to_value(payload).expect("serialize hook payload");
         let expected = json!({
             "session_id": session_id.to_string(),
-            "cwd": "tmp",
+            "cwd": cwd.display().to_string(),
             "triggered_at": "2025-01-01T00:00:00Z",
             "hook_event": {
                 "event_type": "after_agent",
@@ -218,9 +219,10 @@ mod tests {
     #[test]
     fn after_tool_use_payload_serializes_stable_wire_shape() {
         let session_id = ThreadId::new();
+        let cwd = test_path_buf("/tmp").abs();
         let payload = HookPayload {
             session_id,
-            cwd: PathBuf::from("tmp"),
+            cwd: cwd.clone(),
             client: None,
             triggered_at: Utc
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
@@ -256,7 +258,7 @@ mod tests {
         let actual = serde_json::to_value(payload).expect("serialize hook payload");
         let expected = json!({
             "session_id": session_id.to_string(),
-            "cwd": "tmp",
+            "cwd": cwd.display().to_string(),
             "triggered_at": "2025-01-01T00:00:00Z",
             "hook_event": {
                 "event_type": "after_tool_use",

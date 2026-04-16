@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::ToolName;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
 use pretty_assertions::assert_eq;
@@ -647,6 +648,42 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
 }
 
 #[tokio::test]
+async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
+    let startup_tools = vec![create_test_tool("rmcp", "echo")];
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
+    let mut manager = McpConnectionManager::new_uninitialized(&approval_policy, &sandbox_policy);
+    manager.clients.insert(
+        "rmcp".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            startup_snapshot: Some(startup_tools),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+        },
+    );
+
+    let tool = manager
+        .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "echo"))
+        .await
+        .expect("split MCP tool namespace and name should resolve");
+
+    let expected = ("rmcp", "mcp__rmcp__", "echo", "echo");
+    assert_eq!(
+        (
+            tool.server_name.as_str(),
+            tool.callable_namespace.as_str(),
+            tool.callable_name.as_str(),
+            tool.tool.name.as_ref(),
+        ),
+        expected
+    );
+}
+
+#[tokio::test]
 async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
@@ -757,6 +794,7 @@ fn mcp_init_error_display_prompts_for_github_pat() {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
@@ -806,6 +844,7 @@ fn mcp_init_error_display_reports_generic_errors() {
             },
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
