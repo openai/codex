@@ -224,7 +224,7 @@ fn network_toml_overlays_unix_socket_permissions_by_path() {
 }
 
 #[test]
-fn read_write_glob_warnings_skip_deny_read_and_trailing_subpaths() {
+fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths() {
     let filesystem = FilesystemPermissionsToml {
         entries: BTreeMap::from([
             (
@@ -251,7 +251,8 @@ fn read_write_glob_warnings_skip_deny_read_and_trailing_subpaths() {
         vec![
             "/tmp/**/*.log".to_string(),
             ":project_roots/src/**/*.rs".to_string()
-        ]
+        ],
+        "`none` glob patterns are supported as deny-read rules; only `read`/`write` globs should warn"
     );
 }
 
@@ -289,7 +290,8 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                 value: FileSystemSpecialPath::project_roots(Some("docs".into())),
             },
             access: FileSystemAccessMode::Read,
-        }])
+        }]),
+        "trailing /** should compile as a subtree path instead of a glob pattern"
     );
     Ok(())
 }

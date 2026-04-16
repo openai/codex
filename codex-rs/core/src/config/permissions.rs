@@ -44,7 +44,7 @@ pub(crate) fn resolve_permission_profile<'a>(
 pub(crate) fn compile_permission_profile(
     permissions: &PermissionsToml,
     profile_name: &str,
-    cwd: &Path,
+    policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
     let profile = resolve_permission_profile(permissions, profile_name)?;
@@ -57,7 +57,7 @@ pub(crate) fn compile_permission_profile(
                 missing_filesystem_entries_warning(profile_name),
             );
         } else {
-            if cfg!(any(target_os = "linux", target_os = "windows")) {
+            if cfg!(not(target_os = "macos")) {
                 for pattern in unsupported_read_write_glob_paths(filesystem) {
                     push_warning(
                         startup_warnings,
@@ -68,13 +68,12 @@ pub(crate) fn compile_permission_profile(
                 }
             }
             for (path, permission) in &filesystem.entries {
-                compile_filesystem_permission(
+                entries.extend(compile_filesystem_permission(
                     path,
                     permission,
-                    cwd,
-                    &mut entries,
+                    policy_cwd,
                     startup_warnings,
-                )?;
+                )?);
             }
         }
     } else {
@@ -136,10 +135,10 @@ fn compile_network_sandbox_policy(network: Option<&NetworkToml>) -> NetworkSandb
 fn compile_filesystem_permission(
     path: &str,
     permission: &FilesystemPermissionToml,
-    cwd: &Path,
-    entries: &mut Vec<FileSystemSandboxEntry>,
+    policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
-) -> io::Result<()> {
+) -> io::Result<Vec<FileSystemSandboxEntry>> {
+    let mut entries = Vec::new();
     match permission {
         FilesystemPermissionToml::Access(access) => {
             entries.push(FileSystemSandboxEntry {
@@ -159,16 +158,14 @@ fn compile_filesystem_permission(
                     // pattern entry. Literal scoped paths continue through the
                     // exact-path parser so existing path semantics stay intact.
                     let entry = FileSystemSandboxEntry {
-                        path: FileSystemPath::Pattern {
+                        path: FileSystemPath::GlobPattern {
                             pattern: compile_scoped_filesystem_pattern(
-                                path, subpath, *access, cwd,
+                                path, subpath, *access, policy_cwd,
                             )?,
                         },
                         access: *access,
                     };
-                    if !entries.iter().any(|existing| existing == &entry) {
-                        entries.push(entry);
-                    }
+                    entries.push(entry);
                 } else {
                     let subpath = compile_read_write_glob_path(subpath, *access)?;
                     entries.push(FileSystemSandboxEntry {
@@ -179,7 +176,7 @@ fn compile_filesystem_permission(
             }
         }
     }
-    Ok(())
+    Ok(entries)
 }
 
 fn compile_filesystem_access_path(
@@ -192,7 +189,11 @@ fn compile_filesystem_access_path(
     }
 
     if access == FileSystemAccessMode::None {
-        return Ok(FileSystemPath::Pattern {
+        // At this point `path` is an unscoped filesystem table key. Top-level
+        // glob deny entries still go through the absolute-path parser before
+        // becoming policy patterns; relative project-root glob syntax is
+        // handled by `compile_scoped_filesystem_pattern`.
+        return Ok(FileSystemPath::GlobPattern {
             pattern: parse_absolute_path(path)?.to_string_lossy().into_owned(),
         });
     }
@@ -253,7 +254,7 @@ fn compile_scoped_filesystem_pattern(
     path: &str,
     subpath: &str,
     access: FileSystemAccessMode,
-    cwd: &Path,
+    policy_cwd: &Path,
 ) -> io::Result<String> {
     // Pattern entries currently mean deny-read only. Supporting broader access
     // modes here would imply glob-based read/write allow semantics that the
@@ -268,9 +269,15 @@ fn compile_scoped_filesystem_pattern(
 
     match parse_special_path(path) {
         Some(FileSystemSpecialPath::ProjectRoots { .. }) => {
-            Ok(AbsolutePathBuf::resolve_path_against_base(&subpath, cwd)
-                .to_string_lossy()
-                .to_string())
+            // `:project_roots` is represented as a special path, but current
+            // filesystem-policy resolution defines it relative to the session
+            // cwd. Use the same policy cwd here so glob entries and exact
+            // scoped entries resolve consistently.
+            Ok(
+                AbsolutePathBuf::resolve_path_against_base(&subpath, policy_cwd)
+                    .to_string_lossy()
+                    .to_string(),
+            )
         }
         Some(_) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,

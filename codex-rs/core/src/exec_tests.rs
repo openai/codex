@@ -830,7 +830,7 @@ fn windows_elevated_rejects_unreadable_globs() {
             access: codex_protocol::permissions::FileSystemAccessMode::Write,
         },
         codex_protocol::permissions::FileSystemSandboxEntry {
-            path: codex_protocol::permissions::FileSystemPath::Pattern {
+            path: codex_protocol::permissions::FileSystemPath::GlobPattern {
                 pattern: "**/*.env".to_string(),
             },
             access: codex_protocol::permissions::FileSystemAccessMode::None,

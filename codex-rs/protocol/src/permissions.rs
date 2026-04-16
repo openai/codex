@@ -168,6 +168,10 @@ pub struct ReadDenyMatcher {
 
 impl ReadDenyMatcher {
     /// Builds a matcher from exact deny-read roots and deny-read glob entries.
+    ///
+    /// Returns `None` when the policy has no deny-read restrictions, so callers
+    /// can skip read-deny checks without allocating matcher state. The `cwd`
+    /// resolves cwd-relative policy paths and special paths before matching.
     pub fn new(file_system_sandbox_policy: &FileSystemSandboxPolicy, cwd: &Path) -> Option<Self> {
         if !file_system_sandbox_policy.has_denied_read_restrictions() {
             return None;
@@ -241,7 +245,7 @@ pub enum FileSystemPath {
     },
     /// A git-style glob pattern. Pattern entries currently support
     /// FileSystemAccessMode::None only.
-    Pattern {
+    GlobPattern {
         pattern: String,
     },
     Special {
@@ -343,7 +347,7 @@ impl FileSystemSandboxPolicy {
 
                 match &entry.path {
                     FileSystemPath::Path { .. } => !self.has_same_target_write_override(entry),
-                    FileSystemPath::Pattern { .. } => true,
+                    FileSystemPath::GlobPattern { .. } => true,
                     FileSystemPath::Special { value } => match value {
                         FileSystemSpecialPath::Root => entry.access == FileSystemAccessMode::None,
                         FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => {
@@ -385,7 +389,7 @@ impl FileSystemSandboxPolicy {
                     FileSystemPath::Path { path } => !legacy_writable_roots
                         .iter()
                         .any(|root| root.is_path_writable(path.as_path())),
-                    FileSystemPath::Pattern { .. } => true,
+                    FileSystemPath::GlobPattern { .. } => true,
                     FileSystemPath::Special { .. } => true,
                 }
             });
@@ -706,7 +710,7 @@ impl FileSystemSandboxPolicy {
             .iter()
             .filter(|entry| entry.access == FileSystemAccessMode::None)
             .filter_map(|entry| match &entry.path {
-                FileSystemPath::Pattern { pattern } => {
+                FileSystemPath::GlobPattern { pattern } => {
                     Some(AbsolutePathBuf::resolve_path_against_base(pattern, cwd))
                 }
                 FileSystemPath::Path { .. } | FileSystemPath::Special { .. } => None,
@@ -753,7 +757,7 @@ impl FileSystemSandboxPolicy {
 
                 for entry in &self.entries {
                     match &entry.path {
-                        FileSystemPath::Pattern { .. } => {}
+                        FileSystemPath::GlobPattern { .. } => {}
                         FileSystemPath::Path { path } => {
                             if entry.access.can_write() {
                                 if cwd_absolute.as_ref().is_some_and(|cwd| cwd == path) {
@@ -1040,7 +1044,7 @@ fn resolve_file_system_path(
 ) -> Option<AbsolutePathBuf> {
     match path {
         FileSystemPath::Path { path } => Some(path.clone()),
-        FileSystemPath::Pattern { .. } => None,
+        FileSystemPath::GlobPattern { .. } => None,
         FileSystemPath::Special { value } => resolve_file_system_special_path(value, cwd),
     }
 }
@@ -1083,10 +1087,11 @@ fn file_system_paths_share_target(left: &FileSystemPath, right: &FileSystemPath)
         | (FileSystemPath::Special { value }, FileSystemPath::Path { path }) => {
             special_path_matches_absolute_path(value, path)
         }
-        (FileSystemPath::Pattern { pattern: left }, FileSystemPath::Pattern { pattern: right }) => {
-            left == right
-        }
-        (FileSystemPath::Pattern { .. }, _) | (_, FileSystemPath::Pattern { .. }) => false,
+        (
+            FileSystemPath::GlobPattern { pattern: left },
+            FileSystemPath::GlobPattern { pattern: right },
+        ) => left == right,
+        (FileSystemPath::GlobPattern { .. }, _) | (_, FileSystemPath::GlobPattern { .. }) => false,
     }
 }
 
@@ -2279,7 +2284,7 @@ mod tests {
 
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
         FileSystemSandboxEntry {
-            path: FileSystemPath::Pattern { pattern },
+            path: FileSystemPath::GlobPattern { pattern },
             access: FileSystemAccessMode::None,
         }
     }
@@ -2308,12 +2313,13 @@ mod tests {
         std::fs::write(&nested, "secret").expect("write secret");
 
         let policy = deny_policy(&denied_dir);
-        assert_eq!(is_read_denied(&denied_dir, &policy, temp.path()), true);
-        assert_eq!(is_read_denied(&nested, &policy, temp.path()), true);
-        assert_eq!(
-            is_read_denied(&temp.path().join("other.txt"), &policy, temp.path()),
-            false
-        );
+        assert!(is_read_denied(&denied_dir, &policy, temp.path()));
+        assert!(is_read_denied(&nested, &policy, temp.path()));
+        assert!(!is_read_denied(
+            &temp.path().join("other.txt"),
+            &policy,
+            temp.path()
+        ));
     }
 
     #[cfg(unix)]
@@ -2330,7 +2336,7 @@ mod tests {
         let alias_secret = alias_dir.join("secret.txt");
 
         let policy = deny_policy(&real_dir);
-        assert_eq!(is_read_denied(&alias_secret, &policy, temp.path()), true);
+        assert!(is_read_denied(&alias_secret, &policy, temp.path()));
     }
 
     #[test]
@@ -2347,8 +2353,8 @@ mod tests {
             temp.path().display()
         )));
 
-        assert_eq!(is_read_denied(&literal, &policy, temp.path()), true);
-        assert_eq!(is_read_denied(&other, &policy, temp.path()), true);
+        assert!(is_read_denied(&literal, &policy, temp.path()));
+        assert!(is_read_denied(&other, &policy, temp.path()));
     }
 
     #[test]
@@ -2363,7 +2369,7 @@ mod tests {
             temp.path().display()
         ));
 
-        assert_eq!(is_read_denied(&denied, &policy, temp.path()), true);
+        assert!(is_read_denied(&denied, &policy, temp.path()));
     }
 
     #[test]
@@ -2384,10 +2390,10 @@ mod tests {
             temp.path().display()
         ));
 
-        assert_eq!(is_read_denied(&matching, &policy, temp.path()), true);
-        assert_eq!(is_read_denied(&nested, &policy, temp.path()), false);
-        assert_eq!(is_read_denied(&short, &policy, temp.path()), false);
-        assert_eq!(is_read_denied(&letters, &policy, temp.path()), false);
+        assert!(is_read_denied(&matching, &policy, temp.path()));
+        assert!(!is_read_denied(&nested, &policy, temp.path()));
+        assert!(!is_read_denied(&short, &policy, temp.path()));
+        assert!(!is_read_denied(&letters, &policy, temp.path()));
     }
 
     #[test]
@@ -2404,9 +2410,9 @@ mod tests {
         let policy =
             default_policy_with_unreadable_glob(format!("{}/**/*.env", temp.path().display()));
 
-        assert_eq!(is_read_denied(&root_env, &policy, temp.path()), true);
-        assert_eq!(is_read_denied(&nested_env, &policy, temp.path()), true);
-        assert_eq!(is_read_denied(&other, &policy, temp.path()), false);
+        assert!(is_read_denied(&root_env, &policy, temp.path()));
+        assert!(is_read_denied(&nested_env, &policy, temp.path()));
+        assert!(!is_read_denied(&other, &policy, temp.path()));
     }
 
     #[test]
@@ -2418,7 +2424,7 @@ mod tests {
         std::fs::write(&other, "notes").expect("write notes");
         let policy = default_policy_with_unreadable_glob(format!("{}/[", temp.path().display()));
 
-        assert_eq!(is_read_denied(&bracket_file, &policy, temp.path()), true);
-        assert_eq!(is_read_denied(&other, &policy, temp.path()), false);
+        assert!(is_read_denied(&bracket_file, &policy, temp.path()));
+        assert!(!is_read_denied(&other, &policy, temp.path()));
     }
 }

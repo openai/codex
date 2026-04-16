@@ -661,7 +661,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
 async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
-    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+    tokio::fs::write(cwd.path().join(".git"), "gitdir: nowhere").await?;
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
@@ -702,7 +702,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
             .file_system_sandbox_policy
             .entries
             .contains(&FileSystemSandboxEntry {
-                path: FileSystemPath::Pattern {
+                path: FileSystemPath::GlobPattern {
                     pattern: expected_pattern,
                 },
                 access: FileSystemAccessMode::None,

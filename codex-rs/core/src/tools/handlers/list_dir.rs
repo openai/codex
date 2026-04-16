@@ -120,16 +120,6 @@ impl ToolHandler for ListDirHandler {
     }
 }
 
-#[cfg(test)]
-async fn list_dir_slice(
-    path: &Path,
-    offset: usize,
-    limit: usize,
-    depth: usize,
-) -> Result<Vec<String>, FunctionCallError> {
-    list_dir_slice_with_policy(path, offset, limit, depth, /*read_deny_matcher*/ None).await
-}
-
 async fn list_dir_slice_with_policy(
     path: &Path,
     offset: usize,

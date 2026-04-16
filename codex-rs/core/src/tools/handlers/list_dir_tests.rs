@@ -7,6 +7,15 @@ use codex_protocol::permissions::ReadDenyMatcher;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
+async fn list_dir_slice(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+    depth: usize,
+) -> Result<Vec<String>, FunctionCallError> {
+    list_dir_slice_with_policy(path, offset, limit, depth, /*read_deny_matcher*/ None).await
+}
+
 #[tokio::test]
 async fn lists_directory_entries() {
     let temp = tempdir().expect("create tempdir");

@@ -4992,7 +4992,7 @@ mod tests {
             }),
             file_system_sandbox_policy: Some(FileSystemSandboxPolicy::restricted(vec![
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::Pattern {
+                    path: FileSystemPath::GlobPattern {
                         pattern: "/tmp/private/**/*.txt".to_string(),
                     },
                     access: FileSystemAccessMode::None,
@@ -5024,7 +5024,7 @@ mod tests {
                 "kind": "restricted",
                 "entries": [{
                     "path": {
-                        "type": "pattern",
+                        "type": "glob_pattern",
                         "pattern": "/tmp/private/**/*.txt"
                     },
                     "access": "none"
