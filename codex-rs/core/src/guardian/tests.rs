@@ -14,6 +14,7 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::test_support;
 use codex_config::config_toml::ConfigToml;
 use codex_network_proxy::NetworkProxyConfig;
@@ -726,6 +727,30 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         guardian_request_turn_id(&apply_patch, "fallback-turn"),
         "fallback-turn"
     );
+}
+
+#[test]
+fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
+    let network_access = GuardianApprovalRequest::NetworkAccess {
+        id: "network-1".to_string(),
+        turn_id: "owner-turn".to_string(),
+        target: "https://example.com:443".to_string(),
+        host: "example.com".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+        port: 443,
+        trigger: Some(GuardianNetworkAccessTrigger {
+            call_id: "call-1".to_string(),
+            tool_name: "shell".to_string(),
+            command: vec!["curl".to_string(), "https://example.com".to_string()],
+            cwd: test_path_buf("/repo").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+            tty: None,
+        }),
+    };
+
+    assert_eq!(guardian_request_target_item_id(&network_access), None);
 }
 
 #[tokio::test]

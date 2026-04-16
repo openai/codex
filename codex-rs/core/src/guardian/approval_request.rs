@@ -393,9 +393,7 @@ pub(crate) fn guardian_request_target_item_id(request: &GuardianApprovalRequest)
         | GuardianApprovalRequest::ExecCommand { id, .. }
         | GuardianApprovalRequest::ApplyPatch { id, .. }
         | GuardianApprovalRequest::McpToolCall { id, .. } => Some(id),
-        GuardianApprovalRequest::NetworkAccess { trigger, .. } => {
-            trigger.as_ref().map(|trigger| trigger.call_id.as_str())
-        }
+        GuardianApprovalRequest::NetworkAccess { .. } => None,
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { id, .. } => Some(id),
     }
