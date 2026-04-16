@@ -1653,6 +1653,18 @@ pub enum HookRunStatus {
     Stopped,
 }
 
+impl HookRunStatus {
+    pub fn metric_tag(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Blocked => "blocked",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum HookOutputEntryKind {

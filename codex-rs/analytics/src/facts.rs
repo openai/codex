@@ -252,6 +252,17 @@ pub enum CodexHookSource {
     Unknown,
 }
 
+impl CodexHookSource {
+    pub fn metric_tag(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::User => "user",
+            Self::Project => "project",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct CodexCompactionEvent {
     pub thread_id: String,

@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_analytics::CodexHookSource;
 use codex_analytics::HookRunFact;
@@ -12,6 +13,8 @@ use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
+use codex_otel::HOOK_RUN_DURATION_METRIC;
+use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -327,9 +330,36 @@ pub(crate) async fn emit_hook_completed_events(
     completed_events: Vec<HookCompletedEvent>,
 ) {
     for completed in completed_events {
-        track_hook_completed_analytics(sess, turn_context, &completed);
+        let hook_source = hook_source_for_path(
+            completed.run.source_path.as_path(),
+            turn_context.config.codex_home.as_path(),
+            turn_context.cwd.as_path(),
+        );
+        emit_hook_completed_metrics(turn_context, &completed, hook_source);
+        track_hook_completed_analytics(sess, turn_context, &completed, hook_source);
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
+    }
+}
+
+fn emit_hook_completed_metrics(
+    turn_context: &TurnContext,
+    completed: &HookCompletedEvent,
+    hook_source: CodexHookSource,
+) {
+    let tags = hook_run_metric_tags(&completed.run, hook_source);
+    let tag_refs: Vec<(&str, &str)> = tags.iter().map(|(key, value)| (*key, *value)).collect();
+    let _ = turn_context
+        .session_telemetry
+        .counter(HOOK_RUN_METRIC, /*inc*/ 1, &tag_refs);
+    if let Some(duration_ms) = completed.run.duration_ms
+        && let Ok(duration_ms) = u64::try_from(duration_ms)
+    {
+        let _ = turn_context.session_telemetry.record_duration(
+            HOOK_RUN_DURATION_METRIC,
+            Duration::from_millis(duration_ms),
+            &tag_refs,
+        );
     }
 }
 
@@ -337,9 +367,14 @@ fn track_hook_completed_analytics(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     completed: &HookCompletedEvent,
+    hook_source: CodexHookSource,
 ) {
-    let (tracking, hook) =
-        hook_run_analytics_payload(sess.conversation_id.to_string(), turn_context, completed);
+    let (tracking, hook) = hook_run_analytics_payload(
+        sess.conversation_id.to_string(),
+        turn_context,
+        completed,
+        hook_source,
+    );
     sess.services
         .analytics_events_client
         .track_hook_run(tracking, hook);
@@ -349,6 +384,7 @@ fn hook_run_analytics_payload(
     thread_id: String,
     turn_context: &TurnContext,
     completed: &HookCompletedEvent,
+    hook_source: CodexHookSource,
 ) -> (codex_analytics::TrackEventsContext, HookRunFact) {
     (
         build_track_events_context(
@@ -361,14 +397,21 @@ fn hook_run_analytics_payload(
         ),
         HookRunFact {
             event_name: completed.run.event_name,
-            hook_source: hook_source_for_path(
-                completed.run.source_path.as_path(),
-                turn_context.config.codex_home.as_path(),
-                turn_context.cwd.as_path(),
-            ),
+            hook_source,
             status: completed.run.status,
         },
     )
+}
+
+fn hook_run_metric_tags(
+    run: &HookRunSummary,
+    hook_source: CodexHookSource,
+) -> [(&'static str, &'static str); 3] {
+    [
+        ("hook_name", run.event_name.analytics_name()),
+        ("source", hook_source.metric_tag()),
+        ("status", run.status.metric_tag()),
+    ]
 }
 
 fn hook_source_for_path(source_path: &Path, codex_home: &Path, cwd: &Path) -> CodexHookSource {
@@ -420,6 +463,7 @@ mod tests {
 
     use super::additional_context_messages;
     use super::hook_run_analytics_payload;
+    use super::hook_run_metric_tags;
     use crate::codex::make_session_and_context;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookRunSummary;
@@ -468,8 +512,12 @@ mod tests {
             run: sample_hook_run(HookRunStatus::Blocked),
         };
 
-        let (tracking, hook) =
-            hook_run_analytics_payload("thread-123".to_string(), &turn_context, &completed);
+        let (tracking, hook) = hook_run_analytics_payload(
+            "thread-123".to_string(),
+            &turn_context,
+            &completed,
+            CodexHookSource::Unknown,
+        );
 
         assert_eq!(tracking.thread_id, "thread-123");
         assert_eq!(tracking.turn_id, "turn-from-hook");
@@ -487,11 +535,29 @@ mod tests {
             run: sample_hook_run(HookRunStatus::Failed),
         };
 
-        let (tracking, hook) =
-            hook_run_analytics_payload("thread-123".to_string(), &turn_context, &completed);
+        let (tracking, hook) = hook_run_analytics_payload(
+            "thread-123".to_string(),
+            &turn_context,
+            &completed,
+            CodexHookSource::Unknown,
+        );
 
         assert_eq!(tracking.turn_id, turn_context.sub_id);
         assert_eq!(hook.status, HookRunStatus::Failed);
+    }
+
+    #[test]
+    fn hook_run_metric_tags_match_analytics_shape() {
+        let run = sample_hook_run(HookRunStatus::Blocked);
+
+        assert_eq!(
+            hook_run_metric_tags(&run, CodexHookSource::Project),
+            [
+                ("hook_name", "Stop"),
+                ("source", "project"),
+                ("status", "blocked"),
+            ]
+        );
     }
 
     #[test]
