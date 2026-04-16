@@ -8942,6 +8942,7 @@ impl ChatWidget {
         let accept_otel = self.session_telemetry.clone();
         let legacy_otel = self.session_telemetry.clone();
         let legacy_preset = preset.clone();
+        let no_sandbox_otel = self.session_telemetry.clone();
         let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
@@ -8972,6 +8973,21 @@ impl ChatWidget {
                     tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                         preset: legacy_preset.clone(),
                     });
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Use Codex without sandbox (approval required)".to_string(),
+                description: Some(
+                    "Continue without Windows sandboxing and approve potentially risky commands as they come up.".to_string(),
+                ),
+                actions: vec![Box::new(move |_tx| {
+                    no_sandbox_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_use_no_sandbox",
+                        /*inc*/ 1,
+                        &[],
+                    );
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -9025,6 +9041,7 @@ impl ChatWidget {
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
+        let no_sandbox_otel = self.session_telemetry.clone();
         let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
@@ -9063,6 +9080,21 @@ impl ChatWidget {
                             preset: preset.clone(),
                         });
                     }
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Use Codex without sandbox (approval required)".to_string(),
+                description: Some(
+                    "Continue without Windows sandboxing and approve potentially risky commands as they come up.".to_string(),
+                ),
+                actions: vec![Box::new(move |_tx| {
+                    no_sandbox_otel.counter(
+                        "codex.windows_sandbox.fallback_use_no_sandbox",
+                        /*inc*/ 1,
+                        &[],
+                    );
                 })],
                 dismiss_on_select: true,
                 ..Default::default()

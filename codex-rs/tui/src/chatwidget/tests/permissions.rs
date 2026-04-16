@@ -104,6 +104,10 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
         popup.contains("Use non-admin sandbox"),
         "expected auto mode prompt to include non-admin fallback option, popup: {popup}"
     );
+    assert!(
+        popup.contains("Use Codex without sandbox"),
+        "expected auto mode prompt to include explicit no-sandbox option, popup: {popup}"
+    );
 }
 
 #[cfg(target_os = "windows")]
@@ -128,6 +132,10 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
     assert!(
         popup.contains("Use non-admin sandbox"),
         "expected startup prompt to offer non-admin fallback: {popup}"
+    );
+    assert!(
+        popup.contains("Use Codex without sandbox"),
+        "expected startup prompt to offer explicit no-sandbox flow: {popup}"
     );
     assert!(
         popup.contains("Quit"),
