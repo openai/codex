@@ -72,6 +72,7 @@ pub(crate) struct GuardianReviewSessionMetadata {
     pub(crate) guardian_model: String,
     pub(crate) guardian_reasoning_effort: Option<String>,
     pub(crate) had_prior_review_context: bool,
+    pub(crate) reviewed_action_truncated: bool,
     pub(crate) token_usage: Option<TokenUsage>,
 }
 
@@ -620,6 +621,7 @@ async fn run_review_on_session(
         guardian_model: params.model.clone(),
         guardian_reasoning_effort: params.reasoning_effort.map(|effort| effort.to_string()),
         had_prior_review_context: had_prior_review_context(&prompt_mode),
+        reviewed_action_truncated: false,
         token_usage: None,
     };
     if send_followup_reminder {
@@ -646,6 +648,7 @@ async fn run_review_on_session(
                 prompt_mode,
             )
             .await?;
+            let reviewed_action_truncated = prompt_items.reviewed_action_truncated;
             let token_usage_at_review_start =
                 review_session.codex.session.total_token_usage().await;
 
@@ -667,8 +670,9 @@ async fn run_review_on_session(
                 })
                 .await?;
 
-            Ok::<(GuardianTranscriptCursor, Option<TokenUsage>), anyhow::Error>((
+            Ok::<(GuardianTranscriptCursor, bool, Option<TokenUsage>), anyhow::Error>((
                 prompt_items.transcript_cursor,
+                reviewed_action_truncated,
                 token_usage_at_review_start,
             ))
         }),
@@ -678,16 +682,18 @@ async fn run_review_on_session(
         Ok(submit_result) => submit_result,
         Err(outcome) => return (outcome, false, guardian_metadata),
     };
-    let (transcript_cursor, token_usage_at_review_start) = match submit_result {
-        Ok(submit_result) => submit_result,
-        Err(err) => {
-            return (
-                GuardianReviewSessionOutcome::PromptBuildFailed(err),
-                false,
-                guardian_metadata,
-            );
-        }
-    };
+    let (transcript_cursor, reviewed_action_truncated, token_usage_at_review_start) =
+        match submit_result {
+            Ok(submit_result) => submit_result,
+            Err(err) => {
+                return (
+                    GuardianReviewSessionOutcome::PromptBuildFailed(err),
+                    false,
+                    guardian_metadata,
+                );
+            }
+        };
+    guardian_metadata.reviewed_action_truncated = reviewed_action_truncated;
 
     let outcome =
         wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
