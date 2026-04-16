@@ -101,6 +101,75 @@ fn base_policy_allows_kmp_registration_shm_read_create_and_unlink() {
 }
 
 #[test]
+fn base_policy_denies_docker_desktop_escape_surfaces() {
+    let docker_exec_deny = r##"(deny process-exec
+  (literal "/usr/bin/docker")
+  (literal "/usr/local/bin/docker")
+  (literal "/usr/local/bin/com.docker.cli")
+  (literal "/opt/homebrew/bin/docker")
+  (literal "/opt/homebrew/bin/com.docker.cli")
+  (subpath "/usr/local/Cellar/docker")
+  (subpath "/opt/homebrew/Cellar/docker")
+  (literal "/Applications/Docker.app/Contents/Resources/bin/docker")
+  (literal "/Applications/Docker.app/Contents/Resources/bin/com.docker.cli")
+  (subpath "/Applications/Docker.app/Contents/MacOS"))"##;
+    let docker_socket_deny = r##"(deny file-read* file-write*
+  (literal "/var/run/docker.sock")
+  (literal "/var/run/docker.sock.raw")
+  (literal "/private/var/run/docker.sock")
+  (literal "/private/var/run/docker.sock.raw")
+  (subpath "/Users/Shared/.docker")
+  (regex #"^/Users/[^/]+/\.docker/run/")
+  (subpath "/var/run/docker")
+  (subpath "/private/var/run/docker"))"##;
+    let docker_unix_socket_deny = r##"(deny network-outbound
+  (remote unix-socket (literal "/var/run/docker.sock"))
+  (remote unix-socket (literal "/var/run/docker.sock.raw"))
+  (remote unix-socket (literal "/private/var/run/docker.sock"))
+  (remote unix-socket (literal "/private/var/run/docker.sock.raw"))
+  (remote unix-socket (subpath "/Users/Shared/.docker"))
+  (remote unix-socket (regex #"^/Users/[^/]+/\.docker/run/"))
+  (remote unix-socket (subpath "/var/run/docker"))
+  (remote unix-socket (subpath "/private/var/run/docker")))"##;
+    let docker_mach_deny = r##"(deny mach-lookup
+  (xpc-service-name-prefix "com.docker."))"##;
+    let docker_shm_deny = r##"(deny ipc-posix-shm-read* ipc-posix-shm-write*
+  (ipc-posix-name-prefix "docker"))"##;
+
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains(docker_exec_deny),
+        "base policy must deny Docker executables:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains(docker_socket_deny),
+        "base policy must deny Docker socket file access:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains(docker_unix_socket_deny),
+        "base policy must deny Docker unix socket outbound access:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains(docker_mach_deny),
+        "base policy must deny Docker mach services:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains(docker_shm_deny),
+        "base policy must deny Docker shared memory handles:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+
+    let docker_exec_deny_position = MACOS_SEATBELT_BASE_POLICY
+        .find(docker_exec_deny)
+        .expect("Docker exec deny must exist");
+    let broad_exec_allow_position = MACOS_SEATBELT_BASE_POLICY
+        .find("(allow process-exec)")
+        .expect("broad process-exec allow must exist");
+    assert!(
+        docker_exec_deny_position < broad_exec_allow_position,
+        "Docker deny block must appear before broad process-exec allow:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+}
+
+#[test]
 fn create_seatbelt_args_routes_network_through_proxy_ports() {
     let policy = dynamic_network_policy(
         &SandboxPolicy::new_read_only_policy(),

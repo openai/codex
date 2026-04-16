@@ -7,6 +7,46 @@
 ; start with closed-by-default
 (deny default)
 
+; Block Docker Desktop control surfaces so the macOS sandbox cannot escape via
+; the host container runtime or its virtiofs bridge.
+(deny process-exec
+  (literal "/usr/bin/docker")
+  (literal "/usr/local/bin/docker")
+  (literal "/usr/local/bin/com.docker.cli")
+  (literal "/opt/homebrew/bin/docker")
+  (literal "/opt/homebrew/bin/com.docker.cli")
+  (subpath "/usr/local/Cellar/docker")
+  (subpath "/opt/homebrew/Cellar/docker")
+  (literal "/Applications/Docker.app/Contents/Resources/bin/docker")
+  (literal "/Applications/Docker.app/Contents/Resources/bin/com.docker.cli")
+  (subpath "/Applications/Docker.app/Contents/MacOS"))
+
+(deny file-read* file-write*
+  (literal "/var/run/docker.sock")
+  (literal "/var/run/docker.sock.raw")
+  (literal "/private/var/run/docker.sock")
+  (literal "/private/var/run/docker.sock.raw")
+  (subpath "/Users/Shared/.docker")
+  (regex #"^/Users/[^/]+/\.docker/run/")
+  (subpath "/var/run/docker")
+  (subpath "/private/var/run/docker"))
+
+(deny network-outbound
+  (remote unix-socket (literal "/var/run/docker.sock"))
+  (remote unix-socket (literal "/var/run/docker.sock.raw"))
+  (remote unix-socket (literal "/private/var/run/docker.sock"))
+  (remote unix-socket (literal "/private/var/run/docker.sock.raw"))
+  (remote unix-socket (subpath "/Users/Shared/.docker"))
+  (remote unix-socket (regex #"^/Users/[^/]+/\.docker/run/"))
+  (remote unix-socket (subpath "/var/run/docker"))
+  (remote unix-socket (subpath "/private/var/run/docker")))
+
+(deny mach-lookup
+  (xpc-service-name-prefix "com.docker."))
+
+(deny ipc-posix-shm-read* ipc-posix-shm-write*
+  (ipc-posix-name-prefix "docker"))
+
 ; child processes inherit the policy of their parent
 (allow process-exec)
 (allow process-fork)
