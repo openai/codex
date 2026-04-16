@@ -72,6 +72,7 @@ use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DELEGATED_SHELL_TOOL_TIMEOUT_MS: u64 = 30_000;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const V2_STEERING_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
@@ -1717,7 +1718,9 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         create_shell_command_sse_response(
             realtime_tool_ok_command(),
             /*workdir*/ None,
-            Some(5000),
+            // Windows CI can spend several seconds starting the nested PowerShell command. This
+            // test verifies delegated shell-tool plumbing, not timeout enforcement.
+            Some(DELEGATED_SHELL_TOOL_TIMEOUT_MS),
             "shell_call",
         )?,
         create_final_assistant_message_sse_response("shell tool finished")?,
