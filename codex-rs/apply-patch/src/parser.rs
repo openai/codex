@@ -372,15 +372,7 @@ fn parse_one_hunk(
             );
             let (chunk, chunk_lines) = match parsed_chunk {
                 Ok(parsed) => parsed,
-                Err(err)
-                    if allow_incomplete
-                        && !chunks.is_empty()
-                        && matches!(
-                            &err,
-                            InvalidHunkError { message, .. }
-                                if message == "Update hunk does not contain any lines"
-                        ) =>
-                {
+                Err(InvalidHunkError { .. }) if allow_incomplete && !chunks.is_empty() => {
                     break;
                 }
                 Err(err) => return Err(err),
