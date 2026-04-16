@@ -101,6 +101,11 @@ impl Session {
         agent_task
     }
 
+    #[cfg(test)]
+    pub(crate) async fn cache_agent_task_for_tests(&self, agent_task: RegisteredAgentTask) {
+        self.cache_agent_task(agent_task).await;
+    }
+
     pub(super) async fn cached_agent_task_for_current_identity(
         &self,
     ) -> Option<RegisteredAgentTask> {
@@ -132,6 +137,28 @@ impl Session {
         );
         self.clear_cached_agent_task(&agent_task).await;
         None
+    }
+
+    pub(crate) async fn authorization_header_for_current_agent_task(
+        &self,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(agent_task) = self.cached_agent_task_for_current_identity().await else {
+            return Ok(None);
+        };
+
+        let authorization_header_value = self
+            .services
+            .agent_identity_manager
+            .authorization_header_for_task(&agent_task)
+            .await?;
+        if authorization_header_value.is_some() {
+            debug!(
+                agent_runtime_id = %agent_task.agent_runtime_id,
+                task_id = %agent_task.task_id,
+                "using agent assertion authorization for current task request"
+            );
+        }
+        Ok(authorization_header_value)
     }
 
     pub(super) async fn ensure_agent_task_registered(
