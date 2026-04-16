@@ -2807,8 +2807,25 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    fn on_rate_limit_error(&mut self, message: String) {
-        match self.codex_rate_limit_reached_type.take() {
+    fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
+        let rate_limit_reached_type = self.codex_rate_limit_reached_type.map(|kind| {
+            if matches!(error_kind, RateLimitErrorKind::UsageLimit) {
+                match kind {
+                    RateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
+                        RateLimitReachedType::WorkspaceOwnerUsageLimitReached
+                    }
+                    RateLimitReachedType::WorkspaceMemberCreditsDepleted => {
+                        RateLimitReachedType::WorkspaceMemberUsageLimitReached
+                    }
+                    other => other,
+                }
+            } else {
+                kind
+            }
+        });
+        self.codex_rate_limit_reached_type = rate_limit_reached_type;
+
+        match rate_limit_reached_type {
             Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => {
                 self.on_error(
                     "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex."
@@ -2851,7 +2868,7 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                    self.on_rate_limit_error(message)
+                    self.on_rate_limit_error(info, message)
                 }
             }
         } else {
@@ -6699,7 +6716,7 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_rate_limit_error(message)
+                            self.on_rate_limit_error(kind, message)
                         }
                     }
                 } else {

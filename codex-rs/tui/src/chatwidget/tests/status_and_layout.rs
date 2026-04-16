@@ -508,7 +508,10 @@ async fn workspace_member_credits_depleted_prompts_and_sends_credits() {
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
     chat.on_rate_limit_snapshot(Some(limits));
 
-    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::Generic,
+        "Usage limit reached.".to_string(),
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 90);
     assert_chatwidget_snapshot!("workspace_member_credits_depleted_prompt", popup);
 
@@ -524,7 +527,10 @@ async fn workspace_member_usage_limit_prompts_and_sends_usage_limit() {
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
     chat.on_rate_limit_snapshot(Some(limits));
 
-    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage limit reached.".to_string(),
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert_chatwidget_snapshot!("workspace_member_usage_limit_prompt", popup);
 
@@ -547,7 +553,32 @@ async fn header_rate_limit_snapshot_preserves_member_limit_type_for_error_prompt
     header_limits.rate_limit_reached_type = None;
     chat.on_rate_limit_snapshot(Some(header_limits));
 
-    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage limit reached.".to_string(),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Request a limit increase from your owner"),
+        "popup: {popup}"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let event = next_send_add_credits_nudge_email_event(&mut rx);
+    assert_eq!(event, AddCreditsNudgeCreditType::UsageLimit);
+}
+
+#[tokio::test]
+async fn usage_limit_error_remaps_stale_member_credits_state_to_usage_limit_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut limits = snapshot(/*percent*/ 100.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
+    chat.on_rate_limit_snapshot(Some(limits));
+
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage limit reached.".to_string(),
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
         popup.contains("Request a limit increase from your owner"),
@@ -561,17 +592,26 @@ async fn header_rate_limit_snapshot_preserves_member_limit_type_for_error_prompt
 
 #[tokio::test]
 async fn workspace_owner_limit_states_do_not_prompt_for_owner_nudge() {
-    for limit_type in [
-        RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
-        RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
-        RateLimitReachedType::RateLimitReached,
+    for (limit_type, error_kind) in [
+        (
+            RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+            RateLimitErrorKind::Generic,
+        ),
+        (
+            RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+            RateLimitErrorKind::UsageLimit,
+        ),
+        (
+            RateLimitReachedType::RateLimitReached,
+            RateLimitErrorKind::Generic,
+        ),
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         let mut limits = snapshot(/*percent*/ 100.0);
         limits.rate_limit_reached_type = Some(limit_type);
         chat.on_rate_limit_snapshot(Some(limits));
 
-        chat.on_rate_limit_error("Usage limit reached.".to_string());
+        chat.on_rate_limit_error(error_kind, "Usage limit reached.".to_string());
         let popup = render_bottom_popup(&chat, /*width*/ 90);
         assert!(!popup.contains("workspace owner"));
         assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
@@ -583,22 +623,24 @@ async fn workspace_owner_limit_states_render_state_specific_messages() {
     let cases = [
         (
             RateLimitReachedType::WorkspaceOwnerCreditsDepleted,
+            RateLimitErrorKind::Generic,
             "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex.",
         ),
         (
             RateLimitReachedType::WorkspaceOwnerUsageLimitReached,
+            RateLimitErrorKind::UsageLimit,
             "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.",
         ),
     ];
 
     let mut rendered_cases = Vec::new();
-    for (limit_type, expected) in cases {
+    for (limit_type, error_kind, expected) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         let mut limits = snapshot(/*percent*/ 100.0);
         limits.rate_limit_reached_type = Some(limit_type);
         chat.on_rate_limit_snapshot(Some(limits));
 
-        chat.on_rate_limit_error("Usage limit reached.".to_string());
+        chat.on_rate_limit_error(error_kind, "Usage limit reached.".to_string());
         let rendered = drain_insert_history(&mut rx)
             .into_iter()
             .map(|lines| lines_to_single_string(&lines))
@@ -618,7 +660,10 @@ async fn missing_rate_limit_reached_type_does_not_prompt_or_refresh() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
 
-    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage limit reached.".to_string(),
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 90);
     assert!(!popup.contains("workspace owner"));
     assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
@@ -631,10 +676,38 @@ async fn workspace_owner_nudge_default_no_dismisses_without_sending() {
     limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted);
     chat.on_rate_limit_snapshot(Some(limits));
 
-    chat.on_rate_limit_error("Usage limit reached.".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::Generic,
+        "Usage limit reached.".to_string(),
+    );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
+}
+
+#[tokio::test]
+async fn workspace_owner_nudge_reappears_after_dismissing_no() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut limits = snapshot(/*percent*/ 100.0);
+    limits.rate_limit_reached_type = Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached);
+    chat.on_rate_limit_snapshot(Some(limits));
+
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage limit reached.".to_string(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_no_owner_nudge_or_rate_limit_refresh(&mut rx);
+
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage limit reached.".to_string(),
+    );
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Request a limit increase from your owner"),
+        "popup: {popup}"
+    );
 }
 
 #[tokio::test]
