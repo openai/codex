@@ -915,6 +915,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
+        environment_id: None,
         ..ThreadStartParams::default()
     }
 }

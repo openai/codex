@@ -216,6 +216,7 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -420,6 +421,7 @@ async fn thread_read_include_turns_rejects_unmaterialized_loaded_thread() -> Res
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -476,6 +478,7 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

@@ -910,6 +910,7 @@ fn thread_start_params_from_config(
         ephemeral: Some(config.ephemeral),
         session_start_source,
         persist_extended_history: true,
+        environment_id: None,
         ..ThreadStartParams::default()
     }
 }

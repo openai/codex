@@ -35,6 +35,7 @@ async fn thread_status_changed_emits_runtime_updates() -> Result<()> {
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;
@@ -157,6 +158,7 @@ async fn thread_status_changed_can_be_opted_out() -> Result<()> {
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            environment_id: None,
             ..Default::default()
         })
         .await?;

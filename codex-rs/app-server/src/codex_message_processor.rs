@@ -2273,6 +2273,7 @@ impl CodexMessageProcessor {
             ephemeral,
             session_start_source,
             persist_extended_history,
+            environment_id,
         } = params;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -2319,6 +2320,7 @@ impl CodexMessageProcessor {
                 service_name,
                 experimental_raw_events,
                 request_trace,
+                environment_id,
             )
             .await;
         };
@@ -2395,6 +2397,7 @@ impl CodexMessageProcessor {
         service_name: Option<String>,
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
+        environment_id: Option<String>,
     ) {
         let requested_cwd = typesafe_overrides.cwd.clone();
         let mut config = match derive_config_from_params(
@@ -2542,6 +2545,7 @@ impl CodexMessageProcessor {
                 persist_extended_history,
                 service_name,
                 request_trace,
+                environment_id,
             )
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
@@ -6109,7 +6113,12 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let fs = match self.thread_manager.environment_manager().current().await {
+        let fs = match self
+            .thread_manager
+            .environment_manager()
+            .environment(/*environment_id*/ None)
+            .await
+        {
             Ok(Some(environment)) => Some(environment.get_filesystem()),
             Ok(None) => None,
             Err(err) => {
