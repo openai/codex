@@ -885,11 +885,8 @@ pub(crate) fn deserialize_config_toml_with_base(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-async fn load_catalog_json(
-    fs: &dyn ExecutorFileSystem,
-    path: &AbsolutePathBuf,
-) -> std::io::Result<ModelsResponse> {
-    let file_contents = fs.read_file_text(path, /*sandbox*/ None).await?;
+fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
+    let file_contents = std::fs::read_to_string(path)?;
     let catalog = serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
@@ -911,14 +908,12 @@ async fn load_catalog_json(
     Ok(catalog)
 }
 
-async fn load_model_catalog(
-    fs: &dyn ExecutorFileSystem,
+fn load_model_catalog(
     model_catalog_json: Option<AbsolutePathBuf>,
 ) -> std::io::Result<Option<ModelsResponse>> {
-    match model_catalog_json {
-        Some(path) => load_catalog_json(fs, &path).await.map(Some),
-        None => Ok(None),
-    }
+    model_catalog_json
+        .map(|path| load_catalog_json(&path))
+        .transpose()
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -1950,13 +1945,11 @@ impl Config {
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
         let model_catalog = load_model_catalog(
-            fs,
             config_profile
                 .model_catalog_json
                 .clone()
                 .or(cfg.model_catalog_json.clone()),
-        )
-        .await?;
+        )?;
 
         let log_dir = cfg
             .log_dir
