@@ -21,6 +21,7 @@ use crate::render::renderable::Renderable;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
+use super::bottom_pane_view::ViewCompletion;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::ColumnWidthConfig;
@@ -137,6 +138,7 @@ pub(crate) struct SelectionItem {
     pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
+    pub dismiss_parent_on_child_accept: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
 }
@@ -239,7 +241,8 @@ pub(crate) struct ListSelectionView {
     tabs: Vec<SelectionTab>,
     active_tab_idx: Option<usize>,
     state: ScrollState,
-    complete: bool,
+    completion: Option<ViewCompletion>,
+    dismiss_after_child_accept: bool,
     app_event_tx: AppEventSender,
     is_searchable: bool,
     search_query: String,
@@ -303,7 +306,8 @@ impl ListSelectionView {
             tabs: params.tabs,
             active_tab_idx,
             state: ScrollState::new(),
-            complete: false,
+            completion: None,
+            dismiss_after_child_accept: false,
             app_event_tx,
             is_searchable: params.is_searchable,
             search_query: String::new(),
@@ -582,13 +586,15 @@ impl ListSelectionView {
                 act(&self.app_event_tx);
             }
             if item.dismiss_on_select {
-                self.complete = true;
+                self.completion = Some(ViewCompletion::Accepted);
+            } else if item.dismiss_parent_on_child_accept {
+                self.dismiss_after_child_accept = true;
             }
         } else if selected_actual_idx.is_none() {
             if let Some(cb) = &self.on_cancel {
                 cb(&self.app_event_tx);
             }
-            self.complete = true;
+            self.completion = Some(ViewCompletion::Cancelled);
         }
     }
 
@@ -858,7 +864,19 @@ impl BottomPaneView for ListSelectionView {
     }
 
     fn is_complete(&self) -> bool {
-        self.complete
+        self.completion.is_some()
+    }
+
+    fn completion(&self) -> Option<ViewCompletion> {
+        self.completion
+    }
+
+    fn dismiss_after_child_accept(&self) -> bool {
+        self.dismiss_after_child_accept
+    }
+
+    fn clear_dismiss_after_child_accept(&mut self) {
+        self.dismiss_after_child_accept = false;
     }
 
     fn view_id(&self) -> Option<&'static str> {
@@ -877,7 +895,7 @@ impl BottomPaneView for ListSelectionView {
         if let Some(cb) = &self.on_cancel {
             cb(&self.app_event_tx);
         }
-        self.complete = true;
+        self.completion = Some(ViewCompletion::Cancelled);
         CancellationEvent::Handled
     }
 }
