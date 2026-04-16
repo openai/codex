@@ -93,8 +93,7 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            bazel_wrapper_args+=(--windows-msvc-host-platform)
-            bazel_test_args+=(--jobs=8)
+            bazel_wrapper_args+=(--ci-config=ci-windows-cross)
           fi
 
           ./.github/scripts/run-bazel-ci.sh \
