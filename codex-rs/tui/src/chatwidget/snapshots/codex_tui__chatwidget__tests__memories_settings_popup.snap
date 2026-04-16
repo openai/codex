@@ -9,7 +9,9 @@ expression: popup
                          next thread.
   [ ] Generate memories  Generate memories from the following threads. Current
                          thread included.
+  Reset all memories     Clear local memory files and summaries. Existing
+                         threads stay intact.
 
   Learn more: https://developers.openai.com/codex/memories
 
-  Press space to toggle; enter to save
+  Press space to toggle; enter to save or select

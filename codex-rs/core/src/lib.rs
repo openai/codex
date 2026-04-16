@@ -5,6 +5,7 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod agent_identity;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
@@ -54,8 +55,6 @@ pub use network_proxy_loader::MtimeConfigReloader;
 pub use network_proxy_loader::build_network_proxy_state;
 pub use network_proxy_loader::build_network_proxy_state_and_reloader;
 mod original_image_detail;
-pub use codex_mcp::MCP_SANDBOX_STATE_CAPABILITY;
-pub use codex_mcp::MCP_SANDBOX_STATE_METHOD;
 pub use codex_mcp::SandboxState;
 mod mcp_openai_file;
 mod mcp_tool_call;
@@ -99,9 +98,7 @@ pub(crate) use skills::build_skill_injections;
 pub(crate) use skills::build_skill_name_counts;
 pub(crate) use skills::collect_env_var_dependencies;
 pub(crate) use skills::collect_explicit_skill_mentions;
-pub(crate) use skills::config_rules;
 pub(crate) use skills::injection;
-pub(crate) use skills::loader;
 pub(crate) use skills::manager;
 pub(crate) use skills::maybe_emit_implicit_skill_invocation;
 pub(crate) use skills::render_skills_section;
@@ -151,6 +148,7 @@ mod tools;
 pub(crate) mod turn_diff_tracker;
 mod turn_metadata;
 mod turn_timing;
+mod unavailable_tool;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::Cursor;
 pub use rollout::EventPersistenceMode;

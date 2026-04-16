@@ -1,5 +1,4 @@
 use crate::auth::AuthProvider;
-use crate::auth::add_auth_headers_to_header_map;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
@@ -310,7 +309,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
 
         let mut headers =
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
-        add_auth_headers_to_header_map(&self.auth, &mut headers);
+        self.auth.add_auth_headers(&mut headers);
 
         let (stream, server_reasoning_included, models_etag, server_model) =
             connect_websocket(ws_url, headers, turn_state.clone()).await?;

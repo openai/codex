@@ -284,8 +284,11 @@ mod tests {
     struct DummyAuth;
 
     impl AuthProvider for DummyAuth {
-        fn bearer_token(&self) -> Option<String> {
-            Some("test-token".to_string())
+        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            headers.insert(
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer test-token"),
+            );
         }
     }
 

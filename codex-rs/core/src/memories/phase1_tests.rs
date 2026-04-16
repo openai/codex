@@ -3,6 +3,8 @@ use super::JobResult;
 use super::aggregate_stats;
 use super::job::serialize_filtered_rollout_response_items;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
@@ -70,6 +72,25 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
             subagent_message,
         ]
     );
+}
+
+#[test]
+fn serializes_memory_rollout_redacts_secrets_before_prompt_upload() {
+    let serialized = serialize_filtered_rollout_response_items(&[RolloutItem::ResponseItem(
+        ResponseItem::FunctionCallOutput {
+            call_id: "call_123".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(
+                    r#"{"token":"sk-abcdefghijklmnopqrstuvwxyz123456"}"#.to_string(),
+                ),
+                success: Some(true),
+            },
+        },
+    )])
+    .expect("serialize");
+
+    assert!(!serialized.contains("sk-abcdefghijklmnopqrstuvwxyz123456"));
+    assert!(serialized.contains("[REDACTED_SECRET]"));
 }
 
 #[test]
