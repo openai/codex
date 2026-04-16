@@ -1,3 +1,14 @@
+//! Replays persisted token usage snapshots when a client attaches to an existing thread.
+//!
+//! The message processor decides when replay is allowed and preserves JSON-RPC response
+//! ordering. This module owns notification construction and the attribution rules that
+//! map the latest persisted `TokenCount` back to a v2 turn id.
+//!
+//! Rollout histories can contain explicit turn ids or generated turn ids. When explicit
+//! ids do not match the rebuilt thread, replay falls back to the active turn position at
+//! the time the `TokenCount` was persisted so the notification still targets the
+//! corresponding rebuilt turn.
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -60,6 +71,10 @@ pub(super) async fn latest_token_usage_turn_id_from_rollout_path(
     latest_token_usage_turn_id_from_rollout_items(&rollout_items, thread)
 }
 
+/// Identifies the turn that was active when a `TokenCount` record appeared.
+///
+/// The id is preferred when it still appears in the rebuilt thread. The position is a
+/// fallback for histories whose implicit turn ids are regenerated during reconstruction.
 struct TokenUsageTurnOwner {
     id: String,
     position: Option<usize>,
