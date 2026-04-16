@@ -3100,7 +3100,6 @@ pub struct ThreadGoalGetParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalGetResponse {
-    #[ts(type = "ThreadGoal | null")]
     pub goal: Option<ThreadGoal>,
 }
 
