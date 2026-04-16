@@ -1294,7 +1294,13 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 
 #[tokio::test]
 async fn record_initial_history_restores_latest_persisted_agent_task() {
-    let (session, _turn_context) = make_session_and_context().await;
+    let auth = make_chatgpt_auth("account-123", Some("user-123"));
+    seed_stored_identity(&auth, "agent-123", "account-123");
+    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
+        auth,
+        "https://chatgpt.com/backend-api".to_string(),
+    )
+    .await;
     let expected = RegisteredAgentTask {
         agent_runtime_id: "agent-123".to_string(),
         task_id: "task-123".to_string(),
@@ -1324,6 +1330,39 @@ async fn record_initial_history_restores_latest_persisted_agent_task() {
         session.state.lock().await.agent_task(),
         Some(expected.to_session_agent_task())
     );
+}
+
+#[tokio::test]
+async fn record_initial_history_discards_persisted_agent_task_for_different_identity() {
+    let auth = make_chatgpt_auth("account-123", Some("user-123"));
+    seed_stored_identity(&auth, "agent-123", "account-123");
+    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
+        auth,
+        "https://chatgpt.com/backend-api".to_string(),
+    )
+    .await;
+    let rollout_items = vec![RolloutItem::SessionState(
+        codex_protocol::protocol::SessionStateUpdate {
+            agent_task: Some(
+                RegisteredAgentTask {
+                    agent_runtime_id: "agent-other".to_string(),
+                    task_id: "task-other".to_string(),
+                    registered_at: "2026-03-23T12:00:00Z".to_string(),
+                }
+                .to_session_agent_task(),
+            ),
+        },
+    )];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    assert_eq!(session.state.lock().await.agent_task(), None);
 }
 
 #[tokio::test]

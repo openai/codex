@@ -2768,6 +2768,7 @@ impl fmt::Display for SubAgentSource {
 /// Persisted agent-task details that let a resumed thread keep using the same backend task.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 pub struct SessionAgentTask {
+    /// Validation metadata only. Restored tasks must match the globally registered identity.
     pub agent_runtime_id: String,
     pub task_id: String,
     pub registered_at: String,
