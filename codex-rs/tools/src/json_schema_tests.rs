@@ -652,6 +652,40 @@ fn parse_tool_input_schema_merges_outer_constraints_when_unwrapping_single_varia
 }
 
 #[test]
+fn parse_tool_input_schema_merges_outer_constraints_when_unwrapping_true_combiners() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "wrapped": {
+                "allOf": [true],
+                "type": "object",
+                "properties": {
+                    "b": { "type": "string" }
+                },
+                "required": ["b"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "wrapped".to_string(),
+                JsonSchema::object(
+                    BTreeMap::from([("b".to_string(), JsonSchema::string(/*description*/ None),)]),
+                    Some(vec!["b".to_string()]),
+                    /*additional_properties*/ None,
+                ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_preserves_sibling_constraints_for_true_ref_targets() {
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
@@ -684,6 +718,37 @@ fn parse_tool_input_schema_preserves_sibling_constraints_for_true_ref_targets() 
                     Some(vec!["dateTime".to_string()]),
                     /*additional_properties*/ None,
                 ),
+            )]),
+            /*required*/ None,
+            /*additional_properties*/ None
+        )
+    );
+}
+
+#[test]
+fn parse_tool_input_schema_intersects_enums_when_merging_ref_siblings() {
+    let schema = parse_tool_input_schema(&serde_json::json!({
+        "type": "object",
+        "properties": {
+            "timeZone": {
+                "$ref": "#/$defs/supported_time_zone",
+                "enum": ["UTC", "PST"]
+            }
+        },
+        "$defs": {
+            "supported_time_zone": {
+                "enum": ["UTC", "EST"]
+            }
+        }
+    }))
+    .expect("parse schema");
+
+    assert_eq!(
+        schema,
+        JsonSchema::object(
+            BTreeMap::from([(
+                "timeZone".to_string(),
+                JsonSchema::string_enum(vec![serde_json::json!("UTC")], /*description*/ None),
             )]),
             /*required*/ None,
             /*additional_properties*/ None

@@ -290,10 +290,7 @@ fn resolve_json_schema_reference(
 ) -> Option<JsonValue> {
     let reference = map.get("$ref")?.as_str()?;
     let pointer = reference.strip_prefix('#')?;
-    let mut replacement = root_schema.pointer(pointer)?.clone();
-    if matches!(replacement, JsonValue::Bool(true)) {
-        replacement = JsonValue::Object(serde_json::Map::new());
-    }
+    let mut replacement = mergeable_schema_node(root_schema.pointer(pointer)?.clone());
     if let JsonValue::Object(replacement_map) = &mut replacement {
         merge_json_schema_objects(replacement_map, map);
     }
@@ -350,6 +347,23 @@ fn cyclic_reference_target_fallback(reference_target: &JsonValue) -> Option<Json
     Some(json!({ "type": "string" }))
 }
 
+/// Converts permissive schema nodes into an object form that can safely absorb
+/// adjacent constraints during local `$ref` resolution or single-variant
+/// combiner unwrapping.
+///
+/// In JSON Schema, `true` means "match anything". When a `true` node sits next
+/// to sibling keywords such as `properties` or `required`, those sibling
+/// constraints still matter. Representing `true` as `{}` keeps those constraints
+/// available to our merge logic instead of dropping them on the floor.
+fn mergeable_schema_node(schema_node: JsonValue) -> JsonValue {
+    match schema_node {
+        JsonValue::Bool(true) => JsonValue::Object(serde_json::Map::new()),
+        other => other,
+    }
+}
+
+/// Merges overlay keywords into a base schema object while preserving the
+/// narrowest combined constraint for overlapping keys.
 fn merge_json_schema_objects(
     base: &mut serde_json::Map<String, JsonValue>,
     overlay: &serde_json::Map<String, JsonValue>,
@@ -369,6 +383,7 @@ fn merge_json_schema_objects(
         }
 
         match key.as_str() {
+            "enum" => merge_enum_values(base_value, overlay_value),
             "required" => merge_required_arrays(base_value, overlay_value),
             "properties" => merge_property_maps(base_value, overlay_value),
             "type" => merge_schema_types(base_value, overlay_value),
@@ -390,6 +405,22 @@ fn merge_json_schema_objects(
             }
         }
     }
+}
+
+fn merge_enum_values(base_value: &mut JsonValue, overlay_value: &JsonValue) {
+    let Some(base_array) = base_value.as_array() else {
+        return;
+    };
+    let Some(overlay_array) = overlay_value.as_array() else {
+        return;
+    };
+
+    let intersection = base_array
+        .iter()
+        .filter(|value| overlay_array.contains(value))
+        .cloned()
+        .collect::<Vec<_>>();
+    *base_value = JsonValue::Array(intersection);
 }
 
 fn merge_required_arrays(base_value: &mut JsonValue, overlay_value: &JsonValue) {
@@ -531,7 +562,7 @@ fn unwrap_single_variant_combiner(map: &serde_json::Map<String, JsonValue>) -> O
             continue;
         }
 
-        let mut replacement = variants[0].clone();
+        let mut replacement = mergeable_schema_node(variants[0].clone());
         if let JsonValue::Object(replacement_map) = &mut replacement {
             merge_json_schema_objects(replacement_map, map);
             replacement_map.remove(combiner);
