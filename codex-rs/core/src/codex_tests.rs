@@ -413,7 +413,7 @@ fn make_mcp_tool(
 ) -> ToolInfo {
     let tool_namespace = if server_name == CODEX_APPS_MCP_SERVER_NAME {
         connector_name
-            .map(crate::connectors::sanitize_name)
+            .map(codex_connectors::metadata::sanitize_name)
             .map(|connector_name| format!("mcp__{server_name}__{connector_name}"))
             .unwrap_or_else(|| server_name.to_string())
     } else {
