@@ -46,8 +46,14 @@ fn parse_tool_input_schema_keeps_local_ref_objects_inside_structured_outputs_sub
             "date_time_zone": {
                 "type": "object",
                 "properties": {
-                    "dateTime": { "type": "string" },
-                    "timeZone": { "type": "string" }
+                    "dateTime": {
+                        "type": "string",
+                        "description": "RFC3339 timestamp"
+                    },
+                    "timeZone": {
+                        "type": "string",
+                        "description": "IANA time zone"
+                    }
                 },
                 "required": ["dateTime", "timeZone"],
                 "additionalProperties": false
@@ -67,11 +73,11 @@ fn parse_tool_input_schema_keeps_local_ref_objects_inside_structured_outputs_sub
                     BTreeMap::from([
                         (
                             "dateTime".to_string(),
-                            JsonSchema::string(/*description*/ None),
+                            JsonSchema::string(Some("RFC3339 timestamp".to_string())),
                         ),
                         (
                             "timeZone".to_string(),
-                            JsonSchema::string(/*description*/ None),
+                            JsonSchema::string(Some("IANA time zone".to_string())),
                         ),
                     ]),
                     Some(vec!["dateTime".to_string(), "timeZone".to_string()]),
