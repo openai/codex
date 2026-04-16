@@ -13,6 +13,7 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use codex_api::CoreAuthProvider;
+use codex_api::OpenAiFileUploadOptions;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
 use serde_json::Value as JsonValue;
@@ -22,6 +23,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     turn_context: &TurnContext,
     arguments_value: Option<JsonValue>,
     openai_file_input_params: Option<&[String]>,
+    upload_options: Option<&OpenAiFileUploadOptions>,
 ) -> Result<Option<JsonValue>, String> {
     let Some(openai_file_input_params) = openai_file_input_params else {
         return Ok(arguments_value);
@@ -40,9 +42,14 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         let Some(value) = arguments.get(field_name) else {
             continue;
         };
-        let Some(uploaded_value) =
-            rewrite_argument_value_for_openai_files(turn_context, auth.as_ref(), field_name, value)
-                .await?
+        let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
+            turn_context,
+            auth.as_ref(),
+            field_name,
+            value,
+            upload_options,
+        )
+        .await?
         else {
             continue;
         };
@@ -61,6 +68,7 @@ async fn rewrite_argument_value_for_openai_files(
     auth: Option<&CodexAuth>,
     field_name: &str,
     value: &JsonValue,
+    upload_options: Option<&OpenAiFileUploadOptions>,
 ) -> Result<Option<JsonValue>, String> {
     match value {
         JsonValue::String(path_or_file_ref) => {
@@ -70,6 +78,7 @@ async fn rewrite_argument_value_for_openai_files(
                 field_name,
                 /*index*/ None,
                 path_or_file_ref,
+                upload_options,
             )
             .await?;
             Ok(Some(rewritten))
@@ -86,6 +95,7 @@ async fn rewrite_argument_value_for_openai_files(
                     field_name,
                     Some(index),
                     path_or_file_ref,
+                    upload_options,
                 )
                 .await?;
                 rewritten_values.push(rewritten);
@@ -102,6 +112,7 @@ async fn build_uploaded_local_argument_value(
     field_name: &str,
     index: Option<usize>,
     file_path: &str,
+    upload_options: Option<&OpenAiFileUploadOptions>,
 ) -> Result<JsonValue, String> {
     let resolved_path = turn_context.resolve_path(Some(file_path.to_string()));
     let Some(auth) = auth else {
@@ -116,10 +127,12 @@ async fn build_uploaded_local_argument_value(
         token: Some(token_data.access_token),
         account_id: token_data.account_id,
     };
+    let default_upload_options = OpenAiFileUploadOptions::default();
     let uploaded = upload_local_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         &upload_auth,
         &resolved_path,
+        upload_options.unwrap_or(&default_upload_options),
     )
     .await
     .map_err(|error| match index {
@@ -159,6 +172,7 @@ mod tests {
             &Arc::new(turn_context),
             arguments.clone(),
             /*openai_file_input_params*/ None,
+            /*upload_options*/ None,
         )
         .await
         .expect("rewrite should succeed");
@@ -230,6 +244,7 @@ mod tests {
             "file",
             /*index*/ None,
             "file_report.csv",
+            /*upload_options*/ None,
         )
         .await
         .expect("rewrite should upload the local file");
@@ -243,6 +258,93 @@ mod tests {
                 "file_name": "file_report.csv",
                 "uri": "sediment://file_123",
                 "file_size_bytes": 5,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn build_uploaded_local_argument_value_honors_upload_options() {
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::body_json;
+        use wiremock::matchers::header;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .and(body_json(serde_json::json!({
+                "file_name": "library.txt",
+                "file_size": 7,
+                "use_case": "codex",
+                "store_in_library": true,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file_id": "file_library",
+                "upload_url": format!("{}/upload/file_library", server.uri()),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/file_library"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files/file_library/uploaded"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/download/file_library", server.uri()),
+                "file_name": "library.txt",
+                "mime_type": "text/plain",
+                "file_size_bytes": 7,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (_, mut turn_context) = make_session_and_context().await;
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let dir = tempdir().expect("temp dir");
+        let local_path = dir.path().join("library.txt");
+        tokio::fs::write(&local_path, b"library")
+            .await
+            .expect("write local file");
+        turn_context.cwd = AbsolutePathBuf::try_from(dir.path()).expect("absolute path");
+
+        let mut config = (*turn_context.config).clone();
+        config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+        turn_context.config = Arc::new(config);
+
+        let upload_options = OpenAiFileUploadOptions {
+            store_in_library: true,
+            ..OpenAiFileUploadOptions::default()
+        };
+        let rewritten = build_uploaded_local_argument_value(
+            &turn_context,
+            Some(&auth),
+            "file",
+            /*index*/ None,
+            "library.txt",
+            Some(&upload_options),
+        )
+        .await
+        .expect("rewrite should upload the local file");
+
+        assert_eq!(
+            rewritten,
+            serde_json::json!({
+                "download_url": format!("{}/download/file_library", server.uri()),
+                "file_id": "file_library",
+                "mime_type": "text/plain",
+                "file_name": "library.txt",
+                "uri": "sediment://file_library",
+                "file_size_bytes": 7,
             })
         );
     }
@@ -309,6 +411,7 @@ mod tests {
             Some(&auth),
             "file",
             &serde_json::json!("file_report.csv"),
+            /*upload_options*/ None,
         )
         .await
         .expect("rewrite should succeed");
@@ -423,6 +526,7 @@ mod tests {
             Some(&auth),
             "files",
             &serde_json::json!(["one.csv", "two.csv"]),
+            /*upload_options*/ None,
         )
         .await
         .expect("rewrite should succeed");
@@ -463,6 +567,7 @@ mod tests {
                 "file": "/definitely/missing/file.csv",
             })),
             Some(&["file".to_string()]),
+            /*upload_options*/ None,
         )
         .await
         .expect_err("missing file should fail");

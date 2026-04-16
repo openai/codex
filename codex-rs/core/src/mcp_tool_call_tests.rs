@@ -61,6 +61,7 @@ fn approval_metadata(
         tool_description: tool_description.map(str::to_string),
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     }
 }
 
@@ -72,6 +73,26 @@ fn prompt_options(
         allow_session_remember,
         allow_persistent_approval,
     }
+}
+
+#[test]
+fn parse_openai_file_upload_options_reads_store_in_library_config() {
+    let meta = serde_json::json!({
+        "openai/fileUploadConfig": {
+            "store_in_library": true,
+        }
+    });
+
+    let parsed = parse_openai_file_upload_options(meta.as_object());
+
+    assert_eq!(
+        parsed,
+        Some(codex_api::OpenAiFileUploadOptions {
+            use_case: "codex".to_string(),
+            store_in_library: true,
+            upload_source: None,
+        })
+    );
 }
 
 #[test]
@@ -600,6 +621,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             .expect("_codex_apps metadata should be an object"),
         ),
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     assert_eq!(
@@ -748,6 +770,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         tool_description: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
@@ -1274,6 +1297,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         tool_description: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1342,6 +1366,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         tool_description: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1413,6 +1438,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         tool_description: Some("Reads calendar data.".to_string()),
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1464,6 +1490,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         tool_description: None,
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let mut approval_task = {
@@ -1541,6 +1568,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1611,6 +1639,7 @@ async fn custom_approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1681,6 +1710,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_without_annotations() {
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1759,6 +1789,7 @@ async fn full_access_mode_skips_arc_monitor_for_all_approval_modes() {
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     for approval_mode in [
@@ -1861,6 +1892,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
         openai_file_input_params: None,
+        openai_file_upload_options: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(

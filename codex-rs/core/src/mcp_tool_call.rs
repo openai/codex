@@ -27,19 +27,18 @@ use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
-use crate::library_mcp::handle_library_mcp_tool_call;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
+use codex_api::OpenAiFileUploadOptions;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
-use codex_mcp::is_codex_apps_library_tool;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
@@ -462,21 +461,12 @@ async fn execute_mcp_tool_call(
     metadata: Option<&McpToolApprovalMetadata>,
     request_meta: Option<serde_json::Value>,
 ) -> Result<CallToolResult, String> {
-    if server == CODEX_APPS_MCP_SERVER_NAME && is_codex_apps_library_tool(tool_name) {
-        return sanitize_mcp_tool_result_for_model(
-            turn_context
-                .model_info
-                .input_modalities
-                .contains(&InputModality::Image),
-            handle_library_mcp_tool_call(sess, turn_context, tool_name, arguments_value).await,
-        );
-    }
-
     let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
         sess,
         turn_context,
         arguments_value,
         metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+        metadata.and_then(|metadata| metadata.openai_file_upload_options.as_ref()),
     )
     .await?;
     let request_meta =
@@ -656,9 +646,42 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_description: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
+    openai_file_upload_options: Option<OpenAiFileUploadOptions>,
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
+const MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY: &str = "openai/fileUploadConfig";
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawOpenAiFileUploadConfig {
+    #[serde(default)]
+    use_case: Option<String>,
+    #[serde(default)]
+    store_in_library: bool,
+    #[serde(default)]
+    upload_source: Option<String>,
+}
+
+fn parse_openai_file_upload_options(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<OpenAiFileUploadOptions> {
+    let raw = meta?
+        .get(MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY)
+        .cloned()
+        .and_then(|value| serde_json::from_value::<RawOpenAiFileUploadConfig>(value).ok())?;
+
+    if raw.use_case.is_none() && !raw.store_in_library && raw.upload_source.is_none() {
+        return None;
+    }
+
+    let mut options = OpenAiFileUploadOptions::default();
+    if let Some(use_case) = raw.use_case {
+        options.use_case = use_case;
+    }
+    options.store_in_library = raw.store_in_library;
+    options.upload_source = raw.upload_source;
+    Some(options)
+}
 
 fn custom_mcp_tool_approval_mode(
     turn_context: &TurnContext,
@@ -1123,6 +1146,9 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             tool_info.tool.meta.as_deref(),
         ))
         .filter(|params| !params.is_empty()),
+        openai_file_upload_options: parse_openai_file_upload_options(
+            tool_info.tool.meta.as_deref(),
+        ),
     })
 }
 

@@ -20,6 +20,23 @@ const OPENAI_FILE_FINALIZE_RETRY_DELAY: Duration = Duration::from_millis(250);
 const OPENAI_FILE_USE_CASE: &str = "codex";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiFileUploadOptions {
+    pub use_case: String,
+    pub store_in_library: bool,
+    pub upload_source: Option<String>,
+}
+
+impl Default for OpenAiFileUploadOptions {
+    fn default() -> Self {
+        Self {
+            use_case: OPENAI_FILE_USE_CASE.to_string(),
+            store_in_library: false,
+            upload_source: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadedOpenAiFile {
     pub file_id: String,
     pub uri: String,
@@ -98,6 +115,7 @@ pub async fn upload_local_file(
     base_url: &str,
     auth: &impl AuthProvider,
     path: &Path,
+    options: &OpenAiFileUploadOptions,
 ) -> Result<UploadedOpenAiFile, OpenAiFileError> {
     let metadata = tokio::fs::metadata(path)
         .await
@@ -129,12 +147,19 @@ pub async fn upload_local_file(
         .unwrap_or("file")
         .to_string();
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
+    let mut create_request = serde_json::json!({
+        "file_name": file_name,
+        "file_size": metadata.len(),
+        "use_case": options.use_case,
+    });
+    if options.store_in_library {
+        create_request["store_in_library"] = serde_json::json!(true);
+    }
+    if let Some(upload_source) = &options.upload_source {
+        create_request["upload_source"] = serde_json::json!(upload_source);
+    }
     let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
-        .json(&serde_json::json!({
-            "file_name": file_name,
-            "file_size": metadata.len(),
-            "use_case": OPENAI_FILE_USE_CASE,
-        }))
+        .json(&create_request)
         .send()
         .await
         .map_err(|source| OpenAiFileError::Request {
@@ -350,9 +375,14 @@ mod tests {
         let path = dir.path().join("hello.txt");
         tokio::fs::write(&path, b"hello").await.expect("write file");
 
-        let uploaded = upload_local_file(&base_url, &chatgpt_auth(), &path)
-            .await
-            .expect("upload succeeds");
+        let uploaded = upload_local_file(
+            &base_url,
+            &chatgpt_auth(),
+            &path,
+            &OpenAiFileUploadOptions::default(),
+        )
+        .await
+        .expect("upload succeeds");
 
         assert_eq!(uploaded.file_id, "file_123");
         assert_eq!(uploaded.uri, "sediment://file_123");
