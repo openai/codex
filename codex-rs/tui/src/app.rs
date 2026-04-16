@@ -5958,9 +5958,10 @@ impl App {
                 self.pending_shutdown_exit_thread_id =
                     self.active_thread_id.or(self.chat_widget.thread_id());
                 if self.pending_shutdown_exit_thread_id.is_some()
-                    && let Err(err) = self.shutdown_current_thread(app_server).await {
-                        tracing::warn!("failed to stop current thread during exit: {err}");
-                    }
+                    && let Err(err) = self.shutdown_current_thread(app_server).await
+                {
+                    tracing::warn!("failed to stop current thread during exit: {err}");
+                }
                 self.pending_shutdown_exit_thread_id = None;
                 AppRunControl::Exit(ExitReason::UserRequested)
             }
