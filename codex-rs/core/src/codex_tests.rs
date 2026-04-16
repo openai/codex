@@ -5927,6 +5927,62 @@ async fn goal_accounting_charges_out_of_band_completed_goal_at_turn_boundary() -
     Ok(())
 }
 
+#[tokio::test]
+async fn goal_accounting_charges_out_of_band_paused_goal_at_turn_boundary() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(1_000),
+        )
+        .await?;
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
+        .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.set_token_info(Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 30,
+                cached_input_tokens: 10,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 55,
+            },
+            last_token_usage: TokenUsage::default(),
+            model_context_window: None,
+        }));
+    }
+    state_db
+        .update_thread_goal(
+            sess.conversation_id,
+            codex_state::ThreadGoalUpdate {
+                status: Some(codex_state::ThreadGoalStatus::Paused),
+                token_budget: None,
+            },
+        )
+        .await?;
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Turn)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(40, goal.tokens_used);
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parallel_goal_accounting_charges_delta_once() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;

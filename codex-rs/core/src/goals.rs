@@ -23,6 +23,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
@@ -44,6 +45,7 @@ pub(crate) struct GoalAccountingState {
     last_accounted_at: Mutex<Instant>,
     last_accounted_token_usage: Mutex<TokenUsage>,
     completed_this_turn: AtomicBool,
+    active_at_turn_start: AtomicBool,
 }
 
 impl GoalAccountingState {
@@ -53,6 +55,7 @@ impl GoalAccountingState {
             last_accounted_at: Mutex::new(Instant::now()),
             last_accounted_token_usage: Mutex::new(TokenUsage::default()),
             completed_this_turn: AtomicBool::new(false),
+            active_at_turn_start: AtomicBool::new(false),
         }
     }
 
@@ -60,6 +63,20 @@ impl GoalAccountingState {
         *self.last_accounted_at.lock().await = Instant::now();
         *self.last_accounted_token_usage.lock().await = token_usage;
         self.completed_this_turn.store(false, Ordering::SeqCst);
+        self.active_at_turn_start.store(false, Ordering::SeqCst);
+    }
+
+    fn mark_active_at_turn_start(&self) {
+        self.active_at_turn_start.store(true, Ordering::SeqCst);
+    }
+
+    fn active_at_turn_start(&self) -> bool {
+        self.active_at_turn_start.load(Ordering::SeqCst)
+    }
+
+    async fn reset_baseline(&self, token_usage: TokenUsage) {
+        *self.last_accounted_at.lock().await = Instant::now();
+        *self.last_accounted_token_usage.lock().await = token_usage;
     }
 
     fn completed_this_turn(&self) -> bool {
@@ -97,7 +114,12 @@ impl GoalAccountingState {
 
     async fn mark_accounted(&self, current: TokenUsage, time_delta_seconds: i64) {
         if time_delta_seconds > 0 {
-            *self.last_accounted_at.lock().await = Instant::now();
+            let mut last_accounted_at = self.last_accounted_at.lock().await;
+            let advance =
+                Duration::from_secs(u64::try_from(time_delta_seconds).unwrap_or(u64::MAX));
+            *last_accounted_at = last_accounted_at
+                .checked_add(advance)
+                .unwrap_or_else(Instant::now);
         }
         *self.last_accounted_token_usage.lock().await = current;
     }
@@ -134,6 +156,7 @@ impl Session {
 
         validate_goal_budget(request.token_budget.flatten())?;
         let state_db = self.require_state_db_for_thread_goals().await?;
+        let replacing_goal = request.objective.is_some();
         let goal = if let Some(objective) = request.objective {
             let objective = objective.trim();
             if objective.is_empty() {
@@ -172,6 +195,13 @@ impl Session {
         let goal = protocol_goal_from_state(goal);
         self.thread_goal_may_exist.store(true, Ordering::SeqCst);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
+        if replacing_goal {
+            let current_token_usage = self.total_token_usage().await.unwrap_or_default();
+            turn_context
+                .goal_accounting
+                .reset_baseline(current_token_usage)
+                .await;
+        }
         if goal.status == ThreadGoalStatus::Complete {
             turn_context.goal_accounting.mark_completed_this_turn();
         }
@@ -184,6 +214,33 @@ impl Session {
         )
         .await;
         Ok(goal)
+    }
+
+    pub(crate) async fn mark_thread_goal_turn_started(
+        &self,
+        turn_context: &TurnContext,
+        token_usage: TokenUsage,
+    ) {
+        turn_context
+            .goal_accounting
+            .mark_turn_started(token_usage)
+            .await;
+
+        if !self.enabled(Feature::GoalMode) {
+            return;
+        }
+        if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
+            return;
+        }
+        match self.get_thread_goal().await {
+            Ok(Some(goal)) if goal.status == ThreadGoalStatus::Active => {
+                turn_context.goal_accounting.mark_active_at_turn_start();
+            }
+            Ok(Some(_)) | Ok(None) => {}
+            Err(err) => {
+                tracing::warn!("failed to read thread goal at turn start: {err}");
+            }
+        }
     }
 
     pub(crate) async fn account_thread_goal_progress(
@@ -229,23 +286,38 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
-        let account_terminal_goal = if turn_context.goal_accounting.completed_this_turn() {
-            true
-        } else if matches!(boundary, GoalAccountingBoundary::Turn) {
-            match state_db.get_thread_goal(self.conversation_id).await? {
-                Some(goal) if goal.status == codex_state::ThreadGoalStatus::Complete => {
-                    *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal));
-                    true
+        let mode = match boundary {
+            GoalAccountingBoundary::Tool => {
+                if turn_context.goal_accounting.completed_this_turn() {
+                    codex_state::ThreadGoalAccountingMode::ActiveOrComplete
+                } else {
+                    codex_state::ThreadGoalAccountingMode::ActiveOnly
                 }
-                Some(_) | None => false,
             }
-        } else {
-            false
-        };
-        let mode = if account_terminal_goal {
-            codex_state::ThreadGoalAccountingMode::ActiveOrComplete
-        } else {
-            codex_state::ThreadGoalAccountingMode::ActiveOnly
+            GoalAccountingBoundary::Turn => {
+                let completed_this_turn = turn_context.goal_accounting.completed_this_turn();
+                match state_db.get_thread_goal(self.conversation_id).await? {
+                    Some(goal) => {
+                        let status = goal.status;
+                        *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal));
+                        if completed_this_turn || status == codex_state::ThreadGoalStatus::Complete
+                        {
+                            codex_state::ThreadGoalAccountingMode::ActiveOrComplete
+                        } else if turn_context.goal_accounting.active_at_turn_start()
+                            && matches!(
+                                status,
+                                codex_state::ThreadGoalStatus::Paused
+                                    | codex_state::ThreadGoalStatus::BudgetLimited
+                            )
+                        {
+                            codex_state::ThreadGoalAccountingMode::ActiveOrStopped
+                        } else {
+                            codex_state::ThreadGoalAccountingMode::ActiveOnly
+                        }
+                    }
+                    None => codex_state::ThreadGoalAccountingMode::ActiveOnly,
+                }
+            }
         };
         let outcome = state_db
             .account_thread_goal_usage(self.conversation_id, time_delta_seconds, token_delta, mode)
@@ -358,6 +430,33 @@ impl Session {
             tracing::debug!(status = ?goal.status, "skipping inactive thread goal");
             return;
         }
+        if self.has_active_turn().await
+            || self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await
+        {
+            tracing::debug!("skipping active goal continuation because pending work appeared");
+            return;
+        }
+        let goal = match self.get_thread_goal().await {
+            Ok(Some(goal)) if goal.status == ThreadGoalStatus::Active => goal,
+            Ok(Some(goal)) => {
+                tracing::debug!(
+                    status = ?goal.status,
+                    "skipping thread goal that changed before continuation queueing"
+                );
+                return;
+            }
+            Ok(None) => {
+                tracing::debug!(
+                    "skipping thread goal that disappeared before continuation queueing"
+                );
+                return;
+            }
+            Err(err) => {
+                tracing::warn!("failed to re-read thread goal for continuation: {err}");
+                return;
+            }
+        };
         self.queue_response_items_for_next_turn(vec![ResponseInputItem::Message {
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
@@ -493,8 +592,12 @@ pub(crate) fn goal_token_delta_for_usage(usage: &TokenUsage) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use super::GoalAccountingState;
     use super::should_ignore_goal_for_mode;
     use codex_protocol::config_types::ModeKind;
+    use codex_protocol::protocol::TokenUsage;
+    use std::time::Duration;
+    use std::time::Instant;
 
     #[test]
     fn goal_continuation_is_ignored_only_in_plan_mode() {
@@ -502,5 +605,27 @@ mod tests {
         assert!(!should_ignore_goal_for_mode(ModeKind::Default));
         assert!(!should_ignore_goal_for_mode(ModeKind::PairProgramming));
         assert!(!should_ignore_goal_for_mode(ModeKind::Execute));
+    }
+
+    #[tokio::test]
+    async fn goal_accounting_preserves_fractional_seconds_between_boundaries() {
+        let accounting = GoalAccountingState::new();
+        *accounting.last_accounted_at.lock().await = Instant::now() - Duration::from_millis(2500);
+
+        let delta = accounting.time_delta_since_last_accounting().await;
+        assert_eq!(2, delta);
+
+        accounting
+            .mark_accounted(TokenUsage::default(), delta)
+            .await;
+        let elapsed = accounting.last_accounted_at.lock().await.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(400),
+            "expected subsecond remainder to be preserved, got {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "expected only subsecond-ish remainder after accounting, got {elapsed:?}"
+        );
     }
 }

@@ -254,10 +254,11 @@ impl Session {
             .mark_turn_started(started_at)
             .await;
         let token_usage_at_turn_start = self.total_token_usage().await.unwrap_or_default();
-        turn_context
-            .goal_accounting
-            .mark_turn_started(token_usage_at_turn_start.clone())
-            .await;
+        self.mark_thread_goal_turn_started(
+            turn_context.as_ref(),
+            token_usage_at_turn_start.clone(),
+        )
+        .await;
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
@@ -576,18 +577,18 @@ impl Session {
         });
         self.send_event(turn_context.as_ref(), event).await;
 
-        let session = Arc::clone(self);
-        tokio::spawn(async move {
-            if let Err(err) = session
-                .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
-                .await
-            {
-                warn!("failed to account thread goal progress at turn end: {err}");
-            }
-            if should_clear_active_turn {
+        if let Err(err) = self
+            .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
+            .await
+        {
+            warn!("failed to account thread goal progress at turn end: {err}");
+        }
+        if should_clear_active_turn {
+            let session = Arc::clone(self);
+            tokio::spawn(async move {
                 idle_pending_work_scheduler(session).await;
-            }
-        });
+            });
+        }
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
