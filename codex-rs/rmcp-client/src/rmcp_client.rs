@@ -76,6 +76,7 @@ use crate::elicitation_client_service::ElicitationClientService;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::perform_oauth_login;
 use crate::program_resolver;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
@@ -405,6 +406,9 @@ enum TransportRecipe {
         bearer_token: Option<String>,
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
+        oauth_resource: Option<String>,
+        callback_port: Option<u16>,
+        callback_url: Option<String>,
         store_mode: OAuthCredentialsStoreMode,
     },
 }
@@ -604,6 +608,9 @@ impl RmcpClient {
         bearer_token: Option<String>,
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
+        oauth_resource: Option<String>,
+        callback_port: Option<u16>,
+        callback_url: Option<String>,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
@@ -612,6 +619,9 @@ impl RmcpClient {
             bearer_token,
             http_headers,
             env_http_headers,
+            oauth_resource,
+            callback_port,
+            callback_url,
             store_mode,
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
@@ -827,35 +837,72 @@ impl RmcpClient {
             arguments,
             task: None,
         };
-        let result = self
-            .run_service_operation("tools/call", timeout, move |service| {
-                let rmcp_params = rmcp_params.clone();
-                let meta = meta.clone();
-                async move {
-                    let result = service
-                        .peer()
-                        .send_request_with_option(
-                            ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
-                                method: Default::default(),
-                                params: rmcp_params,
-                                extensions: Default::default(),
-                            }),
-                            rmcp::service::PeerRequestOptions {
-                                timeout: None,
-                                meta,
-                            },
-                        )
-                        .await?
-                        .await_response()
-                        .await?;
-                    match result {
-                        ServerResult::CallToolResult(result) => Ok(result),
-                        _ => Err(rmcp::service::ServiceError::UnexpectedResponse),
-                    }
+        let operation = |service: Arc<RunningService<RoleClient, ElicitationClientService>>| {
+            let rmcp_params = rmcp_params.clone();
+            let meta = meta.clone();
+            async move {
+                let result = service
+                    .peer()
+                    .send_request_with_option(
+                        ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
+                            method: Default::default(),
+                            params: rmcp_params,
+                            extensions: Default::default(),
+                        }),
+                        rmcp::service::PeerRequestOptions {
+                            timeout: None,
+                            meta,
+                        },
+                    )
+                    .await?
+                    .await_response()
+                    .await?;
+                match result {
+                    ServerResult::CallToolResult(result) => Ok(result),
+                    _ => Err(rmcp::service::ServiceError::UnexpectedResponse),
                 }
-                .boxed()
-            })
-            .await?;
+            }
+            .boxed()
+        };
+        let service = self.service().await?;
+        let result = match Self::run_service_operation_once(
+            Arc::clone(&service),
+            "tools/call",
+            timeout,
+            self.elicitation_pause_state.clone(),
+            &operation,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) if Self::is_session_expired_404(&error) => {
+                self.reinitialize_after_session_expiry(&service).await?;
+                let recovered_service = self.service().await?;
+                Self::run_service_operation_once(
+                    recovered_service,
+                    "tools/call",
+                    timeout,
+                    self.elicitation_pause_state.clone(),
+                    &operation,
+                )
+                .await
+                .map_err(anyhow::Error::from)?
+            }
+            Err(error) if Self::is_auth_required_error(&error) => {
+                self.reinitialize_after_oauth_login(&service).await?;
+                let recovered_service = self.service().await?;
+                Self::run_service_operation_once(
+                    recovered_service,
+                    "tools/call",
+                    timeout,
+                    self.elicitation_pause_state.clone(),
+                    &operation,
+                )
+                .await
+                .map_err(anyhow::Error::from)?
+            }
+            Err(error) => return Err(error.into()),
+        };
         self.persist_oauth_tokens().await;
         Ok(result)
     }
@@ -1016,6 +1063,7 @@ impl RmcpClient {
                 http_headers,
                 env_http_headers,
                 store_mode,
+                ..
             } => {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
@@ -1223,6 +1271,19 @@ impl RmcpClient {
             })
     }
 
+    fn is_auth_required_error(error: &ClientOperationError) -> bool {
+        let ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error)) =
+            error
+        else {
+            return false;
+        };
+
+        error
+            .error
+            .downcast_ref::<StreamableHttpError<StreamableHttpResponseClientError>>()
+            .is_some_and(|error| matches!(error, StreamableHttpError::AuthRequired(_)))
+    }
+
     async fn reinitialize_after_session_expiry(
         &self,
         failed_service: &Arc<RunningService<RoleClient, ElicitationClientService>>,
@@ -1269,6 +1330,106 @@ impl RmcpClient {
             && let Err(error) = runtime.persist_if_needed().await
         {
             warn!("failed to persist OAuth tokens after session recovery: {error}");
+        }
+
+        Ok(())
+    }
+
+    async fn reinitialize_after_oauth_login(
+        &self,
+        failed_service: &Arc<RunningService<RoleClient, ElicitationClientService>>,
+    ) -> Result<()> {
+        let _recovery_guard = self.session_recovery_lock.lock().await;
+
+        {
+            let guard = self.state.lock().await;
+            match &*guard {
+                ClientState::Ready { service, .. } if !Arc::ptr_eq(service, failed_service) => {
+                    return Ok(());
+                }
+                ClientState::Ready { .. } => {}
+                ClientState::Connecting { .. } => {
+                    return Err(anyhow!("MCP client not initialized"));
+                }
+            }
+        }
+
+        let TransportRecipe::StreamableHttp {
+            server_name,
+            url,
+            bearer_token,
+            http_headers,
+            env_http_headers,
+            oauth_resource,
+            callback_port,
+            callback_url,
+            store_mode,
+        } = &self.transport_recipe
+        else {
+            return Err(anyhow!(
+                "MCP authentication recovery is only supported for streamable HTTP transports"
+            ));
+        };
+
+        if bearer_token.is_some() {
+            return Err(anyhow!(
+                "MCP server `{server_name}` returned auth required while using a fixed bearer token"
+            ));
+        }
+
+        let scopes = load_oauth_tokens(server_name, url, *store_mode)?
+            .and_then(|tokens| tokens.token_response.0.scopes().cloned())
+            .map(|scopes| {
+                scopes
+                    .into_iter()
+                    .map(|scope| scope.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        {
+            let _pause = self.elicitation_pause_state.enter();
+            perform_oauth_login(
+                server_name,
+                url,
+                *store_mode,
+                http_headers.clone(),
+                env_http_headers.clone(),
+                &scopes,
+                oauth_resource.as_deref(),
+                *callback_port,
+                callback_url.as_deref(),
+            )
+            .await?;
+        }
+
+        let initialize_context = self
+            .initialize_context
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow!("MCP client cannot recover before initialize succeeds"))?;
+        let pending_transport = Self::create_pending_transport(&self.transport_recipe).await?;
+        let (service, oauth_persistor, process_group_guard) = Self::connect_pending_transport(
+            pending_transport,
+            initialize_context.client_service,
+            initialize_context.timeout,
+        )
+        .await?;
+
+        {
+            let mut guard = self.state.lock().await;
+            *guard = ClientState::Ready {
+                _process_group_guard: process_group_guard,
+                service,
+                oauth: oauth_persistor.clone(),
+            };
+        }
+
+        if let Some(runtime) = oauth_persistor
+            && let Err(error) = runtime.persist_if_needed().await
+        {
+            warn!("failed to persist OAuth tokens after authentication recovery: {error}");
         }
 
         Ok(())

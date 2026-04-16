@@ -76,6 +76,9 @@ async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> {
         Some("test-bearer".to_string()),
         /*http_headers*/ None,
         /*env_http_headers*/ None,
+        /*oauth_resource*/ None,
+        /*callback_port*/ None,
+        /*callback_url*/ None,
         OAuthCredentialsStoreMode::File,
     )
     .await?;
