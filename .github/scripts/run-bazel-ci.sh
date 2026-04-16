@@ -69,12 +69,30 @@ print_bazel_test_log_tails() {
   local console_log="$1"
   local testlogs_dir
   local -a bazel_info_cmd=(bazel)
+  local -a bazel_info_args=(info)
 
   if (( ${#bazel_startup_args[@]} > 0 )); then
     bazel_info_cmd+=("${bazel_startup_args[@]}")
   fi
 
-  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+  if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+    bazel_info_args+=(
+      "--config=${ci_config}"
+      "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+    )
+  fi
+  for arg in "${post_config_bazel_args[@]}"; do
+    case "$arg" in
+      --host_platform=* | --repo_contents_cache=* | --repository_cache=*)
+        bazel_info_args+=("$arg")
+        ;;
+    esac
+  done
+
+  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" \
+    --noexperimental_remote_repo_contents_cache \
+    "${bazel_info_args[@]}" \
+    bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
 
   local failed_targets=()
   while IFS= read -r target; do
@@ -95,8 +113,9 @@ print_bazel_test_log_tails() {
     rel_path="${rel_path/://}"
     local test_log="${testlogs_dir}/${rel_path}/test.log"
     local reported_test_log
-    reported_test_log="$(grep -F "FAIL: ${target} " "$console_log" | sed -nE 's#.* \(see ([^)]+/test\.log)\).*#\1#p' | head -n 1 || true)"
+    reported_test_log="$(grep -F "FAIL: ${target} " "$console_log" | sed -nE 's#.* \(see (.*[\\/]test\.log)\).*#\1#p' | head -n 1 || true)"
     if [[ -n "$reported_test_log" ]]; then
+      reported_test_log="${reported_test_log//\\//}"
       test_log="$reported_test_log"
     fi
 
