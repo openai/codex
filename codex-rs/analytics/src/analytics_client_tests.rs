@@ -6,6 +6,8 @@ use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
+use crate::events::CodexResponsesApiCallEventParams;
+use crate::events::CodexResponsesApiCallEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventRequest;
 use crate::events::ThreadInitializedEvent;
@@ -45,6 +47,13 @@ use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
 use crate::reducer::skill_id_for_local_skill;
+use crate::responses_api::CodexResponseItemRole;
+use crate::responses_api::CodexResponseItemType;
+use crate::responses_api::CodexResponseMessagePhase;
+use crate::responses_api::CodexResponsesApiCallFact;
+use crate::responses_api::CodexResponsesApiCallStatus;
+use crate::responses_api::CodexResponsesApiItemMetadata;
+use crate::responses_api::CodexResponsesApiItemPhase;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
@@ -256,6 +265,30 @@ fn sample_turn_token_usage_fact(thread_id: &str, turn_id: &str) -> TurnTokenUsag
             output_tokens: 140,
             reasoning_output_tokens: 13,
         },
+    }
+}
+
+fn sample_responses_api_item_metadata(
+    item_phase: CodexResponsesApiItemPhase,
+    item_index: usize,
+) -> CodexResponsesApiItemMetadata {
+    CodexResponsesApiItemMetadata {
+        item_phase,
+        item_index,
+        response_item_type: CodexResponseItemType::Message,
+        role: Some(CodexResponseItemRole::Assistant),
+        status: Some("completed".to_string()),
+        message_phase: Some(CodexResponseMessagePhase::FinalAnswer),
+        call_id: None,
+        tool_name: None,
+        content_bytes: Some(12),
+        arguments_bytes: None,
+        output_bytes: None,
+        encrypted_content_bytes: None,
+        image_generation_revised_prompt_bytes: None,
+        image_generation_result_bytes: None,
+        text_part_count: Some(1),
+        image_part_count: Some(0),
     }
 }
 
@@ -739,6 +772,93 @@ fn compaction_event_serializes_expected_shape() {
 }
 
 #[test]
+fn responses_api_call_event_serializes_expected_shape() {
+    let event = TrackEventRequest::ResponsesApiCall(Box::new(CodexResponsesApiCallEventRequest {
+        event_type: "codex_responses_api_call_event",
+        event_params: CodexResponsesApiCallEventParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            ephemeral: false,
+            thread_source: Some("user".to_string()),
+            initialization_mode: ThreadInitializationMode::New,
+            subagent_source: None,
+            parent_thread_id: None,
+            app_server_client: sample_app_server_client_metadata(),
+            runtime: sample_runtime_metadata(),
+            responses_id: Some("resp_123".to_string()),
+            turn_responses_call_index: 2,
+            model: Some("gpt-5".to_string()),
+            model_provider: Some("openai".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            status: CodexResponsesApiCallStatus::Completed,
+            error: None,
+            started_at: 100,
+            completed_at: Some(102),
+            duration_ms: Some(2345),
+            input_item_count: 1,
+            output_item_count: 1,
+            input_tokens: Some(10),
+            cached_input_tokens: Some(4),
+            output_tokens: Some(20),
+            reasoning_output_tokens: Some(3),
+            total_tokens: Some(30),
+            items: vec![
+                sample_responses_api_item_metadata(CodexResponsesApiItemPhase::Input, 0),
+                sample_responses_api_item_metadata(CodexResponsesApiItemPhase::Output, 0),
+            ],
+        },
+    }));
+
+    let payload = serde_json::to_value(&event).expect("serialize responses api call event");
+
+    assert_eq!(payload["event_type"], "codex_responses_api_call_event");
+    assert_eq!(payload["event_params"]["thread_id"], "thread-1");
+    assert_eq!(payload["event_params"]["turn_id"], "turn-1");
+    assert_eq!(payload["event_params"]["ephemeral"], false);
+    assert_eq!(payload["event_params"]["thread_source"], "user");
+    assert_eq!(payload["event_params"]["initialization_mode"], "new");
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["product_client_id"],
+        DEFAULT_ORIGINATOR
+    );
+    assert_eq!(
+        payload["event_params"]["app_server_client"]["rpc_transport"],
+        "stdio"
+    );
+    assert_eq!(
+        payload["event_params"]["runtime"]["codex_rs_version"],
+        "0.1.0"
+    );
+    assert_eq!(payload["event_params"]["responses_id"], "resp_123");
+    assert_eq!(payload["event_params"]["turn_responses_call_index"], 2);
+    assert_eq!(payload["event_params"]["model"], "gpt-5");
+    assert_eq!(payload["event_params"]["model_provider"], "openai");
+    assert_eq!(payload["event_params"]["reasoning_effort"], "high");
+    assert_eq!(payload["event_params"]["status"], "completed");
+    assert_eq!(payload["event_params"]["error"], json!(null));
+    assert_eq!(payload["event_params"]["started_at"], 100);
+    assert_eq!(payload["event_params"]["completed_at"], 102);
+    assert_eq!(payload["event_params"]["duration_ms"], 2345);
+    assert_eq!(payload["event_params"]["input_item_count"], 1);
+    assert_eq!(payload["event_params"]["output_item_count"], 1);
+    assert_eq!(payload["event_params"]["input_tokens"], 10);
+    assert_eq!(payload["event_params"]["cached_input_tokens"], 4);
+    assert_eq!(payload["event_params"]["output_tokens"], 20);
+    assert_eq!(payload["event_params"]["reasoning_output_tokens"], 3);
+    assert_eq!(payload["event_params"]["total_tokens"], 30);
+    assert_eq!(payload["event_params"]["items"][0]["item_phase"], "input");
+    assert_eq!(payload["event_params"]["items"][0]["response_item_type"], "message");
+    assert_eq!(payload["event_params"]["items"][0]["role"], "assistant");
+    assert_eq!(
+        payload["event_params"]["items"][0]["message_phase"],
+        "final_answer"
+    );
+    assert_eq!(payload["event_params"]["items"][0]["text_part_count"], 1);
+    assert_eq!(payload["event_params"]["items"][0]["image_part_count"], 0);
+    assert_eq!(payload["event_params"]["items"][1]["item_phase"], "output");
+}
+
+#[test]
 fn app_used_dedupe_is_keyed_by_turn_and_connector() {
     let (sender, _receiver) = mpsc::channel(1);
     let queue = AnalyticsEventsQueue {
@@ -1041,6 +1161,82 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_params"]["phase"], "standalone_turn");
     assert_eq!(payload[0]["event_params"]["strategy"], "memento");
     assert_eq!(payload[0]["event_params"]["status"], "failed");
+}
+
+#[tokio::test]
+async fn responses_api_call_event_ingests_custom_fact() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut reducer,
+        &mut events,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ false,
+        /*include_token_usage*/ false,
+    )
+    .await;
+    events.clear();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::ResponsesApiCall(Box::new(
+                CodexResponsesApiCallFact {
+                    thread_id: "thread-2".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    responses_id: Some("resp_456".to_string()),
+                    turn_responses_call_index: 1,
+                    status: CodexResponsesApiCallStatus::Completed,
+                    error: None,
+                    started_at: 100,
+                    completed_at: Some(101),
+                    duration_ms: Some(1200),
+                    input_item_count: 1,
+                    output_item_count: 1,
+                    input_tokens: Some(123),
+                    cached_input_tokens: Some(45),
+                    output_tokens: Some(140),
+                    reasoning_output_tokens: Some(13),
+                    total_tokens: Some(321),
+                    items: vec![
+                        sample_responses_api_item_metadata(CodexResponsesApiItemPhase::Input, 0),
+                        sample_responses_api_item_metadata(CodexResponsesApiItemPhase::Output, 0),
+                    ],
+                },
+            ))),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_responses_api_call_event");
+    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-2");
+    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-2");
+    assert_eq!(payload[0]["event_params"]["ephemeral"], false);
+    assert_eq!(payload[0]["event_params"]["thread_source"], "user");
+    assert_eq!(payload[0]["event_params"]["initialization_mode"], "new");
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["product_client_id"],
+        "codex-tui"
+    );
+    assert_eq!(payload[0]["event_params"]["runtime"]["runtime_os"], "macos");
+    assert_eq!(payload[0]["event_params"]["responses_id"], "resp_456");
+    assert_eq!(payload[0]["event_params"]["turn_responses_call_index"], 1);
+    assert_eq!(payload[0]["event_params"]["model"], "gpt-5");
+    assert_eq!(payload[0]["event_params"]["model_provider"], "openai");
+    assert_eq!(payload[0]["event_params"]["reasoning_effort"], json!(null));
+    assert_eq!(payload[0]["event_params"]["status"], "completed");
+    assert_eq!(payload[0]["event_params"]["input_tokens"], 123);
+    assert_eq!(
+        payload[0]["event_params"]["items"][0]["item_phase"],
+        "input"
+    );
+    assert_eq!(
+        payload[0]["event_params"]["items"][1]["item_phase"],
+        "output"
+    );
 }
 
 #[test]
