@@ -177,7 +177,7 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query for MCP tools."},
+                    "query": {"type": "string", "description": "Search query for deferred tools."},
                     "limit": {"type": "number", "description": "Maximum number of tools to return (defaults to 8)."},
                 },
                 "required": ["query"],

@@ -10,12 +10,13 @@ use bm25::SearchEngine;
 use bm25::SearchEngineBuilder;
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSearchOutputTool;
-use codex_tools::ToolSearchResultSource;
-use codex_tools::collect_tool_search_output_tools;
 use codex_tools::dynamic_tool_to_responses_api_tool;
+use codex_tools::mcp_tool_to_deferred_responses_api_tool;
 
 const COMPUTER_USE_MCP_SERVER_NAME: &str = "computer-use";
 const COMPUTER_USE_TOOL_SEARCH_LIMIT: usize = 20;
@@ -31,9 +32,9 @@ impl ToolSearchHandler {
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> Self {
         let mut mcp_entries: Vec<ToolSearchEntry> = mcp_tools
-            .into_iter()
-            .map(|(name, info)| ToolSearchEntry::Mcp {
-                name,
+            .into_values()
+            .map(|info| ToolSearchEntry::Mcp {
+                name: info.canonical_tool_name().display(),
                 info: Box::new(info),
             })
             .collect();
@@ -118,39 +119,7 @@ impl ToolSearchHandler {
         use_default_limit: bool,
     ) -> Result<Vec<ToolSearchOutputTool>, FunctionCallError> {
         let results = self.search_result_entries(query, limit, use_default_limit);
-        let mut tools = Vec::new();
-        let mut pending_mcp_sources = Vec::new();
-
-        for entry in results {
-            match entry {
-                ToolSearchEntry::Mcp { info, .. } => {
-                    pending_mcp_sources.push(ToolSearchResultSource {
-                        server_name: info.server_name.as_str(),
-                        tool_namespace: info.callable_namespace.as_str(),
-                        tool_name: info.callable_name.as_str(),
-                        tool: &info.tool,
-                        connector_name: info.connector_name.as_deref(),
-                        connector_description: info.connector_description.as_deref(),
-                    });
-                }
-                ToolSearchEntry::Dynamic { tool } => {
-                    tools.extend(
-                        collect_tool_search_output_tools(pending_mcp_sources.drain(..))
-                            .map_err(tool_search_output_error)?,
-                    );
-                    tools.push(ToolSearchOutputTool::Function(
-                        dynamic_tool_to_responses_api_tool(tool)
-                            .map_err(tool_search_output_error)?,
-                    ));
-                }
-            }
-        }
-
-        tools.extend(
-            collect_tool_search_output_tools(pending_mcp_sources)
-                .map_err(tool_search_output_error)?,
-        );
-        Ok(tools)
+        search_output_tools(results)
     }
 
     fn search_result_entries(
@@ -182,6 +151,60 @@ impl ToolSearchHandler {
         }
         limit_results_per_server(results)
     }
+}
+
+fn search_output_tools<'a>(
+    results: impl IntoIterator<Item = &'a ToolSearchEntry>,
+) -> Result<Vec<ToolSearchOutputTool>, FunctionCallError> {
+    let mut tools = Vec::new();
+    // Preserve search order: group MCP tools under namespaces, emit dynamic tools directly.
+    for entry in results {
+        match entry {
+            ToolSearchEntry::Mcp { info, .. } => {
+                let tool_name = info.canonical_tool_name();
+                let namespace = info.callable_namespace.as_str();
+                let namespace_tool =
+                    mcp_tool_to_deferred_responses_api_tool(&tool_name, &info.tool)
+                        .map(ResponsesApiNamespaceTool::Function)
+                        .map_err(tool_search_output_error)?;
+
+                if let Some(output) = tools.iter_mut().find_map(|tool| match tool {
+                    ToolSearchOutputTool::Namespace(output) if output.name == namespace => {
+                        Some(output)
+                    }
+                    ToolSearchOutputTool::Namespace(_) | ToolSearchOutputTool::Function(_) => None,
+                }) {
+                    output.tools.push(namespace_tool);
+                } else {
+                    tools.push(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                        name: namespace.to_string(),
+                        description: mcp_namespace_description(info),
+                        tools: vec![namespace_tool],
+                    }));
+                }
+            }
+            ToolSearchEntry::Dynamic { tool } => {
+                tools.push(ToolSearchOutputTool::Function(
+                    dynamic_tool_to_responses_api_tool(tool).map_err(tool_search_output_error)?,
+                ));
+            }
+        }
+    }
+
+    Ok(tools)
+}
+
+fn mcp_namespace_description(info: &ToolInfo) -> String {
+    info.connector_description
+        .clone()
+        .or_else(|| {
+            info.connector_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())
+                .map(|connector_name| format!("Tools for working with {connector_name}."))
+        })
+        .unwrap_or_else(|| format!("Tools from the {} MCP server.", info.server_name))
 }
 
 fn limit_results_per_server(results: Vec<&ToolSearchEntry>) -> Vec<&ToolSearchEntry> {
@@ -322,57 +345,95 @@ fn build_dynamic_search_text(tool: &DynamicToolSpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_tools::JsonSchema;
+    use codex_tools::ResponsesApiNamespace;
+    use codex_tools::ResponsesApiNamespaceTool;
     use codex_tools::ResponsesApiTool;
     use pretty_assertions::assert_eq;
     use rmcp::model::Tool;
     use std::sync::Arc;
 
     #[test]
-    fn search_returns_deferred_dynamic_tools() {
-        let handler = ToolSearchHandler::new(
-            std::collections::HashMap::new(),
-            vec![DynamicToolSpec {
-                name: "automation_update".to_string(),
-                description: "Create, update, view, or delete recurring automations.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "mode": { "type": "string" },
-                        "kind": { "type": "string" }
-                    },
-                    "required": ["mode"],
-                    "additionalProperties": false,
-                }),
-                defer_loading: true,
-            }],
-        );
+    fn mixed_search_results_coalesce_mcp_namespaces() {
+        let entries = [
+            ToolSearchEntry::Mcp {
+                name: "mcp__calendar__create_event".to_string(),
+                info: Box::new(tool_info("calendar", "create_event", "Create events")),
+            },
+            ToolSearchEntry::Dynamic {
+                tool: DynamicToolSpec {
+                    name: "automation_update".to_string(),
+                    description: "Create, update, view, or delete recurring automations."
+                        .to_string(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "mode": { "type": "string" },
+                        },
+                        "required": ["mode"],
+                        "additionalProperties": false,
+                    }),
+                    defer_loading: true,
+                },
+            },
+            ToolSearchEntry::Mcp {
+                name: "mcp__calendar__list_events".to_string(),
+                info: Box::new(tool_info("calendar", "list_events", "List events")),
+            },
+        ];
 
-        let tools = handler
-            .search(
-                "automation_update",
-                TOOL_SEARCH_DEFAULT_LIMIT,
-                /*use_default_limit*/ true,
-            )
-            .expect("search deferred dynamic tools");
+        let tools =
+            search_output_tools(entries.iter()).expect("mixed search output should serialize");
 
         assert_eq!(
             tools,
-            vec![ToolSearchOutputTool::Function(ResponsesApiTool {
-                name: "automation_update".to_string(),
-                description: "Create, update, view, or delete recurring automations.".to_string(),
-                strict: false,
-                defer_loading: Some(true),
-                parameters: JsonSchema::object(
-                    std::collections::BTreeMap::from([
-                        ("kind".to_string(), JsonSchema::string(None)),
-                        ("mode".to_string(), JsonSchema::string(None)),
-                    ]),
-                    Some(vec!["mode".to_string()]),
-                    Some(false.into()),
-                ),
-                output_schema: None,
-            })],
+            vec![
+                ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                    name: "mcp__calendar__".to_string(),
+                    description: "Tools from the calendar MCP server.".to_string(),
+                    tools: vec![
+                        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                            name: "create_event".to_string(),
+                            description: "Create events desktop tool".to_string(),
+                            strict: false,
+                            defer_loading: Some(true),
+                            parameters: codex_tools::JsonSchema::object(
+                                Default::default(),
+                                /*required*/ None,
+                                Some(false.into()),
+                            ),
+                            output_schema: None,
+                        }),
+                        ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                            name: "list_events".to_string(),
+                            description: "List events desktop tool".to_string(),
+                            strict: false,
+                            defer_loading: Some(true),
+                            parameters: codex_tools::JsonSchema::object(
+                                Default::default(),
+                                /*required*/ None,
+                                Some(false.into()),
+                            ),
+                            output_schema: None,
+                        }),
+                    ],
+                }),
+                ToolSearchOutputTool::Function(ResponsesApiTool {
+                    name: "automation_update".to_string(),
+                    description: "Create, update, view, or delete recurring automations."
+                        .to_string(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: codex_tools::JsonSchema::object(
+                        std::collections::BTreeMap::from([(
+                            "mode".to_string(),
+                            codex_tools::JsonSchema::string(None),
+                        )]),
+                        Some(vec!["mode".to_string()]),
+                        Some(false.into()),
+                    ),
+                    output_schema: None,
+                }),
+            ],
         );
     }
 
