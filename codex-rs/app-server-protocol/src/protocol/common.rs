@@ -289,6 +289,11 @@ client_request_definitions! {
         params: v2::ThreadMemoryModeSetParams,
         response: v2::ThreadMemoryModeSetResponse,
     },
+    #[experimental("memory/reset")]
+    MemoryReset => "memory/reset" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::MemoryResetResponse,
+    },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,
@@ -764,6 +769,7 @@ macro_rules! server_notification_definitions {
             Display,
             ExperimentalApi,
         )]
+        #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[strum(serialize_all = "camelCase")]
         pub enum ServerNotification {

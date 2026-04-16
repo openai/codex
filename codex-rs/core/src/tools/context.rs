@@ -1,5 +1,6 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::original_image_detail::sanitize_original_image_detail;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
@@ -122,6 +123,7 @@ impl ToolOutput for CallToolResult {
 pub struct McpToolOutput {
     pub result: CallToolResult,
     pub wall_time: Duration,
+    pub original_image_detail_supported: bool,
 }
 
 impl ToolOutput for McpToolOutput {
@@ -155,6 +157,10 @@ impl ToolOutput for McpToolOutput {
 impl McpToolOutput {
     fn response_payload(&self) -> FunctionCallOutputPayload {
         let mut payload = self.result.as_function_call_output_payload();
+        if let Some(items) = payload.content_items_mut() {
+            sanitize_original_image_detail(self.original_image_detail_supported, items);
+        }
+
         let wall_time_seconds = self.wall_time.as_secs_f64();
         let header = format!("Wall time: {wall_time_seconds:.4} seconds\nOutput:");
 

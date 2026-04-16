@@ -277,10 +277,6 @@ async fn exec_full_buffer_capture_ignores_expiration() -> Result<()> {
             justification: None,
             arg0: None,
         },
-        SandboxType::None,
-        &SandboxPolicy::DangerFullAccess,
-        &FileSystemSandboxPolicy::unrestricted(),
-        /*windows_sandbox_filesystem_overrides*/ None,
         NetworkSandboxPolicy::Enabled,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,
@@ -317,10 +313,6 @@ async fn exec_full_buffer_capture_keeps_io_drain_timeout_when_descendant_holds_p
                 justification: None,
                 arg0: None,
             },
-            SandboxType::None,
-            &SandboxPolicy::DangerFullAccess,
-            &FileSystemSandboxPolicy::unrestricted(),
-            /*windows_sandbox_filesystem_overrides*/ None,
             NetworkSandboxPolicy::Enabled,
             /*stdout_stream*/ None,
             /*after_spawn*/ None,
@@ -815,6 +807,53 @@ fn windows_elevated_rejects_unreadable_split_carveouts() {
 }
 
 #[test]
+fn windows_elevated_rejects_unreadable_globs() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::GlobPattern {
+                pattern: "**/*.env".to_string(),
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::None,
+        },
+    ]);
+
+    assert_eq!(
+        unsupported_windows_restricted_token_sandbox_reason(
+            SandboxType::WindowsRestrictedToken,
+            &policy,
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+            &temp_dir.path().abs(),
+            WindowsSandboxLevel::Elevated,
+        ),
+        Some(
+            "windows elevated sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"
+                .to_string()
+        )
+    );
+}
+
+#[test]
 fn windows_elevated_rejects_reopened_writable_descendants() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let docs = temp_dir.path().join("docs");
@@ -931,10 +970,6 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
 
     let output = exec(
         params,
-        SandboxType::None,
-        &SandboxPolicy::new_read_only_policy(),
-        &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
-        /*windows_sandbox_filesystem_overrides*/ None,
         NetworkSandboxPolicy::Restricted,
         /*stdout_stream*/ None,
         /*after_spawn*/ None,

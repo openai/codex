@@ -160,6 +160,145 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them() -> Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let db = init_state_db(&home).await?;
+    let now = Utc::now();
+    let thread_id = seed_stage1_output(
+        db.as_ref(),
+        home.path(),
+        now - ChronoDuration::hours(1),
+        "raw memory",
+        "rollout summary",
+        "rollout",
+    )
+    .await?;
+
+    let telepathy_resources = home.path().join("memories_extensions/telepathy/resources");
+    tokio::fs::create_dir_all(&telepathy_resources).await?;
+    tokio::fs::write(
+        home.path()
+            .join("memories_extensions/telepathy/instructions.md"),
+        "instructions",
+    )
+    .await?;
+    let old_file_name = format!(
+        "{}-abcd-10min-old.md",
+        (now - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
+    );
+    let old_file = telepathy_resources.join(&old_file_name);
+    tokio::fs::write(&old_file, "old resource").await?;
+    let recent_file = telepathy_resources.join(format!(
+        "{}-abcd-10min-recent.md",
+        (now - ChronoDuration::days(6)).format("%Y-%m-%dT%H-%M-%S")
+    ));
+    tokio::fs::write(&recent_file, "recent resource").await?;
+
+    let phase2 = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-phase2"),
+            ev_assistant_message("msg-phase2", "phase2 complete"),
+            ev_completed("resp-phase2"),
+        ]),
+    )
+    .await;
+
+    let codex = build_test_codex(&server, home.clone()).await?;
+    let request = wait_for_single_request(&phase2).await;
+    let prompt = phase2_prompt_text(&request);
+
+    assert!(
+        prompt.contains("Memory extension resources removed by retention pruning:"),
+        "expected extension resource prune report in prompt: {prompt}"
+    );
+    assert!(
+        prompt.contains("- retention window: 7 days"),
+        "expected retention window in prompt: {prompt}"
+    );
+    assert!(
+        prompt.contains("- extension: telepathy"),
+        "expected extension name in prompt: {prompt}"
+    );
+    assert!(
+        prompt.contains(&format!("  - resources/{old_file_name}")),
+        "expected old resource in prompt: {prompt}"
+    );
+
+    wait_for_phase2_success(db.as_ref(), thread_id).await?;
+    wait_for_file_removed(&old_file).await?;
+    assert!(
+        !tokio::fs::try_exists(&old_file).await?,
+        "old extension resource should be pruned"
+    );
+    assert!(
+        tokio::fs::try_exists(&recent_file).await?,
+        "recent extension resource should be retained"
+    );
+
+    shutdown_test_codex(&codex).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn memories_startup_phase2_processes_old_extension_resources_without_stage1_input()
+-> Result<()> {
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    let db = init_state_db(&home).await?;
+    db.enqueue_global_consolidation(/*input_watermark*/ 1)
+        .await?;
+
+    let now = Utc::now();
+    let telepathy_resources = home.path().join("memories_extensions/telepathy/resources");
+    tokio::fs::create_dir_all(&telepathy_resources).await?;
+    tokio::fs::write(
+        home.path()
+            .join("memories_extensions/telepathy/instructions.md"),
+        "instructions",
+    )
+    .await?;
+    let old_file_name = format!(
+        "{}-abcd-10min-old.md",
+        (now - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
+    );
+    let old_file = telepathy_resources.join(&old_file_name);
+    tokio::fs::write(&old_file, "old resource").await?;
+
+    let phase2 = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-phase2-empty"),
+            ev_assistant_message("msg-phase2-empty", "phase2 complete"),
+            ev_completed("resp-phase2-empty"),
+        ]),
+    )
+    .await;
+
+    let codex = build_test_codex(&server, home.clone()).await?;
+    let request = wait_for_single_request(&phase2).await;
+    let prompt = phase2_prompt_text(&request);
+
+    assert!(
+        prompt.contains("- selected inputs this run: 0"),
+        "expected no selected raw inputs in prompt: {prompt}"
+    );
+    assert!(
+        prompt.contains("Memory extension resources removed by retention pruning:"),
+        "expected extension resource prune report in prompt: {prompt}"
+    );
+    assert!(
+        prompt.contains(&format!("  - resources/{old_file_name}")),
+        "expected old resource in prompt: {prompt}"
+    );
+    wait_for_file_removed(&old_file).await?;
+
+    shutdown_test_codex(&codex).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs() -> Result<()> {
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
@@ -384,6 +523,21 @@ async fn seed_stage1_output(
 
 async fn wait_for_single_request(mock: &ResponseMock) -> ResponsesRequest {
     wait_for_request(mock, /*expected_count*/ 1).await.remove(0)
+}
+
+async fn wait_for_file_removed(path: &Path) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if !tokio::fs::try_exists(path).await? {
+            return Ok(());
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {} to be removed",
+            path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 async fn wait_for_request(mock: &ResponseMock, expected_count: usize) -> Vec<ResponsesRequest> {

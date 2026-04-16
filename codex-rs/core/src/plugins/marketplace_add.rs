@@ -20,7 +20,7 @@ use metadata::find_marketplace_root_by_name;
 use metadata::installed_marketplace_root_for_source;
 use metadata::record_added_marketplace_entry;
 use source::MarketplaceSource;
-use source::parse_marketplace_source;
+pub(crate) use source::parse_marketplace_source;
 use source::stage_marketplace_source;
 use source::validate_marketplace_source_root;
 
@@ -275,9 +275,15 @@ mod tests {
         );
 
         let config = fs::read_to_string(codex_home.path().join(codex_config::CONFIG_TOML_FILE))?;
-        assert!(config.contains("[marketplaces.debug]"));
-        assert!(config.contains("source_type = \"local\""));
-        assert!(config.contains(&format!("source = \"{expected_source}\"")));
+        let config: toml::Value = toml::from_str(&config)?;
+        assert_eq!(
+            config["marketplaces"]["debug"]["source_type"].as_str(),
+            Some("local")
+        );
+        assert_eq!(
+            config["marketplaces"]["debug"]["source"].as_str(),
+            Some(expected_source.as_str())
+        );
         Ok(())
     }
 

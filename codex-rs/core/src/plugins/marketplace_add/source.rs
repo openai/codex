@@ -1,11 +1,11 @@
 use super::MarketplaceAddError;
-use crate::plugins::validate_marketplace_root;
 use crate::plugins::validate_plugin_segment;
+use codex_core_plugins::marketplace::validate_marketplace_root;
 use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum MarketplaceSource {
+pub(crate) enum MarketplaceSource {
     Git {
         url: String,
         ref_name: Option<String>,
@@ -15,7 +15,7 @@ pub(super) enum MarketplaceSource {
     },
 }
 
-pub(super) fn parse_marketplace_source(
+pub(crate) fn parse_marketplace_source(
     source: &str,
     explicit_ref: Option<String>,
 ) -> Result<MarketplaceSource, MarketplaceAddError> {
@@ -124,12 +124,24 @@ fn normalize_git_url(url: &str) -> String {
 }
 
 fn looks_like_local_path(source: &str) -> bool {
-    source.starts_with("./")
+    Path::new(source).is_absolute()
+        || looks_like_windows_absolute_path(source)
+        || source.starts_with("./")
+        || source.starts_with(".\\")
         || source.starts_with("../")
-        || source.starts_with('/')
+        || source.starts_with("..\\")
         || source.starts_with("~/")
         || source == "."
         || source == ".."
+}
+
+fn looks_like_windows_absolute_path(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+        || source.starts_with(r"\\")
 }
 
 fn resolve_local_source_path(source: &str) -> Result<PathBuf, MarketplaceAddError> {
@@ -308,6 +320,14 @@ mod tests {
             panic!("expected local path source");
         };
         assert!(path.is_absolute());
+    }
+
+    #[test]
+    fn windows_absolute_paths_look_like_local_paths_on_every_host() {
+        assert!(looks_like_local_path(r"C:\Users\alice\marketplace"));
+        assert!(looks_like_local_path("C:/Users/alice/marketplace"));
+        assert!(looks_like_local_path(r"\\server\share\marketplace"));
+        assert!(!looks_like_local_path(r"C:relative\path"));
     }
 
     #[test]

@@ -756,6 +756,21 @@ async fn build_thread_item(
     None
 }
 
+/// Read a single rollout file into the same summary item shape used by thread listing.
+///
+/// This is for callers that already resolved a rollout path and need the same
+/// metadata/preview extraction as list operations without scanning the whole
+/// sessions tree.
+pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> {
+    build_thread_item(
+        path,
+        &[],
+        /*provider_matcher*/ None,
+        /*updated_at*/ None,
+    )
+    .await
+}
+
 /// Collects immediate subdirectories of `parent`, parses their (string) names with `parse`,
 /// and returns them sorted descending by the parsed key.
 async fn collect_dirs_desc<T, F>(parent: &Path, parse: F) -> io::Result<Vec<(T, PathBuf)>>

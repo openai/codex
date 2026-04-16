@@ -664,6 +664,7 @@ jobs:
           export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
           source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
           echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
+          echo "CODEX_TEST_REMOTE_EXEC_SERVER_URL=${CODEX_TEST_REMOTE_EXEC_SERVER_URL}" >> "$GITHUB_ENV"
 
       - name: tests
         id: test

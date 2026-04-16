@@ -17,7 +17,7 @@ pub(crate) mod usage;
 
 use codex_protocol::openai_models::ReasoningEffort;
 
-pub(crate) use control::clear_memory_root_contents;
+pub use control::clear_memory_roots_contents;
 /// Starts the memory startup pipeline for eligible root sessions.
 /// This is the single entrypoint that `codex` uses to trigger memory startup.
 ///
@@ -29,6 +29,8 @@ mod artifacts {
     pub(super) const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";
     pub(super) const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
 }
+
+mod extensions;
 
 /// Phase 1 (startup extraction).
 mod phase_one {
