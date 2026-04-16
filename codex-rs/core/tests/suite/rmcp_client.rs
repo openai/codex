@@ -596,7 +596,6 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 TestMcpServerOptions {
                     supports_parallel_tool_calls: true,
                     tool_timeout_sec: Some(Duration::from_secs(2)),
-                    ..Default::default()
                 },
             );
         })
