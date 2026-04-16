@@ -212,6 +212,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::append_thread_name;
+use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
@@ -362,12 +363,17 @@ use codex_app_server_protocol::ServerRequest;
 mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
+mod token_usage_replay;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use token_usage_replay::latest_token_usage_turn_id_for_thread_path;
+use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
+use token_usage_replay::latest_token_usage_turn_id_from_rollout_path;
+use token_usage_replay::send_thread_token_usage_update_to_connection;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -616,17 +622,9 @@ pub(crate) struct CodexMessageProcessorArgs {
 
 impl CodexMessageProcessor {
     async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
-        let mut paths: Vec<AbsolutePathBuf> =
-            config.user_instructions_path.iter().cloned().collect();
-        match codex_core::discover_project_doc_paths(config, LOCAL_FS.as_ref()).await {
-            Ok(project_doc_paths) => {
-                paths.extend(project_doc_paths);
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to discover project docs for thread response");
-            }
-        }
-        paths
+        codex_core::AgentsMdManager::new(config)
+            .instruction_sources(LOCAL_FS.as_ref())
+            .await
     }
 
     pub(crate) fn handle_config_mutation(&self) {
@@ -3080,48 +3078,12 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let memory_root = self.config.codex_home.join("memories");
-        let memory_extensions_root = self.config.codex_home.join("memories_extensions");
-        let clear_memory_root_result: std::io::Result<()> = async {
-            for directory in [memory_root.as_path(), memory_extensions_root.as_path()] {
-                match tokio::fs::symlink_metadata(directory).await {
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!(
-                                "refusing to clear symlinked memory root {}",
-                                directory.display()
-                            ),
-                        ));
-                    }
-                    Ok(_) => {}
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(err) => return Err(err),
-                }
-
-                tokio::fs::create_dir_all(directory).await?;
-                let mut entries = tokio::fs::read_dir(directory).await?;
-                while let Some(entry) = entries.next_entry().await? {
-                    let path = entry.path();
-                    let file_type = entry.file_type().await?;
-                    if file_type.is_dir() {
-                        tokio::fs::remove_dir_all(path).await?;
-                    } else {
-                        tokio::fs::remove_file(path).await?;
-                    }
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        if let Err(err) = clear_memory_root_result {
+        if let Err(err) = clear_memory_roots_contents(&self.config.codex_home).await {
             self.send_internal_error(
                 request_id,
                 format!(
-                    "failed to clear memory directory {}: {err}",
-                    memory_root.display()
+                    "failed to clear memory directories under {}: {err}",
+                    self.config.codex_home.display()
                 ),
             )
             .await;
@@ -4146,7 +4108,7 @@ impl CodexMessageProcessor {
         {
             Ok(NewThread {
                 thread_id,
-                thread,
+                thread: codex_thread,
                 session_configured,
             }) => {
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
@@ -4175,7 +4137,7 @@ impl CodexMessageProcessor {
                 let mut thread = match self
                     .load_thread_from_resume_source_or_send_internal(
                         thread_id,
-                        thread.as_ref(),
+                        codex_thread.as_ref(),
                         &response_history,
                         rollout_path.as_path(),
                         fallback_model_provider.as_str(),
@@ -4227,7 +4189,25 @@ impl CodexMessageProcessor {
                     );
                 }
 
+                let connection_id = request_id.connection_id;
+                let token_usage_thread = response.thread.clone();
+                let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+                    &response_history.get_rollout_items(),
+                    &token_usage_thread,
+                );
                 self.outgoing.send_response(request_id, response).await;
+                // The client needs restored usage before it starts another turn.
+                // Sending after the response preserves JSON-RPC request ordering while
+                // still filling the status line before the next turn lifecycle begins.
+                send_thread_token_usage_update_to_connection(
+                    &self.outgoing,
+                    connection_id,
+                    thread_id,
+                    &token_usage_thread,
+                    codex_thread.as_ref(),
+                    token_usage_turn_id,
+                )
+                .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4863,7 +4843,31 @@ impl CodexMessageProcessor {
             );
         }
 
+        let connection_id = request_id.connection_id;
+        let token_usage_thread = response.thread.clone();
+        let token_usage_turn_id = if let Some(turn_id) =
+            latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
+        {
+            Some(turn_id)
+        } else {
+            latest_token_usage_turn_id_from_rollout_path(
+                rollout_path.as_path(),
+                &token_usage_thread,
+            )
+            .await
+        };
         self.outgoing.send_response(request_id, response).await;
+        // Mirror the resume contract for forks: the new thread is usable as soon
+        // as the response arrives, so restored usage must follow immediately.
+        send_thread_token_usage_update_to_connection(
+            &self.outgoing,
+            connection_id,
+            thread_id,
+            &token_usage_thread,
+            forked_thread.as_ref(),
+            token_usage_turn_id,
+        )
+        .await;
 
         let notif = ThreadStartedNotification { thread };
         self.outgoing
@@ -6213,7 +6217,7 @@ impl CodexMessageProcessor {
             force_remote_sync,
         } = params;
         let roots = cwds.unwrap_or_default();
-        plugins_manager.maybe_start_non_curated_plugin_cache_refresh_for_roots(&roots);
+        plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
 
         let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
@@ -8568,7 +8572,24 @@ async fn handle_pending_thread_resume_request(
         sandbox: sandbox_policy.into(),
         reasoning_effort,
     };
+    let token_usage_thread = response.thread.clone();
+    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
+        pending.rollout_path.as_path(),
+        &token_usage_thread,
+    )
+    .await;
     outgoing.send_response(request_id, response).await;
+    // Rejoining a loaded thread has the same UI contract as a cold resume, but
+    // uses the live conversation state instead of reconstructing a new session.
+    send_thread_token_usage_update_to_connection(
+        outgoing,
+        connection_id,
+        conversation_id,
+        &token_usage_thread,
+        conversation.as_ref(),
+        token_usage_turn_id,
+    )
+    .await;
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;

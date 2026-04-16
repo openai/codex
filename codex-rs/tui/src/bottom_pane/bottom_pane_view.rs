@@ -7,6 +7,13 @@ use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
 
+/// Reason an active bottom-pane view finished.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ViewCompletion {
+    Accepted,
+    Cancelled,
+}
+
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView: Renderable {
     /// Handle a key event while the view is active. A redraw is always
@@ -17,6 +24,19 @@ pub(crate) trait BottomPaneView: Renderable {
     fn is_complete(&self) -> bool {
         false
     }
+
+    /// Return the completion reason once the view has finished.
+    fn completion(&self) -> Option<ViewCompletion> {
+        None
+    }
+
+    /// Return true when this view should be removed after a child view is accepted.
+    fn dismiss_after_child_accept(&self) -> bool {
+        false
+    }
+
+    /// Clear any pending child-flow cleanup marker after a child view is cancelled.
+    fn clear_dismiss_after_child_accept(&mut self) {}
 
     /// Stable identifier for views that need external refreshes while open.
     fn view_id(&self) -> Option<&'static str> {
