@@ -447,6 +447,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     resumed
         .codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: Some(resume_override_cwd),
             approval_policy: None,
             approvals_reviewer: None,

@@ -123,6 +123,7 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
     let collaboration_mode = collab_mode_with_instructions(Some(collab_text));
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -222,6 +223,7 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -275,6 +277,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -346,6 +349,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -374,6 +378,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -431,6 +436,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -459,6 +465,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -515,6 +522,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -546,6 +554,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -606,6 +615,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -637,6 +647,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -703,6 +714,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     initial
         .codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -768,6 +780,7 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
 
     test.codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

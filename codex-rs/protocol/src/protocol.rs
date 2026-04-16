@@ -381,6 +381,13 @@ pub struct ConversationTextParams {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct TurnEnvironment {
+    pub environment_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -495,6 +502,11 @@ pub enum Op {
     /// turns that rely on persistent session-level context (for example,
     /// [`Op::UserInput`]).
     OverrideTurnContext {
+        /// Updated ordered environment selections for future turns. For now
+        /// only the first entry is used to drive execution.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        environments: Option<Vec<TurnEnvironment>>,
+
         /// Updated `cwd` for sandbox/tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
         cwd: Option<PathBuf>,

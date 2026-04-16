@@ -489,7 +489,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
-            /*environment_id*/ None,
+            /*environment_ids*/ None,
         ))
         .await
     }
@@ -502,7 +502,7 @@ impl ThreadManager {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
-        environment_id: Option<String>,
+        environment_ids: Option<Vec<String>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.state.spawn_thread(
             config,
@@ -514,7 +514,7 @@ impl ThreadManager {
             metrics_service_name,
             parent_trace,
             /*user_shell_override*/ None,
-            environment_id,
+            environment_ids,
         ))
         .await
     }
@@ -555,7 +555,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             /*user_shell_override*/ None,
-            /*environment_id*/ None,
+            /*environment_ids*/ None,
         ))
         .await
     }
@@ -575,7 +575,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
-            /*environment_id*/ None,
+            /*environment_ids*/ None,
         ))
         .await
     }
@@ -598,7 +598,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
-            /*environment_id*/ None,
+            /*environment_ids*/ None,
         ))
         .await
     }
@@ -707,7 +707,7 @@ impl ThreadManager {
             /*metrics_service_name*/ None,
             parent_trace,
             /*user_shell_override*/ None,
-            /*environment_id*/ None,
+            /*environment_ids*/ None,
         ))
         .await
     }
@@ -809,7 +809,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
-            /*environment_id*/ None,
+            /*environment_ids*/ None,
         ))
         .await
     }
@@ -837,7 +837,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
-            /*environment_id*/ None,
+            /*environment_ids*/ None,
         ))
         .await
     }
@@ -866,7 +866,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
-            /*environment_id*/ None,
+            /*environment_ids*/ None,
         ))
         .await
     }
@@ -884,7 +884,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
-        environment_id: Option<String>,
+        environment_ids: Option<Vec<String>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -899,7 +899,7 @@ impl ThreadManagerState {
             /*inherited_exec_policy*/ None,
             parent_trace,
             user_shell_override,
-            environment_id,
+            environment_ids,
         ))
         .await
     }
@@ -917,9 +917,7 @@ impl ThreadManagerState {
         let Ok(parent_thread) = self.get_thread(*parent_thread_id).await else {
             return Arc::clone(&self.environment_manager);
         };
-        Arc::new(EnvironmentManager::from_environment(
-            parent_thread.selected_environment().as_deref(),
-        ))
+        parent_thread.environment_manager()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -937,20 +935,33 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
-        environment_id: Option<String>,
+        environment_ids: Option<Vec<String>>,
     ) -> CodexResult<NewThread> {
-        let environment_manager = if environment_id.is_some() {
+        let environment_manager = if environment_ids
+            .as_ref()
+            .is_some_and(|environment_ids| !environment_ids.is_empty())
+        {
             Arc::clone(&self.environment_manager)
         } else {
             self.inherited_environment_manager_for_source(&session_source)
                 .await
         };
+        let effective_environment_ids = environment_ids
+            .filter(|environment_ids| !environment_ids.is_empty())
+            .unwrap_or_else(|| {
+                environment_manager
+                    .default_environment_id()
+                    .map(|environment_id| vec![environment_id.to_string()])
+                    .unwrap_or_default()
+            });
+        let selected_environment_id = effective_environment_ids.first().cloned();
+        let selected_environment_manager = Arc::new(
+            environment_manager.with_default_environment_id(selected_environment_id.clone()),
+        );
         let environment = environment_manager
-            .environment(environment_id.as_deref())
+            .environment(selected_environment_id.as_deref())
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
-        let selected_environment_manager =
-            Arc::new(EnvironmentManager::from_environment(environment.as_deref()));
         let watch_registration = match environment.as_ref() {
             Some(environment) if !environment.is_remote() => {
                 self.skills_watcher
@@ -986,6 +997,7 @@ impl ThreadManagerState {
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),
+            environment_ids: effective_environment_ids,
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)

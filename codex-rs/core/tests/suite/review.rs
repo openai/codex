@@ -834,6 +834,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
 
     codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: Some(repo_path.to_path_buf()),
             approval_policy: None,
             approvals_reviewer: None,
