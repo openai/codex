@@ -65,9 +65,9 @@ pub use crate::remote::RemoteAppServerConnectArgs;
 /// while legacy startup/config paths are migrated to RPCs.
 pub mod legacy_core {
     pub use codex_core::Cursor;
-    pub use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
+    pub use codex_core::DEFAULT_AGENTS_MD_FILENAME;
     pub use codex_core::INTERACTIVE_SESSION_SOURCES;
-    pub use codex_core::LOCAL_PROJECT_DOC_FILENAME;
+    pub use codex_core::LOCAL_AGENTS_MD_FILENAME;
     pub use codex_core::McpManager;
     pub use codex_core::PLUGIN_TEXT_MENTION_SIGIL;
     pub use codex_core::RolloutRecorder;
@@ -77,7 +77,6 @@ pub mod legacy_core {
     pub use codex_core::ThreadsPage;
     pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
-    pub use codex_core::discover_project_doc_paths;
     pub use codex_core::find_thread_meta_by_name_str;
     pub use codex_core::find_thread_name_by_id;
     pub use codex_core::find_thread_names_by_ids;
@@ -971,6 +970,7 @@ mod tests {
         match ConfigBuilder::default().build().await {
             Ok(config) => config,
             Err(_) => Config::load_default_with_cli_overrides(Vec::new())
+                .await
                 .expect("default config should load"),
         }
     }

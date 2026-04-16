@@ -393,6 +393,7 @@ mod tests {
             env_policy: None,
             env,
             tty: false,
+            pipe_stdin: false,
             arg0: None,
         }
     }

@@ -41,6 +41,7 @@ use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
+use crate::stream_events_utils::mark_thread_memory_mode_polluted_if_external_context;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
@@ -264,6 +265,7 @@ use crate::SkillInjections;
 use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
+use crate::agents_md::AgentsMdManager;
 use crate::build_skill_injections;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
@@ -292,7 +294,6 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
-use crate::project_doc::get_user_instructions;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -555,7 +556,9 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let user_instructions = get_user_instructions(&config, environment.as_deref()).await;
+        let user_instructions = AgentsMdManager::new(&config)
+            .user_instructions(environment.as_deref())
+            .await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -1082,6 +1085,18 @@ impl TurnContext {
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+        let legacy_file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            self.sandbox_policy.get(),
+            &self.cwd,
+        );
+        // Omit the derived split filesystem policy when it is equivalent to
+        // the legacy sandbox policy. This keeps turn-context payloads stable
+        // while both fields exist; once callers consume only the split policy,
+        // this comparison and the legacy projection should go away.
+        let file_system_sandbox_policy = (self.file_system_sandbox_policy
+            != legacy_file_system_sandbox_policy)
+            .then(|| self.file_system_sandbox_policy.clone());
+
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
@@ -1091,6 +1106,7 @@ impl TurnContext {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
+            file_system_sandbox_policy,
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
@@ -1286,7 +1302,14 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
-        if sandbox_policy_changed || (cwd_changed && file_system_policy_matches_legacy) {
+        if sandbox_policy_changed {
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                    next_configuration.sandbox_policy.get(),
+                    &next_configuration.cwd,
+                    &self.file_system_sandbox_policy,
+                );
+        } else if cwd_changed && file_system_policy_matches_legacy {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
             next_configuration.file_system_sandbox_policy =
@@ -1336,6 +1359,10 @@ impl Session {
                 .app_server_client_version
                 .clone(),
         }
+    }
+
+    fn managed_network_proxy_active_for_sandbox_policy(sandbox_policy: &SandboxPolicy) -> bool {
+        !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
     }
 
     /// Builds the `x-codex-beta-features` header value for this session.
@@ -2004,10 +2031,15 @@ impl Session {
                 .await;
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
+        let managed_network_requirements_configured = config
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some();
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
-        let network_policy_decider_session = if managed_network_requirements_enabled {
+        let network_policy_decider_session = if managed_network_requirements_configured {
             config
                 .permissions
                 .network
@@ -2016,7 +2048,7 @@ impl Session {
         } else {
             None
         };
-        let blocked_request_observer = if managed_network_requirements_enabled {
+        let blocked_request_observer = if managed_network_requirements_configured {
             config
                 .permissions
                 .network
@@ -2043,7 +2075,7 @@ impl Session {
                     config.permissions.sandbox_policy.get(),
                     network_policy_decider.as_ref().map(Arc::clone),
                     blocked_request_observer.as_ref().map(Arc::clone),
-                    managed_network_requirements_enabled,
+                    managed_network_requirements_configured,
                     network_proxy_audit_metadata,
                 )
                 .instrument(info_span!(
@@ -2200,7 +2232,11 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
-                network_proxy: session_network_proxy,
+                network_proxy: session_network_proxy.filter(|_| {
+                    Self::managed_network_proxy_active_for_sandbox_policy(
+                        session_configuration.sandbox_policy.get(),
+                    )
+                }),
                 rollout_path,
             }),
         })
@@ -2734,7 +2770,12 @@ impl Session {
             self.services
                 .network_proxy
                 .as_ref()
-                .map(StartedNetworkProxy::proxy),
+                .and_then(|started_proxy| {
+                    Self::managed_network_proxy_active_for_sandbox_policy(
+                        session_configuration.sandbox_policy.get(),
+                    )
+                    .then(|| started_proxy.proxy())
+                }),
             self.services.environment.clone(),
             sub_id,
             Arc::clone(&self.js_repl),
@@ -4944,6 +4985,8 @@ mod handlers {
     use crate::config_loader::load_config_layers_state;
     use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
     use crate::realtime_context::truncate_realtime_text_to_token_budget;
+    use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
+    use crate::realtime_conversation::prefix_realtime_v2_text;
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -5164,6 +5207,11 @@ mod handlers {
         if text.is_empty() {
             return;
         }
+        let text = if sess.conversation.is_running_v2().await {
+            prefix_realtime_v2_text(text, REALTIME_USER_TEXT_PREFIX)
+        } else {
+            text
+        };
         let text = truncate_realtime_text_to_token_budget(&text, REALTIME_TURN_TOKEN_BUDGET);
         if text.is_empty() {
             return;
@@ -5542,15 +5590,15 @@ mod handlers {
             errors.push("state db unavailable; memory rows were not cleared".to_string());
         }
 
-        let memory_root = crate::memories::memory_root(&config.codex_home);
-        if let Err(err) = crate::memories::clear_memory_root_contents(&memory_root).await {
+        if let Err(err) = crate::memories::clear_memory_roots_contents(&config.codex_home).await {
             errors.push(format!(
-                "failed clearing memory directory {}: {err}",
-                memory_root.display()
+                "failed clearing memory directories under {}: {err}",
+                config.codex_home.display()
             ));
         }
 
         if errors.is_empty() {
+            let memory_root = crate::memories::memory_root(&config.codex_home);
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Warning(WarningEvent {
@@ -7805,8 +7853,15 @@ async fn drain_in_flight(
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
-                sess.record_conversation_items(&turn_context, &[response_input.into()])
+                let response_item = response_input.into();
+                sess.record_conversation_items(&turn_context, std::slice::from_ref(&response_item))
                     .await;
+                mark_thread_memory_mode_polluted_if_external_context(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &response_item,
+                )
+                .await;
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));

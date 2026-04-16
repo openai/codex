@@ -20,7 +20,7 @@ use metadata::find_marketplace_root_by_name;
 use metadata::installed_marketplace_root_for_source;
 use metadata::record_added_marketplace_entry;
 use source::MarketplaceSource;
-use source::parse_marketplace_source;
+pub(crate) use source::parse_marketplace_source;
 use source::stage_marketplace_source;
 use source::validate_marketplace_source_root;
 
