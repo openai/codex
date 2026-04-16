@@ -28,6 +28,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use core_test_support::responses;
@@ -184,6 +185,13 @@ async fn thread_read_include_turns_supports_loaded_explicit_path_thread() -> Res
         /*git_info*/ None,
     )?;
     let external_rollout_path = rollout_path(external_home.path(), filename_ts, &conversation_id);
+    let parent_thread_id = "00000000-0000-0000-0000-000000000123";
+    let contents = std::fs::read_to_string(&external_rollout_path)?;
+    let mut lines = contents.lines().map(str::to_string).collect::<Vec<_>>();
+    let mut meta_line: Value = serde_json::from_str(&lines[0])?;
+    meta_line["payload"]["forked_from_id"] = Value::String(parent_thread_id.to_string());
+    lines[0] = meta_line.to_string();
+    std::fs::write(&external_rollout_path, format!("{}\n", lines.join("\n")))?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -218,6 +226,7 @@ async fn thread_read_include_turns_supports_loaded_explicit_path_thread() -> Res
     .await??;
     let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
 
+    assert_eq!(thread.forked_from_id.as_deref(), Some(parent_thread_id));
     assert_eq!(
         thread.turns.len(),
         1,
@@ -238,6 +247,54 @@ async fn thread_read_include_turns_supports_loaded_explicit_path_thread() -> Res
         }
         other => panic!("expected user message item, got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_read_can_return_archived_threads_by_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let preview = "Archived saved user message";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        preview,
+        vec![],
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let active_rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    let archived_dir = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    std::fs::create_dir_all(&archived_dir)?;
+    let archived_rollout_path =
+        archived_dir.join(active_rollout_path.file_name().expect("rollout file name"));
+    std::fs::rename(&active_rollout_path, &archived_rollout_path)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: conversation_id.clone(),
+            include_turns: false,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    assert_eq!(thread.id, conversation_id);
+    assert_eq!(thread.preview, preview);
+    let path = thread.path.expect("thread path");
+    assert_eq!(path.canonicalize()?, archived_rollout_path.canonicalize()?);
 
     Ok(())
 }

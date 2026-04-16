@@ -79,12 +79,13 @@ async fn read_thread_from_rollout_path(
         // Some materialized sessions, such as standalone shell-command turns, have
         // valid persisted history and SQLite metadata before they have a user-message
         // preview that the rollout summary reader can use.
-        let mut thread = if let Some(mut metadata) = read_sqlite_metadata(store, thread_id).await {
-            metadata.rollout_path = path.clone();
-            stored_thread_from_sqlite_metadata(store, metadata).await
-        } else {
-            stored_thread_from_session_meta(store, path.clone(), archived).await?
-        };
+        let mut thread =
+            if let Ok(Some(mut metadata)) = read_sqlite_metadata(store, thread_id).await {
+                metadata.rollout_path = path.clone();
+                stored_thread_from_sqlite_metadata(store, metadata).await
+            } else {
+                stored_thread_from_session_meta(store, path.clone(), archived).await?
+            };
         if params.include_history {
             let Some(path) = thread.rollout_path.clone() else {
                 return Err(ThreadStoreError::Internal {
@@ -106,18 +107,14 @@ async fn read_thread_from_rollout_path(
         .ok()
         .and_then(|meta_line| meta_line.meta.forked_from_id);
     let mut found_sqlite_title = false;
-    if let Ok(runtime) = codex_state::StateRuntime::init(
-        store.config.sqlite_home.clone(),
-        store.config.model_provider_id.clone(),
-    )
-    .await
-        && let Ok(Some(metadata)) = runtime.get_thread(thread.thread_id).await
-    {
+    if let Ok(Some(metadata)) = read_sqlite_metadata(store, thread.thread_id).await {
         if let Some(title) = distinct_title(&metadata) {
             found_sqlite_title = true;
             set_thread_name_from_title(&mut thread, title);
         }
-        thread.git_info = git_info_from_metadata(&metadata);
+        if let Some(git_info) = git_info_from_metadata(&metadata) {
+            thread.git_info = Some(git_info);
+        }
     }
     if !found_sqlite_title
         && let Ok(Some(title)) =
@@ -137,9 +134,9 @@ async fn read_thread_from_sqlite_fallback(
     params: ReadThreadParams,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
-    let metadata = read_sqlite_metadata(store, thread_id).await;
-    let Some(metadata) =
-        metadata.filter(|metadata| params.include_archived || metadata.archived_at.is_none())
+    let metadata = read_sqlite_metadata(store, thread_id).await?;
+    let Some(metadata) = metadata
+        .filter(|metadata| params.include_archived || !metadata_is_archived(store, metadata))
     else {
         return Err(ThreadStoreError::InvalidRequest {
             message: format!("no rollout found for thread id {thread_id}"),
@@ -162,16 +159,31 @@ async fn read_thread_from_sqlite_fallback(
 async fn read_sqlite_metadata(
     store: &LocalThreadStore,
     thread_id: codex_protocol::ThreadId,
-) -> Option<codex_state::ThreadMetadata> {
-    match codex_state::StateRuntime::init(
+) -> ThreadStoreResult<Option<codex_state::ThreadMetadata>> {
+    let runtime = codex_state::StateRuntime::init(
         store.config.sqlite_home.clone(),
         store.config.model_provider_id.clone(),
     )
     .await
-    {
-        Ok(runtime) => runtime.get_thread(thread_id).await.ok().flatten(),
-        Err(_) => None,
-    }
+    .map_err(|err| ThreadStoreError::Internal {
+        message: format!("failed to initialize SQLite state runtime: {err}"),
+    })?;
+    runtime
+        .get_thread(thread_id)
+        .await
+        .map_err(|err| ThreadStoreError::Internal {
+            message: format!("failed to read SQLite metadata for thread {thread_id}: {err}"),
+        })
+}
+
+fn metadata_is_archived(store: &LocalThreadStore, metadata: &codex_state::ThreadMetadata) -> bool {
+    metadata.archived_at.is_some()
+        || metadata.rollout_path.starts_with(
+            store
+                .config
+                .codex_home
+                .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR),
+        )
 }
 
 async fn stored_thread_from_session_meta(
@@ -544,6 +556,51 @@ mod tests {
         assert_eq!(
             git_info.repository_url,
             Some("git@example.com:openai/codex.git".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn read_thread_keeps_rollout_git_metadata_when_sqlite_git_metadata_is_empty() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(219);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        builder.model_provider = Some(config.model_provider_id.clone());
+        let metadata = builder.build(config.model_provider_id.as_str());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read thread");
+
+        let git_info = thread.git_info.expect("rollout git info should be kept");
+        assert_eq!(
+            git_info.commit_hash.map(|sha| sha.0),
+            Some("abcdef".to_string())
+        );
+        assert_eq!(git_info.branch.as_deref(), Some("main"));
+        assert_eq!(
+            git_info.repository_url.as_deref(),
+            Some("https://example.com/repo.git")
         );
     }
 
@@ -922,6 +979,63 @@ mod tests {
         assert_eq!(thread.thread_id, thread_id);
         assert_eq!(thread.preview, "Archived SQLite preview");
         assert!(thread.archived_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn read_thread_sqlite_fallback_treats_archived_rollout_path_as_archived() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(220);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path = home
+            .path()
+            .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR)
+            .join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"));
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        builder.model_provider = Some(config.model_provider_id.clone());
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.archived_at = None;
+        metadata.first_user_message = Some("Archived path SQLite preview".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let active_only_err = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect_err("active-only read should fail for archived metadata path");
+        let ThreadStoreError::InvalidRequest { message } = active_only_err else {
+            panic!("expected invalid request error");
+        };
+        assert_eq!(
+            message,
+            format!("no rollout found for thread id {thread_id}")
+        );
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await
+            .expect("read archived thread");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.preview, "Archived path SQLite preview");
     }
 
     #[tokio::test]

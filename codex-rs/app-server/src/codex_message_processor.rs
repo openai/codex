@@ -3788,7 +3788,7 @@ impl CodexMessageProcessor {
         };
 
         let thread = match self
-            .read_thread_view(thread_uuid, include_turns, /*include_archived*/ false)
+            .read_thread_view(thread_uuid, include_turns, /*include_archived*/ true)
             .await
         {
             Ok(thread) => thread,
@@ -3916,15 +3916,26 @@ impl CodexMessageProcessor {
         // ThreadStore, but loaded threads that are not yet readable from the store may
         // still have local metadata. Keep this compatibility path centralized here so
         // future remote threadstore implementations have one app-server boundary to replace.
-        if let Some(summary) =
-            read_summary_from_state_db_by_thread_id(&self.config, thread_id).await
-        {
+        let loaded_state_db = loaded_thread.state_db();
+        let summary = match loaded_state_db.as_ref() {
+            Some(state_db) => {
+                read_summary_from_state_db_context_by_thread_id(Some(state_db), thread_id).await
+            }
+            None => read_summary_from_state_db_by_thread_id(&self.config, thread_id).await,
+        };
+        if let Some(summary) = summary {
             merge_mutable_thread_metadata(
                 &mut thread,
                 summary_to_thread(summary, &self.config.cwd),
             );
         }
         self.attach_thread_name(thread_id, &mut thread).await;
+        if thread.forked_from_id.is_none()
+            && let Some(path) = loaded_rollout_path.as_deref()
+            && path.exists()
+        {
+            thread.forked_from_id = forked_from_id_from_rollout(path).await;
+        }
 
         if include_turns {
             let path = loaded_materialized_rollout_path(
