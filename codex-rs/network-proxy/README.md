@@ -83,6 +83,27 @@ prefix = "Bearer "
 
 # `match.body` is reserved for a future release. Current hooks match only on
 # method/path/query/headers and can mutate outbound request headers.
+# `match.path_prefixes` accepts literal prefixes by default. Prefix path,
+# query, or header matchers with `pattern:` to opt into wildcard matching.
+# Use `literal:` when a literal value must start with a reserved prefix.
+# In paths, `*` and `?` do not match `/`; use `**` when crossing segments is intended.
+```
+
+Matcher syntax example:
+
+```toml
+[permissions.workspace.network.mitm_hooks.match]
+# Literal path prefixes are the default.
+path_prefixes = [
+  "/repos/openai/",
+  "pattern:/repos/*/codex/issues*",
+]
+
+[permissions.workspace.network.mitm_hooks.match.query]
+state = ["open", "pattern:triage*", "literal:pattern:*"]
+
+[permissions.workspace.network.mitm_hooks.match.headers]
+"x-github-api-version" = ["2022-11-28", "pattern:2022*preview"]
 ```
 
 ### 2) Run the proxy

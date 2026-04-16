@@ -4,6 +4,8 @@ use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use globset::GlobBuilder;
+use globset::GlobMatcher;
 use rama_http::HeaderValue;
 use rama_http::Request;
 use rama_http::header::HeaderName;
@@ -14,6 +16,9 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use url::form_urlencoded;
+
+const PATTERN_PREFIX: &str = "pattern:";
+const LITERAL_PREFIX: &str = "literal:";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
@@ -65,7 +70,7 @@ pub struct MitmHook {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MitmHookMatcher {
     pub methods: Vec<String>,
-    pub path_prefixes: Vec<String>,
+    pub path_prefixes: Vec<PathMatcher>,
     pub query: Vec<QueryConstraint>,
     pub headers: Vec<HeaderConstraint>,
     pub body: Option<MitmHookBodyMatcher>,
@@ -74,13 +79,13 @@ pub struct MitmHookMatcher {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryConstraint {
     pub name: String,
-    pub allowed_values: Vec<String>,
+    pub allowed_values: Vec<ValueMatcher>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderConstraint {
     pub name: HeaderName,
-    pub allowed_values: Vec<String>,
+    pub allowed_values: Vec<ValueMatcher>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +110,51 @@ pub enum SecretSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MitmHookBodyMatcher {
     pub raw: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathMatcher {
+    Prefix(String),
+    Glob(CompiledGlobMatcher),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueMatcher {
+    Exact(String),
+    Glob(CompiledGlobMatcher),
+}
+
+enum MatcherPattern<'a> {
+    Literal(&'a str),
+    Glob(&'a str),
+}
+
+#[derive(Clone)]
+pub struct CompiledGlobMatcher {
+    pattern: String,
+    matcher: GlobMatcher,
+}
+
+impl std::fmt::Debug for CompiledGlobMatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompiledGlobMatcher")
+            .field("pattern", &self.pattern)
+            .finish()
+    }
+}
+
+impl PartialEq for CompiledGlobMatcher {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern == other.pattern
+    }
+}
+
+impl Eq for CompiledGlobMatcher {}
+
+impl CompiledGlobMatcher {
+    fn is_match(&self, candidate: &str) -> bool {
+        self.matcher.is_match(candidate)
+    }
 }
 
 pub type MitmHooksByHost = BTreeMap<String, Vec<MitmHook>>;
@@ -139,7 +189,7 @@ pub(crate) fn validate_mitm_hook_config(config: &NetworkProxyConfig) -> Result<(
         }
 
         let path_prefixes =
-            normalize_path_prefixes(&hook.matcher.path_prefixes).with_context(|| {
+            compile_path_matchers(&hook.matcher.path_prefixes).with_context(|| {
                 format!("invalid network.mitm_hooks[{hook_index}].match.path_prefixes")
             })?;
         if path_prefixes.is_empty() {
@@ -225,7 +275,7 @@ where
     for hook in &config.network.mitm_hooks {
         let host = normalize_hook_host(&hook.host)?;
         let methods = normalize_methods(&hook.matcher.methods)?;
-        let path_prefixes = normalize_path_prefixes(&hook.matcher.path_prefixes)?;
+        let path_prefixes = compile_path_matchers(&hook.matcher.path_prefixes)?;
         let query = hook
             .matcher
             .query
@@ -233,7 +283,7 @@ where
             .map(|(name, values)| {
                 Ok(QueryConstraint {
                     name: normalize_query_name(name)?,
-                    allowed_values: values.clone(),
+                    allowed_values: compile_value_matchers(values)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -244,7 +294,7 @@ where
             .map(|(name, values)| {
                 Ok(HeaderConstraint {
                     name: parse_header_name(name)?,
-                    allowed_values: values.clone(),
+                    allowed_values: compile_value_matchers(values)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -340,12 +390,7 @@ fn hook_matches(hook: &MitmHook, req: &Request) -> bool {
     }
 
     let path = req.uri().path();
-    if !hook
-        .matcher
-        .path_prefixes
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
-    {
+    if !path_matches(&hook.matcher.path_prefixes, path) {
         return false;
     }
 
@@ -376,7 +421,7 @@ fn query_matches(query_constraints: &[QueryConstraint], req: &Request) -> bool {
                 constraint
                     .allowed_values
                     .iter()
-                    .any(|allowed| allowed == candidate)
+                    .any(|allowed| allowed.matches(candidate))
             })
         })
     })
@@ -397,10 +442,92 @@ fn headers_match(header_constraints: &[HeaderConstraint], req: &Request) -> bool
                 constraint
                     .allowed_values
                     .iter()
-                    .any(|allowed| allowed == candidate)
+                    .any(|allowed| allowed.matches(candidate))
             })
         })
     })
+}
+
+fn path_matches(path_prefixes: &[PathMatcher], path: &str) -> bool {
+    path_prefixes.iter().any(|matcher| matcher.matches(path))
+}
+
+impl PathMatcher {
+    fn matches(&self, candidate: &str) -> bool {
+        match self {
+            Self::Prefix(prefix) => candidate.starts_with(prefix),
+            Self::Glob(glob) => glob.is_match(candidate),
+        }
+    }
+}
+
+impl ValueMatcher {
+    fn matches(&self, candidate: &str) -> bool {
+        match self {
+            Self::Exact(value) => value == candidate,
+            Self::Glob(glob) => glob.is_match(candidate),
+        }
+    }
+}
+
+fn compile_path_matchers(path_prefixes: &[String]) -> Result<Vec<PathMatcher>> {
+    path_prefixes
+        .iter()
+        .map(|prefix| {
+            match parse_matcher_pattern(prefix)? {
+                MatcherPattern::Literal(prefix) => {
+                    if prefix.is_empty() {
+                        return Err(anyhow!("path_prefixes must not contain empty entries"));
+                    }
+                    Ok(PathMatcher::Prefix(prefix.to_string()))
+                }
+                MatcherPattern::Glob(glob_pattern) => Ok(PathMatcher::Glob(compile_glob_matcher(
+                    glob_pattern,
+                    /*literal_separator*/ true,
+                )?)),
+            }
+        })
+        .collect()
+}
+
+fn compile_value_matchers(values: &[String]) -> Result<Vec<ValueMatcher>> {
+    values
+        .iter()
+        .map(|value| match parse_matcher_pattern(value)? {
+            MatcherPattern::Literal(value) => Ok(ValueMatcher::Exact(value.to_string())),
+            MatcherPattern::Glob(glob_pattern) => Ok(ValueMatcher::Glob(compile_glob_matcher(
+                glob_pattern,
+                /*literal_separator*/ false,
+            )?)),
+        })
+        .collect()
+}
+
+fn parse_matcher_pattern(pattern: &str) -> Result<MatcherPattern<'_>> {
+    if let Some(literal) = pattern.strip_prefix(LITERAL_PREFIX) {
+        return Ok(MatcherPattern::Literal(literal));
+    }
+    let Some(glob_pattern) = pattern.strip_prefix(PATTERN_PREFIX) else {
+        return Ok(MatcherPattern::Literal(pattern));
+    };
+    if glob_pattern.is_empty() {
+        return Err(anyhow!("glob pattern must not be empty"));
+    }
+    Ok(MatcherPattern::Glob(glob_pattern))
+}
+
+fn compile_glob_matcher(pattern: &str, literal_separator: bool) -> Result<CompiledGlobMatcher> {
+    let mut builder = GlobBuilder::new(pattern);
+    builder
+        .backslash_escape(true)
+        .literal_separator(literal_separator);
+    builder
+        .build()
+        .map(|glob| CompiledGlobMatcher {
+            pattern: pattern.to_string(),
+            matcher: glob.compile_matcher(),
+        })
+        .map_err(|err| anyhow!("invalid glob pattern {pattern:?}: {err}"))
 }
 
 fn normalize_hook_host(host: &str) -> Result<String> {
@@ -429,18 +556,6 @@ fn normalize_methods(methods: &[String]) -> Result<Vec<String>> {
         .collect()
 }
 
-fn normalize_path_prefixes(path_prefixes: &[String]) -> Result<Vec<String>> {
-    path_prefixes
-        .iter()
-        .map(|prefix| {
-            if prefix.is_empty() {
-                return Err(anyhow!("path_prefixes must not contain empty entries"));
-            }
-            Ok(prefix.clone())
-        })
-        .collect()
-}
-
 fn validate_query_constraints(query: &BTreeMap<String, Vec<String>>) -> Result<()> {
     for (name, values) in query {
         let normalized = normalize_query_name(name)?;
@@ -452,6 +567,8 @@ fn validate_query_constraints(query: &BTreeMap<String, Vec<String>>) -> Result<(
                 "query key {name:?} must list at least one allowed value"
             ));
         }
+        let _ = compile_value_matchers(values)
+            .with_context(|| format!("invalid matcher for query key {name:?}"))?;
     }
     Ok(())
 }
@@ -464,8 +581,10 @@ fn normalize_query_name(name: &str) -> Result<String> {
 }
 
 fn validate_header_constraints(headers: &BTreeMap<String, Vec<String>>) -> Result<()> {
-    for name in headers.keys() {
+    for (name, values) in headers {
         let _ = parse_header_name(name)?;
+        let _ = compile_value_matchers(values)
+            .with_context(|| format!("invalid matcher for header {name:?}"))?;
     }
     Ok(())
 }
@@ -726,6 +845,162 @@ mod tests {
             HookEvaluation::Matched {
                 actions: hooks.get("api.github.com").unwrap()[0].actions.clone(),
             }
+        );
+    }
+
+    #[test]
+    fn evaluate_matches_wildcard_path_query_and_header_constraints() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.path_prefixes = vec!["pattern:/repos/*/codex/issues*".to_string()];
+        hook.matcher.query =
+            BTreeMap::from([("state".to_string(), vec!["pattern:op*".to_string()])]);
+        hook.matcher.headers = BTreeMap::from([(
+            "x-github-api-version".to_string(),
+            vec!["pattern:2022*preview".to_string()],
+        )]);
+        config.network.mitm_hooks = vec![hook];
+
+        let hooks = compile_mitm_hooks_with_resolvers(
+            &config,
+            |_| Some("abc".to_string()),
+            |_| Err(anyhow!("unexpected file lookup")),
+        )
+        .unwrap();
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/openai/codex/issues?state=open")
+            .header("x-github-api-version", "2022-11-28-preview")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &req),
+            HookEvaluation::Matched {
+                actions: hooks.get("api.github.com").unwrap()[0].actions.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_wildcard_path_pattern() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.path_prefixes = vec!["pattern:/repos/[".to_string()];
+        config.network.mitm_hooks = vec![hook];
+
+        let err = validate_mitm_hook_config(&config).expect_err("invalid glob should fail");
+        assert!(format!("{err:#}").contains("invalid glob pattern"));
+    }
+
+    #[test]
+    fn evaluate_path_wildcard_does_not_cross_segment_boundaries() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.path_prefixes = vec!["pattern:/repos/*/codex/issues*".to_string()];
+        config.network.mitm_hooks = vec![hook];
+
+        let hooks = compile_mitm_hooks_with_resolvers(
+            &config,
+            |_| Some("abc".to_string()),
+            |_| Err(anyhow!("unexpected file lookup")),
+        )
+        .unwrap();
+        let nested_req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/openai/private/codex/issues")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &nested_req),
+            HookEvaluation::HookedHostNoMatch
+        );
+    }
+
+    #[test]
+    fn evaluate_treats_glob_metacharacters_as_literal_without_glob_prefix() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.path_prefixes = vec!["/repos/[draft]/".to_string()];
+        hook.matcher.query = BTreeMap::from([("state".to_string(), vec!["op*".to_string()])]);
+        hook.matcher.headers = BTreeMap::from([(
+            "x-github-api-version".to_string(),
+            vec!["2022-11-28[preview]".to_string()],
+        )]);
+        config.network.mitm_hooks = vec![hook];
+
+        let hooks = compile_mitm_hooks_with_resolvers(
+            &config,
+            |_| Some("abc".to_string()),
+            |_| Err(anyhow!("unexpected file lookup")),
+        )
+        .unwrap();
+        let exact_req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/[draft]/codex/issues?state=op*")
+            .header("x-github-api-version", "2022-11-28[preview]")
+            .body(Body::empty())
+            .unwrap();
+        let non_literal_req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/draft/codex/issues?state=open")
+            .header("x-github-api-version", "2022-11-28-preview")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &exact_req),
+            HookEvaluation::Matched {
+                actions: hooks.get("api.github.com").unwrap()[0].actions.clone(),
+            }
+        );
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &non_literal_req),
+            HookEvaluation::HookedHostNoMatch
+        );
+    }
+
+    #[test]
+    fn evaluate_allows_literal_values_with_reserved_prefixes() {
+        let mut config = base_config();
+        let mut hook = github_hook();
+        hook.matcher.query =
+            BTreeMap::from([("state".to_string(), vec!["literal:pattern:*".to_string()])]);
+        hook.matcher.headers = BTreeMap::from([(
+            "x-github-api-version".to_string(),
+            vec!["literal:pattern:*".to_string()],
+        )]);
+        config.network.mitm_hooks = vec![hook];
+
+        let hooks = compile_mitm_hooks_with_resolvers(
+            &config,
+            |_| Some("abc".to_string()),
+            |_| Err(anyhow!("unexpected file lookup")),
+        )
+        .unwrap();
+        let exact_req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/openai/codex/issues?state=pattern%3A%2A")
+            .header("x-github-api-version", "pattern:*")
+            .body(Body::empty())
+            .unwrap();
+        let non_literal_req = Request::builder()
+            .method(Method::POST)
+            .uri("/repos/openai/codex/issues?state=pattern%3Aopen")
+            .header("x-github-api-version", "pattern:preview")
+            .body(Body::empty())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &exact_req),
+            HookEvaluation::Matched {
+                actions: hooks.get("api.github.com").unwrap()[0].actions.clone(),
+            }
+        );
+        assert_eq!(
+            evaluate_mitm_hooks(&hooks, "api.github.com", &non_literal_req),
+            HookEvaluation::HookedHostNoMatch
         );
     }
 
