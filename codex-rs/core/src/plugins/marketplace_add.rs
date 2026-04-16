@@ -77,7 +77,7 @@ where
         sparse_paths,
     } = request;
     let source = parse_marketplace_source(&source, ref_name)?;
-    if !sparse_paths.is_empty() && matches!(source, MarketplaceSource::Local { .. }) {
+    if !sparse_paths.is_empty() && !matches!(source, MarketplaceSource::Git { .. }) {
         return Err(MarketplaceAddError::InvalidRequest(
             "--sparse is only supported for git marketplace sources".to_string(),
         ));
@@ -293,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn add_marketplace_sync_rejects_sparse_paths_for_local_directory_source() -> Result<()> {
+    fn add_marketplace_sync_rejects_sparse_checkout_for_local_directory_source() -> Result<()> {
         let codex_home = TempDir::new()?;
         let source_root = TempDir::new()?;
         write_marketplace_source(source_root.path(), "local copy")?;
@@ -309,11 +309,17 @@ mod tests {
                 panic!("git cloner should not be called for local marketplace sources")
             },
         )
-        .expect_err("local marketplace sources should reject sparse paths");
+        .unwrap_err();
 
         assert_eq!(
             err.to_string(),
             "--sparse is only supported for git marketplace sources"
+        );
+        assert!(
+            !codex_home
+                .path()
+                .join(codex_config::CONFIG_TOML_FILE)
+                .exists()
         );
         Ok(())
     }
