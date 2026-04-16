@@ -23,6 +23,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 pub(crate) struct SetGoalRequest {
@@ -40,6 +41,7 @@ pub(crate) enum GoalAccountingBoundary {
 #[derive(Debug)]
 pub(crate) struct GoalAccountingState {
     accounting_lock: Mutex<()>,
+    last_accounted_at: Mutex<Instant>,
     last_accounted_token_usage: Mutex<TokenUsage>,
     completed_this_turn: AtomicBool,
 }
@@ -48,12 +50,14 @@ impl GoalAccountingState {
     pub(crate) fn new() -> Self {
         Self {
             accounting_lock: Mutex::new(()),
+            last_accounted_at: Mutex::new(Instant::now()),
             last_accounted_token_usage: Mutex::new(TokenUsage::default()),
             completed_this_turn: AtomicBool::new(false),
         }
     }
 
     pub(crate) async fn mark_turn_started(&self, token_usage: TokenUsage) {
+        *self.last_accounted_at.lock().await = Instant::now();
         *self.last_accounted_token_usage.lock().await = token_usage;
         self.completed_this_turn.store(false, Ordering::SeqCst);
     }
@@ -86,7 +90,15 @@ impl GoalAccountingState {
         goal_token_delta_for_usage(&delta)
     }
 
-    async fn mark_accounted(&self, current: TokenUsage) {
+    async fn time_delta_since_last_accounting(&self) -> i64 {
+        let last = self.last_accounted_at.lock().await;
+        i64::try_from(last.elapsed().as_secs()).unwrap_or(i64::MAX)
+    }
+
+    async fn mark_accounted(&self, current: TokenUsage, time_delta_seconds: i64) {
+        if time_delta_seconds > 0 {
+            *self.last_accounted_at.lock().await = Instant::now();
+        }
         *self.last_accounted_token_usage.lock().await = current;
     }
 }
@@ -202,12 +214,16 @@ impl Session {
             return Ok(());
         }
         let _accounting_guard = turn_context.goal_accounting.accounting_lock.lock().await;
+        let time_delta_seconds = turn_context
+            .goal_accounting
+            .time_delta_since_last_accounting()
+            .await;
         let current_token_usage = self.total_token_usage().await.unwrap_or_default();
         let token_delta = turn_context
             .goal_accounting
             .token_delta_since_last_accounting(current_token_usage.clone())
             .await;
-        if token_delta <= 0 {
+        if time_delta_seconds == 0 && token_delta <= 0 {
             return Ok(());
         }
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
@@ -232,13 +248,13 @@ impl Session {
             codex_state::ThreadGoalAccountingMode::ActiveOnly
         };
         let outcome = state_db
-            .account_thread_goal_usage(self.conversation_id, token_delta, mode)
+            .account_thread_goal_usage(self.conversation_id, time_delta_seconds, token_delta, mode)
             .await?;
         let goal = match outcome {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
                 turn_context
                     .goal_accounting
-                    .mark_accounted(current_token_usage)
+                    .mark_accounted(current_token_usage, time_delta_seconds)
                     .await;
                 goal
             }
@@ -409,17 +425,19 @@ Objective:
 {objective}
 
 Budget:
+- Time spent pursuing goal: {time_used_seconds} seconds
 - Tokens used: {tokens_used}
 - Token budget: {token_budget}
 - Tokens remaining: {remaining_tokens}
 
 Avoid repeating work that is already done. Choose the next concrete action toward the objective. Before deciding that the goal is achieved, thoroughly evaluate the objective against the actual current state: identify the concrete deliverables or success criteria, inspect the relevant files/results/state or run the checks needed to verify them, and compare that evidence to the objective. Do not rely on intent, partial progress, or memory of earlier work as proof of completion.
 
-Only mark the goal achieved when that verification shows the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call set_goal with status "complete" and omit objective so usage accounting is preserved. If the achieved goal has a token budget, report the final consumed budget to the user after set_goal succeeds.
+Only mark the goal achieved when that verification shows the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call set_goal with status "complete" and omit objective so usage accounting is preserved. Report the final elapsed time, and if the achieved goal has a token budget, report the final consumed token budget to the user after set_goal succeeds.
 
 If the goal has not been achieved and cannot be achieved within the remaining budget, or the remaining budget is too small for productive continuation, call set_goal with status "budgetLimited" and omit objective. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If the goal is otherwise blocked and cannot continue productively for a non-budget reason, call set_goal with status "paused" and omit objective."#,
         objective = goal.objective,
         tokens_used = goal.tokens_used,
+        time_used_seconds = goal.time_used_seconds,
     )
 }
 
