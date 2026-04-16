@@ -63,7 +63,7 @@ pub(crate) struct BwrapOptions {
     ///
     /// Keep this uncapped by default so existing nested deny-read matches are
     /// masked before the sandboxed command starts.
-    pub unreadable_glob_scan_max_depth: Option<usize>,
+    pub glob_scan_max_depth: Option<usize>,
 }
 
 impl Default for BwrapOptions {
@@ -71,7 +71,7 @@ impl Default for BwrapOptions {
         Self {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
-            unreadable_glob_scan_max_depth: None,
+            glob_scan_max_depth: None,
         }
     }
 }
@@ -183,8 +183,8 @@ fn create_bwrap_flags(
         file_system_sandbox_policy,
         sandbox_policy_cwd,
         options
-            .unreadable_glob_scan_max_depth
-            .or(file_system_sandbox_policy.unreadable_glob_scan_max_depth),
+            .glob_scan_max_depth
+            .or(file_system_sandbox_policy.glob_scan_max_depth),
     )?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
@@ -238,7 +238,7 @@ fn create_bwrap_flags(
 fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
-    unreadable_glob_scan_max_depth: Option<usize>,
+    glob_scan_max_depth: Option<usize>,
 ) -> Result<BwrapArgs> {
     let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
     // Bubblewrap requires bind mount targets to exist. Skip missing writable
@@ -267,13 +267,9 @@ fn create_filesystem_args(
     // to the existing matches we can see before constructing the mount overlay;
     // core tool helpers still evaluate the original patterns directly at read time.
     unreadable_roots.extend(
-        expand_unreadable_globs_with_ripgrep(
-            &unreadable_globs,
-            cwd,
-            unreadable_glob_scan_max_depth,
-        )?
-        .into_iter()
-        .map(AbsolutePathBuf::into_path_buf),
+        expand_unreadable_globs_with_ripgrep(&unreadable_globs, cwd, glob_scan_max_depth)?
+            .into_iter()
+            .map(AbsolutePathBuf::into_path_buf),
     );
     unreadable_roots.sort();
     unreadable_roots.dedup();
@@ -420,7 +416,7 @@ fn create_filesystem_args(
         }
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
-            append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
+            append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths)?;
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -793,17 +789,19 @@ fn append_read_only_subpath_args(
     args: &mut Vec<String>,
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
-) {
-    if let Some(target) = canonical_target_for_symlink_in_path(subpath, allowed_write_paths) {
-        // bwrap takes `--ro-bind <source> <destination>`. Use the resolved target
-        // for both operands so a protected symlinked directory is remounted
-        // read-only in place instead of binding onto the symlink path itself.
-        let mount_source = path_to_string(&target);
-        let mount_destination = path_to_string(&target);
-        args.push("--ro-bind".to_string());
-        args.push(mount_source);
-        args.push(mount_destination);
-        return;
+) -> Result<()> {
+    if let Some(symlink) = first_writable_symlink_component_in_path(subpath, allowed_write_paths) {
+        /*
+         * A read-only carveout under a writable symlink cannot be made reliable
+         * with bwrap path arguments. Binding the symlink's current target would
+         * only protect a startup-time snapshot; the sandboxed process could
+         * replace the writable symlink before it reads through the logical path.
+         */
+        return Err(CodexErr::Fatal(format!(
+            "cannot enforce sandbox read-only path {} because it crosses writable symlink {}",
+            subpath.display(),
+            symlink.display()
+        )));
     }
 
     if !subpath.exists() {
@@ -814,7 +812,7 @@ fn append_read_only_subpath_args(
             args.push("/dev/null".to_string());
             args.push(path_to_string(&first_missing_component));
         }
-        return;
+        return Ok(());
     }
 
     if is_within_allowed_write_paths(subpath, allowed_write_paths) {
@@ -822,6 +820,7 @@ fn append_read_only_subpath_args(
         args.push(path_to_string(subpath));
         args.push(path_to_string(subpath));
     }
+    Ok(())
 }
 
 fn append_unreadable_root_args(
@@ -830,16 +829,21 @@ fn append_unreadable_root_args(
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
-    if let Some(target) = canonical_target_for_symlink_in_path(unreadable_root, allowed_write_paths)
+    if let Some(symlink) =
+        first_writable_symlink_component_in_path(unreadable_root, allowed_write_paths)
     {
-        // Apply unreadable handling to the resolved symlink target, not the
-        // logical symlink path, to avoid file-vs-directory bind mismatches.
-        return append_existing_unreadable_path_args(
-            args,
-            preserved_files,
-            &target,
-            allowed_write_paths,
-        );
+        /*
+         * Deny-read masks must fail closed when the protected path crosses a
+         * symlink that remains writable to the sandboxed process. Resolving and
+         * masking the symlink's current target is a TOCTTOU snapshot: bwrap would
+         * protect the old target while the logical path could later point
+         * somewhere else.
+         */
+        return Err(CodexErr::Fatal(format!(
+            "cannot enforce sandbox deny-read path {} because it crosses writable symlink {}",
+            unreadable_root.display(),
+            symlink.display()
+        )));
     }
 
     if !unreadable_root.exists() {
@@ -916,13 +920,16 @@ fn is_within_allowed_write_paths(path: &Path, allowed_write_paths: &[PathBuf]) -
         .any(|root| path.starts_with(root))
 }
 
-fn canonical_target_for_symlink_in_path(
+fn first_writable_symlink_component_in_path(
     target_path: &Path,
     allowed_write_paths: &[PathBuf],
 ) -> Option<PathBuf> {
-    // Only follow symlinks that are themselves under writable roots. Those are
-    // the symlinks a sandboxed process can mutate, so resolving them closes the
-    // practical bypass without canonicalizing every read-only mount target.
+    /*
+     * Walk the logical path and report the first symlink component that lives
+     * under a writable root. These symlinks are mutable from inside the sandbox,
+     * so any mount or mask based on their resolved target would be racing a path
+     * the sandboxed process can change.
+     */
     let mut current = PathBuf::new();
 
     for component in target_path.components() {
@@ -949,7 +956,7 @@ fn canonical_target_for_symlink_in_path(
         if metadata.file_type().is_symlink()
             && is_within_allowed_write_paths(&current, allowed_write_paths)
         {
-            return fs::canonicalize(&current).ok();
+            return Some(current);
         }
     }
 
@@ -1005,7 +1012,7 @@ mod tests {
 
     #[test]
     fn default_unreadable_glob_scan_has_no_depth_cap() {
-        assert_eq!(BwrapOptions::default().unreadable_glob_scan_max_depth, None);
+        assert_eq!(BwrapOptions::default().glob_scan_max_depth, None);
     }
 
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
@@ -1284,7 +1291,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn protected_symlinked_directory_subpaths_bind_target_read_only() {
+    fn protected_symlinked_directory_subpaths_fail_closed() {
         let temp_dir = TempDir::new().expect("temp dir");
         let root = temp_dir.path().join("root");
         let agents_target = root.join("agents-target");
@@ -1294,30 +1301,26 @@ mod tests {
 
         let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
         let agents_link_str = path_to_string(&agents_link);
-        let agents_target_str = path_to_string(&agents_target);
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path { path: root },
             access: FileSystemAccessMode::Write,
         }]);
 
-        let args =
+        let err =
             create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+                .expect_err("protected symlinked subpath should fail closed");
+        let message = err.to_string();
 
-        assert!(args.args.windows(3).any(|window| {
-            window
-                == [
-                    "--ro-bind",
-                    agents_target_str.as_str(),
-                    agents_target_str.as_str(),
-                ]
-        }));
-        assert!(!args.args.iter().any(|arg| arg == agents_link_str.as_str()));
+        assert!(
+            message.contains("cannot enforce sandbox read-only path"),
+            "{message}"
+        );
+        assert!(message.contains(&agents_link_str), "{message}");
     }
 
     #[cfg(unix)]
     #[test]
-    fn symlinked_writable_roots_mask_nested_symlink_escape_paths_without_binding_targets() {
+    fn symlinked_writable_roots_nested_symlink_escape_paths_fail_closed() {
         let temp_dir = TempDir::new().expect("temp dir");
         let real_root = temp_dir.path().join("real");
         let link_root = temp_dir.path().join("link");
@@ -1333,7 +1336,6 @@ mod tests {
             AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
         let link_private = link_root.join("linked-private");
         let real_linked_private_str = path_to_string(&linked_private);
-        let outside_str = path_to_string(&outside);
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: link_root },
@@ -1345,27 +1347,16 @@ mod tests {
             },
         ]);
 
-        let args =
+        let err =
             create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+                .expect_err("deny-read path crossing writable symlink should fail closed");
+        let message = err.to_string();
 
-        assert!(args.args.windows(6).any(|window| {
-            window
-                == [
-                    "--perms",
-                    "000",
-                    "--tmpfs",
-                    outside_str.as_str(),
-                    "--remount-ro",
-                    outside_str.as_str(),
-                ]
-        }));
         assert!(
-            !args
-                .args
-                .iter()
-                .any(|arg| arg == real_linked_private_str.as_str())
+            message.contains("cannot enforce sandbox deny-read path"),
+            "{message}"
         );
+        assert!(message.contains(&real_linked_private_str), "{message}");
     }
 
     #[test]

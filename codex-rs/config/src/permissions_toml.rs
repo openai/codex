@@ -34,7 +34,7 @@ pub struct FilesystemPermissionsToml {
     /// Optional maximum depth for expanding unreadable glob patterns on
     /// platforms that snapshot glob matches before sandbox startup.
     #[schemars(range(min = 1))]
-    pub unreadable_glob_scan_max_depth: Option<usize>,
+    pub glob_scan_max_depth: Option<usize>,
     #[serde(flatten)]
     pub entries: BTreeMap<String, FilesystemPermissionToml>,
 }

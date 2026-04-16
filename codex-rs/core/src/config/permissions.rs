@@ -70,7 +70,7 @@ pub(crate) fn compile_permission_profile(
                     push_warning(
                         startup_warnings,
                         format!(
-                            "Filesystem deny-read glob `{pattern}` uses `**`. Non-macOS sandboxing does not support unbounded `**` natively; set `unreadable_glob_scan_max_depth` in this filesystem profile to cap Linux glob expansion and silence this warning, or enumerate explicit depths such as `*.env`, `*/*.env`, and `*/*/*.env`."
+                            "Filesystem deny-read glob `{pattern}` uses `**`. Non-macOS sandboxing does not support unbounded `**` natively; set `glob_scan_max_depth` in this filesystem profile to cap Linux glob expansion and silence this warning, or enumerate explicit depths such as `*.env`, `*/*.env`, and `*/*/*.env`."
                         ),
                     );
                 }
@@ -90,16 +90,16 @@ pub(crate) fn compile_permission_profile(
             missing_filesystem_entries_warning(profile_name),
         );
     }
-    let unreadable_glob_scan_max_depth = validate_unreadable_glob_scan_max_depth(
+    let glob_scan_max_depth = validate_glob_scan_max_depth(
         profile
             .filesystem
             .as_ref()
-            .and_then(|filesystem| filesystem.unreadable_glob_scan_max_depth),
+            .and_then(|filesystem| filesystem.glob_scan_max_depth),
     )?;
 
     let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
     let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(entries);
-    file_system_sandbox_policy.unreadable_glob_scan_max_depth = unreadable_glob_scan_max_depth;
+    file_system_sandbox_policy.glob_scan_max_depth = glob_scan_max_depth;
     Ok((file_system_sandbox_policy, network_sandbox_policy))
 }
 
@@ -347,7 +347,7 @@ fn unsupported_read_write_glob_paths(filesystem: &FilesystemPermissionsToml) -> 
 }
 
 fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -> Vec<String> {
-    if filesystem.unreadable_glob_scan_max_depth.is_some() {
+    if filesystem.glob_scan_max_depth.is_some() {
         return Vec::new();
     }
 
@@ -372,11 +372,11 @@ fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -
     patterns
 }
 
-fn validate_unreadable_glob_scan_max_depth(max_depth: Option<usize>) -> io::Result<Option<usize>> {
+fn validate_glob_scan_max_depth(max_depth: Option<usize>) -> io::Result<Option<usize>> {
     match max_depth {
         Some(0) => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "unreadable_glob_scan_max_depth must be at least 1",
+            "glob_scan_max_depth must be at least 1",
         )),
         _ => Ok(max_depth),
     }

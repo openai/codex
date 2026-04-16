@@ -72,7 +72,7 @@ commands that would enter the bubblewrap path.
 
   ```toml
   [permissions.workspace.filesystem]
-  unreadable_glob_scan_max_depth = 2
+  glob_scan_max_depth = 2
 
   [permissions.workspace.filesystem.":project_roots"]
   "**/*.env" = "none"

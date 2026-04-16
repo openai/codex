@@ -55,7 +55,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
-                            unreadable_glob_scan_max_depth: None,
+                            glob_scan_max_depth: None,
                             entries: BTreeMap::new(),
                         }),
                         network: None,
@@ -227,7 +227,7 @@ fn network_toml_overlays_unix_socket_permissions_by_path() {
 #[test]
 fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths() {
     let filesystem = FilesystemPermissionsToml {
-        unreadable_glob_scan_max_depth: None,
+        glob_scan_max_depth: None,
         entries: BTreeMap::from([
             (
                 "/tmp/**/*.log".to_string(),
@@ -261,7 +261,7 @@ fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths
 #[test]
 fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
     let filesystem = FilesystemPermissionsToml {
-        unreadable_glob_scan_max_depth: None,
+        glob_scan_max_depth: None,
         entries: BTreeMap::from([(
             ":project_roots".to_string(),
             FilesystemPermissionToml::Scoped(BTreeMap::from([
@@ -277,7 +277,7 @@ fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
     );
 
     let configured_filesystem = FilesystemPermissionsToml {
-        unreadable_glob_scan_max_depth: Some(2),
+        glob_scan_max_depth: Some(2),
         ..filesystem
     };
     assert_eq!(
@@ -287,17 +287,14 @@ fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
 }
 
 #[test]
-fn unreadable_glob_scan_max_depth_must_be_positive() {
-    let err = validate_unreadable_glob_scan_max_depth(Some(0))
+fn glob_scan_max_depth_must_be_positive() {
+    let err = validate_glob_scan_max_depth(Some(0))
         .expect_err("zero depth would silently skip deny-read glob expansion");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(err.to_string(), "glob_scan_max_depth must be at least 1");
     assert_eq!(
-        err.to_string(),
-        "unreadable_glob_scan_max_depth must be at least 1"
-    );
-    assert_eq!(
-        validate_unreadable_glob_scan_max_depth(Some(2)).expect("depth should be valid"),
+        validate_glob_scan_max_depth(Some(2)).expect("depth should be valid"),
         Some(2)
     );
 }
@@ -312,7 +309,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                 "workspace".to_string(),
                 PermissionProfileToml {
                     filesystem: Some(FilesystemPermissionsToml {
-                        unreadable_glob_scan_max_depth: None,
+                        glob_scan_max_depth: None,
                         entries: BTreeMap::from([(
                             ":project_roots".to_string(),
                             FilesystemPermissionToml::Scoped(BTreeMap::from([(
