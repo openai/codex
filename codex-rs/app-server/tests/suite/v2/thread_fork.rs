@@ -43,6 +43,9 @@ use super::analytics::enable_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
+#[cfg(windows)]
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+#[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
@@ -117,9 +120,9 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     assert_eq!(thread.model_provider, "mock_provider");
     assert_eq!(thread.status, ThreadStatus::Idle);
     let thread_path = thread.path.clone().expect("thread path");
-    assert!(thread_path.is_absolute());
-    assert_ne!(thread_path, original_path);
-    assert!(thread.cwd.is_absolute());
+    assert!(thread_path.as_path().is_absolute());
+    assert_ne!(thread_path.as_path(), original_path);
+    assert!(thread.cwd.as_path().is_absolute());
     assert_eq!(thread.source, SessionSource::VsCode);
     assert_eq!(thread.name, None);
 

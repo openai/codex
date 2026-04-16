@@ -6,6 +6,7 @@ use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -129,17 +130,17 @@ pub enum GuardianAssessmentAction {
     Command {
         source: GuardianCommandSource,
         command: String,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
     },
     Execve {
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
     },
     ApplyPatch {
-        cwd: PathBuf,
-        files: Vec<PathBuf>,
+        cwd: AbsolutePathBuf,
+        files: Vec<AbsolutePathBuf>,
     },
     NetworkAccess {
         target: String,
@@ -213,7 +214,7 @@ pub struct ExecApprovalRequestEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -369,6 +370,8 @@ pub struct ApplyPatchApprovalRequestEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -377,7 +380,7 @@ mod tests {
             "type": "command",
             "source": "shell",
             "command": "rm -rf /tmp/guardian",
-            "cwd": "/tmp",
+            "cwd": test_path_buf("/tmp"),
         }))
         .expect("guardian action");
 
@@ -386,7 +389,7 @@ mod tests {
             GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,
                 command: "rm -rf /tmp/guardian".to_string(),
-                cwd: PathBuf::from("/tmp"),
+                cwd: test_path_buf("/tmp").abs(),
             }
         );
     }
@@ -419,7 +422,7 @@ mod tests {
                     "-f".to_string(),
                     "/tmp/file.sqlite".to_string(),
                 ],
-                cwd: PathBuf::from("/tmp"),
+                cwd: test_path_buf("/tmp").abs(),
             }
         );
     }

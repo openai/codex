@@ -279,6 +279,10 @@ impl RolloutRecorder {
         let codex_home = config.codex_home();
         let state_db_ctx = state_db::get_state_db(config).await;
 
+        // Search is the SQLite-optimized path and assumes a DB marked backfill-complete is
+        // actually populated enough to answer the query. If unmigrated rollout files still exist
+        // on disk, the repair path below may or may not run and catch them depending on whether
+        // SQLite already has another matching search hit.
         if search_term.is_some()
             && let Some(db_page) = state_db::list_threads_db(
                 state_db_ctx.as_deref(),

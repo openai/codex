@@ -30,7 +30,6 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use image::DynamicImage;
 use image::GenericImageView;
@@ -48,6 +47,8 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 #[cfg(not(debug_assertions))]
 use wiremock::matchers::body_string_contains;
+
+const VIEW_IMAGE_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn image_messages(body: &Value) -> Vec<&Value> {
     body.get("input")
@@ -180,7 +181,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
         // Empirically, image attachment can be slow under Bazel/RBE.
-        Duration::from_secs(10),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
     .await;
 
@@ -298,7 +299,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         },
         // Empirically, we have seen this run slow when run under
         // Bazel on arm Linux.
-        Duration::from_secs(10),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
     .await;
 
@@ -307,7 +308,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         _ => unreachable!("stored event must be ViewImageToolCall"),
     };
     assert_eq!(tool_event.call_id, call_id);
-    assert_eq!(tool_event.path, abs_path.to_path_buf());
+    assert_eq!(tool_event.path, abs_path);
 
     let req = mock.single_request();
     let body = req.body_json();
@@ -422,7 +423,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
     wait_for_event_with_timeout(
         codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
     .await;
 
@@ -518,7 +519,12 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
         })
         .await?;
 
-    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
 
     let req = mock.single_request();
     let body_with_tool_output = req.body_json();
@@ -603,7 +609,12 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
 
     let req = mock.single_request();
     let function_output = req.function_call_output(call_id);
@@ -701,7 +712,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
     wait_for_event_with_timeout(
         codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
     .await;
 
@@ -805,7 +816,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
     wait_for_event_with_timeout(
         codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
     .await;
 
@@ -915,7 +926,7 @@ await codex.emitImage(out);
             EventMsg::TurnComplete(_) => true,
             _ => false,
         },
-        Duration::from_secs(10),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
     .await;
     let tool_event = match tool_event {
@@ -1035,7 +1046,7 @@ console.log(out.type);
             EventMsg::TurnComplete(_) => true,
             _ => false,
         },
-        Duration::from_secs(10),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
     .await;
     let tool_event = match tool_event {
@@ -1117,7 +1128,12 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
 
     let req = mock.single_request();
     let body_with_tool_output = req.body_json();
@@ -1193,7 +1209,12 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
 
     let request = mock.single_request();
     assert!(
@@ -1274,7 +1295,12 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
 
     let req = mock.single_request();
     let body_with_tool_output = req.body_json();
@@ -1405,7 +1431,12 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         })
         .await?;
 
-    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
 
     let output_text = mock
         .single_request()
@@ -1480,7 +1511,12 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
 
     let first_body = invalid_image_mock.single_request().body_json();
     assert!(

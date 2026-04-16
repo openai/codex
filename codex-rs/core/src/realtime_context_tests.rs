@@ -1,22 +1,34 @@
 use super::build_current_thread_section;
 use super::build_recent_work_section;
 use super::build_workspace_section_with_user_root;
+use super::format_startup_context_blob;
 use chrono::TimeZone;
 use chrono::Utc;
+use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_state::ThreadMetadata;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
+use codex_thread_store::StoredThread;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
-fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMetadata {
-    ThreadMetadata {
-        id: ThreadId::new(),
-        rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
+fn stored_thread(cwd: &str, title: &str, first_user_message: &str) -> StoredThread {
+    StoredThread {
+        thread_id: ThreadId::new(),
+        rollout_path: Some(PathBuf::from("/tmp/rollout.jsonl")),
+        forked_from_id: None,
+        preview: first_user_message.to_string(),
+        name: (!title.is_empty()).then(|| title.to_string()),
+        model_provider: "test-provider".to_string(),
+        model: Some("gpt-5".to_string()),
+        reasoning_effort: None,
         created_at: Utc
             .timestamp_opt(1_709_251_100, 0)
             .single()
@@ -25,24 +37,23 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
             .timestamp_opt(1_709_251_200, 0)
             .single()
             .expect("valid timestamp"),
-        source: "cli".to_string(),
-        agent_path: None,
-        agent_nickname: None,
-        agent_role: None,
-        model_provider: "test-provider".to_string(),
-        model: Some("gpt-5".to_string()),
-        reasoning_effort: None,
+        archived_at: None,
         cwd: PathBuf::from(cwd),
         cli_version: "test".to_string(),
-        title: title.to_string(),
-        sandbox_policy: "workspace-write".to_string(),
-        approval_mode: "never".to_string(),
-        tokens_used: 0,
+        source: SessionSource::Cli,
+        agent_nickname: None,
+        agent_role: None,
+        agent_path: None,
+        git_info: Some(GitInfo {
+            commit_hash: Some(GitSha::new("abcdef")),
+            branch: Some("main".to_string()),
+            repository_url: None,
+        }),
+        approval_mode: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        token_usage: None,
         first_user_message: Some(first_user_message.to_string()),
-        archived_at: None,
-        git_sha: None,
-        git_branch: Some("main".to_string()),
-        git_origin_url: None,
+        history: None,
     }
 }
 
@@ -161,29 +172,47 @@ fn current_thread_section_keeps_latest_turns_when_history_exceeds_budget() {
 }
 
 #[test]
-fn workspace_section_requires_meaningful_structure() {
+fn startup_context_blob_is_wrapped_in_tags_and_fits_budget() {
+    let body = format!(
+        "Startup context from Codex.\n{}\n{}",
+        "recent work ".repeat(1_200),
+        "workspace tree ".repeat(800),
+    );
+
+    let wrapped = format_startup_context_blob(&body, /*budget_tokens*/ 200);
+
+    assert!(wrapped.starts_with("<startup_context>\n"));
+    assert!(wrapped.ends_with("\n</startup_context>"));
+    assert!(wrapped.contains("Startup context from Codex."));
+    assert!(wrapped.contains("tokens truncated"));
+    assert!(wrapped.len().div_ceil(4) <= 200);
+}
+
+#[tokio::test]
+async fn workspace_section_requires_meaningful_structure() {
     let cwd = TempDir::new().expect("tempdir");
     assert_eq!(
-        build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None),
+        build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None).await,
         None
     );
 }
 
-#[test]
-fn workspace_section_includes_tree_when_entries_exist() {
+#[tokio::test]
+async fn workspace_section_includes_tree_when_entries_exist() {
     let cwd = TempDir::new().expect("tempdir");
     fs::create_dir(cwd.path().join("docs")).expect("create docs dir");
     fs::write(cwd.path().join("README.md"), "hello").expect("write readme");
 
     let section = build_workspace_section_with_user_root(cwd.path(), /*user_root*/ None)
+        .await
         .expect("workspace section");
     assert!(section.contains("Working directory tree:"));
     assert!(section.contains("- docs/"));
     assert!(section.contains("- README.md"));
 }
 
-#[test]
-fn workspace_section_includes_user_root_tree_when_distinct() {
+#[tokio::test]
+async fn workspace_section_includes_user_root_tree_when_distinct() {
     let root = TempDir::new().expect("tempdir");
     let cwd = root.path().join("cwd");
     let git_root = root.path().join("git");
@@ -197,14 +226,15 @@ fn workspace_section_includes_user_root_tree_when_distinct() {
     fs::write(user_root.join(".zshrc"), "export TEST=1").expect("write home file");
 
     let section = build_workspace_section_with_user_root(cwd.as_path(), Some(user_root))
+        .await
         .expect("workspace section");
     assert!(section.contains("User root tree:"));
     assert!(section.contains("- code/"));
     assert!(!section.contains("- .zshrc"));
 }
 
-#[test]
-fn recent_work_section_groups_threads_by_cwd() {
+#[tokio::test]
+async fn recent_work_section_groups_threads_by_cwd() {
     let root = TempDir::new().expect("tempdir");
     let repo = root.path().join("repo");
     let workspace_a = repo.join("workspace-a");
@@ -224,22 +254,23 @@ fn recent_work_section_groups_threads_by_cwd() {
     fs::create_dir_all(&outside).expect("create outside dir");
 
     let recent_threads = vec![
-        thread_metadata(
+        stored_thread(
             workspace_a.to_string_lossy().as_ref(),
             "Investigate realtime startup context",
             "Log the startup context before sending it",
         ),
-        thread_metadata(
+        stored_thread(
             workspace_b.to_string_lossy().as_ref(),
             "Trim websocket startup payload",
             "Remove memories from the realtime startup context",
         ),
-        thread_metadata(outside.to_string_lossy().as_ref(), "", "Inspect flaky test"),
+        stored_thread(outside.to_string_lossy().as_ref(), "", "Inspect flaky test"),
     ];
     let current_cwd = workspace_a;
     let repo = fs::canonicalize(repo).expect("canonicalize repo");
 
     let section = build_recent_work_section(current_cwd.as_path(), &recent_threads)
+        .await
         .expect("recent work section");
     assert!(section.contains(&format!("### Git repo: {}", repo.display())));
     assert!(section.contains("Recent sessions: 2"));

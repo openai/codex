@@ -10,6 +10,11 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppMetadata;
 use serde::Deserialize;
 
+pub mod accessible;
+pub mod filter;
+pub mod merge;
+pub mod metadata;
+
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 #[derive(Clone, Debug, PartialEq, Eq)]

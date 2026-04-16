@@ -24,9 +24,7 @@ use wiremock::matchers::path;
 struct DummyAuth;
 
 impl AuthProvider for DummyAuth {
-    fn bearer_token(&self) -> Option<String> {
-        None
-    }
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 }
 
 fn provider(base_url: &str) -> Provider {

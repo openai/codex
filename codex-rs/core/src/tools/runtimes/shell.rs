@@ -145,7 +145,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     ) -> BoxFuture<'a, ReviewDecision> {
         let keys = self.approval_keys(req);
         let command = req.command.clone();
-        let cwd = req.cwd.to_path_buf();
+        let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let session = ctx.session;
@@ -161,7 +161,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     GuardianApprovalRequest::Shell {
                         id: call_id,
                         command,
-                        cwd,
+                        cwd: cwd.clone(),
                         sandbox_permissions: req.sandbox_permissions,
                         additional_permissions: req.additional_permissions.clone(),
                         justification: req.justification.clone(),

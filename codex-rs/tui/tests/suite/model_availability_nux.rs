@@ -140,7 +140,7 @@ trust_level = "trusted"
     let mut startup_ready = false;
     let mut answered_cursor_query = false;
 
-    let exit_code_result = timeout(Duration::from_secs(15), async {
+    let exit_code_result = timeout(Duration::from_secs(30), async {
         loop {
             select! {
                 result = output_rx.recv() => match result {

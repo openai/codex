@@ -85,6 +85,7 @@ Request params:
     "PATH": "/usr/bin:/bin"
   },
   "tty": true,
+  "pipeStdin": false,
   "arg0": null
 }
 ```
@@ -95,8 +96,8 @@ Field definitions:
 - `argv`: command vector. It must be non-empty.
 - `cwd`: absolute working directory used for the child process.
 - `env`: environment variables passed to the child process.
-- `tty`: when `true`, spawn a PTY-backed interactive process; when `false`,
-  spawn a pipe-backed process with closed stdin.
+- `tty`: when `true`, spawn a PTY-backed interactive process.
+- `pipeStdin`: when `true`, keep non-PTY stdin writable via `process/write`.
 - `arg0`: optional argv0 override forwarded to `codex-utils-pty`.
 
 Response:
@@ -111,7 +112,7 @@ Behavior notes:
 
 - Reusing an existing `processId` is rejected.
 - PTY-backed processes accept later writes through `process/write`.
-- Pipe-backed processes are launched with stdin closed and reject writes.
+- Non-PTY processes reject writes unless `pipeStdin` is `true`.
 - Output is streamed asynchronously via `process/output`.
 - Exit is reported asynchronously via `process/exited`.
 
@@ -153,7 +154,7 @@ Response:
 
 ### `process/write`
 
-Writes raw bytes to a running PTY-backed process stdin.
+Writes raw bytes to a running process stdin.
 
 Request params:
 
@@ -177,7 +178,7 @@ Response:
 Behavior notes:
 
 - Writes to an unknown `processId` are rejected.
-- Writes to a non-PTY process are rejected because stdin is already closed.
+- Writes to a non-PTY process are rejected unless it started with `pipeStdin`.
 
 ### `process/terminate`
 
@@ -325,7 +326,7 @@ Initialize:
 Start a process:
 
 ```json
-{"id":2,"method":"process/start","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"arg0":null}}
+{"id":2,"method":"process/start","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"pipeStdin":false,"arg0":null}}
 {"id":2,"result":{"processId":"proc-1"}}
 {"method":"process/output","params":{"processId":"proc-1","seq":1,"stream":"stdout","chunk":"cmVhZHkK"}}
 ```

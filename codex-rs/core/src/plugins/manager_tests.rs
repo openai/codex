@@ -6,7 +6,6 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::LoadedPlugin;
-use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::PluginLoadOutcome;
 use crate::plugins::marketplace_install_root;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
@@ -14,12 +13,17 @@ use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
+use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
+use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
 use toml::Value;
 use wiremock::Mock;
@@ -172,12 +176,14 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                         http_headers: None,
                         env_http_headers: None,
                     },
+                    experimental_environment: None,
                     enabled: true,
                     required: false,
                     supports_parallel_tool_calls: false,
                     disabled_reason: None,
                     startup_timeout_sec: None,
                     tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,
@@ -508,12 +514,14 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
                     http_headers: None,
                     env_http_headers: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -617,12 +625,14 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                     http_headers: None,
                     env_http_headers: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -774,12 +784,14 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
             http_headers: None,
             env_http_headers: None,
         },
+        experimental_environment: None,
         enabled: true,
         required: false,
         supports_parallel_tool_calls: false,
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
+        default_tools_approval_mode: None,
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
@@ -2477,14 +2489,10 @@ enabled = true
     );
 
     assert_eq!(
-        curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
-            tmp.path(),
-            "failed to read user config while refreshing curated plugin cache",
-            "failed to parse user config while refreshing curated plugin cache",
-        ))
-        .into_iter()
-        .map(|plugin_id| plugin_id.as_key())
-        .collect::<Vec<_>>(),
+        configured_curated_plugin_ids_from_codex_home(tmp.path())
+            .into_iter()
+            .map(|plugin_id| plugin_id.as_key())
+            .collect::<Vec<_>>(),
         vec!["slack@openai-curated".to_string()]
     );
 
@@ -2496,11 +2504,7 @@ plugins = true
     );
 
     assert_eq!(
-        curated_plugin_ids_from_config_keys(configured_plugins_from_codex_home(
-            tmp.path(),
-            "failed to read user config while refreshing curated plugin cache",
-            "failed to parse user config while refreshing curated plugin cache",
-        )),
+        configured_curated_plugin_ids_from_codex_home(tmp.path()),
         Vec::<PluginId>::new()
     );
 }
@@ -2675,6 +2679,68 @@ enabled = true
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
         )
         .expect("cache refresh should be a no-op when configured plugins are current")
+    );
+}
+
+#[test]
+fn refresh_non_curated_plugin_cache_force_reinstalls_current_local_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_plugin(&repo_root, "sample-plugin", "sample-plugin");
+    fs::write(repo_root.join("sample-plugin/skills/SKILL.md"), "new skill").unwrap();
+    write_file(
+        &repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./sample-plugin"
+      }
+    }
+  ]
+}"#,
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/debug"),
+        "sample-plugin/local",
+        "sample-plugin",
+    );
+    fs::write(
+        tmp.path()
+            .join("plugins/cache/debug/sample-plugin/local/skills/SKILL.md"),
+        "old skill",
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[plugins."sample-plugin@debug"]
+enabled = true
+"#,
+    );
+
+    assert!(
+        refresh_non_curated_plugin_cache_force_reinstall(
+            tmp.path(),
+            &[AbsolutePathBuf::try_from(repo_root).unwrap()],
+        )
+        .expect("cache refresh should reinstall unchanged local version")
+    );
+
+    assert_eq!(
+        fs::read_to_string(
+            tmp.path()
+                .join("plugins/cache/debug/sample-plugin/local/skills/SKILL.md")
+        )
+        .unwrap(),
+        "new skill"
     );
 }
 

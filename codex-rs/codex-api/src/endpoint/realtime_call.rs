@@ -119,6 +119,7 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeCallClient<T, A> {
         session_config: RealtimeSessionConfig,
         extra_headers: HeaderMap,
     ) -> Result<RealtimeCallResponse, ApiError> {
+        trace!(target: "codex_api::realtime_websocket::wire", "realtime call request SDP: {sdp}");
         // WebRTC can begin inference as soon as the peer connection comes up, so the initial
         // session payload is sent with call creation. The sideband WebSocket still sends its normal
         // session.update after it joins.
@@ -283,8 +284,11 @@ mod tests {
     struct DummyAuth;
 
     impl AuthProvider for DummyAuth {
-        fn bearer_token(&self) -> Option<String> {
-            Some("test-token".to_string())
+        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            headers.insert(
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer test-token"),
+            );
         }
     }
 

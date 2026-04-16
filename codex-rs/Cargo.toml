@@ -13,6 +13,7 @@ members = [
     "arg0",
     "feedback",
     "features",
+    "install-context",
     "codex-backend-openapi-models",
     "code-mode",
     "cloud-requirements",
@@ -27,6 +28,7 @@ members = [
     "shell-escalation",
     "skills",
     "core",
+    "core-plugins",
     "core-skills",
     "hooks",
     "instructions",
@@ -87,6 +89,7 @@ members = [
     "state",
     "terminal-detection",
     "test-binary-support",
+    "thread-store",
     "codex-experimental-api-macros",
     "plugin",
 ]
@@ -126,6 +129,7 @@ codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
+codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
 codex-exec = { path = "exec" }
 codex-exec-server = { path = "exec-server" }
@@ -133,6 +137,7 @@ codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
+codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
@@ -165,6 +170,7 @@ codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
+codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
@@ -226,6 +232,7 @@ diffy = "0.4.2"
 dirs = "6"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
+ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 encoding_rs = "0.8.35"
 env-flags = "0.1.1"
 env_logger = "0.11.9"
@@ -340,6 +347,8 @@ tracing-appender = "0.2.3"
 tracing-opentelemetry = "0.32.0"
 tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
+tonic = { version = "0.14.3", default-features = false, features = ["channel", "codegen"] }
+tonic-prost = "0.14.3"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
 ts-rs = "11"

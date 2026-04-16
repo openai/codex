@@ -305,7 +305,9 @@ impl ExecutorFileSystem for DirectFileSystem {
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
-            let metadata = tokio::fs::metadata(entry.path()).await?;
+            let Ok(metadata) = tokio::fs::metadata(entry.path()).await else {
+                continue;
+            };
             entries.push(ReadDirectoryEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_directory: metadata.is_dir(),

@@ -65,8 +65,10 @@ const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
-const REALTIME_V2_PROGRESS_UPDATE_SUFFIX: &str =
-    "\n\nUpdate from background agent (task hasn't finished yet):";
+pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
+pub(crate) const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";
+const REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
+    "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 const REALTIME_V2_STEER_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
 const REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX: &str =
@@ -209,6 +211,7 @@ impl RealtimeHandoffState {
 struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     user_text_tx: Sender<String>,
+    session_kind: RealtimeSessionKind,
     writer: RealtimeWebsocketWriter,
     handoff: RealtimeHandoffState,
     input_task: JoinHandle<()>,
@@ -243,6 +246,16 @@ impl RealtimeConversationManager {
         state
             .as_ref()
             .and_then(|state| state.realtime_active.load(Ordering::Relaxed).then_some(()))
+    }
+
+    pub(crate) async fn is_running_v2(&self) -> bool {
+        let state = self.state.lock().await;
+        matches!(
+            state.as_ref(),
+            Some(state)
+                if state.realtime_active.load(Ordering::Relaxed)
+                    && state.session_kind == RealtimeSessionKind::V2
+        )
     }
 
     async fn start(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
@@ -331,6 +344,7 @@ impl RealtimeConversationManager {
         *guard = Some(ConversationState {
             audio_tx,
             user_text_tx,
+            session_kind,
             writer,
             handoff,
             input_task: task,
@@ -406,15 +420,18 @@ impl RealtimeConversationManager {
     pub(crate) async fn text_in(&self, text: String) -> CodexResult<()> {
         let sender = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.user_text_tx.clone())
+            guard
+                .as_ref()
+                .map(|state| (state.user_text_tx.clone(), state.session_kind))
         };
 
-        let Some(sender) = sender else {
+        let Some((sender, session_kind)) = sender else {
             return Err(CodexErr::InvalidRequest(
                 "conversation is not running".to_string(),
             ));
         };
 
+        let text = prefix_realtime_text(text, REALTIME_USER_TEXT_PREFIX, session_kind);
         sender
             .send(text)
             .await
@@ -437,6 +454,11 @@ impl RealtimeConversationManager {
             return Ok(());
         };
 
+        let output_text = prefix_realtime_text(
+            output_text,
+            REALTIME_BACKEND_TEXT_PREFIX,
+            handoff.session_kind,
+        );
         *handoff.last_output_text.lock().await = Some(output_text.clone());
         handoff
             .output_tx
@@ -695,6 +717,17 @@ fn default_realtime_voice(version: RealtimeWsVersion) -> RealtimeVoice {
     }
 }
 
+fn prefix_realtime_text(text: String, prefix: &str, session_kind: RealtimeSessionKind) -> String {
+    if session_kind != RealtimeSessionKind::V2 || text.is_empty() || text.starts_with(prefix) {
+        return text;
+    }
+    format!("{prefix}{text}")
+}
+
+pub(crate) fn prefix_realtime_v2_text(text: String, prefix: &str) -> String {
+    prefix_realtime_text(text, prefix, RealtimeSessionKind::V2)
+}
+
 fn validate_realtime_voice(version: RealtimeWsVersion, voice: RealtimeVoice) -> CodexResult<()> {
     let voices = RealtimeVoicesList::builtin();
     let allowed = match version {
@@ -805,7 +838,9 @@ async fn handle_start_inner(
             if let Some(text) = maybe_routed_text {
                 debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
-                sess_for_routed_text.route_realtime_text_input(text).await;
+                sess_for_routed_text
+                    .route_realtime_text_input(wrap_realtime_delegation_input(&text))
+                    .await;
             }
             if !fanout_realtime_active.load(Ordering::Relaxed) {
                 break;
@@ -865,6 +900,20 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
     (!active_transcript.is_empty())
         .then_some(active_transcript)
         .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
+}
+
+fn wrap_realtime_delegation_input(input: &str) -> String {
+    format!(
+        "<realtime_delegation>\n  <input>{}</input>\n</realtime_delegation>",
+        escape_xml_text(input)
+    )
+}
+
+fn escape_xml_text(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
@@ -1058,18 +1107,17 @@ async fn handle_handoff_output(
                         return Ok(());
                     }
                 }
-                writer
-                    .send_conversation_item_create(format!(
-                        "{output_text}{REALTIME_V2_PROGRESS_UPDATE_SUFFIX}"
-                    ))
-                    .await
+                writer.send_conversation_item_create(output_text).await
             }
             HandoffOutput::FinalUpdate {
                 handoff_id,
-                output_text,
+                output_text: _,
             } => {
                 if let Err(err) = writer
-                    .send_conversation_handoff_append(handoff_id, output_text)
+                    .send_conversation_handoff_append(
+                        handoff_id,
+                        REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT.to_string(),
+                    )
                     .await
                 {
                     Err(err)
