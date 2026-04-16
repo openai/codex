@@ -133,6 +133,7 @@ common:ci-windows-cross-build --config=ci-bazel
 common:ci-windows-cross-build --build_metadata=TAG_os=windows-cross
 common:ci-windows-cross-build --config=remote
 common:ci-windows-cross-build --strategy=remote
+common:ci-windows-cross-build --use_target_platform_for_tests=true
 common:ci-windows-cross-build --platforms=//:local_windows
 common:ci-windows-cross-build --host_platform=//:rbe
 common:ci-windows-cross-build --shell_executable=/bin/bash
