@@ -497,6 +497,9 @@
             "tool_search": {
               "type": "boolean"
             },
+            "tool_search_token_budget_deferral": {
+              "type": "boolean"
+            },
             "tool_suggest": {
               "type": "boolean"
             },
@@ -2388,6 +2391,9 @@
           "type": "boolean"
         },
         "tool_search": {
+          "type": "boolean"
+        },
+        "tool_search_token_budget_deferral": {
           "type": "boolean"
         },
         "tool_suggest": {
