@@ -1,5 +1,4 @@
 use http::HeaderMap;
-use http::HeaderValue;
 use std::sync::Arc;
 
 /// Adds authentication headers to API requests.
@@ -9,49 +8,25 @@ use std::sync::Arc;
 /// reach this interface.
 pub trait AuthProvider: Send + Sync {
     fn add_auth_headers(&self, headers: &mut HeaderMap);
-
-    fn auth_header_attached(&self) -> bool {
-        false
-    }
-
-    fn auth_header_name(&self) -> Option<&'static str> {
-        None
-    }
 }
 
-impl<T: AuthProvider + ?Sized> AuthProvider for Arc<T> {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
-        self.as_ref().add_auth_headers(headers);
-    }
+/// Shared auth handle passed through API clients.
+pub type SharedAuthProvider = Arc<dyn AuthProvider>;
 
-    fn auth_header_attached(&self) -> bool {
-        self.as_ref().auth_header_attached()
-    }
-
-    fn auth_header_name(&self) -> Option<&'static str> {
-        self.as_ref().auth_header_name()
-    }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthHeaderTelemetry {
+    pub attached: bool,
+    pub name: Option<&'static str>,
 }
 
-pub(crate) fn add_fedramp_routing_header(headers: &mut HeaderMap) {
-    headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn add_fedramp_routing_header_sets_header() {
-        let mut headers = HeaderMap::new();
-
-        add_fedramp_routing_header(&mut headers);
-
-        assert_eq!(
-            headers
-                .get("X-OpenAI-Fedramp")
-                .and_then(|v| v.to_str().ok()),
-            Some("true")
-        );
+pub fn auth_header_telemetry(auth: &dyn AuthProvider) -> AuthHeaderTelemetry {
+    let mut headers = HeaderMap::new();
+    auth.add_auth_headers(&mut headers);
+    let name = headers
+        .contains_key(http::header::AUTHORIZATION)
+        .then_some("authorization");
+    AuthHeaderTelemetry {
+        attached: name.is_some(),
+        name,
     }
 }

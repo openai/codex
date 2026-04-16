@@ -1,6 +1,6 @@
 use super::*;
-use codex_provider_auth::SharedModelProvider;
-use codex_provider_auth::create_model_provider;
+use codex_model_provider::SharedModelProvider;
+use codex_model_provider::create_model_provider;
 
 pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
     matches!(

@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::CompactionInput;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
@@ -17,7 +17,7 @@ pub struct CompactClient<T: HttpTransport> {
 }
 
 impl<T: HttpTransport> CompactClient<T> {
-    pub fn new(transport: T, provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }

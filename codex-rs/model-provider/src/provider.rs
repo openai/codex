@@ -2,8 +2,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_api::AuthProvider;
 use codex_api::Provider;
+use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -38,17 +38,19 @@ pub struct ResolvedProviderAuth {
     /// Provider configuration adapted for the API client.
     pub api_provider: Provider,
     /// Auth provider used to attach request credentials.
-    pub api_auth: Arc<dyn AuthProvider>,
+    pub api_auth: SharedAuthProvider,
 }
 
 /// Creates the default runtime model provider for configured provider metadata.
 pub fn create_model_provider(
-    info: ModelProviderInfo,
+    provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
-    let auth_manager =
-        auth_manager.map(|auth_manager| auth_manager_for_provider(auth_manager, &info));
-    Arc::new(ConfiguredModelProvider { info, auth_manager })
+    let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
+    Arc::new(ConfiguredModelProvider {
+        info: provider_info,
+        auth_manager,
+    })
 }
 
 /// Runtime model provider backed by configured `ModelProviderInfo`.
@@ -82,5 +84,42 @@ impl ModelProvider for ConfiguredModelProvider {
             api_provider,
             api_auth,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU64;
+
+    use codex_protocol::config_types::ModelProviderAuthInfo;
+
+    use super::*;
+
+    fn provider_info_with_command_auth() -> ModelProviderInfo {
+        ModelProviderInfo {
+            auth: Some(ModelProviderAuthInfo {
+                command: "print-token".to_string(),
+                args: Vec::new(),
+                timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
+                refresh_interval_ms: 300_000,
+                cwd: std::env::current_dir()
+                    .expect("current dir should be available")
+                    .try_into()
+                    .expect("current dir should be absolute"),
+            }),
+            requires_openai_auth: false,
+            ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+        }
+    }
+
+    #[test]
+    fn create_model_provider_builds_command_auth_manager_without_base_manager() {
+        let provider = create_model_provider(provider_info_with_command_auth(), None);
+
+        let auth_manager = provider
+            .auth_manager()
+            .expect("command auth provider should have an auth manager");
+
+        assert!(auth_manager.has_external_auth());
     }
 }

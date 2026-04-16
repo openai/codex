@@ -52,9 +52,11 @@ use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::ResponsesWsRequest;
+use codex_api::SharedAuthProvider;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
+use codex_api::auth_header_telemetry;
 use codex_api::build_conversation_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
@@ -280,26 +282,26 @@ impl ModelClient {
         auth_manager: Option<Arc<AuthManager>>,
         conversation_id: ThreadId,
         installation_id: String,
-        provider: ModelProviderInfo,
+        provider_info: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
-        let provider = create_model_provider(provider, auth_manager);
-        let codex_api_key_env_enabled = provider
+        let model_provider = create_model_provider(provider_info, auth_manager);
+        let codex_api_key_env_enabled = model_provider
             .auth_manager()
             .as_ref()
             .is_some_and(|manager| manager.codex_api_key_env_enabled());
         let auth_env_telemetry =
-            collect_auth_env_telemetry(provider.info(), codex_api_key_env_enabled);
+            collect_auth_env_telemetry(model_provider.info(), codex_api_key_env_enabled);
         Self {
             state: Arc::new(ModelClientState {
                 conversation_id,
                 window_generation: AtomicU64::new(0),
                 installation_id,
-                provider,
+                provider: model_provider,
                 auth_env_telemetry,
                 session_source,
                 model_verbosity,
@@ -655,7 +657,7 @@ impl ModelClient {
         &self,
         session_telemetry: &SessionTelemetry,
         api_provider: codex_api::Provider,
-        api_auth: Arc<dyn AuthProvider>,
+        api_auth: SharedAuthProvider,
         turn_state: Option<Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
         auth_context: AuthRequestTelemetryContext,
@@ -1662,13 +1664,14 @@ impl AuthRequestTelemetryContext {
         api_auth: &dyn AuthProvider,
         retry: PendingUnauthorizedRetry,
     ) -> Self {
+        let auth_telemetry = auth_header_telemetry(api_auth);
         Self {
             auth_mode: auth_mode.map(|mode| match mode {
                 AuthMode::ApiKey => "ApiKey",
                 AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => "Chatgpt",
             }),
-            auth_header_attached: api_auth.auth_header_attached(),
-            auth_header_name: api_auth.auth_header_name(),
+            auth_header_attached: auth_telemetry.attached,
+            auth_header_name: auth_telemetry.name,
             retry_after_unauthorized: retry.retry_after_unauthorized,
             recovery_mode: retry.recovery_mode,
             recovery_phase: retry.recovery_phase,
@@ -1679,7 +1682,7 @@ impl AuthRequestTelemetryContext {
 struct WebsocketConnectParams<'a> {
     session_telemetry: &'a SessionTelemetry,
     api_provider: codex_api::Provider,
-    api_auth: Arc<dyn AuthProvider>,
+    api_auth: SharedAuthProvider,
     turn_metadata_header: Option<&'a str>,
     options: &'a ApiResponsesOptions,
     auth_context: AuthRequestTelemetryContext,

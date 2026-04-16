@@ -196,17 +196,25 @@ impl CodexThread {
     pub(crate) async fn append_message(&self, message: ResponseItem) -> CodexResult<String> {
         let submission_id = uuid::Uuid::new_v4().to_string();
         let pending_item = pending_message_input_item(&message)?;
-        if let Err(items) = self
+        if self
             .codex
             .session
             .inject_response_items(vec![pending_item])
             .await
+            .is_err()
         {
+            let turn_context = self.codex.session.new_default_turn().await;
+            if self.codex.session.reference_context_item().await.is_none() {
+                self.codex
+                    .session
+                    .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+                    .await;
+            }
             self.codex
                 .session
-                .queue_response_items_for_next_turn(items)
+                .record_conversation_items(turn_context.as_ref(), std::slice::from_ref(&message))
                 .await;
-            self.codex.session.maybe_start_turn_for_pending_work().await;
+            self.codex.session.flush_rollout().await?;
         }
 
         Ok(submission_id)

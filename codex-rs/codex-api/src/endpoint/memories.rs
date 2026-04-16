@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::MemorySummarizeInput;
 use crate::common::MemorySummarizeOutput;
 use crate::endpoint::session::EndpointSession;
@@ -17,7 +17,7 @@ pub struct MemoriesClient<T: HttpTransport> {
 }
 
 impl<T: HttpTransport> MemoriesClient<T> {
-    pub fn new(transport: T, provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -67,6 +67,7 @@ struct SummarizeResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::AuthProvider;
     use crate::common::RawMemory;
     use crate::common::RawMemoryMetadata;
     use crate::provider::RetryConfig;

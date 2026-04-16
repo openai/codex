@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::ResponseStream;
 use crate::common::ResponsesApiRequest;
 use crate::endpoint::session::EndpointSession;
@@ -38,7 +38,7 @@ pub struct ResponsesOptions {
 }
 
 impl<T: HttpTransport> ResponsesClient<T> {
-    pub fn new(transport: T, provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
             sse_telemetry: None,

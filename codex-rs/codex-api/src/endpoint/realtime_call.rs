@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::endpoint::realtime_websocket::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::session_update_session_json;
 use crate::endpoint::session::EndpointSession;
@@ -45,7 +45,7 @@ struct BackendRealtimeCallRequest<'a> {
 }
 
 impl<T: HttpTransport> RealtimeCallClient<T> {
-    pub fn new(transport: T, provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -221,6 +221,7 @@ fn decode_call_id_from_location(headers: &HeaderMap) -> Result<String, ApiError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::AuthProvider;
     use crate::endpoint::realtime_websocket::RealtimeEventParser;
     use crate::endpoint::realtime_websocket::RealtimeOutputModality;
     use crate::endpoint::realtime_websocket::RealtimeSessionMode;

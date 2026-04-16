@@ -16,7 +16,10 @@ pub use codex_client::ReqwestTransport;
 pub use codex_client::TransportError;
 
 pub use crate::api_bridge::map_api_error;
+pub use crate::auth::AuthHeaderTelemetry;
 pub use crate::auth::AuthProvider;
+pub use crate::auth::SharedAuthProvider;
+pub use crate::auth::auth_header_telemetry;
 pub use crate::common::CompactionInput;
 pub use crate::common::MemorySummarizeInput;
 pub use crate::common::MemorySummarizeOutput;

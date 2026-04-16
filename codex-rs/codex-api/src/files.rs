@@ -96,7 +96,7 @@ pub fn openai_file_uri(file_id: &str) -> String {
 
 pub async fn upload_local_file(
     base_url: &str,
-    auth: &impl AuthProvider,
+    auth: &dyn AuthProvider,
     path: &Path,
 ) -> Result<UploadedOpenAiFile, OpenAiFileError> {
     let metadata = tokio::fs::metadata(path)
@@ -252,7 +252,7 @@ pub async fn upload_local_file(
 }
 
 fn authorized_request(
-    auth: &impl AuthProvider,
+    auth: &dyn AuthProvider,
     method: reqwest::Method,
     url: &str,
 ) -> reqwest::RequestBuilder {

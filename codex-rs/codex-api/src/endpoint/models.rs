@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -16,7 +16,7 @@ pub struct ModelsClient<T: HttpTransport> {
 }
 
 impl<T: HttpTransport> ModelsClient<T> {
-    pub fn new(transport: T, provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -76,6 +76,7 @@ impl<T: HttpTransport> ModelsClient<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::AuthProvider;
     use crate::provider::RetryConfig;
     use async_trait::async_trait;
     use codex_client::Request;

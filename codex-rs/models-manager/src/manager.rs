@@ -7,6 +7,7 @@ use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::TransportError;
+use codex_api::auth_header_telemetry;
 use codex_api::map_api_error;
 use codex_app_server_protocol::AuthMode;
 use codex_feedback::FeedbackRequestTags;
@@ -205,14 +206,17 @@ impl ModelsManager {
     }
 
     /// Construct a manager with an explicit provider used for remote model refreshes.
+    // TODO(celia-oai): Revisit this ownership direction: the model provider should likely
+    // own or return the models manager instead of requiring the manager to construct and use
+    // a provider from provider info.
     pub fn new_with_provider(
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
-        provider: ModelProviderInfo,
+        provider_info: ModelProviderInfo,
     ) -> Self {
-        let provider = create_model_provider(provider, Some(auth_manager));
+        let model_provider = create_model_provider(provider_info, Some(auth_manager));
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let catalog_mode = if model_catalog.is_some() {
@@ -229,7 +233,7 @@ impl ModelsManager {
             collaboration_modes_config,
             etag: RwLock::new(None),
             cache_manager,
-            provider,
+            provider: model_provider,
         }
     }
 
@@ -440,10 +444,11 @@ impl ModelsManager {
         let auth_mode = provider_auth.auth.as_ref().map(CodexAuth::auth_mode);
         let auth_env = collect_auth_env_telemetry(self.provider.info(), codex_api_key_env_enabled);
         let transport = ReqwestTransport::new(build_reqwest_client());
+        let auth_telemetry = auth_header_telemetry(provider_auth.api_auth.as_ref());
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
-            auth_header_attached: provider_auth.api_auth.auth_header_attached(),
-            auth_header_name: provider_auth.api_auth.auth_header_name(),
+            auth_header_attached: auth_telemetry.attached,
+            auth_header_name: auth_telemetry.name,
             auth_env,
         });
         let client = ModelsClient::new(

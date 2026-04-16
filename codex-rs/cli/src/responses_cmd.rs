@@ -30,8 +30,8 @@ pub(crate) async fn run_responses_command(
     let base_auth_manager = codex_login::AuthManager::shared_from_config(
         &config, /*enable_codex_api_key_env*/ true,
     );
-    let provider = create_model_provider(config.model_provider, Some(base_auth_manager));
-    let provider_auth = provider.resolve_auth().await?;
+    let model_provider = create_model_provider(config.model_provider, Some(base_auth_manager));
+    let provider_auth = model_provider.resolve_auth().await?;
     let client = codex_api::ResponsesClient::new(
         codex_api::ReqwestTransport::new(codex_login::default_client::build_reqwest_client()),
         provider_auth.api_provider,

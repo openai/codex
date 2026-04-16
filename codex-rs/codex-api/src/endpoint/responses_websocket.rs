@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
@@ -281,11 +281,11 @@ impl ResponsesWebsocketConnection {
 
 pub struct ResponsesWebsocketClient {
     provider: Provider,
-    auth: Arc<dyn AuthProvider>,
+    auth: SharedAuthProvider,
 }
 
 impl ResponsesWebsocketClient {
-    pub fn new(provider: Provider, auth: Arc<dyn AuthProvider>) -> Self {
+    pub fn new(provider: Provider, auth: SharedAuthProvider) -> Self {
         Self { provider, auth }
     }
 

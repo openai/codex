@@ -354,10 +354,10 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let mut config = (*turn.config).clone();
-    let provider =
+    let provider_info =
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["ollama"].clone();
     config.model_provider_id = "ollama".to_string();
-    config.model_provider = provider.clone();
+    config.model_provider = provider_info.clone();
     config
         .permissions
         .approval_policy
@@ -366,7 +366,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
-    turn.provider = create_model_provider(provider, turn.auth_manager.clone());
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
     turn.config = Arc::new(config);
 
     let invocation = invocation(
