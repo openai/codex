@@ -20,6 +20,7 @@ use crate::apply_rollout_item;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_state_migrator;
 use crate::model::AgentJobRow;
+use crate::model::ThreadGoalRow;
 use crate::model::ThreadRow;
 use crate::model::anchor_from_item;
 use crate::model::datetime_to_epoch_millis;
@@ -55,6 +56,7 @@ use tracing::warn;
 
 mod agent_jobs;
 mod backfill;
+mod goals;
 mod logs;
 mod memories;
 mod remote_control;
@@ -62,6 +64,9 @@ mod remote_control;
 mod test_support;
 mod threads;
 
+pub use goals::ThreadGoalAccountingMode;
+pub use goals::ThreadGoalAccountingOutcome;
+pub use goals::ThreadGoalUpdate;
 pub use remote_control::RemoteControlEnrollmentRecord;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:

@@ -395,6 +395,9 @@
             "general_analytics": {
               "type": "boolean"
             },
+            "goal_mode": {
+              "type": "boolean"
+            },
             "guardian_approval": {
               "type": "boolean"
             },
@@ -2256,6 +2259,9 @@
           "type": "boolean"
         },
         "general_analytics": {
+          "type": "boolean"
+        },
+        "goal_mode": {
           "type": "boolean"
         },
         "guardian_approval": {

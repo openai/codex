@@ -165,6 +165,8 @@ pub enum Feature {
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
+    /// Enable persisted thread goals and automatic goal continuation.
+    GoalMode,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
@@ -847,6 +849,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
             announcement: "",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GoalMode,
+        key: "goal_mode",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

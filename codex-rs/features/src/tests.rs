@@ -122,6 +122,13 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn goal_mode_is_under_development() {
+    assert_eq!(Feature::GoalMode.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::GoalMode.default_enabled(), false);
+    assert_eq!(feature_for_key("goal_mode"), Some(Feature::GoalMode));
+}
+
+#[test]
 fn tool_suggest_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ToolSuggest.stage(), Stage::Stable);
     assert_eq!(Feature::ToolSuggest.default_enabled(), true);
