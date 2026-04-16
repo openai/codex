@@ -926,9 +926,12 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     assert!(initial_next_cursor.is_none());
     assert_eq!(initial_data.len(), 1);
     assert!(initial_data.iter().all(|app| app.is_accessible));
+    timeout(
+        DEFAULT_TIMEOUT,
+        server_control.wait_for_tools_list_finished(),
+    )
+    .await?;
 
-    let directory_gate = server_control.pause_next_directory_list();
-    let tool_list_gate = server_control.pause_next_tools_list();
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("chatgpt-token-invalid")
@@ -947,9 +950,6 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
             force_refetch: true,
         })
         .await?;
-    timeout(DEFAULT_TIMEOUT, tool_list_gate.wait_started()).await?;
-    directory_gate.release();
-    timeout(DEFAULT_TIMEOUT, directory_gate.wait_finished()).await?;
     let refetch_error: JSONRPCError = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_error_message(RequestId::Integer(refetch_request)),
@@ -957,8 +957,11 @@ async fn list_apps_force_refetch_preserves_previous_cache_on_failure() -> Result
     .await??;
     assert!(refetch_error.error.message.contains("failed to"));
 
-    tool_list_gate.release();
-    timeout(DEFAULT_TIMEOUT, tool_list_gate.wait_finished()).await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        server_control.wait_for_tools_list_finished(),
+    )
+    .await?;
 
     let cached_request = mcp
         .send_apps_list_request(AppsListParams {
@@ -1347,27 +1350,26 @@ struct AppsServerState {
     expected_bearer: String,
     expected_account_id: String,
     response: Arc<StdMutex<serde_json::Value>>,
-    directory_gate: Arc<StdMutex<Option<RequestGate>>>,
     directory_delay: Duration,
 }
 
 #[derive(Clone)]
 struct AppListMcpServer {
     tools: Arc<StdMutex<Vec<Tool>>>,
-    tools_gate: Arc<StdMutex<Option<RequestGate>>>,
     tools_delay: Duration,
+    tools_list_finished: Arc<Notify>,
 }
 
 impl AppListMcpServer {
     fn new(
         tools: Arc<StdMutex<Vec<Tool>>>,
-        tools_gate: Arc<StdMutex<Option<RequestGate>>>,
         tools_delay: Duration,
+        tools_list_finished: Arc<Notify>,
     ) -> Self {
         Self {
             tools,
-            tools_gate,
             tools_delay,
+            tools_list_finished,
         }
     }
 }
@@ -1376,8 +1378,7 @@ impl AppListMcpServer {
 struct AppsServerControl {
     response: Arc<StdMutex<serde_json::Value>>,
     tools: Arc<StdMutex<Vec<Tool>>>,
-    directory_gate: Arc<StdMutex<Option<RequestGate>>>,
-    tools_gate: Arc<StdMutex<Option<RequestGate>>>,
+    tools_list_finished: Arc<Notify>,
 }
 
 impl AppsServerControl {
@@ -1397,80 +1398,16 @@ impl AppsServerControl {
         *tools_guard = tools;
     }
 
-    fn pause_next_directory_list(&self) -> RequestGate {
-        pause_next_request(&self.directory_gate)
-    }
-
-    fn pause_next_tools_list(&self) -> RequestGate {
-        pause_next_request(&self.tools_gate)
+    async fn wait_for_tools_list_finished(&self) {
+        self.tools_list_finished.notified().await;
     }
 }
 
-#[derive(Clone)]
-struct RequestGate {
-    started: Arc<Notify>,
-    release: Arc<Notify>,
-    finished: Arc<Notify>,
-}
+struct NotifyOnDrop(Arc<Notify>);
 
-impl RequestGate {
-    fn new() -> Self {
-        Self {
-            started: Arc::new(Notify::new()),
-            release: Arc::new(Notify::new()),
-            finished: Arc::new(Notify::new()),
-        }
-    }
-
-    async fn wait_started(&self) {
-        self.started.notified().await;
-    }
-
-    fn release(&self) {
-        self.release.notify_one();
-    }
-
-    async fn wait_finished(&self) {
-        self.finished.notified().await;
-    }
-
-    async fn wait_for_release(&self) {
-        self.started.notify_one();
-        self.release.notified().await;
-    }
-}
-
-fn pause_next_request(gate_slot: &Arc<StdMutex<Option<RequestGate>>>) -> RequestGate {
-    let gate = RequestGate::new();
-    let mut gate_slot = gate_slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *gate_slot = Some(gate.clone());
-    gate
-}
-
-fn take_next_request_gate(gate_slot: &Arc<StdMutex<Option<RequestGate>>>) -> Option<RequestGate> {
-    gate_slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take()
-}
-
-struct RequestGateFinish {
-    finished: Arc<Notify>,
-}
-
-impl RequestGateFinish {
-    fn new(gate: &RequestGate) -> Self {
-        Self {
-            finished: Arc::clone(&gate.finished),
-        }
-    }
-}
-
-impl Drop for RequestGateFinish {
+impl Drop for NotifyOnDrop {
     fn drop(&mut self) {
-        self.finished.notify_one();
+        self.0.notify_one();
     }
 }
 
@@ -1489,14 +1426,10 @@ impl ServerHandler for AppListMcpServer {
     ) -> impl std::future::Future<Output = Result<ListToolsResult, rmcp::ErrorData>> + Send + '_
     {
         let tools = self.tools.clone();
-        let tools_gate = self.tools_gate.clone();
         let tools_delay = self.tools_delay;
+        let tools_list_finished = self.tools_list_finished.clone();
         async move {
-            let gate = take_next_request_gate(&tools_gate);
-            let _finish = gate.as_ref().map(RequestGateFinish::new);
-            if let Some(gate) = &gate {
-                gate.wait_for_release().await;
-            }
+            let _notify_finished = NotifyOnDrop(tools_list_finished);
             if tools_delay > Duration::ZERO {
                 tokio::time::sleep(tools_delay).await;
             }
@@ -1535,21 +1468,18 @@ async fn start_apps_server_with_delays_and_control(
         json!({ "apps": connectors, "next_token": null }),
     ));
     let tools = Arc::new(StdMutex::new(tools));
-    let directory_gate = Arc::new(StdMutex::new(None));
-    let tools_gate = Arc::new(StdMutex::new(None));
+    let tools_list_finished = Arc::new(Notify::new());
     let state = AppsServerState {
         expected_bearer: "Bearer chatgpt-token".to_string(),
         expected_account_id: "account-123".to_string(),
         response: response.clone(),
-        directory_gate: directory_gate.clone(),
         directory_delay,
     };
     let state = Arc::new(state);
     let server_control = AppsServerControl {
         response,
         tools: tools.clone(),
-        directory_gate,
-        tools_gate: tools_gate.clone(),
+        tools_list_finished: tools_list_finished.clone(),
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -1558,12 +1488,12 @@ async fn start_apps_server_with_delays_and_control(
     let mcp_service = StreamableHttpService::new(
         {
             let tools = tools.clone();
-            let tools_gate = tools_gate.clone();
+            let tools_list_finished = tools_list_finished.clone();
             move || {
                 Ok(AppListMcpServer::new(
                     tools.clone(),
-                    tools_gate.clone(),
                     tools_delay,
+                    tools_list_finished.clone(),
                 ))
             }
         },
@@ -1592,12 +1522,6 @@ async fn list_directory_connectors(
     headers: HeaderMap,
     uri: Uri,
 ) -> Result<impl axum::response::IntoResponse, StatusCode> {
-    let gate = take_next_request_gate(&state.directory_gate);
-    let _finish = gate.as_ref().map(RequestGateFinish::new);
-    if let Some(gate) = &gate {
-        gate.wait_for_release().await;
-    }
-
     if state.directory_delay > Duration::ZERO {
         tokio::time::sleep(state.directory_delay).await;
     }
