@@ -49,6 +49,12 @@ pub(crate) trait BottomPaneView: Renderable {
         None
     }
 
+    /// Active tab id for tabbed list-based views.
+    #[allow(dead_code)]
+    fn active_tab_id(&self) -> Option<&str> {
+        None
+    }
+
     /// Handle Ctrl-C while this view is active.
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         CancellationEvent::NotHandled
