@@ -269,6 +269,142 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_archive_notifies_descendants_archived_before_later_failure() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let parent_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-00-00",
+        "2025-01-01T00:00:00Z",
+        "parent",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let child_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-01-00",
+        "2025-01-01T00:01:00Z",
+        "child",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let grandchild_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-01T00-02-00",
+        "2025-01-01T00:02:00Z",
+        "grandchild",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let parent_thread_id = ThreadId::from_string(&parent_id)?;
+    let child_thread_id = ThreadId::from_string(&child_id)?;
+    let grandchild_thread_id = ThreadId::from_string(&grandchild_id)?;
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
+    state_db
+        .upsert_thread_spawn_edge(
+            parent_thread_id,
+            child_thread_id,
+            DirectionalThreadSpawnEdgeStatus::Closed,
+        )
+        .await?;
+    state_db
+        .upsert_thread_spawn_edge(
+            child_thread_id,
+            grandchild_thread_id,
+            DirectionalThreadSpawnEdgeStatus::Open,
+        )
+        .await?;
+
+    let parent_rollout_path = find_thread_path_by_id_str(codex_home.path(), &parent_id)
+        .await?
+        .expect("parent rollout path");
+    let archived_parent_path = codex_home
+        .path()
+        .join(ARCHIVED_SESSIONS_SUBDIR)
+        .join(parent_rollout_path.file_name().expect("rollout file name"));
+    std::fs::create_dir_all(&archived_parent_path)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let archive_id = mcp
+        .send_thread_archive_request(ThreadArchiveParams {
+            thread_id: parent_id.clone(),
+        })
+        .await?;
+    let archive_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(archive_id)),
+    )
+    .await??;
+    assert!(
+        archive_err
+            .error
+            .message
+            .contains("failed to archive thread"),
+        "unexpected archive error: {}",
+        archive_err.error.message
+    );
+
+    let mut archived_ids = Vec::new();
+    for _ in 0..2 {
+        let notification = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("thread/archived"),
+        )
+        .await??;
+        let archived_notification: ThreadArchivedNotification = serde_json::from_value(
+            notification
+                .params
+                .expect("thread/archived notification params"),
+        )?;
+        archived_ids.push(archived_notification.thread_id);
+    }
+    assert_eq!(archived_ids, vec![grandchild_id, child_id]);
+
+    assert!(
+        timeout(
+            std::time::Duration::from_millis(250),
+            mcp.read_stream_until_notification_message("thread/archived"),
+        )
+        .await
+        .is_err()
+    );
+
+    assert!(
+        parent_rollout_path.exists(),
+        "parent should stay active after archive failure"
+    );
+    assert!(
+        archived_parent_path.is_dir(),
+        "test conflict should remain in archived sessions"
+    );
+    for thread_id in [child_thread_id, grandchild_thread_id] {
+        assert!(
+            find_thread_path_by_id_str(codex_home.path(), &thread_id.to_string())
+                .await?
+                .is_none(),
+            "expected active rollout for {thread_id} to be archived"
+        );
+        assert!(
+            find_archived_thread_path_by_id_str(codex_home.path(), &thread_id.to_string())
+                .await?
+                .is_some(),
+            "expected archived rollout for {thread_id} to exist"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_archive_fails_when_spawned_descendant_is_missing() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

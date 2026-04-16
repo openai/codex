@@ -2803,6 +2803,14 @@ impl CodexMessageProcessor {
                     archived_thread_ids.push(thread_id.to_string());
                 }
                 Err(err) => {
+                    for thread_id in archived_thread_ids {
+                        let notification = ThreadArchivedNotification { thread_id };
+                        self.outgoing
+                            .send_server_notification(ServerNotification::ThreadArchived(
+                                notification,
+                            ))
+                            .await;
+                    }
                     self.outgoing
                         .send_error(request_id, thread_store_archive_error("archive", err))
                         .await;

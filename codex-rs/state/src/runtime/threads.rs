@@ -151,7 +151,7 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
         &self,
         root_thread_id: ThreadId,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        self.list_thread_spawn_descendants_matching(root_thread_id, None)
+        self.list_thread_spawn_descendants_matching(root_thread_id, /*status*/ None)
             .await
     }
 
