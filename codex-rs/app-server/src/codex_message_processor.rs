@@ -9519,8 +9519,18 @@ fn summary_from_stored_thread(
         conversation_id: thread.thread_id,
         path,
         preview: thread.first_user_message.unwrap_or(thread.preview),
-        timestamp: Some(thread.created_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
-        updated_at: Some(thread.updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)),
+        // Preserve millisecond precision from the thread store so thread/list cursors
+        // round-trip the same ordering key used by pagination queries.
+        timestamp: Some(
+            thread
+                .created_at
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+        ),
+        updated_at: Some(
+            thread
+                .updated_at
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+        ),
         model_provider: if thread.model_provider.is_empty() {
             fallback_provider.to_string()
         } else {
@@ -10115,11 +10125,17 @@ mod tests {
     use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
+    use chrono::DateTime;
+    use chrono::Utc;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::AskForApproval;
+    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_thread_store::StoredThread;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -10167,6 +10183,53 @@ mod tests {
             defer_loading: false,
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
+    fn summary_from_stored_thread_preserves_millisecond_precision() {
+        let created_at =
+            DateTime::parse_from_rfc3339("2025-01-02T03:04:05.678Z").expect("valid timestamp");
+        let updated_at =
+            DateTime::parse_from_rfc3339("2025-01-02T03:04:06.789Z").expect("valid timestamp");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread");
+        let stored_thread = StoredThread {
+            thread_id,
+            rollout_path: Some(PathBuf::from("/tmp/thread.jsonl")),
+            forked_from_id: None,
+            preview: "preview".to_string(),
+            name: None,
+            model_provider: "openai".to_string(),
+            model: None,
+            reasoning_effort: None,
+            created_at: created_at.with_timezone(&Utc),
+            updated_at: updated_at.with_timezone(&Utc),
+            archived_at: None,
+            cwd: PathBuf::from("/tmp"),
+            cli_version: "0.0.0".to_string(),
+            source: SessionSource::Cli,
+            agent_nickname: None,
+            agent_role: None,
+            agent_path: None,
+            git_info: None,
+            approval_mode: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            token_usage: None,
+            first_user_message: Some("first user message".to_string()),
+            history: None,
+        };
+
+        let summary =
+            summary_from_stored_thread(stored_thread, "fallback").expect("summary should exist");
+
+        assert_eq!(
+            summary.timestamp.as_deref(),
+            Some("2025-01-02T03:04:05.678Z")
+        );
+        assert_eq!(
+            summary.updated_at.as_deref(),
+            Some("2025-01-02T03:04:06.789Z")
+        );
     }
 
     #[test]
