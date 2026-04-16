@@ -758,12 +758,13 @@ impl McpConnectionManager {
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
             join_set.spawn(async move {
-                let outcome = async_managed_client.client().await;
+                let mut outcome = async_managed_client.client().await;
                 if cancel_token.is_cancelled() {
-                    return (server_name, Err(StartupOutcomeError::Cancelled));
+                    outcome = Err(StartupOutcomeError::Cancelled);
                 }
                 let status = match &outcome {
                     Ok(_) => McpStartupStatus::Ready,
+                    Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
                     Err(error) => {
                         let error_str = mcp_init_error_display(
                             server_name.as_str(),
