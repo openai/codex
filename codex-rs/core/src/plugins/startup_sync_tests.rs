@@ -10,6 +10,8 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -678,6 +680,8 @@ enabled = false
         tmp.path().to_path_buf(),
         config,
         auth_manager,
+        TaskTracker::new(),
+        CancellationToken::new(),
     );
 
     let marker_path = tmp.path().join(STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE);

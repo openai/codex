@@ -34,6 +34,8 @@ approval_policy = "never"
 sandbox_mode = "danger-full-access"
 
 [features]
+apps = false
+plugins = false
 shell_snapshot = false
 "#,
     )

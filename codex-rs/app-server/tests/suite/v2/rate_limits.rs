@@ -235,5 +235,15 @@ async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
 
 fn write_chatgpt_base_url(codex_home: &Path, base_url: &str) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
-    std::fs::write(config_toml, format!("chatgpt_base_url = \"{base_url}\"\n"))
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"chatgpt_base_url = "{base_url}"
+
+[features]
+apps = false
+plugins = false
+"#
+        ),
+    )
 }

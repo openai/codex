@@ -173,7 +173,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
                 "print(42)".to_string(),
             ],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "call-approve",
         )?,
         create_final_assistant_message_sse_response("done")?,
@@ -426,7 +426,13 @@ fn create_config_toml(
     approval_policy: &str,
     feature_flags: &BTreeMap<Feature, bool>,
 ) -> std::io::Result<()> {
-    let feature_entries = feature_flags
+    let mut features = BTreeMap::new();
+    features.insert(Feature::Apps, false);
+    features.insert(Feature::Plugins, false);
+    for (feature, enabled) in feature_flags {
+        features.insert(*feature, *enabled);
+    }
+    let feature_entries = features
         .iter()
         .map(|(feature, enabled)| {
             let key = FEATURES

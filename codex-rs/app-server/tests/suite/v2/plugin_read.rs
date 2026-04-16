@@ -160,6 +160,7 @@ description: Visible only for ChatGPT
     std::fs::write(
         codex_home.path().join("config.toml"),
         r#"[features]
+apps = false
 plugins = true
 
 [[skills.config]]
@@ -543,6 +544,7 @@ fn write_plugins_enabled_config(codex_home: &TempDir) -> Result<()> {
     std::fs::write(
         codex_home.path().join("config.toml"),
         r#"[features]
+apps = false
 plugins = true
 "#,
     )?;
@@ -690,6 +692,7 @@ chatgpt_base_url = "{base_url}"
 mcp_oauth_credentials_store = "file"
 
 [features]
+apps = false
 plugins = true
 connectors = true
 "#

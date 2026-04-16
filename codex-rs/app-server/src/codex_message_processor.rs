@@ -2334,6 +2334,10 @@ impl CodexMessageProcessor {
         {
             warn!("timed out waiting for background tasks to shut down; proceeding");
         }
+        self.thread_manager
+            .plugins_manager()
+            .drain_background_tasks()
+            .await;
     }
 
     pub(crate) async fn cancel_active_login(&self) {

@@ -38,6 +38,7 @@ fn write_plugins_enabled_config(codex_home: &std::path::Path) -> std::io::Result
     std::fs::write(
         codex_home.join("config.toml"),
         r#"[features]
+apps = false
 plugins = true
 "#,
     )
@@ -335,6 +336,7 @@ async fn plugin_list_includes_install_and_enabled_state_from_config() -> Result<
     std::fs::write(
         codex_home.path().join("config.toml"),
         r#"[features]
+apps = false
 plugins = true
 
 [plugins."enabled-plugin@codex-curated"]
@@ -448,6 +450,7 @@ async fn plugin_list_uses_home_config_for_enabled_state() -> Result<()> {
     std::fs::write(
         codex_home.path().join("config.toml"),
         r#"[features]
+apps = false
 plugins = true
 
 [plugins."shared-plugin@codex-curated"]
@@ -1133,6 +1136,7 @@ fn write_plugin_sync_config(codex_home: &std::path::Path, base_url: &str) -> std
 chatgpt_base_url = "{base_url}"
 
 [features]
+apps = false
 plugins = true
 
 [plugins."linear@openai-curated"]

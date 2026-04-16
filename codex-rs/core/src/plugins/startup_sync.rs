@@ -11,6 +11,8 @@ use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
 use reqwest::Client;
 use serde::Deserialize;
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::info;
 use tracing::warn;
 use zip::ZipArchive;
@@ -234,18 +236,27 @@ pub(super) fn start_startup_remote_plugin_sync_once(
     codex_home: PathBuf,
     config: Config,
     auth_manager: Arc<AuthManager>,
+    background_tasks: TaskTracker,
+    shutdown: CancellationToken,
 ) {
     let marker_path = startup_remote_plugin_sync_marker_path(codex_home.as_path());
     if marker_path.is_file() {
         return;
     }
 
-    tokio::spawn(async move {
+    background_tasks.spawn(async move {
+        if shutdown.is_cancelled() {
+            return;
+        }
         if marker_path.is_file() {
             return;
         }
 
-        if !wait_for_startup_remote_plugin_sync_prerequisites(codex_home.as_path()).await {
+        let prerequisites_ready = tokio::select! {
+            _ = shutdown.cancelled() => return,
+            ready = wait_for_startup_remote_plugin_sync_prerequisites(codex_home.as_path()) => ready,
+        };
+        if !prerequisites_ready {
             warn!(
                 codex_home = %codex_home.display(),
                 "skipping startup remote plugin sync because curated marketplace is not ready"
@@ -253,11 +264,15 @@ pub(super) fn start_startup_remote_plugin_sync_once(
             return;
         }
 
-        let auth = auth_manager.auth().await;
-        match manager
-            .sync_plugins_from_remote(&config, auth.as_ref(), /*additive_only*/ true)
-            .await
-        {
+        let auth = tokio::select! {
+            _ = shutdown.cancelled() => return,
+            auth = auth_manager.auth() => auth,
+        };
+        let result = tokio::select! {
+            _ = shutdown.cancelled() => return,
+            result = manager.sync_plugins_from_remote(&config, auth.as_ref(), /*additive_only*/ true) => result,
+        };
+        match result {
             Ok(sync_result) => {
                 info!(
                     installed_plugin_ids = ?sync_result.installed_plugin_ids,

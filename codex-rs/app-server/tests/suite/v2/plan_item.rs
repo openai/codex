@@ -250,7 +250,11 @@ async fn wait_for_responses_request_count(
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let features = BTreeMap::from([(Feature::CollaborationModes, true)]);
+    let features = BTreeMap::from([
+        (Feature::Apps, false),
+        (Feature::CollaborationModes, true),
+        (Feature::Plugins, false),
+    ]);
     let feature_entries = features
         .into_iter()
         .map(|(feature, enabled)| {

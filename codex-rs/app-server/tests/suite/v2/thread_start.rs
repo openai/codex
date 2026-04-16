@@ -883,6 +883,10 @@ model = "mock-model"
 
 model_provider = "mock_provider"
 
+[features]
+apps = false
+plugins = false
+
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
@@ -918,6 +922,8 @@ chatgpt_base_url = "{chatgpt_base_url}"
 model_provider = "mock_provider"
 
 [features]
+apps = false
+plugins = false
 {general_analytics_toml}
 
 [model_providers.mock_provider]
@@ -945,6 +951,10 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+
+[features]
+apps = false
+plugins = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
@@ -976,6 +986,10 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+
+[features]
+apps = false
+plugins = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

@@ -308,6 +308,8 @@ model_provider = "mock_provider"
 {extra}
 
 [features]
+apps = false
+plugins = false
 shell_snapshot = false
 
 [model_providers.mock_provider]

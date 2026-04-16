@@ -124,6 +124,8 @@ model_provider = "mock_provider"
 suppress_unstable_features_warning = true
 
 [features]
+apps = false
+plugins = false
 sqlite = true
 
 [model_providers.mock_provider]

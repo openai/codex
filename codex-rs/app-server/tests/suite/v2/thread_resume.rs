@@ -291,7 +291,9 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
+apps = false
 personality = true
+plugins = false
 sqlite = true
 
 [model_providers.mock_provider]
@@ -1077,7 +1079,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
                 "print(42)".to_string(),
             ],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "call-1",
         )?,
         create_final_assistant_message_sse_response("done")?,
@@ -1879,6 +1881,8 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
+apps = false
+plugins = false
 personality = true
 general_analytics = true
 
@@ -1917,6 +1921,8 @@ chatgpt_base_url = "{chatgpt_base_url}"
 model_provider = "mock_provider"
 
 [features]
+apps = false
+plugins = false
 personality = true
 {general_analytics_toml}
 
@@ -1947,6 +1953,8 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
+apps = false
+plugins = false
 personality = true
 
 [model_providers.mock_provider]

@@ -534,7 +534,7 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
-        "[features]\nplugins = true\n",
+        "[features]\napps = false\nplugins = true\n",
     )?;
     let repo_root = TempDir::new()?;
     write_plugin_marketplace(
@@ -743,7 +743,9 @@ chatgpt_base_url = "{base_url}"
 mcp_oauth_credentials_store = "file"
 
 [features]
+apps = false
 connectors = true
+plugins = false
 "#
         ),
     )
@@ -752,7 +754,14 @@ connectors = true
 fn write_analytics_config(codex_home: &std::path::Path, base_url: &str) -> std::io::Result<()> {
     std::fs::write(
         codex_home.join("config.toml"),
-        format!("chatgpt_base_url = \"{base_url}\"\n"),
+        format!(
+            r#"chatgpt_base_url = "{base_url}"
+
+[features]
+apps = false
+plugins = false
+"#
+        ),
     )
 }
 
@@ -767,6 +776,7 @@ fn write_plugin_remote_sync_config(
 chatgpt_base_url = "{base_url}"
 
 [features]
+apps = false
 plugins = true
 "#
         ),

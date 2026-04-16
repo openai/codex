@@ -78,6 +78,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use toml_edit::value;
 use tracing::info;
 use tracing::warn;
@@ -347,6 +349,8 @@ pub struct PluginsManager {
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
     remote_sync_lock: Mutex<()>,
+    background_tasks: TaskTracker,
+    background_task_shutdown: CancellationToken,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
@@ -377,6 +381,8 @@ impl PluginsManager {
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             cached_enabled_outcome: RwLock::new(None),
             remote_sync_lock: Mutex::new(()),
+            background_tasks: TaskTracker::new(),
+            background_task_shutdown: CancellationToken::new(),
             restriction_product,
             analytics_events_client: RwLock::new(None),
         }
@@ -1100,55 +1106,58 @@ impl PluginsManager {
     ) {
         if config.features.enabled(Feature::Plugins) {
             self.start_curated_repo_sync();
-            let should_spawn_marketplace_auto_upgrade = {
-                let mut state = match self.configured_marketplace_upgrade_state.write() {
-                    Ok(state) => state,
-                    Err(err) => err.into_inner(),
-                };
-                if state.in_flight {
-                    false
-                } else {
-                    state.in_flight = true;
-                    true
-                }
-            };
-            if should_spawn_marketplace_auto_upgrade {
-                let manager = Arc::clone(self);
-                let config = config.clone();
-                if let Err(err) = std::thread::Builder::new()
-                    .name("plugins-marketplace-auto-upgrade".to_string())
-                    .spawn(move || {
-                        let outcome = manager.upgrade_configured_marketplaces_for_config(
-                            &config, /*marketplace_name*/ None,
-                        );
-                        match outcome {
-                            Ok(outcome) => {
-                                for error in outcome.errors {
-                                    warn!(
-                                        marketplace = error.marketplace_name,
-                                        error = %error.message,
-                                        "failed to auto-upgrade configured marketplace"
-                                    );
-                                }
-                            }
-                            Err(err) => {
-                                warn!("failed to auto-upgrade configured marketplaces: {err}");
-                            }
-                        }
-
-                        let mut state = match manager.configured_marketplace_upgrade_state.write() {
-                            Ok(state) => state,
-                            Err(err) => err.into_inner(),
-                        };
-                        state.in_flight = false;
-                    })
-                {
+            if !configured_git_marketplace_names(config).is_empty() {
+                let should_spawn_marketplace_auto_upgrade = {
                     let mut state = match self.configured_marketplace_upgrade_state.write() {
                         Ok(state) => state,
                         Err(err) => err.into_inner(),
                     };
-                    state.in_flight = false;
-                    warn!("failed to start configured marketplace auto-upgrade task: {err}");
+                    if state.in_flight {
+                        false
+                    } else {
+                        state.in_flight = true;
+                        true
+                    }
+                };
+                if should_spawn_marketplace_auto_upgrade {
+                    let manager = Arc::clone(self);
+                    let config = config.clone();
+                    if let Err(err) = std::thread::Builder::new()
+                        .name("plugins-marketplace-auto-upgrade".to_string())
+                        .spawn(move || {
+                            let outcome = manager.upgrade_configured_marketplaces_for_config(
+                                &config, /*marketplace_name*/ None,
+                            );
+                            match outcome {
+                                Ok(outcome) => {
+                                    for error in outcome.errors {
+                                        warn!(
+                                            marketplace = error.marketplace_name,
+                                            error = %error.message,
+                                            "failed to auto-upgrade configured marketplace"
+                                        );
+                                    }
+                                }
+                                Err(err) => {
+                                    warn!("failed to auto-upgrade configured marketplaces: {err}");
+                                }
+                            }
+
+                            let mut state =
+                                match manager.configured_marketplace_upgrade_state.write() {
+                                    Ok(state) => state,
+                                    Err(err) => err.into_inner(),
+                                };
+                            state.in_flight = false;
+                        })
+                    {
+                        let mut state = match self.configured_marketplace_upgrade_state.write() {
+                            Ok(state) => state,
+                            Err(err) => err.into_inner(),
+                        };
+                        state.in_flight = false;
+                        warn!("failed to start configured marketplace auto-upgrade task: {err}");
+                    }
                 }
             }
             start_startup_remote_plugin_sync_once(
@@ -1156,22 +1165,44 @@ impl PluginsManager {
                 self.codex_home.clone(),
                 config.clone(),
                 auth_manager.clone(),
+                self.background_tasks.clone(),
+                self.background_task_shutdown.clone(),
             );
 
             let config = config.clone();
             let manager = Arc::clone(self);
-            tokio::spawn(async move {
-                let auth = auth_manager.auth().await;
-                if let Err(err) = manager
-                    .featured_plugin_ids_for_config(&config, auth.as_ref())
-                    .await
-                {
-                    warn!(
-                        error = %err,
-                        "failed to warm featured plugin ids cache"
-                    );
+            let shutdown = self.background_task_shutdown.clone();
+            self.background_tasks.spawn(async move {
+                let auth = tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    auth = auth_manager.auth() => auth,
+                };
+                tokio::select! {
+                    _ = shutdown.cancelled() => {}
+                    result = manager.featured_plugin_ids_for_config(&config, auth.as_ref()) => {
+                        if let Err(err) = result {
+                            warn!(
+                                error = %err,
+                                "failed to warm featured plugin ids cache"
+                            );
+                        }
+                    }
                 }
             });
+        }
+    }
+
+    pub async fn drain_background_tasks(&self) {
+        self.background_task_shutdown.cancel();
+        self.background_tasks.close();
+        if tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            self.background_tasks.wait(),
+        )
+        .await
+        .is_err()
+        {
+            warn!("timed out waiting for plugin background tasks to shut down; proceeding");
         }
     }
 
@@ -1284,7 +1315,9 @@ impl PluginsManager {
         let manager = Arc::clone(self);
         if let Err(err) = std::thread::Builder::new()
             .name("plugins-non-curated-cache-refresh".to_string())
-            .spawn(move || manager.run_non_curated_plugin_cache_refresh_loop())
+            .spawn(move || {
+                manager.run_non_curated_plugin_cache_refresh_loop();
+            })
         {
             let mut state = match self.non_curated_cache_refresh_state.write() {
                 Ok(state) => state,
@@ -1300,7 +1333,7 @@ impl PluginsManager {
         if CURATED_REPO_SYNC_STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
-        let manager = Arc::clone(self);
+        let manager = Arc::downgrade(self);
         let codex_home = self.codex_home.clone();
         if let Err(err) = std::thread::Builder::new()
             .name("plugins-curated-repo-sync".to_string())
@@ -1320,12 +1353,14 @@ impl PluginsManager {
                             &configured_curated_plugin_ids,
                         ) {
                             Ok(cache_refreshed) => {
-                                if cache_refreshed {
+                                if cache_refreshed && let Some(manager) = manager.upgrade() {
                                     manager.clear_cache();
                                 }
                             }
                             Err(err) => {
-                                manager.clear_cache();
+                                if let Some(manager) = manager.upgrade() {
+                                    manager.clear_cache();
+                                }
                                 CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
                                 warn!("failed to refresh curated plugin cache after sync: {err}");
                             }

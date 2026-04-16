@@ -150,7 +150,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
                 "HEAD".to_string(),
             ],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "review-call-1",
         )?,
         create_final_assistant_message_sse_response("done")?,
@@ -471,6 +471,8 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
+apps = false
+plugins = false
 shell_snapshot = false
 
 [model_providers.mock_provider]

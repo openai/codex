@@ -45,6 +45,8 @@ sandbox_mode = "danger-full-access"
 model_provider = "mock_provider"
 
 [features]
+apps = false
+plugins = false
 shell_snapshot = false
 
 [model_providers.mock_provider]
@@ -69,6 +71,8 @@ approval_policy = "never"
 sandbox_mode = "danger-full-access"
 
 [features]
+apps = false
+plugins = false
 shell_snapshot = false
 "#,
     )
@@ -84,6 +88,8 @@ sandbox_mode = "danger-full-access"
 forced_login_method = "{forced_method}"
 
 [features]
+apps = false
+plugins = false
 shell_snapshot = false
 "#
     );

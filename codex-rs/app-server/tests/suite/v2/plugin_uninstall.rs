@@ -32,6 +32,7 @@ async fn plugin_uninstall_removes_plugin_cache_and_config_entry() -> Result<()> 
     std::fs::write(
         codex_home.path().join("config.toml"),
         r#"[features]
+apps = false
 plugins = true
 
 [plugins."sample-plugin@debug"]
@@ -88,6 +89,7 @@ async fn plugin_uninstall_force_remote_sync_calls_remote_uninstall_first() -> Re
             r#"chatgpt_base_url = "{}/backend-api/"
 
 [features]
+apps = false
 plugins = true
 
 [plugins."sample-plugin@debug"]
@@ -153,7 +155,7 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
-            "chatgpt_base_url = \"{}\"\n\n[features]\nplugins = true\n\n[plugins.\"sample-plugin@debug\"]\nenabled = true\n",
+            "chatgpt_base_url = \"{}\"\n\n[features]\napps = false\nplugins = true\n\n[plugins.\"sample-plugin@debug\"]\nenabled = true\n",
             analytics_server.uri()
         ),
     )?;

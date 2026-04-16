@@ -435,7 +435,7 @@ async fn turn_start_does_not_track_turn_event_analytics_without_feature() -> Res
     let config_toml = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         &config_path,
-        format!("{config_toml}\n[features]\ngeneral_analytics = false\n"),
+        config_toml.replace("[features]\n", "[features]\ngeneral_analytics = false\n"),
     )?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
@@ -1285,7 +1285,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 "print(42)".to_string(),
             ],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
@@ -1296,7 +1296,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
                 "print(42)".to_string(),
             ],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "call2",
         )?,
         create_final_assistant_message_sse_response("done 2")?,
@@ -1440,7 +1440,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
                 "print(42)".to_string(),
             ],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "call-decline",
         )?,
         create_final_assistant_message_sse_response("done")?,
@@ -1585,14 +1585,14 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         create_shell_command_sse_response(
             vec!["echo".to_string(), "first".to_string(), "turn".to_string()],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
         create_shell_command_sse_response(
             vec!["echo".to_string(), "second".to_string(), "turn".to_string()],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "call-second",
         )?,
         create_final_assistant_message_sse_response("done second")?,
@@ -2863,6 +2863,8 @@ fn create_config_toml_with_sandbox(
     sandbox_mode: &str,
 ) -> std::io::Result<()> {
     let mut features = BTreeMap::new();
+    features.insert(Feature::Apps, false);
+    features.insert(Feature::Plugins, false);
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
     }

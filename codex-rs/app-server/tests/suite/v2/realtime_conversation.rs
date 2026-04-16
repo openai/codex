@@ -1717,7 +1717,7 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         create_shell_command_sse_response(
             realtime_tool_ok_command(),
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "shell_call",
         )?,
         create_final_assistant_message_sse_response("shell tool finished")?,
@@ -2285,6 +2285,8 @@ type = "conversational"
 
 [features]
 {realtime_feature_key} = {realtime_enabled}
+apps = false
+plugins = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

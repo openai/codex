@@ -1053,6 +1053,8 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
     let fixture = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
+            let _ = config.features.disable(Feature::Apps);
+            let _ = config.features.disable(Feature::Plugins);
             insert_mcp_server(
                 config,
                 server_name,

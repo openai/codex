@@ -293,6 +293,10 @@ fn create_minimal_config(codex_home: &std::path::Path) -> std::io::Result<()> {
         r#"
 model = "mock-model"
 approval_policy = "never"
+
+[features]
+apps = false
+plugins = false
 "#,
     )
 }
@@ -308,6 +312,10 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+
+[features]
+apps = false
+plugins = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
@@ -534,6 +542,8 @@ approval_policy = "never"
 suppress_unstable_features_warning = true
 
 [features]
+apps = false
+plugins = false
 sqlite = true
 "#,
     )?;

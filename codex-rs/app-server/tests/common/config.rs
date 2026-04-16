@@ -14,6 +14,8 @@ pub fn write_mock_responses_config_toml(
 ) -> std::io::Result<()> {
     // Phase 1: build the features block for config.toml.
     let mut features = BTreeMap::new();
+    features.insert(Feature::Apps, false);
+    features.insert(Feature::Plugins, false);
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
     }
@@ -95,6 +97,10 @@ sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
+
+[features]
+apps = false
+plugins = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

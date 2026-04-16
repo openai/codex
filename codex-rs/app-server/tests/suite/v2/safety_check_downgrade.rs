@@ -231,8 +231,10 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
-remote_models = false
+apps = false
 personality = true
+plugins = false
+remote_models = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

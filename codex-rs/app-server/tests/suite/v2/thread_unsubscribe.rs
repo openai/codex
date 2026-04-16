@@ -130,9 +130,9 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
 async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     #[cfg(target_os = "windows")]
     let shell_command = vec![
-        "powershell".to_string(),
-        "-Command".to_string(),
-        "Start-Sleep -Seconds 1".to_string(),
+        "Start-Sleep".to_string(),
+        "-Seconds".to_string(),
+        "1".to_string(),
     ];
     #[cfg(not(target_os = "windows"))]
     let shell_command = vec!["sleep".to_string(), "1".to_string()];
@@ -374,6 +374,10 @@ approval_policy = "never"
 sandbox_mode = "danger-full-access"
 
 model_provider = "mock_provider"
+
+[features]
+apps = false
+plugins = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

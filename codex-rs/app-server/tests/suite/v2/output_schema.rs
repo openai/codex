@@ -222,6 +222,10 @@ sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 
+[features]
+apps = false
+plugins = false
+
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"

@@ -149,6 +149,8 @@ request_max_retries = 0
 stream_max_retries = 0
 
 [features]
+apps = false
+plugins = false
 request_permissions_tool = true
 "#
         ),

@@ -203,6 +203,7 @@ mcp_oauth_credentials_store = "file"
 
 [features]
 connectors = false
+plugins = false
 "#
         ),
     )?;
@@ -282,6 +283,7 @@ chatgpt_base_url = "{server_url}"
 
 [features]
 connectors = true
+plugins = false
 
 [apps.beta]
 enabled = false
@@ -1527,6 +1529,7 @@ mcp_oauth_credentials_store = "file"
 
 [features]
 connectors = true
+plugins = false
 "#
         ),
     )

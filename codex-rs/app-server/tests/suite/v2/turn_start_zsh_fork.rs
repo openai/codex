@@ -72,7 +72,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     let response = create_shell_command_sse_response(
         vec!["/bin/sh".to_string(), "-c".to_string(), wait_for_interrupt],
         /*workdir*/ None,
-        Some(5000),
+        Some(10_000),
         "call-zsh-fork",
     )?;
     let no_op_response = responses::sse(vec![
@@ -198,7 +198,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
                 "print(42)".to_string(),
             ],
             /*workdir*/ None,
-            Some(5000),
+            Some(10_000),
             "call-zsh-fork-decline",
         )?,
         create_final_assistant_message_sse_response("done")?,
@@ -333,7 +333,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
             "print(42)".to_string(),
         ],
         /*workdir*/ None,
-        Some(5000),
+        Some(10_000),
         "call-zsh-fork-cancel",
     )?];
     let server = create_mock_responses_server_sequence(responses).await;
@@ -751,7 +751,11 @@ fn create_config_toml(
     feature_flags: &BTreeMap<Feature, bool>,
     zsh_path: &Path,
 ) -> std::io::Result<()> {
-    let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
+    let mut features = BTreeMap::from([
+        (Feature::Apps, false),
+        (Feature::RemoteModels, false),
+        (Feature::Plugins, false),
+    ]);
     for (feature, enabled) in feature_flags {
         features.insert(*feature, *enabled);
     }
