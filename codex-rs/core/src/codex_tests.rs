@@ -5524,6 +5524,45 @@ async fn interrupt_pauses_active_goal_and_prevents_continuation() -> anyhow::Res
 }
 
 #[tokio::test]
+async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should remain persisted after interrupt");
+    assert_eq!(
+        codex_protocol::protocol::ThreadGoalStatus::Paused,
+        goal.status
+    );
+    assert_eq!(40, goal.tokens_used);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn goal_continuation_refreshes_stale_cached_status() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
