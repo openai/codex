@@ -134,7 +134,7 @@ impl SessionState {
             self.prefix_compact,
             PrefixCompactState::Running { generation } if generation == candidate.generation
         ) {
-            self.prefix_compact = PrefixCompactState::Ready(candidate);
+            self.prefix_compact = PrefixCompactState::Ready(Box::new(candidate));
         }
     }
 
@@ -165,7 +165,7 @@ impl SessionState {
             && current_history[..candidate.base_history.len()] == candidate.base_history;
 
         if prefix_is_current {
-            Some(candidate)
+            Some(*candidate)
         } else {
             None
         }
@@ -307,7 +307,7 @@ enum PrefixCompactState {
     Running {
         generation: u64,
     },
-    Ready(PrefixCompactCandidate),
+    Ready(Box<PrefixCompactCandidate>),
 }
 
 #[derive(Debug, Clone)]
