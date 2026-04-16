@@ -8893,6 +8893,7 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
             path,
             ref_name,
             sha,
+            ..
         } => PluginSource::Git {
             url,
             path,

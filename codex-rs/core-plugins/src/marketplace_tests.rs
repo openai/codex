@@ -142,6 +142,10 @@ fn resolve_marketplace_plugin_supports_git_subdir_sources() {
                 path: Some("plugins/toolkit".to_string()),
                 ref_name: Some("main".to_string()),
                 sha: Some("abc123".to_string()),
+                materialized_path: AbsolutePathBuf::try_from(
+                    repo_root.join(".codex-remote-sources/remote-plugin/checkout/plugins/toolkit"),
+                )
+                .unwrap(),
             },
             auth_policy: MarketplacePluginAuthPolicy::OnInstall,
         }
@@ -831,6 +835,10 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                     path: None,
                     ref_name: None,
                     sha: None,
+                    materialized_path: AbsolutePathBuf::try_from(
+                        repo_root.join(".codex-remote-sources/url-plugin/checkout"),
+                    )
+                    .unwrap(),
                 },
                 policy: MarketplacePluginPolicy {
                     installation: MarketplacePluginInstallPolicy::Available,
@@ -846,6 +854,12 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                     path: Some("plugins/example".to_string()),
                     ref_name: Some("main".to_string()),
                     sha: Some("abc123".to_string()),
+                    materialized_path: AbsolutePathBuf::try_from(
+                        repo_root.join(
+                            ".codex-remote-sources/git-subdir-plugin/checkout/plugins/example",
+                        )
+                    )
+                    .unwrap(),
                 },
                 policy: MarketplacePluginPolicy {
                     installation: MarketplacePluginInstallPolicy::Available,

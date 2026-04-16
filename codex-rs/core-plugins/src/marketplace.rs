@@ -5,6 +5,7 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_git_utils::get_git_repo_root;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
+use codex_plugin::validate_plugin_segment;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
@@ -72,6 +73,7 @@ pub enum MarketplacePluginSource {
         path: Option<String>,
         ref_name: Option<String>,
         sha: Option<String>,
+        materialized_path: AbsolutePathBuf,
     },
 }
 
@@ -288,7 +290,10 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
             MarketplacePluginSource::Local { path } => {
                 load_plugin_manifest(path.as_path()).and_then(|manifest| manifest.interface)
             }
-            MarketplacePluginSource::Git { .. } => None,
+            MarketplacePluginSource::Git {
+                materialized_path, ..
+            } => load_plugin_manifest(materialized_path.as_path())
+                .and_then(|manifest| manifest.interface),
         };
         if let Some(category) = category {
             // Marketplace taxonomy wins when both sources provide a category.
@@ -409,7 +414,7 @@ fn resolve_supported_plugin_source(
             );
             None
         }
-        source => match resolve_plugin_source(marketplace_path, source) {
+        source => match resolve_plugin_source(marketplace_path, plugin_name, source) {
             Ok(source) => Some(source),
             Err(err) => {
                 warn!(
@@ -426,6 +431,7 @@ fn resolve_supported_plugin_source(
 
 fn resolve_plugin_source(
     marketplace_path: &AbsolutePathBuf,
+    plugin_name: &str,
     source: RawMarketplaceManifestPluginSource,
 ) -> Result<MarketplacePluginSource, MarketplaceError> {
     match source {
@@ -442,15 +448,23 @@ fn resolve_plugin_source(
                 ref_name,
                 sha,
             },
-        ) => Ok(MarketplacePluginSource::Git {
-            url: normalize_git_plugin_source_url(marketplace_path, &url)?,
-            path: path
+        ) => {
+            let path = path
                 .as_deref()
                 .map(|path| normalize_remote_plugin_subdir(marketplace_path, path))
-                .transpose()?,
-            ref_name: normalize_optional_git_selector(&ref_name),
-            sha: normalize_optional_git_selector(&sha),
-        }),
+                .transpose()?;
+            Ok(MarketplacePluginSource::Git {
+                url: normalize_git_plugin_source_url(marketplace_path, &url)?,
+                materialized_path: materialized_git_plugin_source_path(
+                    marketplace_path,
+                    plugin_name,
+                    path.as_deref(),
+                )?,
+                path,
+                ref_name: normalize_optional_git_selector(&ref_name),
+                sha: normalize_optional_git_selector(&sha),
+            })
+        }
         RawMarketplaceManifestPluginSource::Object(
             RawMarketplaceManifestPluginSourceObject::GitSubdir {
                 url,
@@ -458,12 +472,20 @@ fn resolve_plugin_source(
                 ref_name,
                 sha,
             },
-        ) => Ok(MarketplacePluginSource::Git {
-            url: normalize_git_plugin_source_url(marketplace_path, &url)?,
-            path: Some(normalize_remote_plugin_subdir(marketplace_path, &path)?),
-            ref_name: normalize_optional_git_selector(&ref_name),
-            sha: normalize_optional_git_selector(&sha),
-        }),
+        ) => {
+            let path = normalize_remote_plugin_subdir(marketplace_path, &path)?;
+            Ok(MarketplacePluginSource::Git {
+                url: normalize_git_plugin_source_url(marketplace_path, &url)?,
+                materialized_path: materialized_git_plugin_source_path(
+                    marketplace_path,
+                    plugin_name,
+                    Some(path.as_str()),
+                )?,
+                path: Some(path),
+                ref_name: normalize_optional_git_selector(&ref_name),
+                sha: normalize_optional_git_selector(&sha),
+            })
+        }
         RawMarketplaceManifestPluginSource::Unsupported(_) => {
             unreachable!("unsupported plugin sources should be filtered before resolution")
         }
@@ -568,6 +590,28 @@ fn normalize_optional_git_selector(value: &Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn materialized_git_plugin_source_path(
+    marketplace_path: &AbsolutePathBuf,
+    plugin_name: &str,
+    plugin_subdir: Option<&str>,
+) -> Result<AbsolutePathBuf, MarketplaceError> {
+    validate_plugin_segment(plugin_name, "plugin name").map_err(|message| {
+        MarketplaceError::InvalidMarketplaceFile {
+            path: marketplace_path.to_path_buf(),
+            message,
+        }
+    })?;
+    let checkout_root = marketplace_root_dir(marketplace_path)?
+        .join(".codex-remote-sources")
+        .join(plugin_name)
+        .join("checkout");
+    let plugin_root = match plugin_subdir {
+        Some(plugin_subdir) => checkout_root.join(plugin_subdir),
+        None => checkout_root,
+    };
+    Ok(plugin_root)
 }
 
 fn normalize_github_git_url(url: &str) -> String {

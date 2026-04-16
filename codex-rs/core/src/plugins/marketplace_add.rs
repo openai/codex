@@ -1,6 +1,12 @@
 use super::OPENAI_CURATED_MARKETPLACE_NAME;
 use super::marketplace_install_root;
+use super::validate_plugin_segment;
+use codex_core_plugins::manifest::load_plugin_manifest;
+use codex_core_plugins::marketplace::MarketplacePluginSource;
+use codex_core_plugins::marketplace::find_marketplace_manifest_path;
+use codex_core_plugins::marketplace::load_marketplace;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -90,6 +96,7 @@ where
     if let Some(existing_root) =
         installed_marketplace_root_for_source(codex_home, &install_root, &install_metadata)?
     {
+        materialize_remote_plugin_sources(&existing_root, &clone_source)?;
         let marketplace_name = validate_marketplace_source_root(&existing_root)?;
         record_added_marketplace_entry(codex_home, &marketplace_name, &install_metadata)?;
         return Ok(MarketplaceAddOutcome {
@@ -118,6 +125,7 @@ where
                 source.display()
             )));
         }
+        materialize_remote_plugin_sources(path, &clone_source)?;
         record_added_marketplace_entry(codex_home, &marketplace_name, &install_metadata)?;
         return Ok(MarketplaceAddOutcome {
             marketplace_name,
@@ -149,7 +157,7 @@ where
         })?;
     let staged_root = staged_root.keep();
 
-    stage_marketplace_source(&source, &sparse_paths, &staged_root, clone_source)?;
+    stage_marketplace_source(&source, &sparse_paths, &staged_root, &clone_source)?;
 
     let marketplace_name = validate_marketplace_source_root(&staged_root)?;
     if marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -167,6 +175,7 @@ where
             source.display()
         )));
     }
+    materialize_remote_plugin_sources(&staged_root, &clone_source)?;
 
     replace_marketplace_root(&staged_root, &destination).map_err(|err| {
         MarketplaceAddError::Internal(format!(
@@ -196,6 +205,189 @@ where
         })?,
         already_added: false,
     })
+}
+
+fn materialize_remote_plugin_sources<F>(
+    marketplace_root: &Path,
+    clone_source: F,
+) -> Result<(), MarketplaceAddError>
+where
+    F: Fn(&str, Option<&str>, &[String], &Path) -> Result<(), MarketplaceAddError>,
+{
+    let Some(marketplace_path) = find_marketplace_manifest_path(marketplace_root) else {
+        return Err(MarketplaceAddError::InvalidRequest(format!(
+            "marketplace root {} does not contain a supported manifest",
+            marketplace_root.display()
+        )));
+    };
+    let marketplace = load_marketplace(&marketplace_path)
+        .map_err(|err| MarketplaceAddError::InvalidRequest(err.to_string()))?;
+    let remote_sources_root = marketplace_root.join(".codex-remote-sources");
+    let staging_root = remote_sources_root.join(".staging");
+    let mut materialized_names = HashSet::new();
+
+    for plugin in marketplace.plugins {
+        let MarketplacePluginSource::Git {
+            url,
+            path,
+            ref_name,
+            sha,
+            ..
+        } = plugin.source
+        else {
+            continue;
+        };
+        if !materialized_names.insert(plugin.name.clone()) {
+            return Err(MarketplaceAddError::InvalidRequest(format!(
+                "duplicate git plugin `{}` in marketplace `{}`",
+                plugin.name, marketplace.name
+            )));
+        }
+
+        fs::create_dir_all(&staging_root).map_err(|err| {
+            MarketplaceAddError::Internal(format!(
+                "failed to create remote plugin source staging directory {}: {err}",
+                staging_root.display()
+            ))
+        })?;
+        let staged_plugin_root = Builder::new()
+            .prefix(&format!("{}-", plugin.name))
+            .tempdir_in(&staging_root)
+            .map_err(|err| {
+                MarketplaceAddError::Internal(format!(
+                    "failed to create remote plugin source staging directory in {}: {err}",
+                    staging_root.display()
+                ))
+            })?;
+        let checkout_root = staged_plugin_root.path().join("checkout");
+        let empty_sparse_paths: &[String] = &[];
+        clone_source(
+            &url,
+            sha.as_deref().or(ref_name.as_deref()),
+            empty_sparse_paths,
+            &checkout_root,
+        )?;
+
+        let plugin_root = match path.as_deref() {
+            Some(path) => checkout_root.join(path),
+            None => checkout_root,
+        };
+        if !plugin_root.is_dir() {
+            return Err(MarketplaceAddError::InvalidRequest(format!(
+                "materialized git plugin `{}` does not exist at {}",
+                plugin.name,
+                plugin_root.display()
+            )));
+        }
+        if load_plugin_manifest(&plugin_root).is_none() {
+            return Err(MarketplaceAddError::InvalidRequest(format!(
+                "materialized git plugin `{}` is missing .codex-plugin/plugin.json at {}",
+                plugin.name,
+                plugin_root.display()
+            )));
+        }
+
+        let destination = remote_plugin_source_root(&remote_sources_root, &plugin.name)?;
+        replace_materialized_plugin_root(staged_plugin_root.path(), &destination, &staging_root)?;
+    }
+
+    if let Err(err) = fs::remove_dir(&staging_root)
+        && err.kind() != std::io::ErrorKind::NotFound
+        && err.kind() != std::io::ErrorKind::DirectoryNotEmpty
+    {
+        return Err(MarketplaceAddError::Internal(format!(
+            "failed to clean up remote plugin source staging directory {}: {err}",
+            staging_root.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn remote_plugin_source_root(
+    remote_sources_root: &Path,
+    plugin_name: &str,
+) -> Result<PathBuf, MarketplaceAddError> {
+    validate_plugin_segment(plugin_name, "plugin name")
+        .map_err(MarketplaceAddError::InvalidRequest)?;
+    Ok(remote_sources_root.join(plugin_name))
+}
+
+fn replace_materialized_plugin_root(
+    staged_plugin_root: &Path,
+    destination: &Path,
+    staging_root: &Path,
+) -> Result<(), MarketplaceAddError> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            MarketplaceAddError::Internal(format!(
+                "failed to create remote plugin source directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    let backup = if destination.exists() {
+        fs::create_dir_all(staging_root).map_err(|err| {
+            MarketplaceAddError::Internal(format!(
+                "failed to create remote plugin source staging directory {}: {err}",
+                staging_root.display()
+            ))
+        })?;
+        let backup = Builder::new()
+            .prefix("backup-")
+            .tempdir_in(staging_root)
+            .map_err(|err| {
+                MarketplaceAddError::Internal(format!(
+                    "failed to create remote plugin source backup directory in {}: {err}",
+                    staging_root.display()
+                ))
+            })?;
+        let backup_path = backup.path().to_path_buf();
+        fs::remove_dir(&backup_path).map_err(|err| {
+            MarketplaceAddError::Internal(format!(
+                "failed to prepare remote plugin source backup directory {}: {err}",
+                backup_path.display()
+            ))
+        })?;
+        fs::rename(destination, &backup_path).map_err(|err| {
+            MarketplaceAddError::Internal(format!(
+                "failed to back up existing remote plugin source {}: {err}",
+                destination.display()
+            ))
+        })?;
+        let _ = backup.keep();
+        Some(backup_path)
+    } else {
+        None
+    };
+
+    if let Err(err) = fs::rename(staged_plugin_root, destination) {
+        if let Some(backup) = &backup
+            && let Err(rollback_err) = fs::rename(backup, destination)
+        {
+            return Err(MarketplaceAddError::Internal(format!(
+                "failed to install remote plugin source at {}: {err}; additionally failed to restore previous source from {}: {rollback_err}",
+                destination.display(),
+                backup.display()
+            )));
+        }
+        return Err(MarketplaceAddError::Internal(format!(
+            "failed to install remote plugin source at {}: {err}",
+            destination.display()
+        )));
+    }
+
+    if let Some(backup) = backup
+        && let Err(err) = fs::remove_dir_all(&backup)
+    {
+        return Err(MarketplaceAddError::Internal(format!(
+            "failed to remove remote plugin source backup directory {}: {err}",
+            backup.display()
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -239,6 +431,49 @@ mod tests {
         assert!(config.contains("[marketplaces.debug]"));
         assert!(config.contains("source_type = \"git\""));
         assert!(config.contains("source = \"https://github.com/owner/repo.git\""));
+        Ok(())
+    }
+
+    #[test]
+    fn add_marketplace_sync_materializes_remote_plugin_sources() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let marketplace_source_root = TempDir::new()?;
+        let plugin_source_root = TempDir::new()?;
+        let marketplace_url = "https://github.com/owner/marketplace.git";
+        let plugin_url = "https://github.com/owner/toolkit.git";
+        write_marketplace_source_with_remote_plugin(marketplace_source_root.path(), plugin_url)?;
+        write_plugin_source(plugin_source_root.path(), "plugins/toolkit", "toolkit")?;
+
+        let result = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            MarketplaceAddRequest {
+                source: marketplace_url.to_string(),
+                ref_name: None,
+                sparse_paths: Vec::new(),
+            },
+            |url, _ref_name, _sparse_paths, destination| {
+                let source = match url {
+                    url if url == marketplace_url => marketplace_source_root.path(),
+                    url if url == plugin_url => plugin_source_root.path(),
+                    _ => {
+                        return Err(MarketplaceAddError::Internal(format!(
+                            "unexpected clone url: {url}"
+                        )));
+                    }
+                };
+                copy_dir_all(source, destination)
+                    .map_err(|err| MarketplaceAddError::Internal(err.to_string()))
+            },
+        )?;
+
+        assert_eq!(result.marketplace_name, "debug");
+        assert!(
+            result
+                .installed_root
+                .as_path()
+                .join(".codex-remote-sources/toolkit/checkout/plugins/toolkit/.codex-plugin/plugin.json")
+                .is_file()
+        );
         Ok(())
     }
 
@@ -319,7 +554,7 @@ mod tests {
 
     fn write_marketplace_source(source: &Path, marker: &str) -> std::io::Result<()> {
         fs::create_dir_all(source.join(".agents/plugins"))?;
-        fs::create_dir_all(source.join("plugins/sample/.codex-plugin"))?;
+        write_plugin_source(source, "plugins/sample", "sample")?;
         fs::write(
             source.join(".agents/plugins/marketplace.json"),
             r#"{
@@ -335,11 +570,49 @@ mod tests {
   ]
 }"#,
         )?;
-        fs::write(
-            source.join("plugins/sample/.codex-plugin/plugin.json"),
-            r#"{"name":"sample"}"#,
-        )?;
         fs::write(source.join("plugins/sample/marker.txt"), marker)?;
+        Ok(())
+    }
+
+    fn write_marketplace_source_with_remote_plugin(
+        source: &Path,
+        plugin_url: &str,
+    ) -> std::io::Result<()> {
+        fs::create_dir_all(source.join(".agents/plugins"))?;
+        fs::write(
+            source.join(".agents/plugins/marketplace.json"),
+            format!(
+                r#"{{
+  "name": "debug",
+  "plugins": [
+    {{
+      "name": "toolkit",
+      "source": {{
+        "source": "git-subdir",
+        "url": "{plugin_url}",
+        "path": "plugins/toolkit"
+      }}
+    }}
+  ]
+}}"#
+            ),
+        )?;
+        Ok(())
+    }
+
+    fn write_plugin_source(
+        source: &Path,
+        plugin_path: &str,
+        plugin_name: &str,
+    ) -> std::io::Result<()> {
+        fs::create_dir_all(source.join(plugin_path).join(".codex-plugin"))?;
+        fs::write(
+            source
+                .join(plugin_path)
+                .join(".codex-plugin")
+                .join("plugin.json"),
+            format!(r#"{{"name":"{plugin_name}"}}"#),
+        )?;
         Ok(())
     }
 
