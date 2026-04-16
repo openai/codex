@@ -1273,6 +1273,56 @@ async fn status_line_goal_active_token_budget_footer_snapshot() {
     );
 }
 
+#[tokio::test]
+async fn session_configured_clears_goal_status_footer() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                goal: test_thread_goal(
+                    codex_app_server_protocol::ThreadGoalStatus::Active,
+                    /*token_budget*/ Some(50_000),
+                    /*tokens_used*/ 40_000,
+                ),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(
+        chat.current_goal_status_indicator,
+        Some(GoalStatusIndicator::Active {
+            usage: Some("40K / 50K".to_string())
+        })
+    );
+
+    let rollout_file = NamedTempFile::new().unwrap();
+    chat.handle_codex_event(Event {
+        id: "session-2".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-5.4".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: test_path_buf("/home/user/project").abs(),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(rollout_file.path().to_path_buf()),
+        }),
+    });
+
+    assert_eq!(chat.current_goal_status_indicator, None);
+}
+
 #[test]
 fn goal_status_indicator_formats_statuses_and_budgets() {
     assert_eq!(

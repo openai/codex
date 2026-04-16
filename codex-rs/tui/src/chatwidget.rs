@@ -1986,6 +1986,7 @@ impl ChatWidget {
         self.thread_id = Some(event.session_id);
         self.last_turn_id = None;
         self.thread_name = event.thread_name.clone();
+        self.current_goal_status_indicator = None;
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.to_path_buf());
