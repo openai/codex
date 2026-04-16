@@ -131,9 +131,9 @@ common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
 common:ci-windows-cross --config=ci-bazel
 common:ci-windows-cross --build_metadata=TAG_os=windows-cross
 common:ci-windows-cross --config=remote
-common:ci-windows-cross --extra_execution_platforms=//:local_windows
 common:ci-windows-cross --strategy=remote
 common:ci-windows-cross --strategy=TestRunner=local
+common:ci-windows-cross --use_target_platform_for_tests=true
 common:ci-windows-cross --platforms=//:local_windows
 common:ci-windows-cross --host_platform=//:rbe
 common:ci-windows-cross --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
