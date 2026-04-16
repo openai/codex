@@ -254,11 +254,30 @@ fn auth_home_store_key_path_does_not_depend_on_directory_existing() {
     let root = tempdir().expect("tempdir");
     let auth_home = root.path().join("missing").join("..").join("auth");
 
-    let before_create = compute_store_key_for_path(&normalize_auth_home_path(auth_home.clone()));
+    let before_create =
+        compute_store_key_for_home_path(normalize_auth_home_path(auth_home.clone()));
     std::fs::create_dir_all(root.path().join("auth")).expect("create auth home");
-    let after_create = compute_store_key_for_path(&normalize_auth_home_path(auth_home));
+    let after_create = compute_store_key_for_home_path(normalize_auth_home_path(auth_home));
 
     assert_eq!(before_create, after_create);
+}
+
+#[cfg(unix)]
+#[test]
+fn auth_home_store_key_canonicalizes_symlink() -> anyhow::Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir()?;
+    let auth_home = root.path().join("auth");
+    let auth_home_link = root.path().join("auth-link");
+    std::fs::create_dir_all(&auth_home)?;
+    symlink(&auth_home, &auth_home_link)?;
+
+    let canonical_key = compute_store_key_for_home_path(auth_home);
+    let symlink_key = compute_store_key_for_home_path(normalize_auth_home_path(auth_home_link));
+
+    assert_eq!(canonical_key, symlink_key);
+    Ok(())
 }
 
 #[test]

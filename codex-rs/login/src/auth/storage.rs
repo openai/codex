@@ -173,15 +173,29 @@ impl AuthStorageBackend for FileAuthStorage {
 
 const KEYRING_SERVICE: &str = "Codex Auth";
 
-// turns codex_home path into a stable, short key string
+// Turns the effective auth home path into a stable, short key string.
 fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
-    let canonical = match auth_home_from_env() {
-        Some(auth_home) => auth_home,
-        None => codex_home
-            .canonicalize()
-            .unwrap_or_else(|_| codex_home.to_path_buf()),
+    let home = auth_home_from_env().unwrap_or_else(|| codex_home.to_path_buf());
+    Ok(compute_store_key_for_home_path(home))
+}
+
+fn compute_store_key_for_home_path(path: PathBuf) -> String {
+    let canonical = canonicalize_auth_home_path(path);
+    compute_store_key_for_path(&canonical)
+}
+
+fn canonicalize_auth_home_path(path: PathBuf) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+
+    let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) else {
+        return path;
     };
-    Ok(compute_store_key_for_path(&canonical))
+    parent
+        .canonicalize()
+        .map(|parent| parent.join(file_name))
+        .unwrap_or(path)
 }
 
 fn compute_store_key_for_path(path: &Path) -> String {
