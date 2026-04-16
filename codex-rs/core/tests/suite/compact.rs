@@ -7,6 +7,7 @@ use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::CompactionStrategyConfig;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -407,6 +408,209 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         saw_compacted_summary,
         "expected a Compacted entry containing the summarizer output"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reflections_manual_compact_writes_sidecar_without_summarizer_request() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 80),
+    ]);
+    let request_log = mount_sse_once(&server, first_turn).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.compaction_strategy = CompactionStrategyConfig::Reflections;
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = test.codex.clone();
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+    let sidecar_path = rollout_path.with_extension("reflections");
+    assert!(!sidecar_path.exists());
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "remember this detail".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    assert!(sidecar_path.is_dir());
+    assert!(sidecar_path.join("notes").is_dir());
+    assert!(sidecar_path.join("logs").is_dir());
+    assert!(!sidecar_path.join("logs/cw00000").exists());
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(
+        request_log.requests().len(),
+        1,
+        "Reflections /compact should not call the summarizer"
+    );
+
+    codex.submit(Op::Shutdown).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let transcript_path = sidecar_path.join("logs/cw00000/transcript.md");
+    let transcript = std::fs::read_to_string(&transcript_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read Reflections transcript {}: {err}",
+            transcript_path.display()
+        )
+    });
+    assert!(sidecar_path.join("notes").is_dir());
+    assert!(transcript.contains("schema: reflections.transcript.v1"));
+    assert!(transcript.contains("remember this detail"));
+    assert!(transcript.contains(FIRST_REPLY));
+    assert!(transcript.contains("source_rollout:"));
+    assert!(!transcript.contains("Reflections is enabled"));
+
+    let rollout = std::fs::read_to_string(&rollout_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read rollout file {}: {err}",
+            rollout_path.display()
+        )
+    });
+    assert!(rollout.contains("Reflections is enabled"));
+    assert!(rollout.contains(&format!("{}/logs", sidecar_path.display())));
+    assert!(!rollout.contains("logs/cw00000/transcript.md"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reflections_near_limit_reminder_is_recorded_once_and_dropped_after_compaction() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let first_turn = sse(vec![
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r1", /*total_tokens*/ 6_000),
+    ]);
+    let reminder_turn = sse(vec![
+        ev_assistant_message("m2", FINAL_REPLY),
+        ev_completed_with_tokens("r2", /*total_tokens*/ 6_500),
+    ]);
+    let post_compaction_turn = sse(vec![
+        ev_assistant_message("m3", "AFTER_REFLECTIONS_COMPACT"),
+        ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+    ]);
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![first_turn, reminder_turn, post_compaction_turn],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.compaction_strategy = CompactionStrategyConfig::Reflections;
+            config.model_context_window = Some(20_000);
+            config.model_auto_compact_token_limit = Some(10_000);
+        })
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = test.codex.clone();
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
+    let sidecar_path = rollout_path.with_extension("reflections");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "do work near the context limit".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "continue after reflections compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Shutdown).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let reminder_prefix = "Your context window is nearly exhausted (";
+    let reminder_suffix = "tokens remain before your context will be reset).";
+    let request_bodies: Vec<String> = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json().to_string())
+        .collect();
+    assert_eq!(request_bodies.len(), 3);
+    assert!(
+        !body_contains_text(&request_bodies[0], reminder_prefix),
+        "first request should not include the reminder before the threshold is crossed"
+    );
+    assert!(
+        body_contains_text(&request_bodies[1], reminder_prefix)
+            && body_contains_text(&request_bodies[1], reminder_suffix),
+        "second request should include the near-limit developer reminder"
+    );
+    assert!(
+        body_contains_text(&request_bodies[1], "advised NOT to send a final answer"),
+        "near-limit reminder should include the stronger note-writing guidance"
+    );
+    assert!(
+        request_bodies[1].contains(&format!("unsupported call: {DUMMY_FUNCTION_NAME}")),
+        "tool output should still be sent with the reminder"
+    );
+    assert!(
+        !body_contains_text(&request_bodies[2], reminder_prefix),
+        "reminder should not survive into the fresh context after Reflections compaction"
+    );
+
+    let rollout = std::fs::read_to_string(&rollout_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read rollout file {}: {err}",
+            rollout_path.display()
+        )
+    });
+    assert!(
+        rollout.contains(reminder_prefix),
+        "near-limit reminder should be persisted in the rollout like other developer messages"
+    );
+
+    let transcript_path = sidecar_path.join("logs/cw00000/transcript.md");
+    let transcript = std::fs::read_to_string(&transcript_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read Reflections transcript {}: {err}",
+            transcript_path.display()
+        )
+    });
+    assert!(
+        !transcript.contains(reminder_prefix),
+        "near-limit reminder should not be copied into visible Reflections transcripts"
     );
 }
 

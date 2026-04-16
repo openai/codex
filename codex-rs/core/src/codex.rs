@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -52,6 +54,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AppInvocation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
+use codex_analytics::CompactionTrigger;
 use codex_analytics::InvocationType;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnResolvedConfigFact;
@@ -96,6 +99,7 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::CompactionStrategyConfig;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -107,6 +111,7 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -660,6 +665,7 @@ impl Codex {
             persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
+            reflections_sidecar_path: None,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -856,6 +862,8 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    reflections_context_window_reset_requested: AtomicBool,
+    reflections_near_limit_reminder_recorded: AtomicBool,
 }
 
 #[derive(Clone, Debug)]
@@ -1204,6 +1212,7 @@ pub(crate) struct SessionConfiguration {
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     user_shell_override: Option<shell::Shell>,
+    reflections_sidecar_path: Option<AbsolutePathBuf>,
 }
 
 impl SessionConfiguration {
@@ -1294,7 +1303,36 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
+        next_configuration.add_reflections_sidecar_to_sandbox_policies();
         Ok(next_configuration)
+    }
+
+    fn add_reflections_sidecar_to_sandbox_policies(&mut self) {
+        let Some(sidecar_path) = self.reflections_sidecar_path.clone() else {
+            return;
+        };
+
+        self.file_system_sandbox_policy = self
+            .file_system_sandbox_policy
+            .clone()
+            .with_additional_writable_roots(
+                self.cwd.as_path(),
+                std::slice::from_ref(&sidecar_path),
+            );
+
+        let mut sandbox_policy = self.sandbox_policy.get().clone();
+        let mut sandbox_policy_changed = false;
+        if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy
+            && !writable_roots
+                .iter()
+                .any(|existing| existing == &sidecar_path)
+        {
+            writable_roots.push(sidecar_path);
+            sandbox_policy_changed = true;
+        }
+        if sandbox_policy_changed && let Err(err) = self.sandbox_policy.set(sandbox_policy) {
+            warn!("failed to add Reflections sidecar to sandbox policy: {err}");
+        }
     }
 }
 
@@ -1317,6 +1355,12 @@ pub(crate) struct SessionSettingsUpdate {
 pub(crate) struct AppServerClientMetadata {
     pub(crate) client_name: Option<String>,
     pub(crate) client_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReflectionsSidecarPreparation {
+    Prepare,
+    Skip,
 }
 
 impl Session {
@@ -1539,6 +1583,29 @@ impl Session {
         let auth_manager_for_context = auth_manager;
         let provider_for_context = provider;
         let session_telemetry_for_context = session_telemetry;
+        let reflections_enabled = per_turn_config.compaction_strategy
+            == CompactionStrategyConfig::Reflections
+            && session_configuration.reflections_sidecar_path.is_some();
+        let reflections_usage_hint_text = if reflections_enabled
+            && per_turn_config.reflections.usage_hint_enabled
+        {
+            session_configuration
+                .reflections_sidecar_path
+                .as_ref()
+                .map(|sidecar_path| {
+                    let context_window = model_info.context_window.map(|context_window| {
+                        context_window.saturating_mul(model_info.effective_context_window_percent)
+                            / 100
+                    });
+                    crate::reflections::usage_hint(
+                        context_window,
+                        sidecar_path.as_path(),
+                        per_turn_config.reflections.usage_hint_text.as_deref(),
+                    )
+                })
+        } else {
+            None
+        };
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             available_models: &models_manager.try_list_models().unwrap_or_default(),
@@ -1560,6 +1627,7 @@ impl Session {
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
+        .with_reflections(reflections_enabled, reflections_usage_hint_text)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -1776,6 +1844,15 @@ impl Session {
         let rollout_path = rollout_recorder
             .as_ref()
             .map(|rec| rec.rollout_path().to_path_buf());
+        if config.compaction_strategy == CompactionStrategyConfig::Reflections
+            && let Some(sidecar_path) = rollout_path
+                .as_ref()
+                .map(|rollout_path| crate::reflections::sidecar_path_for_rollout(rollout_path))
+                .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+        {
+            session_configuration.reflections_sidecar_path = Some(sidecar_path);
+            session_configuration.add_reflections_sidecar_to_sandbox_policies();
+        }
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -1946,7 +2023,16 @@ impl Session {
                 ))
                 .await;
         session_configuration.thread_name = thread_name.clone();
-        let state = SessionState::new(session_configuration.clone());
+        let mut state = SessionState::new(session_configuration.clone());
+        if let Some(sidecar_path) = session_configuration.reflections_sidecar_path.clone() {
+            state.record_granted_permissions(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![]),
+                    write: Some(vec![sidecar_path]),
+                }),
+                ..Default::default()
+            });
+        }
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
@@ -2112,6 +2198,8 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            reflections_context_window_reset_requested: AtomicBool::new(false),
+            reflections_near_limit_reminder_recorded: AtomicBool::new(false),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -2293,6 +2381,68 @@ impl Session {
             .next_internal_sub_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         format!("auto-compact-{id}")
+    }
+
+    pub(crate) fn request_reflections_context_window_reset(&self) {
+        self.reflections_context_window_reset_requested
+            .store(true, Ordering::SeqCst);
+    }
+
+    fn take_reflections_context_window_reset_request(&self) -> bool {
+        self.reflections_context_window_reset_requested
+            .swap(false, Ordering::SeqCst)
+    }
+
+    pub(crate) fn reset_reflections_near_limit_reminder(&self) {
+        self.reflections_near_limit_reminder_recorded
+            .store(false, Ordering::SeqCst);
+    }
+
+    async fn maybe_record_reflections_near_limit_reminder(
+        &self,
+        turn_context: &TurnContext,
+        total_usage_tokens: i64,
+        auto_compact_limit: i64,
+    ) {
+        if turn_context.config.compaction_strategy != CompactionStrategyConfig::Reflections
+            || auto_compact_limit == i64::MAX
+            || total_usage_tokens >= auto_compact_limit
+        {
+            return;
+        }
+
+        let reminder_threshold =
+            crate::reflections::near_limit_reminder_threshold(auto_compact_limit);
+        if total_usage_tokens < reminder_threshold
+            || self
+                .reflections_near_limit_reminder_recorded
+                .load(Ordering::SeqCst)
+        {
+            return;
+        }
+
+        let history = self.clone_history().await;
+        if history
+            .raw_items()
+            .iter()
+            .any(crate::reflections::is_near_limit_reminder)
+        {
+            self.reflections_near_limit_reminder_recorded
+                .store(true, Ordering::SeqCst);
+            return;
+        }
+
+        if self
+            .reflections_near_limit_reminder_recorded
+            .swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+
+        let remaining_tokens = auto_compact_limit.saturating_sub(total_usage_tokens).max(0);
+        let reminder = crate::reflections::near_limit_reminder(Some(remaining_tokens));
+        self.record_conversation_items(turn_context, std::slice::from_ref(&reminder))
+            .await;
     }
 
     pub(crate) async fn route_realtime_text_input(self: &Arc<Self>, text: String) {
@@ -2615,6 +2765,7 @@ impl Session {
                 session_configuration,
                 updates.final_output_json_schema,
                 sandbox_policy_changed,
+                ReflectionsSidecarPreparation::Prepare,
             )
             .await)
     }
@@ -2622,11 +2773,30 @@ impl Session {
     async fn new_turn_from_configuration(
         &self,
         sub_id: String,
-        session_configuration: SessionConfiguration,
+        mut session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
         sandbox_policy_changed: bool,
+        reflections_sidecar_preparation: ReflectionsSidecarPreparation,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        if matches!(
+            reflections_sidecar_preparation,
+            ReflectionsSidecarPreparation::Prepare
+        ) && per_turn_config.compaction_strategy == CompactionStrategyConfig::Reflections
+            && let Some(sidecar_path) = session_configuration.reflections_sidecar_path.clone()
+        {
+            let ensure_result = match self.try_ensure_rollout_materialized().await {
+                Ok(()) => crate::reflections::ensure_sidecar_dirs(sidecar_path.as_path()).await,
+                Err(err) => Err(err),
+            };
+            if let Err(err) = ensure_result {
+                warn!(
+                    "failed to prepare Reflections sidecar {}: {err}",
+                    sidecar_path.as_path().display()
+                );
+                session_configuration.reflections_sidecar_path = None;
+            }
+        }
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
@@ -2798,6 +2968,7 @@ impl Session {
             session_configuration,
             /*final_output_json_schema*/ None,
             /*sandbox_policy_changed*/ false,
+            ReflectionsSidecarPreparation::Skip,
         )
         .await
     }
@@ -6406,6 +6577,13 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
+        let total_usage_tokens = sess.get_total_token_usage().await;
+        sess.maybe_record_reflections_near_limit_reminder(
+            turn_context.as_ref(),
+            total_usage_tokens,
+            auto_compact_limit,
+        )
+        .await;
         let sampling_request_input: Vec<ResponseItem> = {
             sess.clone_history()
                 .await
@@ -6765,7 +6943,16 @@ async fn run_auto_compact(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
-    if should_use_remote_compact_task(&turn_context.provider) {
+    if turn_context.config.compaction_strategy == CompactionStrategyConfig::Reflections {
+        crate::reflections::run_inline_reflections_auto_compact_task(
+            Arc::clone(sess),
+            Arc::clone(turn_context),
+            initial_context_injection,
+            reason,
+            phase,
+        )
+        .await?;
+    } else if should_use_remote_compact_task(&turn_context.provider) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
@@ -7747,16 +7934,31 @@ async fn drain_in_flight(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
+    let mut reset_reflections_context_window = false;
     while let Some(res) = in_flight.next().await {
         match res {
             Ok(response_input) => {
                 sess.record_conversation_items(&turn_context, &[response_input.into()])
                     .await;
+                if sess.take_reflections_context_window_reset_request() {
+                    reset_reflections_context_window = true;
+                }
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
             }
         }
+    }
+    if reset_reflections_context_window {
+        crate::reflections::run_reflections_compact_task_inner(
+            Arc::clone(&sess),
+            Arc::clone(&turn_context),
+            InitialContextInjection::DoNotInject,
+            CompactionTrigger::Manual,
+            CompactionReason::UserRequested,
+            CompactionPhase::MidTurn,
+        )
+        .await?;
     }
     Ok(())
 }

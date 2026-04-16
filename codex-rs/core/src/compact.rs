@@ -300,6 +300,7 @@ pub(crate) struct CompactionAnalyticsAttempt {
     reason: CompactionReason,
     implementation: CompactionImplementation,
     phase: CompactionPhase,
+    strategy: CompactionStrategy,
     active_context_tokens_before: i64,
     started_at: u64,
     start_instant: Instant,
@@ -314,6 +315,27 @@ impl CompactionAnalyticsAttempt {
         implementation: CompactionImplementation,
         phase: CompactionPhase,
     ) -> Self {
+        Self::begin_with_strategy(
+            sess,
+            turn_context,
+            trigger,
+            reason,
+            implementation,
+            phase,
+            CompactionStrategy::Memento,
+        )
+        .await
+    }
+
+    pub(crate) async fn begin_with_strategy(
+        sess: &Session,
+        turn_context: &TurnContext,
+        trigger: CompactionTrigger,
+        reason: CompactionReason,
+        implementation: CompactionImplementation,
+        phase: CompactionPhase,
+        strategy: CompactionStrategy,
+    ) -> Self {
         let enabled = sess.enabled(Feature::GeneralAnalytics);
         let active_context_tokens_before = sess.get_total_token_usage().await;
         Self {
@@ -324,6 +346,7 @@ impl CompactionAnalyticsAttempt {
             reason,
             implementation,
             phase,
+            strategy,
             active_context_tokens_before,
             started_at: now_unix_seconds(),
             start_instant: Instant::now(),
@@ -349,7 +372,7 @@ impl CompactionAnalyticsAttempt {
                 reason: self.reason,
                 implementation: self.implementation,
                 phase: self.phase,
-                strategy: CompactionStrategy::Memento,
+                strategy: self.strategy,
                 status,
                 error,
                 active_context_tokens_before: self.active_context_tokens_before,

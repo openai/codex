@@ -302,6 +302,13 @@
       },
       "type": "object"
     },
+    "CompactionStrategyConfig": {
+      "enum": [
+        "default",
+        "reflections"
+      ],
+      "type": "string"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -317,6 +324,9 @@
         },
         "chatgpt_base_url": {
           "type": "string"
+        },
+        "compaction_strategy": {
+          "$ref": "#/definitions/CompactionStrategyConfig"
         },
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
@@ -436,6 +446,9 @@
             },
             "realtime_conversation": {
               "type": "boolean"
+            },
+            "reflections": {
+              "$ref": "#/definitions/ReflectionsConfigToml"
             },
             "remote_control": {
               "type": "boolean"
@@ -1654,6 +1667,18 @@
         }
       ]
     },
+    "ReflectionsConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "usage_hint_enabled": {
+          "type": "boolean"
+        },
+        "usage_hint_text": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -2141,6 +2166,14 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "compaction_strategy": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CompactionStrategyConfig"
+        }
+      ],
+      "description": "Strategy used when compacting conversation history."
+    },
     "default_permissions": {
       "description": "Default named permissions profile to apply from the `[permissions]` table.",
       "type": "string"
@@ -2292,6 +2325,9 @@
         },
         "realtime_conversation": {
           "type": "boolean"
+        },
+        "reflections": {
+          "$ref": "#/definitions/ReflectionsConfigToml"
         },
         "remote_control": {
           "type": "boolean"

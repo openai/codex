@@ -360,6 +360,27 @@ usage_hint_enabled = false
 }
 
 #[test]
+fn reflections_feature_config_deserializes_table_without_feature_toggle() {
+    let features_toml: FeaturesToml = toml::from_str(
+        r#"
+[reflections]
+usage_hint_enabled = false
+usage_hint_text = "Custom recovery guidance."
+"#,
+    )
+    .expect("features table should deserialize");
+
+    assert_eq!(features_toml.entries(), BTreeMap::new());
+    assert_eq!(
+        features_toml.reflections,
+        Some(crate::ReflectionsConfigToml {
+            usage_hint_enabled: Some(false),
+            usage_hint_text: Some("Custom recovery guidance.".to_string()),
+        })
+    );
+}
+
+#[test]
 fn unstable_warning_event_only_mentions_enabled_under_development_features() {
     let mut configured_features = Table::new();
     configured_features.insert("child_agents_md".to_string(), TomlValue::Boolean(true));

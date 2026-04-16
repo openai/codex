@@ -11,6 +11,7 @@ use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
 use crate::ToolHandlerSpec;
+use crate::ToolName;
 use crate::ToolNamespace;
 use crate::ToolRegistryPlanDeferredTool;
 use crate::ToolsConfigParams;
@@ -630,6 +631,61 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
     );
 
     assert_lacks_tool_name(&tools, "request_permissions");
+}
+
+#[test]
+fn reflections_tools_require_config_flag() {
+    let model_info = model_info();
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &default_tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_lacks_tool_name(&tools, REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME);
+
+    let reflections_tools_config =
+        default_tools_config.with_reflections(true, Some("Custom Reflections hint.".to_string()));
+    let (tools, handlers) = build_specs(
+        &reflections_tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_contains_tool_names(
+        &tools,
+        &[
+            REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME,
+            REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME,
+        ],
+    );
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsNewContextWindow,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsGetContextRemaining,
+    }));
+
+    let new_context_tool = find_tool(&tools, REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &new_context_tool.spec else {
+        panic!("{REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME} should be a function tool");
+    };
+    assert!(description.contains("Custom Reflections hint."));
 }
 
 #[test]

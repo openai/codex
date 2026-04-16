@@ -17,6 +17,7 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 pub use feature_configs::MultiAgentV2ConfigToml;
+pub use feature_configs::ReflectionsConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -502,6 +503,8 @@ pub fn is_known_feature_key(key: &str) -> bool {
 pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflections: Option<ReflectionsConfigToml>,
     /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
     entries: BTreeMap<String, bool>,

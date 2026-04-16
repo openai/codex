@@ -216,6 +216,7 @@ pub enum CompactionReason {
 pub enum CompactionImplementation {
     Responses,
     ResponsesCompact,
+    Reflections,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -231,6 +232,7 @@ pub enum CompactionPhase {
 pub enum CompactionStrategy {
     Memento,
     PrefixCompaction,
+    Reflections,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

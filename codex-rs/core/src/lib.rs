@@ -199,6 +199,7 @@ pub use file_watcher::FileWatcherEvent;
 pub use turn_metadata::build_turn_metadata_header;
 pub mod compact;
 pub(crate) mod memory_trace;
+pub(crate) mod reflections;
 pub use memory_trace::BuiltMemory;
 pub use memory_trace::build_memories_from_trace_files;
 pub mod otel_init;

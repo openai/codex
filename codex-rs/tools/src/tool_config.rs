@@ -104,6 +104,8 @@ pub struct ToolsConfig {
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
+    pub reflections: bool,
+    pub reflections_usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
@@ -225,6 +227,8 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
+            reflections: false,
+            reflections_usage_hint_text: None,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
@@ -251,6 +255,16 @@ impl ToolsConfig {
         spawn_agent_usage_hint_text: Option<String>,
     ) -> Self {
         self.spawn_agent_usage_hint_text = spawn_agent_usage_hint_text;
+        self
+    }
+
+    pub fn with_reflections(
+        mut self,
+        reflections: bool,
+        reflections_usage_hint_text: Option<String>,
+    ) -> Self {
+        self.reflections = reflections;
+        self.reflections_usage_hint_text = reflections_usage_hint_text;
         self
     }
 

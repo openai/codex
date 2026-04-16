@@ -48,6 +48,7 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::config_types::CompactionStrategyConfig;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -4635,6 +4636,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apps_instructions: true,
             include_environment_context: true,
             compact_prompt: None,
+            compaction_strategy: CompactionStrategyConfig::Default,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
@@ -4645,6 +4647,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             multi_agent_v2: MultiAgentV2Config::default(),
+            reflections: ReflectionsConfig::default(),
             features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("o3".to_string()),
@@ -4784,6 +4787,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        compaction_strategy: CompactionStrategyConfig::Default,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
@@ -4794,6 +4798,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        reflections: ReflectionsConfig::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt3".to_string()),
@@ -4931,6 +4936,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        compaction_strategy: CompactionStrategyConfig::Default,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
@@ -4941,6 +4947,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        reflections: ReflectionsConfig::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("zdr".to_string()),
@@ -5064,6 +5071,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apps_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
+        compaction_strategy: CompactionStrategyConfig::Default,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
@@ -5074,6 +5082,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
+        reflections: ReflectionsConfig::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt5".to_string()),
@@ -6293,6 +6302,78 @@ hide_spawn_agent_metadata = false
         Some("profile hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reflections_config_from_strategy_and_feature_table() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"compaction_strategy = "reflections"
+
+[features.reflections]
+usage_hint_enabled = false
+usage_hint_text = "Custom recovery guidance."
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.compaction_strategy,
+        CompactionStrategyConfig::Reflections
+    );
+    assert!(!config.reflections.usage_hint_enabled);
+    assert_eq!(
+        config.reflections.usage_hint_text.as_deref(),
+        Some("Custom recovery guidance.")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_reflections_config_overrides_base() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"profile = "default_compaction"
+compaction_strategy = "reflections"
+
+[features.reflections]
+usage_hint_enabled = true
+usage_hint_text = "base hint"
+
+[profiles.default_compaction]
+compaction_strategy = "default"
+
+[profiles.default_compaction.features.reflections]
+usage_hint_enabled = false
+usage_hint_text = "profile hint"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.compaction_strategy,
+        CompactionStrategyConfig::Default
+    );
+    assert!(!config.reflections.usage_hint_enabled);
+    assert_eq!(
+        config.reflections.usage_hint_text.as_deref(),
+        Some("profile hint")
+    );
 
     Ok(())
 }

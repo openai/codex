@@ -53,6 +53,17 @@ pub enum Verbosity {
 }
 
 #[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum CompactionStrategyConfig {
+    #[default]
+    Default,
+    Reflections,
+}
+
+#[derive(
     Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display, JsonSchema, TS,
 )]
 #[serde(rename_all = "kebab-case")]

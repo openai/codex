@@ -38,6 +38,10 @@ pub fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
             .properties
             .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());
     }
+    validation.properties.insert(
+        "reflections".to_string(),
+        schema_gen.subschema_for::<codex_features::ReflectionsConfigToml>(),
+    );
     for legacy_key in legacy_feature_keys() {
         validation
             .properties

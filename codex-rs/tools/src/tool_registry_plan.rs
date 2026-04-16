@@ -1,4 +1,6 @@
 use crate::CommandToolOptions;
+use crate::REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME;
+use crate::REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
@@ -33,6 +35,8 @@ use crate::create_list_mcp_resource_templates_tool;
 use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
 use crate::create_read_mcp_resource_tool;
+use crate::create_reflections_get_context_remaining_tool;
+use crate::create_reflections_new_context_window_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
 use crate::create_request_user_input_tool;
@@ -245,6 +249,29 @@ pub fn build_tool_registry_plan(
             config.code_mode_enabled,
         );
         plan.register_handler("request_permissions", ToolHandlerKind::RequestPermissions);
+    }
+
+    if config.reflections {
+        plan.push_spec(
+            create_reflections_new_context_window_tool(
+                config.reflections_usage_hint_text.as_deref(),
+            ),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        plan.push_spec(
+            create_reflections_get_context_remaining_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        plan.register_handler(
+            REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME,
+            ToolHandlerKind::ReflectionsNewContextWindow,
+        );
+        plan.register_handler(
+            REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME,
+            ToolHandlerKind::ReflectionsGetContextRemaining,
+        );
     }
 
     if config.search_tool

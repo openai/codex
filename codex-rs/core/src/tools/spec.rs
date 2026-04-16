@@ -72,6 +72,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::ReflectionsGetContextRemainingHandler;
+    use crate::tools::handlers::ReflectionsNewContextWindowHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -205,6 +207,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::Plan => {
                 builder.register_handler(handler.name, plan_handler.clone());
+            }
+            ToolHandlerKind::ReflectionsGetContextRemaining => {
+                builder.register_handler(
+                    handler.name,
+                    Arc::new(ReflectionsGetContextRemainingHandler),
+                );
+            }
+            ToolHandlerKind::ReflectionsNewContextWindow => {
+                builder
+                    .register_handler(handler.name, Arc::new(ReflectionsNewContextWindowHandler));
             }
             ToolHandlerKind::RequestPermissions => {
                 builder.register_handler(handler.name, request_permissions_handler.clone());

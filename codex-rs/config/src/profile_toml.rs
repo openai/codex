@@ -9,6 +9,7 @@ use crate::types::ApprovalsReviewer;
 use crate::types::Personality;
 use crate::types::WindowsToml;
 use codex_features::FeaturesToml;
+use codex_protocol::config_types::CompactionStrategyConfig;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
@@ -40,6 +41,7 @@ pub struct ConfigProfile {
     pub chatgpt_base_url: Option<String>,
     /// Optional path to a file containing model instructions.
     pub model_instructions_file: Option<AbsolutePathBuf>,
+    pub compaction_strategy: Option<CompactionStrategyConfig>,
     pub js_repl_node_path: Option<AbsolutePathBuf>,
     /// Ordered list of directories to search for Node modules in `js_repl`.
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,

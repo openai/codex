@@ -26,6 +26,8 @@ pub enum ToolHandlerKind {
     Mcp,
     McpResource,
     Plan,
+    ReflectionsGetContextRemaining,
+    ReflectionsNewContextWindow,
     RequestPermissions,
     RequestUserInput,
     ResumeAgentV1,

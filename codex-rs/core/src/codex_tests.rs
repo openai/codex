@@ -1930,6 +1930,7 @@ async fn set_rate_limits_retains_previous_credits() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        reflections_sidecar_path: None,
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2032,6 +2033,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        reflections_sidecar_path: None,
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2384,6 +2386,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        reflections_sidecar_path: None,
     }
 }
 
@@ -2559,6 +2562,53 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 }
 
 #[tokio::test]
+async fn session_configuration_apply_preserves_reflections_sidecar_write_root() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    let workspace = tempfile::tempdir().expect("create temp dir");
+    let project_root = workspace.path().join("project");
+    let original_cwd = project_root.join("subdir");
+    let sidecar_path = workspace.path().join("rollout.reflections").abs();
+    std::fs::create_dir_all(&original_cwd).expect("create cwd");
+
+    session_configuration.cwd = original_cwd.abs();
+    session_configuration.reflections_sidecar_path = Some(sidecar_path.clone());
+    session_configuration.sandbox_policy =
+        codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        });
+    session_configuration.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            session_configuration.sandbox_policy.get(),
+            &session_configuration.cwd,
+        );
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            cwd: Some(project_root),
+            ..Default::default()
+        })
+        .expect("cwd-only update should succeed");
+
+    assert_eq!(
+        updated
+            .file_system_sandbox_policy
+            .resolve_access_with_cwd(sidecar_path.as_path(), updated.cwd.as_path()),
+        FileSystemAccessMode::Write
+    );
+    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = updated.sandbox_policy.get() else {
+        panic!("expected workspace-write sandbox policy");
+    };
+    assert!(writable_roots.contains(&sidecar_path));
+}
+
+#[tokio::test]
 async fn session_update_settings_keeps_runtime_cwds_absolute() {
     let (session, turn_context) = make_session_and_context().await;
     let updated_cwd = turn_context.cwd.join("project");
@@ -2647,6 +2697,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        reflections_sidecar_path: None,
     };
 
     let (tx_event, _rx_event) = async_channel::unbounded();
@@ -2751,6 +2802,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        reflections_sidecar_path: None,
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -2884,6 +2936,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
+        reflections_context_window_reset_requested: AtomicBool::new(false),
+        reflections_near_limit_reminder_recorded: AtomicBool::new(false),
     };
 
     (session, turn_context)
@@ -3597,6 +3651,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        reflections_sidecar_path: None,
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -3730,6 +3785,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
+        reflections_context_window_reset_requested: AtomicBool::new(false),
+        reflections_near_limit_reminder_recorded: AtomicBool::new(false),
     });
 
     (session, turn_context, rx_event)

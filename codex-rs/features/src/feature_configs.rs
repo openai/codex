@@ -21,3 +21,12 @@ impl FeatureConfig for MultiAgentV2ConfigToml {
         self.enabled
     }
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReflectionsConfigToml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_hint_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_hint_text: Option<String>,
+}

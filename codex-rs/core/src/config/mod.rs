@@ -55,6 +55,7 @@ use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
+use codex_features::ReflectionsConfigToml;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -63,6 +64,7 @@ use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
+use codex_protocol::config_types::CompactionStrategyConfig;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -550,8 +552,14 @@ pub struct Config {
     /// Settings for ghost snapshots (used for undo).
     pub ghost_snapshot: GhostSnapshotConfig,
 
+    /// Strategy used when compacting conversation history.
+    pub compaction_strategy: CompactionStrategyConfig,
+
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
+
+    /// Settings for the Reflections compaction strategy.
+    pub reflections: ReflectionsConfig,
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
@@ -610,6 +618,21 @@ impl Default for MultiAgentV2Config {
             usage_hint_enabled: true,
             usage_hint_text: None,
             hide_spawn_agent_metadata: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReflectionsConfig {
+    pub usage_hint_enabled: bool,
+    pub usage_hint_text: Option<String>,
+}
+
+impl Default for ReflectionsConfig {
+    fn default() -> Self {
+        Self {
+            usage_hint_enabled: true,
+            usage_hint_text: None,
         }
     }
 }
@@ -1375,6 +1398,34 @@ fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiA
     }
 }
 
+fn resolve_reflections_config(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> ReflectionsConfig {
+    let base = reflections_toml_config(config_toml.features.as_ref());
+    let profile = reflections_toml_config(config_profile.features.as_ref());
+    let default = ReflectionsConfig::default();
+
+    let usage_hint_enabled = profile
+        .and_then(|config| config.usage_hint_enabled)
+        .or_else(|| base.and_then(|config| config.usage_hint_enabled))
+        .unwrap_or(default.usage_hint_enabled);
+    let usage_hint_text = profile
+        .and_then(|config| config.usage_hint_text.as_ref())
+        .or_else(|| base.and_then(|config| config.usage_hint_text.as_ref()))
+        .cloned()
+        .or(default.usage_hint_text);
+
+    ReflectionsConfig {
+        usage_hint_enabled,
+        usage_hint_text,
+    }
+}
+
+fn reflections_toml_config(features: Option<&FeaturesToml>) -> Option<&ReflectionsConfigToml> {
+    features?.reflections.as_ref()
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     sandbox_policy: &SandboxPolicy,
@@ -1706,6 +1757,11 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
+        let reflections = resolve_reflections_config(&cfg, &config_profile);
+        let compaction_strategy = config_profile
+            .compaction_strategy
+            .or(cfg.compaction_strategy)
+            .unwrap_or_default();
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -2146,7 +2202,9 @@ impl Config {
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
+            compaction_strategy,
             multi_agent_v2,
+            reflections,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
