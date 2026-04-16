@@ -145,16 +145,6 @@ pub struct ToolNamespaceDescription {
     pub description: String,
 }
 
-/// Options for rendering the model-visible `exec` tool description.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ExecToolDescriptionOptions {
-    /// Whether the model can only invoke tools through `exec`/`wait`.
-    pub code_mode_only: bool,
-    /// Whether additional nested tools are callable but intentionally omitted
-    /// from the description to save prompt context.
-    pub deferred_tools_available: bool,
-}
-
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct CodeModeExecPragma {
@@ -262,17 +252,18 @@ pub fn is_code_mode_nested_tool(tool_name: &str) -> bool {
 pub fn build_exec_tool_description(
     enabled_tools: &[ToolDefinition],
     namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
-    options: ExecToolDescriptionOptions,
+    code_mode_only: bool,
+    deferred_tools_available: bool,
 ) -> String {
     let mut sections = Vec::new();
-    if options.code_mode_only {
+    if code_mode_only {
         sections.push(CODE_MODE_ONLY_PREFACE.to_string());
     }
     sections.push(EXEC_DESCRIPTION_TEMPLATE.to_string());
-    if options.deferred_tools_available {
+    if deferred_tools_available {
         sections.push(DEFERRED_NESTED_TOOLS_GUIDANCE.to_string());
     }
-    if !options.code_mode_only {
+    if !code_mode_only {
         return sections.join("\n\n");
     }
 
@@ -720,7 +711,6 @@ fn render_json_schema_literal(value: &JsonValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::CodeModeToolKind;
-    use super::ExecToolDescriptionOptions;
     use super::ParsedExecSource;
     use super::ToolDefinition;
     use super::ToolNamespaceDescription;
@@ -878,10 +868,8 @@ mod tests {
                 output_schema: None,
             }],
             &BTreeMap::new(),
-            ExecToolDescriptionOptions {
-                code_mode_only: true,
-                ..Default::default()
-            },
+            /*code_mode_only*/ true,
+            /*deferred_tools_available*/ false,
         );
         assert!(description.contains(
             "### `foo`
@@ -894,7 +882,8 @@ bar"
         let description = build_exec_tool_description(
             &[],
             &BTreeMap::new(),
-            ExecToolDescriptionOptions::default(),
+            /*code_mode_only*/ false,
+            /*deferred_tools_available*/ false,
         );
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
@@ -945,10 +934,8 @@ bar"
                 },
             ],
             &namespace_descriptions,
-            ExecToolDescriptionOptions {
-                code_mode_only: true,
-                ..Default::default()
-            },
+            /*code_mode_only*/ true,
+            /*deferred_tools_available*/ false,
         );
         assert_eq!(description.matches("## mcp__sample").count(), 1);
         assert!(description.contains("## mcp__sample\nShared namespace guidance."));
@@ -987,10 +974,8 @@ bar"
                 }))),
             }],
             &namespace_descriptions,
-            ExecToolDescriptionOptions {
-                code_mode_only: true,
-                ..Default::default()
-            },
+            /*code_mode_only*/ true,
+            /*deferred_tools_available*/ false,
         );
 
         assert!(!description.contains("## mcp__sample"));
@@ -1088,10 +1073,8 @@ bar"
                 },
             ],
             &BTreeMap::new(),
-            ExecToolDescriptionOptions {
-                code_mode_only: true,
-                ..Default::default()
-            },
+            /*code_mode_only*/ true,
+            /*deferred_tools_available*/ false,
         );
 
         assert_eq!(
@@ -1108,10 +1091,8 @@ bar"
         let description = build_exec_tool_description(
             &[],
             &BTreeMap::new(),
-            ExecToolDescriptionOptions {
-                deferred_tools_available: true,
-                ..Default::default()
-            },
+            /*code_mode_only*/ false,
+            /*deferred_tools_available*/ true,
         );
 
         assert!(description.contains("Some nested MCP/app tools may be omitted"));

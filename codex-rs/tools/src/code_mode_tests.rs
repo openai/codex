@@ -197,20 +197,16 @@ fn create_code_mode_tool_matches_expected_spec() {
         create_code_mode_tool(
             &enabled_tools,
             &BTreeMap::new(),
-            codex_code_mode::ExecToolDescriptionOptions {
-                code_mode_only: true,
-                ..Default::default()
-            },
+            /*code_mode_only*/ true,
+            /*deferred_tools_available*/ false,
         ),
         ToolSpec::Freeform(FreeformTool {
             name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             description: codex_code_mode::build_exec_tool_description(
                 &enabled_tools,
                 &BTreeMap::new(),
-                codex_code_mode::ExecToolDescriptionOptions {
-                    code_mode_only: true,
-                    ..Default::default()
-                }
+                /*code_mode_only*/ true,
+                /*deferred_tools_available*/ false
             ),
             format: FreeformToolFormat {
                 r#type: "grammar".to_string(),
