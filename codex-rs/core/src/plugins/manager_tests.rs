@@ -15,6 +15,8 @@ use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core_plugins::loader::refresh_non_curated_plugin_cache;
+use codex_core_plugins::loader::refresh_non_curated_plugin_cache_force_reinstall;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::Product;
@@ -2562,7 +2564,6 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            NonCuratedCacheRefreshMode::IfVersionChanged,
         )
         .expect("cache refresh should succeed")
     );
@@ -2615,7 +2616,6 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            NonCuratedCacheRefreshMode::IfVersionChanged,
         )
         .expect("cache refresh should reinstall missing configured plugin")
     );
@@ -2669,7 +2669,6 @@ enabled = true
         !refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            NonCuratedCacheRefreshMode::IfVersionChanged,
         )
         .expect("cache refresh should be a no-op when configured plugins are current")
     );
@@ -2720,10 +2719,9 @@ enabled = true
     );
 
     assert!(
-        refresh_non_curated_plugin_cache(
+        refresh_non_curated_plugin_cache_force_reinstall(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            NonCuratedCacheRefreshMode::ForceReinstall,
         )
         .expect("cache refresh should reinstall unchanged local version")
     );
@@ -2782,7 +2780,6 @@ enabled = true
         refresh_non_curated_plugin_cache(
             tmp.path(),
             &[AbsolutePathBuf::try_from(repo_root).unwrap()],
-            NonCuratedCacheRefreshMode::IfVersionChanged,
         )
         .expect("cache refresh should ignore unrelated invalid plugin manifests")
     );

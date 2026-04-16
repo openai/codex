@@ -11,6 +11,8 @@ mod startup_sync;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
+pub use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
 pub use codex_plugin::AppConnectorId;
 pub use codex_plugin::EffectiveSkillRoots;
 pub use codex_plugin::PluginCapabilitySummary;

@@ -105,7 +105,9 @@ fn marketplace_install_root(codex_home: &Path) -> PathBuf {
     codex_home.join(INSTALLED_MARKETPLACES_DIR)
 }
 
-fn configured_git_marketplaces(config_layer_stack: &ConfigLayerStack) -> Vec<ConfiguredGitMarketplace> {
+fn configured_git_marketplaces(
+    config_layer_stack: &ConfigLayerStack,
+) -> Vec<ConfiguredGitMarketplace> {
     let Some(user_layer) = config_layer_stack.get_user_layer() else {
         return Vec::new();
     };

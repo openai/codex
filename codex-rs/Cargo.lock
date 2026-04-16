@@ -2019,6 +2019,7 @@ dependencies = [
 name = "codex-core-plugins"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "codex-app-server-protocol",
  "codex-config",
  "codex-core-skills",
