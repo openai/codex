@@ -188,7 +188,7 @@ async fn thread_start_accepts_explicit_local_environment_when_default_is_remote(
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            environment_id: Some("local".to_string()),
+            environment_ids: Some(vec!["local".to_string()]),
             ..Default::default()
         })
         .await?;
@@ -305,7 +305,7 @@ async fn thread_start_rejects_explicit_remote_environment_when_not_configured() 
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            environment_id: Some("remote".to_string()),
+            environment_ids: Some(vec!["remote".to_string()]),
             ..Default::default()
         })
         .await?;
@@ -342,7 +342,7 @@ async fn thread_start_rejects_explicit_environment_when_disabled() -> Result<()>
 
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            environment_id: Some("local".to_string()),
+            environment_ids: Some(vec!["local".to_string()]),
             ..Default::default()
         })
         .await?;

@@ -2267,15 +2267,16 @@ impl CodexMessageProcessor {
             personality,
             ephemeral,
             session_start_source,
-            environment_id,
             environment_ids,
             persist_extended_history,
         } = params;
+        // TODO(starr): Plumb environment ids as a list through core/session
+        // state instead of collapsing to the first id at the app-server
+        // boundary.
         let environment_id = environment_ids
             .as_ref()
             .and_then(|environment_ids| environment_ids.first())
-            .cloned()
-            .or(environment_id);
+            .cloned();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
