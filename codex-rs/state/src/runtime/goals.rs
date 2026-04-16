@@ -90,15 +90,11 @@ ON CONFLICT(thread_id) DO UPDATE SET
         thread_id: ThreadId,
         update: ThreadGoalUpdate,
     ) -> anyhow::Result<Option<crate::ThreadGoal>> {
-        let Some(existing) = self.get_thread_goal(thread_id).await? else {
-            return Ok(None);
-        };
-        let status = update.status.unwrap_or(existing.status);
-        let token_budget = update.token_budget.unwrap_or(existing.token_budget);
         let now_ms = datetime_to_epoch_millis(Utc::now());
-
-        sqlx::query(
-            r#"
+        let result = match (update.status, update.token_budget) {
+            (Some(status), Some(token_budget)) => {
+                sqlx::query(
+                    r#"
 UPDATE thread_goals
 SET
     status = ?,
@@ -106,13 +102,52 @@ SET
     updated_at_ms = ?
 WHERE thread_id = ?
             "#,
-        )
-        .bind(status.as_str())
-        .bind(token_budget)
-        .bind(now_ms)
-        .bind(thread_id.to_string())
-        .execute(self.pool.as_ref())
-        .await?;
+                )
+                .bind(status.as_str())
+                .bind(token_budget)
+                .bind(now_ms)
+                .bind(thread_id.to_string())
+                .execute(self.pool.as_ref())
+                .await?
+            }
+            (Some(status), None) => {
+                sqlx::query(
+                    r#"
+UPDATE thread_goals
+SET
+    status = ?,
+    updated_at_ms = ?
+WHERE thread_id = ?
+            "#,
+                )
+                .bind(status.as_str())
+                .bind(now_ms)
+                .bind(thread_id.to_string())
+                .execute(self.pool.as_ref())
+                .await?
+            }
+            (None, Some(token_budget)) => {
+                sqlx::query(
+                    r#"
+UPDATE thread_goals
+SET
+    token_budget = ?,
+    updated_at_ms = ?
+WHERE thread_id = ?
+            "#,
+                )
+                .bind(token_budget)
+                .bind(now_ms)
+                .bind(thread_id.to_string())
+                .execute(self.pool.as_ref())
+                .await?
+            }
+            (None, None) => return self.get_thread_goal(thread_id).await,
+        };
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
 
         self.get_thread_goal(thread_id).await
     }
@@ -240,6 +275,47 @@ mod tests {
         assert_eq!(crate::ThreadGoalStatus::Active, replaced.status);
         assert_eq!(None, replaced.token_budget);
         assert_eq!(0, replaced.tokens_used);
+    }
+
+    #[tokio::test]
+    async fn concurrent_partial_updates_preserve_independent_fields() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "optimize the benchmark",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(100_000),
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let status_update = runtime.update_thread_goal(
+            thread_id,
+            ThreadGoalUpdate {
+                status: Some(crate::ThreadGoalStatus::Paused),
+                token_budget: None,
+            },
+        );
+        let budget_update = runtime.update_thread_goal(
+            thread_id,
+            ThreadGoalUpdate {
+                status: None,
+                token_budget: Some(Some(200_000)),
+            },
+        );
+        let (status_update, budget_update) = tokio::join!(status_update, budget_update);
+        status_update.expect("status update should succeed");
+        budget_update.expect("budget update should succeed");
+
+        let goal = runtime
+            .get_thread_goal(thread_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("goal should exist");
+        assert_eq!(crate::ThreadGoalStatus::Paused, goal.status);
+        assert_eq!(Some(200_000), goal.token_budget);
     }
 
     #[tokio::test]
