@@ -1070,6 +1070,9 @@ async fn install_plugin_supports_git_subdir_marketplace_sources() {
     let tmp = tempfile::tempdir().unwrap();
     let repo_root = tmp.path().join("marketplace");
     let remote_repo = tmp.path().join("remote-plugin-repo");
+    let remote_repo_url = url::Url::from_directory_path(&remote_repo)
+        .unwrap()
+        .to_string();
     fs::create_dir_all(repo_root.join(".git")).unwrap();
     fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
     write_plugin(&remote_repo, "plugins/toolkit", "toolkit");
@@ -1090,7 +1093,7 @@ async fn install_plugin_supports_git_subdir_marketplace_sources() {
     }}
   ]
 }}"#,
-            remote_repo.display()
+            remote_repo_url
         ),
     )
     .unwrap();
