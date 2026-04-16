@@ -10,9 +10,11 @@ use std::time::Duration;
 
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -48,6 +50,7 @@ use codex_sandboxing::SandboxablePreference;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 
@@ -1013,11 +1016,17 @@ impl JsReplManager {
             .write_kernel_script()
             .await
             .map_err(|err| err.to_string())?;
+        let js_tmp_dir = AbsolutePathBuf::from_absolute_path(self.tmp_dir.path().to_path_buf())
+            .map_err(|err| format!("failed to resolve js_repl temp dir: {err}"))?;
 
         let mut env = create_env(&turn.shell_environment_policy, thread_id);
         if !dependency_env.is_empty() {
             env.extend(dependency_env.clone());
         }
+        env.insert(
+            "TMPDIR".to_string(),
+            self.tmp_dir.path().to_string_lossy().to_string(),
+        );
         env.insert(
             "CODEX_JS_TMP_DIR".to_string(),
             self.tmp_dir.path().to_string_lossy().to_string(),
@@ -1054,7 +1063,13 @@ impl JsReplManager {
             ],
             cwd: turn.cwd.clone(),
             env,
-            additional_permissions: None,
+            additional_permissions: Some(PermissionProfile {
+                network: None,
+                file_system: Some(FileSystemPermissions {
+                    read: None,
+                    write: Some(vec![js_tmp_dir]),
+                }),
+            }),
         };
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
@@ -1568,7 +1583,6 @@ impl JsReplManager {
             crate::tools::router::ToolRouterParams {
                 deferred_mcp_tools: None,
                 mcp_tools: Some(mcp_tools),
-                unavailable_called_tools: Vec::new(),
                 // JS REPL dispatches nested tool calls directly, not through
                 // `ToolCallRuntime`'s parallel scheduling lock.
                 parallel_mcp_server_names: std::collections::HashSet::new(),
@@ -1970,6 +1984,7 @@ pub(crate) async fn resolve_compatible_node(config_path: Option<&Path>) -> Resul
     let node_path = resolve_node(config_path).ok_or_else(|| {
         "Node runtime not found; install Node or set CODEX_JS_REPL_NODE_PATH".to_string()
     })?;
+    let node_path = materialize_dotslash_path(node_path).await?;
     ensure_node_version(&node_path).await?;
     Ok(node_path)
 }
@@ -1993,6 +2008,62 @@ pub(crate) fn resolve_node(config_path: Option<&Path>) -> Option<PathBuf> {
     }
 
     None
+}
+
+async fn materialize_dotslash_path(path: PathBuf) -> Result<PathBuf, String> {
+    if !is_dotslash_manifest(&path).await? {
+        return Ok(path);
+    }
+
+    let output = tokio::process::Command::new("dotslash")
+        .arg("--")
+        .arg("fetch")
+        .arg(&path)
+        .output()
+        .await
+        .map_err(|err| format!("failed to run dotslash for {}: {err}", path.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "dotslash fetch failed for {}: {stderr}",
+            path.display()
+        ));
+    }
+
+    let fetched_path = String::from_utf8(output.stdout)
+        .map_err(|err| {
+            format!(
+                "dotslash fetch output was not utf8 for {}: {err}",
+                path.display()
+            )
+        })?
+        .trim()
+        .to_string();
+    if fetched_path.is_empty() {
+        return Err(format!(
+            "dotslash fetch output was empty for {}",
+            path.display()
+        ));
+    }
+
+    let fetched_path = PathBuf::from(fetched_path);
+    if !fetched_path.is_file() {
+        return Err(format!(
+            "dotslash returned non-file path for {}: {}",
+            path.display(),
+            fetched_path.display()
+        ));
+    }
+
+    Ok(fetched_path)
+}
+
+async fn is_dotslash_manifest(path: &Path) -> Result<bool, String> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|err| format!("failed to read Node runtime path {}: {err}", path.display()))?;
+    let prefix = String::from_utf8_lossy(&bytes[..bytes.len().min(128)]);
+    Ok(prefix.starts_with("#!/usr/bin/env dotslash"))
 }
 
 #[cfg(test)]

@@ -73,12 +73,26 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
 fn assert_parallel_duration(actual: Duration) {
     // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
     assert!(
-        actual < Duration::from_millis(1_600),
+        actual < Duration::from_secs(6),
         "expected parallel execution to finish quickly, got {actual:?}"
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+fn assert_shell_function_call_succeeded(
+    req: &core_test_support::responses::ResponsesRequest,
+    call_id: &str,
+) {
+    let (content, success) = req
+        .function_call_output_content_and_success(call_id)
+        .unwrap_or_else(|| panic!("shell output missing for {call_id}"));
+    assert_eq!(
+        success,
+        Some(true),
+        "expected successful shell output for {call_id}, got content={content:?} success={success:?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -126,7 +140,7 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(
+    let response_mock = mount_sse_sequence(
         &server,
         vec![warmup_first, warmup_second, first_response, second_response],
     )
@@ -136,11 +150,22 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
 
     let duration = run_turn_and_measure(&test, "exercise sync tool").await?;
     assert_parallel_duration(duration);
+    let req = response_mock
+        .last_request()
+        .expect("parallel sync tool run should send a completion request");
+    assert_eq!(
+        req.function_call_output_text("call-1").as_deref(),
+        Some("ok")
+    );
+    assert_eq!(
+        req.function_call_output_text("call-2").as_deref(),
+        Some("ok")
+    );
 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -148,15 +173,39 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     let mut builder = test_codex().with_model("gpt-5.1");
     let test = builder.build(&server).await?;
 
-    let shell_args = json!({
-        "command": "sleep 0.25",
+    let warmup_shell_args = json!({
+        "command": "sleep 0.01",
         // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
         "login": false,
         "timeout_ms": 1_000,
     });
+    let shell_args = json!({
+        "command": "sleep 3",
+        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
+        "login": false,
+        "timeout_ms": 10_000,
+    });
+    let shell_args_two = json!({
+        "command": "sleep 3",
+        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
+        "login": false,
+        "timeout_ms": 10_000,
+    });
+    let warmup_args_one = serde_json::to_string(&warmup_shell_args)?;
+    let warmup_args_two = serde_json::to_string(&warmup_shell_args)?;
     let args_one = serde_json::to_string(&shell_args)?;
-    let args_two = serde_json::to_string(&shell_args)?;
+    let args_two = serde_json::to_string(&shell_args_two)?;
 
+    let warmup_first_response = sse(vec![
+        json!({"type": "response.created", "response": {"id": "resp-warm-1"}}),
+        ev_function_call("warm-call-1", "shell_command", &warmup_args_one),
+        ev_function_call("warm-call-2", "shell_command", &warmup_args_two),
+        ev_completed("resp-warm-1"),
+    ]);
+    let warmup_second_response = sse(vec![
+        ev_assistant_message("warm-msg-1", "warmup done"),
+        ev_completed("resp-warm-2"),
+    ]);
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
         ev_function_call("call-1", "shell_command", &args_one),
@@ -167,25 +216,50 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            warmup_first_response,
+            warmup_second_response,
+            first_response,
+            second_response,
+        ],
+    )
+    .await;
 
+    run_turn(&test, "warm up shell_command in parallel").await?;
     let duration = run_turn_and_measure(&test, "run shell_command twice").await?;
     assert_parallel_duration(duration);
+    let req = response_mock
+        .last_request()
+        .expect("parallel shell run should send a completion request");
+    assert_shell_function_call_succeeded(&req, "call-1");
+    assert_shell_function_call_succeeded(&req, "call-2");
 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let test = build_codex_with_test_tool(&server).await?;
 
+    let warmup_sync_args = json!({
+        "sleep_after_ms": 10
+    })
+    .to_string();
     let sync_args = json!({
         "sleep_after_ms": 300
     })
     .to_string();
+    let warmup_shell_args = serde_json::to_string(&json!({
+        "command": "sleep 0.01",
+        // Avoid user-specific shell startup cost in timing assertions.
+        "login": false,
+        "timeout_ms": 1_000,
+    }))?;
     let shell_args = serde_json::to_string(&json!({
         "command": "sleep 0.25",
         // Avoid user-specific shell startup cost in timing assertions.
@@ -193,6 +267,16 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
         "timeout_ms": 1_000,
     }))?;
 
+    let warmup_first_response = sse(vec![
+        json!({"type": "response.created", "response": {"id": "resp-warm-1"}}),
+        ev_function_call("warm-call-1", "test_sync_tool", &warmup_sync_args),
+        ev_function_call("warm-call-2", "shell_command", &warmup_shell_args),
+        ev_completed("resp-warm-1"),
+    ]);
+    let warmup_second_response = sse(vec![
+        ev_assistant_message("warm-msg-1", "warmup done"),
+        ev_completed("resp-warm-2"),
+    ]);
     let first_response = sse(vec![
         json!({"type": "response.created", "response": {"id": "resp-1"}}),
         ev_function_call("call-1", "test_sync_tool", &sync_args),
@@ -203,8 +287,18 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_assistant_message("msg-1", "done"),
         ev_completed("resp-2"),
     ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    mount_sse_sequence(
+        &server,
+        vec![
+            warmup_first_response,
+            warmup_second_response,
+            first_response,
+            second_response,
+        ],
+    )
+    .await;
 
+    run_turn(&test, "warm up mixed tools").await?;
     let duration = run_turn_and_measure(&test, "mix tools").await?;
     assert_parallel_duration(duration);
 

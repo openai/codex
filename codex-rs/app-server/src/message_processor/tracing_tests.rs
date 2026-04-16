@@ -41,6 +41,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::SpanData;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -503,154 +504,187 @@ where
     spans.into_iter().skip(baseline_len).collect()
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
-    let mut harness = TracingHarness::new().await?;
-
-    let RemoteTrace {
-        trace_id: remote_trace_id,
-        parent_span_id: remote_parent_span_id,
-        context: remote_trace,
-        ..
-    } = RemoteTrace::new("00000000000000000000000000000011", "0000000000000022");
-
-    let _: ThreadStartResponse = harness
-        .start_thread(/*request_id*/ 20_002, /*trace*/ None)
-        .await;
-    let untraced_spans = wait_for_exported_spans(harness.tracing, |spans| {
-        spans.iter().any(|span| {
-            span.span_kind == SpanKind::Server
-                && span_attr(span, "rpc.method") == Some("thread/start")
+fn run_current_thread_test_with_large_stack<F, Fut>(test: F) -> Result<()>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<()>> + 'static,
+{
+    let join_handle = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("current-thread runtime should build")
+                .block_on(test())
         })
-    })
-    .await;
-    let untraced_server_span = find_rpc_span_with_trace(
-        &untraced_spans,
-        SpanKind::Server,
-        "thread/start",
-        untraced_spans
-            .iter()
-            .rev()
-            .find(|span| {
-                span.span_kind == SpanKind::Server
-                    && span_attr(span, "rpc.system") == Some("jsonrpc")
-                    && span_attr(span, "rpc.method") == Some("thread/start")
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "missing latest thread/start server span; exported spans:\n{}",
-                    format_spans(&untraced_spans)
-                )
-            })
-            .span_context
-            .trace_id(),
-    );
-    assert_has_internal_descendant_at_min_depth(
-        &untraced_spans,
-        untraced_server_span,
-        /*min_depth*/ 1,
-    );
+        .expect("test thread should spawn");
 
-    let baseline_len = untraced_spans.len();
-    let _: ThreadStartResponse = harness
-        .start_thread(/*request_id*/ 20_003, Some(remote_trace))
-        .await;
-    let spans = wait_for_new_exported_spans(harness.tracing, baseline_len, |spans| {
-        spans.iter().any(|span| {
-            span.span_kind == SpanKind::Server
-                && span_attr(span, "rpc.method") == Some("thread/start")
-                && span.span_context.trace_id() == remote_trace_id
-        }) && spans.iter().any(|span| {
-            span.name.as_ref() == "app_server.thread_start.notify_started"
-                && span.span_context.trace_id() == remote_trace_id
-        })
-    })
-    .await;
-
-    let server_request_span =
-        find_rpc_span_with_trace(&spans, SpanKind::Server, "thread/start", remote_trace_id);
-    assert_eq!(server_request_span.name.as_ref(), "thread/start");
-    assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
-    assert!(server_request_span.parent_span_is_remote);
-    assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
-    assert_ne!(server_request_span.span_context.span_id(), SpanId::INVALID);
-    assert_has_internal_descendant_at_min_depth(&spans, server_request_span, /*min_depth*/ 1);
-    assert_has_internal_descendant_at_min_depth(&spans, server_request_span, /*min_depth*/ 2);
-    harness.shutdown().await;
-
-    Ok(())
+    join_handle
+        .join()
+        .unwrap_or_else(|panic_payload| std::panic::resume_unwind(panic_payload))
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
-    let mut harness = TracingHarness::new().await?;
-    let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
-    let thread_id = thread_start_response.thread.id.clone();
+#[test]
+fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
+    run_current_thread_test_with_large_stack(|| async {
+        let _guard = tracing_test_guard().lock().await;
+        let mut harness = TracingHarness::new().await?;
 
-    harness.reset_tracing();
+        let RemoteTrace {
+            trace_id: remote_trace_id,
+            parent_span_id: remote_parent_span_id,
+            context: remote_trace,
+            ..
+        } = RemoteTrace::new("00000000000000000000000000000011", "0000000000000022");
 
-    let RemoteTrace {
-        trace_id: remote_trace_id,
-        parent_span_id: remote_parent_span_id,
-        context: remote_trace,
-    } = RemoteTrace::new("00000000000000000000000000000077", "0000000000000088");
-    let turn_start_response: TurnStartResponse = harness
-        .request(
-            ClientRequest::TurnStart {
-                request_id: RequestId::Integer(3),
-                params: TurnStartParams {
-                    thread_id,
-                    input: vec![UserInput::Text {
-                        text: "hello".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    responsesapi_client_metadata: None,
-                    cwd: None,
-                    approval_policy: None,
-                    sandbox_policy: None,
-                    approvals_reviewer: None,
-                    model: None,
-                    service_tier: None,
-                    effort: None,
-                    summary: None,
-                    personality: None,
-                    output_schema: None,
-                    collaboration_mode: None,
-                },
-            },
-            Some(remote_trace),
-        )
-        .await;
-    let spans = wait_for_exported_spans(harness.tracing, |spans| {
-        spans.iter().any(|span| {
-            span.span_kind == SpanKind::Server
-                && span_attr(span, "rpc.method") == Some("turn/start")
-                && span.span_context.trace_id() == remote_trace_id
-        }) && spans.iter().any(|span| {
-            span_attr(span, "codex.op") == Some("user_input")
-                && span.span_context.trace_id() == remote_trace_id
+        let _: ThreadStartResponse = harness
+            .start_thread(/*request_id*/ 20_002, /*trace*/ None)
+            .await;
+        let untraced_spans = wait_for_exported_spans(harness.tracing, |spans| {
+            spans.iter().any(|span| {
+                span.span_kind == SpanKind::Server
+                    && span_attr(span, "rpc.method") == Some("thread/start")
+            })
         })
+        .await;
+        let untraced_server_span = find_rpc_span_with_trace(
+            &untraced_spans,
+            SpanKind::Server,
+            "thread/start",
+            untraced_spans
+                .iter()
+                .rev()
+                .find(|span| {
+                    span.span_kind == SpanKind::Server
+                        && span_attr(span, "rpc.system") == Some("jsonrpc")
+                        && span_attr(span, "rpc.method") == Some("thread/start")
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing latest thread/start server span; exported spans:\n{}",
+                        format_spans(&untraced_spans)
+                    )
+                })
+                .span_context
+                .trace_id(),
+        );
+        assert_has_internal_descendant_at_min_depth(
+            &untraced_spans,
+            untraced_server_span,
+            /*min_depth*/ 1,
+        );
+
+        let baseline_len = untraced_spans.len();
+        let _: ThreadStartResponse = harness
+            .start_thread(/*request_id*/ 20_003, Some(remote_trace))
+            .await;
+        let spans = wait_for_new_exported_spans(harness.tracing, baseline_len, |spans| {
+            spans.iter().any(|span| {
+                span.span_kind == SpanKind::Server
+                    && span_attr(span, "rpc.method") == Some("thread/start")
+                    && span.span_context.trace_id() == remote_trace_id
+            }) && spans.iter().any(|span| {
+                span.name.as_ref() == "app_server.thread_start.notify_started"
+                    && span.span_context.trace_id() == remote_trace_id
+            })
+        })
+        .await;
+
+        let server_request_span =
+            find_rpc_span_with_trace(&spans, SpanKind::Server, "thread/start", remote_trace_id);
+        assert_eq!(server_request_span.name.as_ref(), "thread/start");
+        assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
+        assert!(server_request_span.parent_span_is_remote);
+        assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
+        assert_ne!(server_request_span.span_context.span_id(), SpanId::INVALID);
+        assert_has_internal_descendant_at_min_depth(
+            &spans,
+            server_request_span,
+            /*min_depth*/ 1,
+        );
+        assert_has_internal_descendant_at_min_depth(
+            &spans,
+            server_request_span,
+            /*min_depth*/ 2,
+        );
+        harness.shutdown().await;
+
+        Ok(())
     })
-    .await;
+}
 
-    let server_request_span =
-        find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
-    let core_turn_span =
-        find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
-            span_attr(span, "codex.op") == Some("user_input")
-        });
+#[test]
+fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
+    run_current_thread_test_with_large_stack(|| async {
+        let _guard = tracing_test_guard().lock().await;
+        let mut harness = TracingHarness::new().await?;
+        let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
+        let thread_id = thread_start_response.thread.id.clone();
 
-    assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
-    assert!(server_request_span.parent_span_is_remote);
-    assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
-    assert_eq!(
-        span_attr(server_request_span, "turn.id"),
-        Some(turn_start_response.turn.id.as_str())
-    );
-    assert_span_descends_from(&spans, core_turn_span, server_request_span);
-    harness.shutdown().await;
+        harness.reset_tracing();
 
-    Ok(())
+        let RemoteTrace {
+            trace_id: remote_trace_id,
+            parent_span_id: remote_parent_span_id,
+            context: remote_trace,
+        } = RemoteTrace::new("00000000000000000000000000000077", "0000000000000088");
+        let turn_start_response: TurnStartResponse = harness
+            .request(
+                ClientRequest::TurnStart {
+                    request_id: RequestId::Integer(3),
+                    params: TurnStartParams {
+                        thread_id,
+                        input: vec![UserInput::Text {
+                            text: "hello".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        responsesapi_client_metadata: None,
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        approvals_reviewer: None,
+                        model: None,
+                        service_tier: None,
+                        effort: None,
+                        summary: None,
+                        personality: None,
+                        output_schema: None,
+                        collaboration_mode: None,
+                    },
+                },
+                Some(remote_trace),
+            )
+            .await;
+        let spans = wait_for_exported_spans(harness.tracing, |spans| {
+            spans.iter().any(|span| {
+                span.span_kind == SpanKind::Server
+                    && span_attr(span, "rpc.method") == Some("turn/start")
+                    && span.span_context.trace_id() == remote_trace_id
+            }) && spans.iter().any(|span| {
+                span_attr(span, "codex.op") == Some("user_input")
+                    && span.span_context.trace_id() == remote_trace_id
+            })
+        })
+        .await;
+
+        let server_request_span =
+            find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
+        let core_turn_span =
+            find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
+                span_attr(span, "codex.op") == Some("user_input")
+            });
+
+        assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
+        assert!(server_request_span.parent_span_is_remote);
+        assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
+        assert_eq!(
+            span_attr(server_request_span, "turn.id"),
+            Some(turn_start_response.turn.id.as_str())
+        );
+        assert_span_descends_from(&spans, core_turn_span, server_request_span);
+        harness.shutdown().await;
+
+        Ok(())
+    })
 }

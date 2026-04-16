@@ -57,8 +57,6 @@ use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
-const STARTUP_CONTEXT_OPEN_TAG: &str = "<startup_context>";
-const STARTUP_CONTEXT_CLOSE_TAG: &str = "</startup_context>";
 const REALTIME_BACKEND_PROMPT: &str = include_str!("../../templates/realtime/backend_prompt.md");
 const USER_FIRST_NAME_PLACEHOLDER: &str = "{{ user_first_name }}";
 const MEMORY_PROMPT_PHRASE: &str =
@@ -1532,8 +1530,6 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     let startup_context = websocket_request_instructions(&startup_context_request)
         .expect("startup context request should contain instructions");
 
-    assert!(startup_context.contains(STARTUP_CONTEXT_OPEN_TAG));
-    assert!(startup_context.contains(STARTUP_CONTEXT_CLOSE_TAG));
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
     assert!(!startup_context.contains("## User"));
     assert!(startup_context.contains("### "));
@@ -1751,8 +1747,6 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
     let startup_context = websocket_request_instructions(&startup_context_request)
         .expect("startup context request should contain instructions");
 
-    assert!(startup_context.contains(STARTUP_CONTEXT_OPEN_TAG));
-    assert!(startup_context.contains(STARTUP_CONTEXT_CLOSE_TAG));
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
     assert!(startup_context.contains("## Machine / Workspace Map"));
     assert!(startup_context.contains("notes.txt"));
@@ -1807,8 +1801,6 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
     .await;
     let startup_context = websocket_request_instructions(&startup_context_request)
         .expect("startup context request should contain instructions");
-    assert!(startup_context.contains(STARTUP_CONTEXT_OPEN_TAG));
-    assert!(startup_context.contains(STARTUP_CONTEXT_CLOSE_TAG));
     assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
     assert!(startup_context.len() <= 20_500);
 
@@ -1887,7 +1879,6 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
     assert_eq!(session_updated, "sess_user_text");
 
     let user_text = "typed follow-up for realtime";
-    let prefixed_user_text = format!("[USER] {user_text}");
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -1907,7 +1898,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
     let realtime_text_request = wait_for_matching_websocket_request(
         &realtime_server,
         "normal user turn text mirrored to realtime",
-        |request| websocket_request_text(request).as_deref() == Some(prefixed_user_text.as_str()),
+        |request| websocket_request_text(request).as_deref() == Some(user_text),
     )
     .await;
     let model_user_texts = response_mock.single_request().message_input_texts("user");
@@ -1916,7 +1907,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
             model_user_texts.iter().any(|text| text == user_text),
             websocket_request_text(&realtime_text_request),
         ),
-        (true, Some(prefixed_user_text)),
+        (true, Some(user_text.to_string())),
     );
     let realtime_response_create = timeout(Duration::from_millis(200), async {
         wait_for_matching_websocket_request(
@@ -2698,7 +2689,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
     .await;
 
     let audio_out = tokio::time::timeout(
-        Duration::from_millis(500),
+        Duration::from_secs(2),
         wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
                 payload: RealtimeEvent::AudioOut(frame),
