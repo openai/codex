@@ -3044,6 +3044,8 @@ pub struct ThreadGoal {
     #[ts(type = "number")]
     pub tokens_used: i64,
     #[ts(type = "number")]
+    pub time_used_seconds: i64,
+    #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number")]
     pub updated_at: i64,
@@ -3057,6 +3059,7 @@ impl From<codex_protocol::protocol::ThreadGoal> for ThreadGoal {
             status: value.status.into(),
             token_budget: value.token_budget,
             tokens_used: value.tokens_used,
+            time_used_seconds: value.time_used_seconds,
             created_at: value.created_at,
             updated_at: value.updated_at,
         }

@@ -192,6 +192,9 @@ fn completion_budget_report(goal: &ThreadGoal) -> Option<String> {
     if let Some(budget) = goal.token_budget {
         parts.push(format!("tokens used: {} of {budget}", goal.tokens_used));
     }
+    if goal.time_used_seconds > 0 {
+        parts.push(format!("time used: {} seconds", goal.time_used_seconds));
+    }
     if parts.is_empty() {
         None
     } else {
@@ -224,6 +227,7 @@ mod tests {
             status: ThreadGoalStatus::Complete,
             token_budget: Some(10_000),
             tokens_used: 3_250,
+            time_used_seconds: 75,
             created_at: 1,
             updated_at: 2,
         };
@@ -236,7 +240,7 @@ mod tests {
                 goal: Some(goal),
                 remaining_tokens: Some(6_750),
                 completion_budget_report: Some(
-                    "Goal achieved. Report final budget usage to the user: tokens used: 3250 of 10000."
+                    "Goal achieved. Report final budget usage to the user: tokens used: 3250 of 10000; time used: 75 seconds."
                         .to_string()
                 ),
             }
@@ -251,6 +255,7 @@ mod tests {
             status: ThreadGoalStatus::Complete,
             token_budget: None,
             tokens_used: 120,
+            time_used_seconds: 0,
             created_at: 1,
             updated_at: 2,
         };
