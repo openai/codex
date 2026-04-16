@@ -169,7 +169,12 @@ async fn mitm_policy_allows_matching_hooked_write_in_full_mode() {
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);
     let app_state = Arc::new(network_proxy_state_for_policy(network));
-    let ctx = policy_ctx(app_state.clone(), NetworkMode::Full, "api.github.com", 443);
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Full,
+        "api.github.com",
+        /*target_port*/ 443,
+    );
     let req = Request::builder()
         .method(Method::POST)
         .uri("/repos/openai/codex/issues")
@@ -202,7 +207,12 @@ async fn mitm_policy_blocks_hook_miss_for_hooked_host_and_records_telemetry_in_f
     };
     network.set_allowed_domains(vec!["api.github.com".to_string()]);
     let app_state = Arc::new(network_proxy_state_for_policy(network));
-    let ctx = policy_ctx(app_state.clone(), NetworkMode::Full, "api.github.com", 443);
+    let ctx = policy_ctx(
+        app_state.clone(),
+        NetworkMode::Full,
+        "api.github.com",
+        /*target_port*/ 443,
+    );
     let req = Request::builder()
         .method(Method::GET)
         .uri("/repos/openai/codex/issues?token=secret")

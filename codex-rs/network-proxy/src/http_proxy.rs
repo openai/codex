@@ -1093,7 +1093,9 @@ mod tests {
             .unwrap();
         req.extensions_mut().insert(state);
 
-        let response = http_connect_accept(None, req).await.unwrap_err();
+        let response = http_connect_accept(/*policy_decider*/ None, req)
+            .await
+            .unwrap_err();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),

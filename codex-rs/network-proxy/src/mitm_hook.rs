@@ -17,7 +17,7 @@ use std::fs;
 use std::path::Path;
 use url::form_urlencoded;
 
-const GLOB_PREFIX: &str = "glob:";
+const PATTERN_PREFIX: &str = "pattern:";
 const LITERAL_PREFIX: &str = "literal:";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -507,7 +507,7 @@ fn parse_matcher_pattern(pattern: &str) -> Result<MatcherPattern<'_>> {
     if let Some(literal) = pattern.strip_prefix(LITERAL_PREFIX) {
         return Ok(MatcherPattern::Literal(literal));
     }
-    let Some(glob_pattern) = pattern.strip_prefix(GLOB_PREFIX) else {
+    let Some(glob_pattern) = pattern.strip_prefix(PATTERN_PREFIX) else {
         return Ok(MatcherPattern::Literal(pattern));
     };
     if glob_pattern.is_empty() {
@@ -852,11 +852,12 @@ mod tests {
     fn evaluate_matches_wildcard_path_query_and_header_constraints() {
         let mut config = base_config();
         let mut hook = github_hook();
-        hook.matcher.path_prefixes = vec!["glob:/repos/*/codex/issues*".to_string()];
-        hook.matcher.query = BTreeMap::from([("state".to_string(), vec!["glob:op*".to_string()])]);
+        hook.matcher.path_prefixes = vec!["pattern:/repos/*/codex/issues*".to_string()];
+        hook.matcher.query =
+            BTreeMap::from([("state".to_string(), vec!["pattern:op*".to_string()])]);
         hook.matcher.headers = BTreeMap::from([(
             "x-github-api-version".to_string(),
-            vec!["glob:2022*preview".to_string()],
+            vec!["pattern:2022*preview".to_string()],
         )]);
         config.network.mitm_hooks = vec![hook];
 
@@ -885,7 +886,7 @@ mod tests {
     fn validate_rejects_invalid_wildcard_path_pattern() {
         let mut config = base_config();
         let mut hook = github_hook();
-        hook.matcher.path_prefixes = vec!["glob:/repos/[".to_string()];
+        hook.matcher.path_prefixes = vec!["pattern:/repos/[".to_string()];
         config.network.mitm_hooks = vec![hook];
 
         let err = validate_mitm_hook_config(&config).expect_err("invalid glob should fail");
@@ -896,7 +897,7 @@ mod tests {
     fn evaluate_path_wildcard_does_not_cross_segment_boundaries() {
         let mut config = base_config();
         let mut hook = github_hook();
-        hook.matcher.path_prefixes = vec!["glob:/repos/*/codex/issues*".to_string()];
+        hook.matcher.path_prefixes = vec!["pattern:/repos/*/codex/issues*".to_string()];
         config.network.mitm_hooks = vec![hook];
 
         let hooks = compile_mitm_hooks_with_resolvers(
@@ -965,10 +966,10 @@ mod tests {
         let mut config = base_config();
         let mut hook = github_hook();
         hook.matcher.query =
-            BTreeMap::from([("state".to_string(), vec!["literal:glob:*".to_string()])]);
+            BTreeMap::from([("state".to_string(), vec!["literal:pattern:*".to_string()])]);
         hook.matcher.headers = BTreeMap::from([(
             "x-github-api-version".to_string(),
-            vec!["literal:glob:*".to_string()],
+            vec!["literal:pattern:*".to_string()],
         )]);
         config.network.mitm_hooks = vec![hook];
 
@@ -980,14 +981,14 @@ mod tests {
         .unwrap();
         let exact_req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues?state=glob%3A%2A")
-            .header("x-github-api-version", "glob:*")
+            .uri("/repos/openai/codex/issues?state=pattern%3A%2A")
+            .header("x-github-api-version", "pattern:*")
             .body(Body::empty())
             .unwrap();
         let non_literal_req = Request::builder()
             .method(Method::POST)
-            .uri("/repos/openai/codex/issues?state=glob%3Aopen")
-            .header("x-github-api-version", "glob:preview")
+            .uri("/repos/openai/codex/issues?state=pattern%3Aopen")
+            .header("x-github-api-version", "pattern:preview")
             .body(Body::empty())
             .unwrap();
 
