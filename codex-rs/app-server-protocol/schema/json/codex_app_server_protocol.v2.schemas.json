@@ -10969,6 +10969,10 @@
         "threadId": {
           "type": "string"
         },
+        "timeUsedSeconds": {
+          "format": "int64",
+          "type": "integer"
+        },
         "tokenBudget": {
           "format": "int64",
           "type": [
@@ -10990,6 +10994,7 @@
         "objective",
         "status",
         "threadId",
+        "timeUsedSeconds",
         "tokensUsed",
         "updatedAt"
       ],
