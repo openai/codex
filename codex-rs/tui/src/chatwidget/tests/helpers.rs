@@ -254,6 +254,7 @@ pub(super) async fn make_chatwidget_manual(
         queued_user_messages: VecDeque::new(),
         queued_user_message_history_records: VecDeque::new(),
         rejected_steers_queue: VecDeque::new(),
+        rejected_steer_history_records: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
@@ -570,6 +571,7 @@ pub(super) fn complete_assistant_message(
 pub(super) fn pending_steer(text: &str) -> PendingSteer {
     PendingSteer {
         user_message: UserMessage::from(text),
+        history_record: UserMessageHistoryRecord::UserMessageText,
         compare_key: PendingSteerCompareKey {
             message: text.to_string(),
             image_count: 0,

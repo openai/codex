@@ -892,6 +892,9 @@ pub(crate) struct ChatWidget {
     queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
+    // History records for rejected steers. This is kept in lockstep with
+    // `rejected_steers_queue`, with missing entries treated as user-message text.
+    rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     // Steers already submitted to core but not yet committed into history.
     //
     // The bottom pane shows these above queued drafts until core records the
@@ -1050,7 +1053,7 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum UserMessageHistoryRecord {
     UserMessageText,
     Override(String),
@@ -1117,6 +1120,7 @@ impl From<&str> for UserMessage {
 
 struct PendingSteer {
     user_message: UserMessage,
+    history_record: UserMessageHistoryRecord,
     compare_key: PendingSteerCompareKey,
 }
 
@@ -1995,6 +1999,7 @@ impl ChatWidget {
         self.last_turn_id = None;
         self.thread_name = event.thread_name.clone();
         self.current_goal_status_indicator = None;
+        self.update_collaboration_mode_indicator();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.to_path_buf());
@@ -2553,10 +2558,49 @@ impl ChatWidget {
                 (user_message, history_record)
             })
         } else {
-            Some((
-                merge_user_messages(self.rejected_steers_queue.drain(..).collect()),
+            let rejected_messages = self.rejected_steers_queue.drain(..).collect::<Vec<_>>();
+            let mut history_records = self
+                .rejected_steer_history_records
+                .drain(..)
+                .collect::<Vec<_>>();
+            history_records.resize(
+                rejected_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,
-            ))
+            );
+            let history_record = if history_records
+                .iter()
+                .all(|record| *record == UserMessageHistoryRecord::UserMessageText)
+            {
+                UserMessageHistoryRecord::UserMessageText
+            } else {
+                let history_text = rejected_messages
+                    .iter()
+                    .zip(history_records.iter())
+                    .filter_map(|(message, record)| match record {
+                        UserMessageHistoryRecord::Override(history_text)
+                            if !history_text.is_empty() =>
+                        {
+                            Some(history_text.clone())
+                        }
+                        UserMessageHistoryRecord::Override(_) if message.text.is_empty() => None,
+                        UserMessageHistoryRecord::Override(_)
+                        | UserMessageHistoryRecord::UserMessageText => {
+                            let encoded_mentions = message
+                                .mention_bindings
+                                .iter()
+                                .map(|binding| LinkedMention {
+                                    mention: binding.mention.clone(),
+                                    path: binding.path.clone(),
+                                })
+                                .collect::<Vec<_>>();
+                            Some(encode_history_mentions(&message.text, &encoded_mentions))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                UserMessageHistoryRecord::Override(history_text)
+            };
+            Some((merge_user_messages(rejected_messages), history_record))
         }
     }
 
@@ -2565,6 +2609,7 @@ impl ChatWidget {
             self.queued_user_message_history_records.pop_back();
             Some(user_message)
         } else {
+            self.rejected_steer_history_records.pop_back();
             self.rejected_steers_queue.pop_back()
         }
     }
@@ -2578,6 +2623,8 @@ impl ChatWidget {
         };
         self.rejected_steers_queue
             .push_back(pending_steer.user_message);
+        self.rejected_steer_history_records
+            .push_back(pending_steer.history_record);
         self.refresh_pending_input_preview();
         true
     }
@@ -3234,6 +3281,7 @@ impl ChatWidget {
         };
 
         let mut to_merge: Vec<UserMessage> = self.rejected_steers_queue.drain(..).collect();
+        self.rejected_steer_history_records.clear();
         to_merge.extend(
             self.pending_steers
                 .drain(..)
@@ -3336,10 +3384,14 @@ impl ChatWidget {
                         image_count: user_message.local_images.len()
                             + user_message.remote_image_urls.len(),
                     },
+                    history_record: UserMessageHistoryRecord::UserMessageText,
                     user_message,
                 })
                 .collect();
             self.rejected_steers_queue = input_state.rejected_steers_queue;
+            self.rejected_steer_history_records =
+                vec![UserMessageHistoryRecord::UserMessageText; self.rejected_steers_queue.len()]
+                    .into();
             self.queued_user_messages = input_state.queued_user_messages;
             self.queued_user_message_history_records =
                 vec![UserMessageHistoryRecord::UserMessageText; self.queued_user_messages.len()]
@@ -3348,6 +3400,7 @@ impl ChatWidget {
             self.agent_turn_running = false;
             self.pending_steers.clear();
             self.rejected_steers_queue.clear();
+            self.rejected_steer_history_records.clear();
             self.set_remote_image_urls(Vec::new());
             self.bottom_pane.set_composer_text_with_mention_bindings(
                 String::new(),
@@ -4975,6 +5028,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             queued_user_message_history_records: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
+            rejected_steer_history_records: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
@@ -5629,6 +5683,7 @@ impl ChatWidget {
                 text_elements: text_elements.clone(),
                 mention_bindings: mention_bindings.clone(),
             },
+            history_record: history_record.clone(),
             compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
         let personality = self
