@@ -86,20 +86,38 @@ jobs:
             --print-failed-test-logs
             --use-node-test-env
           )
-          bazel_test_args=(
-            test
+          bazel_common_args=(
             --test_tag_filters=-argument-comment-lint
-            --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            bazel_wrapper_args+=(--ci-config=ci-windows-cross)
+            ./.github/scripts/run-bazel-ci.sh \
+              --ci-config=ci-windows-cross-build \
+              -- \
+              build \
+              --build_tests_only \
+              "${bazel_common_args[@]}" \
+              -- \
+              "${bazel_targets[@]}"
+
+            ./.github/scripts/run-bazel-ci.sh \
+              "${bazel_wrapper_args[@]}" \
+              -- \
+              test \
+              --nobuild \
+              --test_verbose_timeout_warnings \
+              "${bazel_common_args[@]}" \
+              -- \
+              "${bazel_targets[@]}"
+            exit 0
           fi
 
           ./.github/scripts/run-bazel-ci.sh \
             "${bazel_wrapper_args[@]}" \
             -- \
-            "${bazel_test_args[@]}" \
+            test \
+            --test_verbose_timeout_warnings \
+            "${bazel_common_args[@]}" \
             -- \
             "${bazel_targets[@]}"
 
