@@ -21,6 +21,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
@@ -404,13 +405,21 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
         HookSource::Unknown => "unknown",
     };
+    let status = match run.status {
+        HookRunStatus::Running => "running",
+        HookRunStatus::Completed => "completed",
+        HookRunStatus::Failed => "failed",
+        HookRunStatus::Blocked => "blocked",
+        HookRunStatus::Stopped => "stopped",
+    };
 
     [
         ("hook_name", hook_name),
         ("source", hook_source),
-        ("status", run.status.metric_tag()),
+        ("status", status),
     ]
 }
+
 fn hook_permission_mode(turn_context: &TurnContext) -> String {
     match turn_context.approval_policy.value() {
         AskForApproval::Never => "bypassPermissions",
