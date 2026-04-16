@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentConfig;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::FileSystemSandboxContext;
@@ -87,6 +88,12 @@ async fn thread_can_start_and_complete_turn_with_named_local_environment() -> Re
         .selected_environment()
         .context("named local environment should resolve")?;
     assert!(!selected_environment.is_remote());
+    assert_environment_file_round_trip(
+        &selected_environment,
+        local_test_file_path(),
+        b"named-local-environment",
+    )
+    .await?;
 
     test.submit_turn("hello from named local env").await?;
 
@@ -136,6 +143,12 @@ async fn thread_can_start_and_complete_turn_with_named_remote_environment() -> R
         .selected_environment()
         .context("named remote environment should resolve")?;
     assert!(selected_environment.is_remote());
+    assert_environment_file_round_trip(
+        &selected_environment,
+        remote_test_file_path(),
+        b"named-remote-environment",
+    )
+    .await?;
 
     test.submit_turn("hello from named remote env").await?;
 
@@ -181,6 +194,36 @@ fn absolute_path(path: PathBuf) -> AbsolutePathBuf {
         Ok(path) => path,
         Err(error) => panic!("path should be absolute: {error}"),
     }
+}
+
+async fn assert_environment_file_round_trip(
+    environment: &Environment,
+    file_path: PathBuf,
+    payload: &[u8],
+) -> Result<()> {
+    let file_system = environment.get_filesystem();
+    file_system
+        .write_file(
+            &absolute_path(file_path.clone()),
+            payload.to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+    let actual = file_system
+        .read_file(&absolute_path(file_path.clone()), /*sandbox*/ None)
+        .await?;
+    assert_eq!(actual, payload);
+    file_system
+        .remove(
+            &absolute_path(file_path),
+            RemoveOptions {
+                recursive: false,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    Ok(())
 }
 
 fn read_only_sandbox(readable_root: PathBuf) -> FileSystemSandboxContext {
@@ -467,6 +510,17 @@ fn remote_test_file_path() -> PathBuf {
     };
     PathBuf::from(format!(
         "/tmp/codex-remote-test-env-{}-{nanos}.txt",
+        std::process::id()
+    ))
+}
+
+fn local_test_file_path() -> PathBuf {
+    let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos(),
+        Err(_) => 0,
+    };
+    std::env::temp_dir().join(format!(
+        "codex-local-test-env-{}-{nanos}.txt",
         std::process::id()
     ))
 }
