@@ -8,7 +8,6 @@ use crate::transport::remote_control::approval_key::RemoteControlApprovalKey;
 use crate::transport::remote_control::approval_key::RemoteControlApprovalSignature;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
 use crate::transport::remote_control::websocket::RemoteControlWebsocketControls;
-use crate::transport::remote_control::websocket::load_remote_control_auth;
 
 pub use self::protocol::ClientId;
 use self::protocol::ServerEvent;
