@@ -114,6 +114,20 @@
       "title": "AccountUpdatedNotification",
       "type": "object"
     },
+    "AddCreditsNudgeCreditType": {
+      "enum": [
+        "credits",
+        "usage_limit"
+      ],
+      "type": "string"
+    },
+    "AddCreditsNudgeEmailStatus": {
+      "enum": [
+        "sent",
+        "cooldown_active"
+      ],
+      "type": "string"
+    },
     "AgentMessageDeltaNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2020,6 +2034,30 @@
             "method"
           ],
           "title": "Account/rateLimits/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/sendAddCreditsNudgeEmail"
+              ],
+              "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SendAddCreditsNudgeEmailParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/sendAddCreditsNudgeEmailRequest",
           "type": "object"
         },
         {
@@ -8904,6 +8942,32 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "SendAddCreditsNudgeEmailParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "creditType": {
+          "$ref": "#/definitions/AddCreditsNudgeCreditType"
+        }
+      },
+      "required": [
+        "creditType"
+      ],
+      "title": "SendAddCreditsNudgeEmailParams",
+      "type": "object"
+    },
+    "SendAddCreditsNudgeEmailResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "status": {
+          "$ref": "#/definitions/AddCreditsNudgeEmailStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "SendAddCreditsNudgeEmailResponse",
       "type": "object"
     },
     "ServerNotification": {

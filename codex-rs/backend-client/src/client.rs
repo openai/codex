@@ -20,6 +20,7 @@ use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 
@@ -79,6 +80,18 @@ impl From<anyhow::Error> for RequestError {
     fn from(err: anyhow::Error) -> Self {
         Self::Other(err)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AddCreditsNudgeCreditType {
+    Credits,
+    UsageLimit,
+}
+
+#[derive(Serialize)]
+struct SendAddCreditsNudgeEmailRequest {
+    credit_type: AddCreditsNudgeCreditType,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -280,6 +293,21 @@ impl Client {
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
         Ok(Self::rate_limit_snapshots_from_payload(payload))
+    }
+
+    pub async fn send_add_credits_nudge_email(
+        &self,
+        credit_type: AddCreditsNudgeCreditType,
+    ) -> std::result::Result<(), RequestError> {
+        let url = self.send_add_credits_nudge_email_url();
+        let req = self
+            .http
+            .post(&url)
+            .headers(self.headers())
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(&SendAddCreditsNudgeEmailRequest { credit_type });
+        self.exec_request_detailed(req, "POST", &url).await?;
+        Ok(())
     }
 
     pub async fn list_tasks(
@@ -487,6 +515,18 @@ impl Client {
                 Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached)
             }
             BackendRateLimitReachedKind::Unknown => None,
+        }
+    }
+
+    fn send_add_credits_nudge_email_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!(
+                "{}/api/codex/accounts/send_add_credits_nudge_email",
+                self.base_url
+            ),
+            PathStyle::ChatGptApi => {
+                format!("{}/accounts/send_add_credits_nudge_email", self.base_url)
+            }
         }
     }
 
@@ -766,5 +806,51 @@ mod tests {
 
         let snapshots = Client::rate_limit_snapshots_from_payload(payload);
         assert_eq!(snapshots[0].rate_limit_reached_type, None);
+    }
+
+    #[test]
+    fn add_credits_nudge_email_uses_expected_paths_and_bodies() {
+        let codex_client = Client {
+            base_url: "https://example.test".to_string(),
+            http: reqwest::Client::new(),
+            bearer_token: None,
+            user_agent: None,
+            chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
+            path_style: PathStyle::CodexApi,
+        };
+        assert_eq!(
+            codex_client.send_add_credits_nudge_email_url(),
+            "https://example.test/api/codex/accounts/send_add_credits_nudge_email"
+        );
+
+        let chatgpt_client = Client {
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            http: reqwest::Client::new(),
+            bearer_token: None,
+            user_agent: None,
+            chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
+            path_style: PathStyle::ChatGptApi,
+        };
+        assert_eq!(
+            chatgpt_client.send_add_credits_nudge_email_url(),
+            "https://chatgpt.com/backend-api/accounts/send_add_credits_nudge_email"
+        );
+
+        assert_eq!(
+            serde_json::to_value(SendAddCreditsNudgeEmailRequest {
+                credit_type: AddCreditsNudgeCreditType::Credits,
+            })
+            .unwrap(),
+            serde_json::json!({ "credit_type": "credits" })
+        );
+        assert_eq!(
+            serde_json::to_value(SendAddCreditsNudgeEmailRequest {
+                credit_type: AddCreditsNudgeCreditType::UsageLimit,
+            })
+            .unwrap(),
+            serde_json::json!({ "credit_type": "usage_limit" })
+        );
     }
 }
