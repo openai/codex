@@ -369,7 +369,6 @@ pub(crate) enum AppEvent {
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
-        return_to_models: Option<Vec<ModelPreset>>,
     },
 
     /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
