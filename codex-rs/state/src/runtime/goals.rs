@@ -238,6 +238,7 @@ WHERE thread_id = ?
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::test_support::test_thread_metadata;
     use crate::runtime::test_support::unique_temp_dir;
     use pretty_assertions::assert_eq;
 
@@ -251,10 +252,23 @@ mod tests {
         ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id")
     }
 
+    async fn upsert_test_thread(runtime: &StateRuntime, thread_id: ThreadId) {
+        let metadata = test_thread_metadata(
+            runtime.codex_home(),
+            thread_id,
+            runtime.codex_home().join("workspace"),
+        );
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("test thread should be upserted");
+    }
+
     #[tokio::test]
     async fn replace_update_and_get_thread_goal() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
 
         let goal = runtime
             .replace_thread_goal(
@@ -309,6 +323,7 @@ mod tests {
     async fn concurrent_partial_updates_preserve_independent_fields() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
         runtime
             .replace_thread_goal(
                 thread_id,
@@ -350,6 +365,7 @@ mod tests {
     async fn usage_accounting_updates_active_goals_and_stops_on_budget() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
         runtime
             .replace_thread_goal(
                 thread_id,
@@ -413,6 +429,7 @@ mod tests {
     async fn budget_updates_immediately_stop_active_goals_already_over_budget() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
         runtime
             .replace_thread_goal(
                 thread_id,
@@ -453,6 +470,7 @@ mod tests {
     async fn activating_goal_already_over_budget_keeps_it_budget_limited() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
         runtime
             .replace_thread_goal(
                 thread_id,
@@ -493,6 +511,7 @@ mod tests {
     async fn usage_accounting_can_finalize_completed_goal_for_completing_turn() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
         runtime
             .replace_thread_goal(
                 thread_id,
@@ -540,6 +559,7 @@ mod tests {
     async fn usage_accounting_adds_concurrent_token_deltas() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
         runtime
             .replace_thread_goal(
                 thread_id,
@@ -573,5 +593,34 @@ mod tests {
             .expect("goal should exist");
         assert_eq!(100, goal.tokens_used);
         assert_eq!(10, goal.time_used_seconds);
+    }
+
+    #[tokio::test]
+    async fn deleting_thread_deletes_goal() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "clean up with the thread",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        runtime
+            .delete_thread(thread_id)
+            .await
+            .expect("thread deletion should succeed");
+
+        assert_eq!(
+            None,
+            runtime
+                .get_thread_goal(thread_id)
+                .await
+                .expect("goal read should succeed")
+        );
     }
 }
