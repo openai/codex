@@ -94,6 +94,8 @@ use prompt::render_guardian_transcript_entries;
 #[cfg(test)]
 use review::GuardianReviewOutcome;
 #[cfg(test)]
+use review::GuardianReviewSessionReport;
+#[cfg(test)]
 use review::run_guardian_review_session as run_guardian_review_session_for_test;
 #[cfg(test)]
 use review_session::build_guardian_review_session_config as build_guardian_review_session_config_for_test;
