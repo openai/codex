@@ -1,15 +1,17 @@
+# What: keep Windows direct-linker arguments in forms link.exe/lld-link accept.
+# Scope: Windows direct-driver link arg filtering and runtime library handling.
+
 --- a/rust/private/rustc.bzl
 +++ b/rust/private/rustc.bzl
-@@ -501,11 +501,41 @@
+@@ -501,11 +501,24 @@
                      filtered_args.append(version)
                      # Keep library search path flags
-
+ 
 +                elif processed_arg == "-L" and i + 1 < len(link_args):
-+                    path = link_args[i + 1]
 +                    if ld_is_direct_driver and toolchain.target_os == "windows":
 +                        skip_next = True
 +                        continue
-+                    filtered_args.extend([processed_arg, path])
++                    filtered_args.extend([processed_arg, link_args[i + 1]])
 +                    skip_next = True
 +
                  elif processed_arg.startswith("-L"):
@@ -26,37 +28,51 @@
                      filtered_args.append(processed_arg)
                      if processed_arg == "--sysroot" and i + 1 < len(link_args):
                          # Two-part argument, keep the next arg too
-@@ -2305,7 +2335,7 @@
-         return crate.metadata.dirname
-     return crate.output.dirname
+@@ -2266,8 +2279,10 @@
+         use_pic,
+         ambiguous_libs,
+         get_lib_name,
++        for_windows = False,
+         for_darwin = False,
+-        flavor_msvc = False):
++        flavor_msvc = False,
++        use_direct_driver = False):
+     """_summary_
  
--def _portable_link_flags(lib, use_pic, ambiguous_libs, get_lib_name, for_windows = False, for_darwin = False, flavor_msvc = False):
-+def _portable_link_flags(lib, use_pic, ambiguous_libs, get_lib_name, for_windows = False, for_darwin = False, flavor_msvc = False, use_direct_driver = False):
-     artifact = get_preferred_artifact(lib, use_pic)
-     if ambiguous_libs and artifact.path in ambiguous_libs:
-         artifact = ambiguous_libs[artifact.path]
-@@ -2344,6 +2344,11 @@
-             artifact.basename.startswith("test-") or artifact.basename.startswith("std-")
+     Args:
+@@ -2275,8 +2290,10 @@
+         use_pic (_type_): _description_
+         ambiguous_libs (_type_): _description_
+         get_lib_name (_type_): _description_
++        for_windows (bool, optional): _description_. Defaults to False.
+         for_darwin (bool, optional): _description_. Defaults to False.
+         flavor_msvc (bool, optional): _description_. Defaults to False.
++        use_direct_driver (bool, optional): _description_. Defaults to False.
+ 
+     Returns:
+         _type_: _description_
+@@ -2320,6 +2337,11 @@
          ):
              return [] if for_darwin else ["-lstatic=%s" % get_lib_name(artifact)]
-+
+ 
 +        if for_windows and use_direct_driver and not artifact.basename.endswith(".lib"):
 +            return [
 +                "-Clink-arg={}".format(artifact.path),
 +            ]
- 
++
          if flavor_msvc:
              return [
-@@ -2381,7 +2386,7 @@
+                 "-lstatic=%s" % get_lib_name(artifact),
+@@ -2356,7 +2378,7 @@
                  ])
          elif include_link_flags:
              get_lib_name = get_lib_name_for_windows if flavor_msvc else get_lib_name_default
--            ret.extend(_portable_link_flags(lib, use_pic, ambiguous_libs, get_lib_name, flavor_msvc = flavor_msvc))
-+            ret.extend(_portable_link_flags(lib, use_pic, ambiguous_libs, get_lib_name, flavor_msvc = flavor_msvc, use_direct_driver = use_direct_driver))
+-            ret.extend(portable_link_flags(lib, use_pic, ambiguous_libs, get_lib_name, flavor_msvc = flavor_msvc))
++            ret.extend(portable_link_flags(lib, use_pic, ambiguous_libs, get_lib_name, for_windows = True, flavor_msvc = flavor_msvc, use_direct_driver = use_direct_driver))
  
      # Windows toolchains can inherit POSIX defaults like -pthread from C deps,
      # which fails to link with the MinGW/LLD toolchain. Drop them here.
-@@ -2453,14 +2483,21 @@
+@@ -2532,14 +2554,21 @@
          else:
              # For all other crate types we want to link C++ runtime library statically
              # (for example libstdc++.a or libc++.a).
@@ -74,16 +90,9 @@
                  format_each = "-Lnative=%s",
              )
              if include_link_flags:
--                args.add_all(
+                 args.add_all(
 -                    cc_toolchain.static_runtime_lib(feature_configuration = feature_configuration),
--                    map_each = get_lib_name,
--                    format_each = "-lstatic=%s",
--                )
-+                args.add_all(
 +                    runtime_libs,
-+                    map_each = get_lib_name,
-+                    format_each = "-lstatic=%s",
-+                )
- 
- def _get_dirname(file):
-     """A helper function for `_add_native_link_flags`.
+                     map_each = get_lib_name,
+                     format_each = "-lstatic=%s",
+                 )
