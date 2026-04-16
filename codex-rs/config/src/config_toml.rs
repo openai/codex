@@ -182,9 +182,9 @@ pub struct ConfigToml {
     /// Set to an empty string to disable automatic commit attribution.
     pub commit_attribution: Option<String>,
 
-    /// When set, restricts ChatGPT login to a specific workspace identifier.
+    /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]
-    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
@@ -513,7 +513,9 @@ impl From<ConfigToml> for UserSavedConfig {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
-            forced_chatgpt_workspace_id: config_toml.forced_chatgpt_workspace_id,
+            forced_chatgpt_workspace_id: config_toml
+                .forced_chatgpt_workspace_id
+                .map(ForcedChatgptWorkspaceIds::into_vec),
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
