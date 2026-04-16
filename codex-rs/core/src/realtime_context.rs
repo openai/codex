@@ -2,12 +2,14 @@ use crate::codex::Session;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
 use chrono::Utc;
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
 use codex_thread_store::ListThreadsParams;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadSortKey;
 use codex_thread_store::ThreadStore;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use dirs::home_dir;
@@ -147,15 +149,23 @@ async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
 async fn build_recent_work_section(cwd: &Path, recent_threads: &[StoredThread]) -> Option<String> {
     let mut groups: HashMap<PathBuf, Vec<&StoredThread>> = HashMap::new();
     for entry in recent_threads {
-        let group = resolve_root_git_project_for_trust(&entry.cwd)
-            .await
-            .unwrap_or_else(|| entry.cwd.clone());
+        let group = match AbsolutePathBuf::from_absolute_path(&entry.cwd) {
+            Ok(cwd) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd)
+                .await
+                .map(AbsolutePathBuf::into_path_buf)
+                .unwrap_or_else(|| entry.cwd.clone()),
+            Err(_) => entry.cwd.clone(),
+        };
         groups.entry(group).or_default().push(entry);
     }
 
-    let current_group = resolve_root_git_project_for_trust(cwd)
-        .await
-        .unwrap_or_else(|| cwd.to_path_buf());
+    let current_group = match AbsolutePathBuf::from_absolute_path(cwd) {
+        Ok(cwd_abs) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd_abs)
+            .await
+            .map(AbsolutePathBuf::into_path_buf)
+            .unwrap_or_else(|| cwd.to_path_buf()),
+        Err(_) => cwd.to_path_buf(),
+    };
     let mut groups = groups.into_iter().collect::<Vec<_>>();
     groups.sort_by(|(left_group, left_entries), (right_group, right_entries)| {
         let left_latest = left_entries
@@ -311,7 +321,12 @@ async fn build_workspace_section_with_user_root(
     cwd: &Path,
     user_root: Option<PathBuf>,
 ) -> Option<String> {
-    let git_root = resolve_root_git_project_for_trust(cwd).await;
+    let git_root = match AbsolutePathBuf::from_absolute_path(cwd) {
+        Ok(cwd) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd)
+            .await
+            .map(AbsolutePathBuf::into_path_buf),
+        Err(_) => None,
+    };
     let cwd_tree = render_tree(cwd);
     let git_root_tree = git_root
         .as_ref()
@@ -473,10 +488,12 @@ async fn format_thread_group(
     entries: Vec<&StoredThread>,
 ) -> Option<String> {
     let latest = entries.first()?;
-    let group_label = if resolve_root_git_project_for_trust(latest.cwd.as_path())
-        .await
-        .is_some()
-    {
+    let group_label = if match AbsolutePathBuf::from_absolute_path(&latest.cwd) {
+        Ok(cwd) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd)
+            .await
+            .is_some(),
+        Err(_) => false,
+    } {
         format!("### Git repo: {}", group.display())
     } else {
         format!("### Directory: {}", group.display())

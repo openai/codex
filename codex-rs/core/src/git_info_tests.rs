@@ -1,3 +1,4 @@
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::GitInfo;
 use codex_git_utils::GitSha;
 use codex_git_utils::collect_git_info;
@@ -5,6 +6,7 @@ use codex_git_utils::get_has_changes;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::recent_commits;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::skip_if_sandbox;
 use std::fs;
 use std::path::PathBuf;
@@ -429,8 +431,9 @@ async fn test_get_git_working_tree_state_branch_fallback() {
 #[tokio::test]
 async fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
     let tmp = TempDir::new().expect("tempdir");
+    let tmp = AbsolutePathBuf::from_absolute_path(tmp.path()).unwrap();
     assert!(
-        resolve_root_git_project_for_trust(tmp.path())
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &tmp)
             .await
             .is_none()
     );
@@ -440,17 +443,17 @@ async fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
 async fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let repo_path = create_test_git_repo(&temp_dir).await;
-    let expected = std::fs::canonicalize(&repo_path).unwrap();
+    let repo_path = AbsolutePathBuf::from_absolute_path(&repo_path).unwrap();
 
     assert_eq!(
-        resolve_root_git_project_for_trust(&repo_path).await,
-        Some(expected.clone())
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &repo_path).await,
+        Some(repo_path.clone())
     );
     let nested = repo_path.join("sub/dir");
-    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(nested.as_path()).unwrap();
     assert_eq!(
-        resolve_root_git_project_for_trust(&nested).await,
-        Some(expected)
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested).await,
+        Some(repo_path)
     );
 }
 
@@ -473,16 +476,15 @@ async fn resolve_root_git_project_for_trust_detects_worktree_and_returns_main_ro
         .output()
         .expect("git worktree add");
 
-    let expected = std::fs::canonicalize(&repo_path).ok();
-    let got = resolve_root_git_project_for_trust(&wt_root)
-        .await
-        .and_then(|p| std::fs::canonicalize(p).ok());
+    let expected = Some(
+        AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(&repo_path).unwrap()).unwrap(),
+    );
+    let wt_root = AbsolutePathBuf::from_absolute_path(&wt_root).unwrap();
+    let got = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &wt_root).await;
     assert_eq!(got, expected);
     let nested = wt_root.join("nested/sub");
-    std::fs::create_dir_all(&nested).unwrap();
-    let got_nested = resolve_root_git_project_for_trust(&nested)
-        .await
-        .and_then(|p| std::fs::canonicalize(p).ok());
+    std::fs::create_dir_all(nested.as_path()).unwrap();
+    let got_nested = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested).await;
     assert_eq!(got_nested, expected);
 }
 
@@ -502,13 +504,15 @@ async fn resolve_root_git_project_for_trust_detects_worktree_pointer_without_git
     )
     .unwrap();
 
-    let expected = std::fs::canonicalize(&repo_root).unwrap();
+    let expected = AbsolutePathBuf::from_absolute_path(&repo_root).unwrap();
+    let worktree_root = AbsolutePathBuf::from_absolute_path(&worktree_root).unwrap();
     assert_eq!(
-        resolve_root_git_project_for_trust(&worktree_root).await,
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &worktree_root).await,
         Some(expected.clone())
     );
+    let nested = worktree_root.join("nested");
     assert_eq!(
-        resolve_root_git_project_for_trust(&worktree_root.join("nested")).await,
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested).await,
         Some(expected)
     );
 }
@@ -529,9 +533,15 @@ async fn resolve_root_git_project_for_trust_non_worktrees_gitdir_returns_none() 
     )
     .unwrap();
 
-    assert!(resolve_root_git_project_for_trust(&proj).await.is_none());
+    let proj = AbsolutePathBuf::from_absolute_path(&proj).unwrap();
     assert!(
-        resolve_root_git_project_for_trust(&proj.join("nested"))
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &proj)
+            .await
+            .is_none()
+    );
+    let nested = proj.join("nested");
+    assert!(
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested)
             .await
             .is_none()
     );

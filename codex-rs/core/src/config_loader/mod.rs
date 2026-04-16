@@ -662,8 +662,10 @@ async fn project_trust_context(
     let projects = project_trust_config.projects.unwrap_or_default();
 
     let project_root_key = project_trust_key(project_root.as_path());
-    let repo_root = resolve_root_git_project_for_trust(cwd.as_path()).await;
-    let repo_root_key = repo_root.as_ref().map(|root| project_trust_key(root));
+    let repo_root = resolve_root_git_project_for_trust(fs, cwd).await;
+    let repo_root_key = repo_root
+        .as_ref()
+        .map(|root| project_trust_key(root.as_path()));
 
     let projects_trust = projects
         .into_iter()

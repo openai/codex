@@ -4,9 +4,11 @@ use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ServerNotification;
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -123,9 +125,13 @@ impl OnboardingScreen {
         let show_windows_create_sandbox_hint = false;
         let highlighted = TrustDirectorySelection::Trust;
         if show_trust_screen {
-            let trust_target = resolve_root_git_project_for_trust(&cwd)
-                .await
-                .unwrap_or_else(|| cwd.clone());
+            let trust_target = match AbsolutePathBuf::from_absolute_path(&cwd) {
+                Ok(cwd_abs) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd_abs)
+                    .await
+                    .map(AbsolutePathBuf::into_path_buf)
+                    .unwrap_or_else(|| cwd.clone()),
+                Err(_) => cwd.clone(),
+            };
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
                 trust_target,
