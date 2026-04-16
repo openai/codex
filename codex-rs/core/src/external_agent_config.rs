@@ -1,7 +1,6 @@
 use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::plugins::MarketplaceAddRequest;
-use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::PluginId;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::PluginsManager;
@@ -9,6 +8,7 @@ use crate::plugins::add_marketplace;
 use crate::plugins::configured_plugins_from_stack;
 use crate::plugins::find_marketplace_manifest_path;
 use crate::plugins::parse_marketplace_source;
+use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_protocol::protocol::Product;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
@@ -291,6 +291,7 @@ impl ExternalAgentConfigService {
                     )?;
                     self.detect_plugin_migration(
                         source_settings.as_path(),
+                        repo_root.unwrap_or(self.external_agent_home.as_path()),
                         cwd.clone(),
                         Some(settings),
                         &configured_plugin_ids,
@@ -321,6 +322,7 @@ impl ExternalAgentConfigService {
     fn detect_plugin_migration(
         &self,
         source_settings: &Path,
+        source_root: &Path,
         cwd: Option<PathBuf>,
         settings: Option<&JsonValue>,
         configured_plugin_ids: &HashSet<String>,
@@ -330,7 +332,7 @@ impl ExternalAgentConfigService {
         let Some(plugin_details) = settings.and_then(|settings| {
             extract_plugin_migration_details(
                 settings,
-                source_settings,
+                source_root,
                 configured_plugin_ids,
                 configured_marketplace_plugins,
             )
@@ -374,9 +376,9 @@ impl ExternalAgentConfigService {
                 || self.external_agent_home.join("settings.json"),
                 |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
             );
+            let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
             let import_source = read_external_settings(&source_settings)?.and_then(|settings| {
-                collect_marketplace_import_sources(&settings, &source_settings)
-                    .remove(&marketplace_name)
+                collect_marketplace_import_sources(&settings, source_root).remove(&marketplace_name)
             });
             let Some(import_source) = import_source else {
                 outcome.failed_marketplaces.push(marketplace_name);
@@ -572,11 +574,11 @@ fn read_external_settings(path: &Path) -> io::Result<Option<JsonValue>> {
 
 fn extract_plugin_migration_details(
     settings: &JsonValue,
-    settings_path: &Path,
+    source_root: &Path,
     configured_plugin_ids: &HashSet<String>,
     configured_marketplace_plugins: &BTreeMap<String, HashSet<String>>,
 ) -> Option<MigrationDetails> {
-    let loadable_marketplaces = collect_marketplace_import_sources(settings, settings_path)
+    let loadable_marketplaces = collect_marketplace_import_sources(settings, source_root)
         .into_iter()
         .filter_map(|(marketplace_name, source)| {
             parse_marketplace_source(&source.source, source.ref_name)
@@ -682,7 +684,7 @@ fn configured_marketplace_plugins(
 
 fn collect_marketplace_import_sources(
     settings: &JsonValue,
-    settings_path: &Path,
+    source_root: &Path,
 ) -> BTreeMap<String, MarketplaceImportSource> {
     let Some(extra_known_marketplaces) = settings
         .as_object()
@@ -713,7 +715,7 @@ fn collect_marketplace_import_sources(
             if source.is_empty() {
                 return None;
             }
-            let source = resolve_external_marketplace_source(&source, settings_path);
+            let source = resolve_external_marketplace_source(&source, source_root);
 
             let ref_name = source_fields
                 .get("ref")
@@ -734,17 +736,12 @@ struct MarketplaceImportSource {
     ref_name: Option<String>,
 }
 
-fn resolve_external_marketplace_source(source: &str, settings_path: &Path) -> String {
+fn resolve_external_marketplace_source(source: &str, source_root: &Path) -> String {
     if !looks_like_relative_local_path(source) {
         return source.to_string();
     }
 
-    settings_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(source)
-        .display()
-        .to_string()
+    source_root.join(source).display().to_string()
 }
 
 fn looks_like_relative_local_path(source: &str) -> bool {

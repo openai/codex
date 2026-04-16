@@ -1247,6 +1247,162 @@ async fn import_plugins_supports_relative_external_agent_plugin_marketplace_path
     assert!(config.contains("enabled = true"));
 }
 
+#[tokio::test]
+async fn detect_repo_supports_project_relative_external_agent_plugin_marketplace_path() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    let marketplace_root = repo_root.join("my-marketplace");
+    let plugin_root = marketplace_root.join("plugins").join("cloudflare");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo external agent dir");
+    fs::create_dir_all(marketplace_root.join(".claude-plugin"))
+        .expect("create marketplace manifest dir");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "cloudflare@my-plugins": true
+          },
+          "extraKnownMarketplaces": {
+            "my-plugins": {
+              "source": "directory",
+              "path": "./my-marketplace"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+    fs::write(
+        marketplace_root
+            .join(".claude-plugin")
+            .join("marketplace.json"),
+        r#"{
+          "name": "my-plugins",
+          "plugins": [
+            {
+              "name": "cloudflare",
+              "source": "./plugins/cloudflare"
+            }
+          ]
+        }"#,
+    )
+    .expect("write marketplace manifest");
+    fs::write(
+        plugin_root.join(".codex-plugin").join("plugin.json"),
+        r#"{"name":"cloudflare","version":"0.1.0"}"#,
+    )
+    .expect("write plugin manifest");
+
+    let items = service_for_paths(external_agent_home, codex_home)
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .await
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: format!(
+                "Import enabled plugins from {}",
+                repo_root.join(".claude").join("settings.json").display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "my-plugins".to_string(),
+                    plugin_names: vec!["cloudflare".to_string()],
+                }],
+            }),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn import_plugins_supports_project_relative_external_agent_plugin_marketplace_path() {
+    let root = TempDir::new().expect("create tempdir");
+    let external_agent_home = root.path().join(".claude");
+    let codex_home = root.path().join(".codex");
+    let repo_root = root.path().join("repo");
+    let marketplace_root = repo_root.join("my-marketplace");
+    let plugin_root = marketplace_root.join("plugins").join("cloudflare");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create repo external agent dir");
+    fs::create_dir_all(marketplace_root.join(".claude-plugin"))
+        .expect("create marketplace manifest dir");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "cloudflare@my-plugins": true
+          },
+          "extraKnownMarketplaces": {
+            "my-plugins": {
+              "source": "directory",
+              "path": "./my-marketplace"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+    fs::write(
+        marketplace_root
+            .join(".claude-plugin")
+            .join("marketplace.json"),
+        r#"{
+          "name": "my-plugins",
+          "plugins": [
+            {
+              "name": "cloudflare",
+              "source": "./plugins/cloudflare"
+            }
+          ]
+        }"#,
+    )
+    .expect("write marketplace manifest");
+    fs::write(
+        plugin_root.join(".codex-plugin").join("plugin.json"),
+        r#"{"name":"cloudflare","version":"0.1.0"}"#,
+    )
+    .expect("write plugin manifest");
+
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
+        .import_plugins(
+            Some(repo_root.as_path()),
+            Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "my-plugins".to_string(),
+                    plugin_names: vec!["cloudflare".to_string()],
+                }],
+            }),
+        )
+        .await
+        .expect("import plugins");
+
+    assert_eq!(
+        outcome,
+        PluginImportOutcome {
+            succeeded_marketplaces: vec!["my-plugins".to_string()],
+            succeeded_plugin_ids: vec!["cloudflare@my-plugins".to_string()],
+            failed_marketplaces: Vec::new(),
+            failed_plugin_ids: Vec::new(),
+        }
+    );
+    let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
+    assert!(config.contains(r#"[plugins."cloudflare@my-plugins"]"#));
+    assert!(config.contains("enabled = true"));
+}
+
 #[test]
 fn import_skills_returns_only_new_skill_directory_count() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
