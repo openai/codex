@@ -324,7 +324,7 @@ impl ListSelectionView {
             on_cancel: params.on_cancel,
         };
         s.apply_filter();
-        if s.tabs_enabled() && !has_initial_selected_idx {
+        if s.tabs_enabled() && !has_initial_selected_idx && s.state.selected_idx.is_none() {
             s.select_first_enabled_row();
         }
         s
@@ -494,7 +494,9 @@ impl ListSelectionView {
         self.search_query.clear();
         self.state.reset();
         self.apply_filter();
-        self.select_first_enabled_row();
+        if self.state.selected_idx.is_none() {
+            self.select_first_enabled_row();
+        }
         self.fire_selection_changed();
     }
 
@@ -1473,6 +1475,65 @@ mod tests {
             rendered.contains("Alpha Item") && !rendered.contains("Beta Item"),
             "expected switched tab to render the alpha items, got:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn tabbed_view_preserves_current_row_on_initial_selection_and_tab_switch() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = ListSelectionView::new(
+            SelectionViewParams {
+                tabs: vec![
+                    SelectionTab {
+                        id: "alpha".to_string(),
+                        label: "Alpha".to_string(),
+                        header: Box::new(()),
+                        items: vec![
+                            SelectionItem {
+                                name: "Alpha First".to_string(),
+                                dismiss_on_select: true,
+                                ..Default::default()
+                            },
+                            SelectionItem {
+                                name: "Alpha Current".to_string(),
+                                is_current: true,
+                                dismiss_on_select: true,
+                                ..Default::default()
+                            },
+                        ],
+                    },
+                    SelectionTab {
+                        id: "beta".to_string(),
+                        label: "Beta".to_string(),
+                        header: Box::new(()),
+                        items: vec![
+                            SelectionItem {
+                                name: "Beta First".to_string(),
+                                dismiss_on_select: true,
+                                ..Default::default()
+                            },
+                            SelectionItem {
+                                name: "Beta Current".to_string(),
+                                is_current: true,
+                                dismiss_on_select: true,
+                                ..Default::default()
+                            },
+                        ],
+                    },
+                ],
+                initial_tab_id: Some("beta".to_string()),
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert_eq!(view.active_tab_id(), Some("beta"));
+        assert_eq!(view.selected_actual_idx(), Some(1));
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Left));
+
+        assert_eq!(view.active_tab_id(), Some("alpha"));
+        assert_eq!(view.selected_actual_idx(), Some(1));
     }
 
     #[test]
