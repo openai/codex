@@ -32,5 +32,6 @@ pub use types::StoredThreadHistory;
 pub use types::ThreadEventPersistenceMode;
 pub use types::ThreadMetadataPatch;
 pub use types::ThreadPage;
+pub use types::ThreadReadSource;
 pub use types::ThreadSortKey;
 pub use types::UpdateThreadMetadataParams;

@@ -62,9 +62,9 @@ impl ThreadStore for LocalThreadStore {
 
     async fn load_history(
         &self,
-        _params: LoadThreadHistoryParams,
+        params: LoadThreadHistoryParams,
     ) -> ThreadStoreResult<StoredThreadHistory> {
-        unsupported("load_history")
+        read_thread::load_history(self, params.source).await
     }
 
     async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {

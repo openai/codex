@@ -206,8 +206,6 @@ use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
-use codex_core::RolloutRecorder;
-use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
@@ -240,7 +238,6 @@ use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::add_marketplace as add_marketplace_to_codex_home;
-use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -286,7 +283,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -294,7 +290,6 @@ use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -306,7 +301,6 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
-use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
@@ -323,9 +317,11 @@ use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
+use codex_thread_store::LoadThreadHistoryParams as StoreLoadThreadHistoryParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
 use codex_thread_store::StoredThread;
+use codex_thread_store::ThreadReadSource as StoreThreadReadSource;
 use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
@@ -487,6 +483,7 @@ struct ListenerTaskContext {
     general_analytics_enabled: bool,
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
+    thread_store: LocalThreadStore,
     codex_home: PathBuf,
 }
 
@@ -2299,6 +2296,7 @@ impl CodexMessageProcessor {
             general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
+            thread_store: self.thread_store.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
         };
         let request_trace = request_context.request_trace();
@@ -2735,8 +2733,10 @@ impl CodexMessageProcessor {
         if let Err(err) = self
             .thread_store
             .read_thread(StoreReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: StoreThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -3821,8 +3821,10 @@ impl CodexMessageProcessor {
         let mut thread = match self
             .thread_store
             .read_thread(StoreReadThreadParams {
-                thread_id,
-                include_archived,
+                source: StoreThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived,
+                },
                 include_history: include_turns,
             })
             .await
@@ -3930,12 +3932,6 @@ impl CodexMessageProcessor {
             );
         }
         self.attach_thread_name(thread_id, &mut thread).await;
-        if thread.forked_from_id.is_none()
-            && let Some(path) = loaded_rollout_path.as_deref()
-            && path.exists()
-        {
-            thread.forked_from_id = forked_from_id_from_rollout(path).await;
-        }
 
         if include_turns {
             let path = loaded_materialized_rollout_path(
@@ -3947,13 +3943,41 @@ impl CodexMessageProcessor {
             // live threads resumed from explicit rollout paths outside codex_home. Stored
             // thread reads should continue to go through ThreadStore; future pathless live
             // history should come from ThreadManager/CodexThread instead of the filesystem.
-            let items = read_rollout_items_from_rollout(path).await.map_err(|err| {
-                ThreadReadViewError::Internal(format!(
-                    "failed to load rollout history {}: {err}",
+            let stored_thread = self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    source: StoreThreadReadSource::LocalPath {
+                        rollout_path: path.to_path_buf(),
+                    },
+                    include_history: true,
+                })
+                .await
+                .map_err(|err| {
+                    ThreadReadViewError::Internal(format!(
+                        "failed to load rollout history {}: {err}",
+                        path.display()
+                    ))
+                })?;
+            thread.forked_from_id = stored_thread.forked_from_id.map(|id| id.to_string());
+            let Some(history) = stored_thread.history else {
+                return Err(ThreadReadViewError::Internal(format!(
+                    "failed to load rollout history {}",
                     path.display()
-                ))
-            })?;
-            thread.turns = build_turns_from_rollout_items(&items);
+                )));
+            };
+            thread.turns = build_turns_from_rollout_items(&history.items);
+        } else if thread.forked_from_id.is_none()
+            && let Some(path) = loaded_rollout_path
+            && path.exists()
+            && let Ok(stored_thread) = self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    source: StoreThreadReadSource::LocalPath { rollout_path: path },
+                    include_history: false,
+                })
+                .await
+        {
+            thread.forked_from_id = stored_thread.forked_from_id.map(|id| id.to_string());
         }
 
         Ok(thread)
@@ -4094,13 +4118,12 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         );
-        let persisted_resume_metadata = self
-            .load_and_apply_persisted_resume_metadata(
-                &thread_history,
-                &mut request_overrides,
-                &mut typesafe_overrides,
-            )
-            .await;
+        self.load_and_apply_persisted_resume_metadata(
+            &thread_history,
+            &mut request_overrides,
+            &mut typesafe_overrides,
+        )
+        .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
@@ -4175,7 +4198,6 @@ impl CodexMessageProcessor {
                         &response_history,
                         rollout_path.as_path(),
                         fallback_model_provider.as_str(),
-                        persisted_resume_metadata.as_ref(),
                     )
                     .await
                 {
@@ -4278,56 +4300,38 @@ impl CodexMessageProcessor {
                 if path.exists() {
                     path
                 } else {
-                    match find_thread_path_by_id_str(
-                        &self.config.codex_home,
-                        &existing_thread_id.to_string(),
-                    )
-                    .await
-                    {
-                        Ok(Some(path)) => path,
-                        Ok(None) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!("no rollout found for thread id {existing_thread_id}"),
-                            )
-                            .await;
-                            return true;
-                        }
-                        Err(err) => {
-                            self.send_invalid_request_error(
-                                request_id,
-                                format!("failed to locate thread id {existing_thread_id}: {err}"),
-                            )
-                            .await;
-                            return true;
-                        }
-                    }
-                }
-            } else {
-                match find_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &existing_thread_id.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
+                    let Some(path) = self
+                        .read_rollout_path_from_store(
+                            existing_thread_id,
+                            /*include_archived*/ false,
+                        )
+                        .await
+                    else {
                         self.send_invalid_request_error(
                             request_id,
                             format!("no rollout found for thread id {existing_thread_id}"),
                         )
                         .await;
                         return true;
-                    }
-                    Err(err) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("failed to locate thread id {existing_thread_id}: {err}"),
-                        )
-                        .await;
-                        return true;
-                    }
+                    };
+                    path
                 }
+            } else {
+                let Some(path) = self
+                    .read_rollout_path_from_store(
+                        existing_thread_id,
+                        /*include_archived*/ false,
+                    )
+                    .await
+                else {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for thread id {existing_thread_id}"),
+                    )
+                    .await;
+                    return true;
+                };
+                path
             };
 
             if let Some(requested_path) = params.path.as_ref()
@@ -4375,18 +4379,52 @@ impl CodexMessageProcessor {
             config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
             let instruction_sources =
                 Self::instruction_sources_from_config(&config_for_instruction_sources).await;
-            let thread_summary = match load_thread_summary_for_rollout(
-                &self.config,
-                existing_thread_id,
-                rollout_path.as_path(),
-                config_snapshot.model_provider_id.as_str(),
-                /*persisted_metadata*/ None,
-            )
-            .await
+            let thread_summary = match self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    source: StoreThreadReadSource::LocalPath {
+                        rollout_path: rollout_path.clone(),
+                    },
+                    include_history: false,
+                })
+                .await
             {
-                Ok(thread) => thread,
-                Err(message) => {
-                    self.send_internal_error(request_id, message).await;
+                Ok(stored_thread) => {
+                    thread_from_stored_thread(
+                        stored_thread,
+                        config_snapshot.model_provider_id.as_str(),
+                        &self.config.cwd,
+                    )
+                    .0
+                }
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!("failed to load thread {existing_thread_id}: {err}"),
+                    )
+                    .await;
+                    return true;
+                }
+            };
+            let history_items = match self
+                .thread_store
+                .load_history(StoreLoadThreadHistoryParams {
+                    source: StoreThreadReadSource::LocalPath {
+                        rollout_path: rollout_path.clone(),
+                    },
+                })
+                .await
+            {
+                Ok(history) => history.items,
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!(
+                            "failed to load rollout `{}` for thread {existing_thread_id}: {err}",
+                            rollout_path.display()
+                        ),
+                    )
+                    .await;
                     return true;
                 }
             };
@@ -4410,7 +4448,7 @@ impl CodexMessageProcessor {
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
-                    rollout_path: rollout_path.clone(),
+                    history_items,
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
@@ -4456,8 +4494,10 @@ impl CodexMessageProcessor {
         thread_id: &str,
         path: Option<&PathBuf>,
     ) -> Option<InitialHistory> {
-        let rollout_path = if let Some(path) = path {
-            path.clone()
+        let source = if let Some(path) = path {
+            StoreThreadReadSource::LocalPath {
+                rollout_path: path.clone(),
+            }
         } else {
             let existing_thread_id = match ThreadId::from_string(thread_id) {
                 Ok(id) => id,
@@ -4472,38 +4512,38 @@ impl CodexMessageProcessor {
                 }
             };
 
-            match find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(path)) => path,
-                Ok(None) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("no rollout found for thread id {existing_thread_id}"),
-                    )
-                    .await;
-                    return None;
-                }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {existing_thread_id}: {err}"),
-                    )
-                    .await;
-                    return None;
-                }
+            StoreThreadReadSource::ThreadId {
+                thread_id: existing_thread_id,
+                include_archived: false,
             }
         };
 
-        match RolloutRecorder::get_rollout_history(&rollout_path).await {
-            Ok(initial_history) => Some(initial_history),
+        match self
+            .thread_store
+            .load_history(StoreLoadThreadHistoryParams { source })
+            .await
+        {
+            Ok(history) => {
+                let Some(rollout_path) = history.rollout_path else {
+                    self.send_internal_error(
+                        request_id,
+                        format!("rollout path missing for thread {}", history.thread_id),
+                    )
+                    .await;
+                    return None;
+                };
+                Some(InitialHistory::Resumed(
+                    codex_protocol::protocol::ResumedHistory {
+                        conversation_id: history.thread_id,
+                        history: history.items,
+                        rollout_path,
+                    },
+                ))
+            }
             Err(err) => {
                 self.send_invalid_request_error(
                     request_id,
-                    format!("failed to load rollout `{}`: {err}", rollout_path.display()),
+                    format!("failed to load thread history for {thread_id}: {err}"),
                 )
                 .await;
                 None
@@ -4518,19 +4558,27 @@ impl CodexMessageProcessor {
         thread_history: &InitialHistory,
         rollout_path: &Path,
         fallback_provider: &str,
-        persisted_resume_metadata: Option<&ThreadMetadata>,
     ) -> std::result::Result<Thread, String> {
         let thread = match thread_history {
-            InitialHistory::Resumed(resumed) => {
-                load_thread_summary_for_rollout(
-                    &self.config,
-                    resumed.conversation_id,
-                    resumed.rollout_path.as_path(),
-                    fallback_provider,
-                    persisted_resume_metadata,
-                )
+            InitialHistory::Resumed(resumed) => self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    source: StoreThreadReadSource::LocalPath {
+                        rollout_path: resumed.rollout_path.clone(),
+                    },
+                    include_history: false,
+                })
                 .await
-            }
+                .map(|stored_thread| {
+                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd).0
+                })
+                .map_err(|err| {
+                    format!(
+                        "failed to load rollout `{}` for thread {}: {err}",
+                        resumed.rollout_path.display(),
+                        resumed.conversation_id
+                    )
+                }),
             InitialHistory::Forked(items) => {
                 let config_snapshot = thread.config_snapshot().await;
                 let mut thread = build_thread_from_snapshot(
@@ -4549,12 +4597,7 @@ impl CodexMessageProcessor {
         thread.id = thread_id.to_string();
         thread.path = Some(rollout_path.to_path_buf());
         let history_items = thread_history.get_rollout_items();
-        populate_thread_turns(
-            &mut thread,
-            ThreadTurnSource::HistoryItems(&history_items),
-            /*active_turn*/ None,
-        )
-        .await?;
+        populate_thread_turns(&mut thread, &history_items, /*active_turn*/ None).await?;
         self.attach_thread_name(thread_id, &mut thread).await;
         Ok(thread)
     }
@@ -4598,30 +4641,18 @@ impl CodexMessageProcessor {
                 }
             };
 
-            match find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &existing_thread_id.to_string(),
-            )
-            .await
-            {
-                Ok(Some(p)) => (p, Some(existing_thread_id)),
-                Ok(None) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("no rollout found for thread id {existing_thread_id}"),
-                    )
-                    .await;
-                    return;
-                }
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {existing_thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            }
+            let Some(path) = self
+                .read_rollout_path_from_store(existing_thread_id, /*include_archived*/ false)
+                .await
+            else {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("no rollout found for thread id {existing_thread_id}"),
+                )
+                .await;
+                return;
+            };
+            (path, Some(existing_thread_id))
         };
 
         let history_cwd =
@@ -4748,16 +4779,33 @@ impl CodexMessageProcessor {
         // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
         // pathless, so they rebuild their visible history from the copied source rollout instead.
         let mut thread = if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref() {
-            match read_summary_from_rollout(
-                fork_rollout_path.as_path(),
-                fallback_model_provider.as_str(),
-            )
-            .await
+            match self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    source: StoreThreadReadSource::LocalPath {
+                        rollout_path: fork_rollout_path.clone(),
+                    },
+                    include_history: true,
+                })
+                .await
             {
-                Ok(summary) => {
-                    let mut thread = summary_to_thread(summary, &self.config.cwd);
-                    thread.forked_from_id =
-                        forked_from_id_from_rollout(fork_rollout_path.as_path()).await;
+                Ok(stored_thread) => {
+                    let (mut thread, history) = thread_from_stored_thread(
+                        stored_thread,
+                        fallback_model_provider.as_str(),
+                        &self.config.cwd,
+                    );
+                    if let Some(history) = history
+                        && let Err(message) = populate_thread_turns(
+                            &mut thread,
+                            &history.items,
+                            /*active_turn*/ None,
+                        )
+                        .await
+                    {
+                        self.send_internal_error(request_id, message).await;
+                        return;
+                    }
                     thread
                 }
                 Err(err) => {
@@ -4777,7 +4825,14 @@ impl CodexMessageProcessor {
             // forked thread names do not inherit the source thread name
             let mut thread =
                 build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
-            let history_items = match read_rollout_items_from_rollout(rollout_path.as_path()).await
+            let history = match self
+                .thread_store
+                .load_history(StoreLoadThreadHistoryParams {
+                    source: StoreThreadReadSource::LocalPath {
+                        rollout_path: rollout_path.clone(),
+                    },
+                })
+                .await
             {
                 Ok(items) => items,
                 Err(err) => {
@@ -4792,6 +4847,7 @@ impl CodexMessageProcessor {
                     return;
                 }
             };
+            let history_items = history.items;
             thread.preview = preview_from_rollout_items(&history_items);
             thread.forked_from_id = source_thread_id
                 .or_else(|| {
@@ -4801,30 +4857,14 @@ impl CodexMessageProcessor {
                     })
                 })
                 .map(|id| id.to_string());
-            if let Err(message) = populate_thread_turns(
-                &mut thread,
-                ThreadTurnSource::HistoryItems(&history_items),
-                /*active_turn*/ None,
-            )
-            .await
+            if let Err(message) =
+                populate_thread_turns(&mut thread, &history_items, /*active_turn*/ None).await
             {
                 self.send_internal_error(request_id, message).await;
                 return;
             }
             thread
         };
-
-        if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref()
-            && let Err(message) = populate_thread_turns(
-                &mut thread,
-                ThreadTurnSource::RolloutPath(fork_rollout_path.as_path()),
-                /*active_turn*/ None,
-            )
-            .await
-        {
-            self.send_internal_error(request_id, message).await;
-            return;
-        }
 
         self.thread_watch_manager
             .upsert_thread_silently(thread.clone())
@@ -4891,10 +4931,33 @@ impl CodexMessageProcessor {
                 } else {
                     rollout_path
                 };
-                match read_summary_from_rollout(&path, fallback_provider).await {
-                    Ok(summary) => {
-                        let response = GetConversationSummaryResponse { summary };
-                        self.outgoing.send_response(request_id, response).await;
+                match self
+                    .thread_store
+                    .read_thread(StoreReadThreadParams {
+                        source: StoreThreadReadSource::LocalPath {
+                            rollout_path: path.clone(),
+                        },
+                        include_history: false,
+                    })
+                    .await
+                {
+                    Ok(stored_thread) => {
+                        match summary_from_stored_thread(stored_thread, fallback_provider) {
+                            Some(summary) => {
+                                let response = GetConversationSummaryResponse { summary };
+                                self.outgoing.send_response(request_id, response).await;
+                            }
+                            None => {
+                                self.send_internal_error(
+                                    request_id,
+                                    format!(
+                                        "thread summary missing rollout path for {}",
+                                        path.display()
+                                    ),
+                                )
+                                .await;
+                            }
+                        }
                     }
                     Err(err) => {
                         let error = JSONRPCErrorError {
@@ -4914,8 +4977,10 @@ impl CodexMessageProcessor {
                 let stored_thread = match self
                     .thread_store
                     .read_thread(StoreReadThreadParams {
-                        thread_id: conversation_id,
-                        include_archived: false,
+                        source: StoreThreadReadSource::ThreadId {
+                            thread_id: conversation_id,
+                            include_archived: false,
+                        },
                         include_history: false,
                     })
                     .await
@@ -7458,9 +7523,21 @@ impl CodexMessageProcessor {
 
         let fallback_provider = self.config.model_provider_id.as_str();
         if let Some(rollout_path) = review_thread.rollout_path() {
-            match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
-                Ok(summary) => {
-                    let mut thread = summary_to_thread(summary, &self.config.cwd);
+            match self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    source: StoreThreadReadSource::LocalPath { rollout_path },
+                    include_history: false,
+                })
+                .await
+            {
+                Ok(stored_thread) => {
+                    let mut thread = thread_from_stored_thread(
+                        stored_thread,
+                        fallback_provider,
+                        &self.config.cwd,
+                    )
+                    .0;
                     self.thread_watch_manager
                         .upsert_thread_silently(thread.clone())
                         .await;
@@ -7644,6 +7721,7 @@ impl CodexMessageProcessor {
                 general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
+                thread_store: self.thread_store.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
             },
             conversation_id,
@@ -7758,6 +7836,7 @@ impl CodexMessageProcessor {
                 general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
+                thread_store: self.thread_store.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
             },
             conversation_id,
@@ -7807,6 +7886,7 @@ impl CodexMessageProcessor {
             general_analytics_enabled: _,
             thread_watch_manager,
             fallback_model_provider,
+            thread_store,
             codex_home,
         } = listener_task_context;
         let outgoing_for_task = Arc::clone(&outgoing);
@@ -7888,6 +7968,7 @@ impl CodexMessageProcessor {
                             thread_watch_manager.clone(),
                             api_version,
                             fallback_model_provider.clone(),
+                            &thread_store,
                             codex_home.as_path(),
                         )
                         .await;
@@ -8362,6 +8443,24 @@ impl CodexMessageProcessor {
                 None
             })
     }
+
+    async fn read_rollout_path_from_store(
+        &self,
+        thread_id: ThreadId,
+        include_archived: bool,
+    ) -> Option<PathBuf> {
+        self.thread_store
+            .read_thread(StoreReadThreadParams {
+                source: StoreThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived,
+                },
+                include_history: false,
+            })
+            .await
+            .ok()
+            .and_then(|thread| thread.rollout_path)
+    }
 }
 
 fn normalize_thread_list_cwd_filter(
@@ -8491,12 +8590,8 @@ async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if let Err(message) = populate_thread_turns(
-        &mut thread,
-        ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
-        active_turn.as_ref(),
-    )
-    .await
+    if let Err(message) =
+        populate_thread_turns(&mut thread, &pending.history_items, active_turn.as_ref()).await
     {
         outgoing
             .send_error(
@@ -8582,31 +8677,12 @@ async fn handle_pending_thread_resume_request(
         .await;
 }
 
-enum ThreadTurnSource<'a> {
-    RolloutPath(&'a Path),
-    HistoryItems(&'a [RolloutItem]),
-}
-
 async fn populate_thread_turns(
     thread: &mut Thread,
-    turn_source: ThreadTurnSource<'_>,
+    history_items: &[RolloutItem],
     active_turn: Option<&Turn>,
 ) -> std::result::Result<(), String> {
-    let mut turns = match turn_source {
-        ThreadTurnSource::RolloutPath(rollout_path) => {
-            read_rollout_items_from_rollout(rollout_path)
-                .await
-                .map(|items| build_turns_from_rollout_items(&items))
-                .map_err(|err| {
-                    format!(
-                        "failed to load rollout `{}` for thread {}: {err}",
-                        rollout_path.display(),
-                        thread.id
-                    )
-                })?
-        }
-        ThreadTurnSource::HistoryItems(items) => build_turns_from_rollout_items(items),
-    };
+    let mut turns = build_turns_from_rollout_items(history_items);
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
     }
@@ -9232,7 +9308,7 @@ fn thread_store_read_error(err: ThreadStoreError) -> JSONRPCErrorError {
     }
 }
 
-fn thread_from_stored_thread(
+pub(crate) fn thread_from_stored_thread(
     thread: StoredThread,
     fallback_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
@@ -9427,195 +9503,6 @@ fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummar
     )
 }
 
-pub(crate) async fn read_summary_from_rollout(
-    path: &Path,
-    fallback_provider: &str,
-) -> std::io::Result<ConversationSummary> {
-    let head = read_head_for_summary(path).await?;
-
-    let Some(first) = head.first() else {
-        return Err(IoError::other(format!(
-            "rollout at {} is empty",
-            path.display()
-        )));
-    };
-
-    let session_meta_line =
-        serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
-            IoError::other(format!(
-                "rollout at {} does not start with session metadata",
-                path.display()
-            ))
-        })?;
-    let SessionMetaLine {
-        meta: session_meta,
-        git,
-    } = session_meta_line;
-    let mut session_meta = session_meta;
-    session_meta.source = with_thread_spawn_agent_metadata(
-        session_meta.source.clone(),
-        session_meta.agent_nickname.clone(),
-        session_meta.agent_role.clone(),
-    );
-
-    let created_at = if session_meta.timestamp.is_empty() {
-        None
-    } else {
-        Some(session_meta.timestamp.as_str())
-    };
-    let updated_at = read_updated_at(path, created_at).await;
-    if let Some(summary) = extract_conversation_summary(
-        path.to_path_buf(),
-        &head,
-        &session_meta,
-        git.as_ref(),
-        fallback_provider,
-        updated_at.clone(),
-    ) {
-        return Ok(summary);
-    }
-
-    let timestamp = if session_meta.timestamp.is_empty() {
-        None
-    } else {
-        Some(session_meta.timestamp.clone())
-    };
-    let model_provider = session_meta
-        .model_provider
-        .clone()
-        .unwrap_or_else(|| fallback_provider.to_string());
-    let git_info = git.as_ref().map(map_git_info);
-    let updated_at = updated_at.or_else(|| timestamp.clone());
-
-    Ok(ConversationSummary {
-        conversation_id: session_meta.id,
-        timestamp,
-        updated_at,
-        path: path.to_path_buf(),
-        preview: String::new(),
-        model_provider,
-        cwd: session_meta.cwd,
-        cli_version: session_meta.cli_version,
-        source: session_meta.source,
-        git_info,
-    })
-}
-
-pub(crate) async fn read_rollout_items_from_rollout(
-    path: &Path,
-) -> std::io::Result<Vec<RolloutItem>> {
-    let items = match RolloutRecorder::get_rollout_history(path).await? {
-        InitialHistory::New | InitialHistory::Cleared => Vec::new(),
-        InitialHistory::Forked(items) => items,
-        InitialHistory::Resumed(resumed) => resumed.history,
-    };
-
-    Ok(items)
-}
-
-fn extract_conversation_summary(
-    path: PathBuf,
-    head: &[serde_json::Value],
-    session_meta: &SessionMeta,
-    git: Option<&CoreGitInfo>,
-    fallback_provider: &str,
-    updated_at: Option<String>,
-) -> Option<ConversationSummary> {
-    let preview = head
-        .iter()
-        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
-        .find_map(|item| match codex_core::parse_turn_item(&item) {
-            Some(TurnItem::UserMessage(user)) => Some(user.message()),
-            _ => None,
-        })?;
-
-    let preview = match preview.find(USER_MESSAGE_BEGIN) {
-        Some(idx) => preview[idx + USER_MESSAGE_BEGIN.len()..].trim(),
-        None => preview.as_str(),
-    };
-
-    let timestamp = if session_meta.timestamp.is_empty() {
-        None
-    } else {
-        Some(session_meta.timestamp.clone())
-    };
-    let conversation_id = session_meta.id;
-    let model_provider = session_meta
-        .model_provider
-        .clone()
-        .unwrap_or_else(|| fallback_provider.to_string());
-    let git_info = git.map(map_git_info);
-    let updated_at = updated_at.or_else(|| timestamp.clone());
-
-    Some(ConversationSummary {
-        conversation_id,
-        timestamp,
-        updated_at,
-        path,
-        preview: preview.to_string(),
-        model_provider,
-        cwd: session_meta.cwd.clone(),
-        cli_version: session_meta.cli_version.clone(),
-        source: session_meta.source.clone(),
-        git_info,
-    })
-}
-
-fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
-    ConversationGitInfo {
-        sha: git_info.commit_hash.as_ref().map(|sha| sha.0.clone()),
-        branch: git_info.branch.clone(),
-        origin_url: git_info.repository_url.clone(),
-    }
-}
-
-async fn load_thread_summary_for_rollout(
-    config: &Config,
-    thread_id: ThreadId,
-    rollout_path: &Path,
-    fallback_provider: &str,
-    persisted_metadata: Option<&ThreadMetadata>,
-) -> std::result::Result<Thread, String> {
-    let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
-        .await
-        .map(|summary| summary_to_thread(summary, &config.cwd))
-        .map_err(|err| {
-            format!(
-                "failed to load rollout `{}` for thread {thread_id}: {err}",
-                rollout_path.display()
-            )
-        })?;
-    thread.forked_from_id = forked_from_id_from_rollout(rollout_path).await;
-    if let Some(persisted_metadata) = persisted_metadata {
-        merge_mutable_thread_metadata(
-            &mut thread,
-            summary_to_thread(
-                summary_from_thread_metadata(persisted_metadata),
-                &config.cwd,
-            ),
-        );
-    } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
-        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary, &config.cwd));
-    }
-    let title = if let Some(metadata) = persisted_metadata {
-        non_empty_title(metadata)
-    } else {
-        title_from_state_db(config, thread_id).await
-    };
-    if let Some(title) = title {
-        set_thread_name_from_title(&mut thread, title);
-    }
-    Ok(thread)
-}
-
-async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
-    read_session_meta_line(path)
-        .await
-        .ok()
-        .and_then(|meta_line| meta_line.meta.forked_from_id)
-        .map(|thread_id| thread_id.to_string())
-}
-
 fn merge_mutable_thread_metadata(thread: &mut Thread, persisted_thread: Thread) {
     thread.git_info = persisted_thread.git_info;
 }
@@ -9674,18 +9561,6 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc))
     })
-}
-
-async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String> {
-    let updated_at = tokio::fs::metadata(path)
-        .await
-        .ok()
-        .and_then(|meta| meta.modified().ok())
-        .map(|modified| {
-            let updated_at: DateTime<Utc> = modified.into();
-            updated_at.to_rfc3339_opts(SecondsFormat::Millis, true)
-        });
-    updated_at.or_else(|| created_at.map(str::to_string))
 }
 
 fn build_thread_from_snapshot(
@@ -9786,7 +9661,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
-    use tempfile::TempDir;
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
@@ -10116,210 +9990,6 @@ mod tests {
 
         assert_eq!(typesafe_overrides.model, None);
         assert_eq!(request_overrides, None);
-        Ok(())
-    }
-
-    #[test]
-    fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {
-        let conversation_id = ThreadId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
-        let timestamp = Some("2025-09-05T16:53:11.850Z".to_string());
-        let path = PathBuf::from("rollout.jsonl");
-
-        let head = vec![
-            json!({
-                "id": conversation_id.to_string(),
-                "timestamp": timestamp,
-                "cwd": "/",
-                "originator": "codex",
-                "cli_version": "0.0.0",
-                "model_provider": "test-provider"
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\n<AGENTS.md contents>\n</INSTRUCTIONS>".to_string(),
-                }],
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": format!("<prior context> {USER_MESSAGE_BEGIN}Count to 5"),
-                }],
-            }),
-        ];
-
-        let session_meta = serde_json::from_value::<SessionMeta>(head[0].clone())?;
-
-        let summary = extract_conversation_summary(
-            path.clone(),
-            &head,
-            &session_meta,
-            /*git*/ None,
-            "test-provider",
-            timestamp.clone(),
-        )
-        .expect("summary");
-
-        let expected = ConversationSummary {
-            conversation_id,
-            timestamp: timestamp.clone(),
-            updated_at: timestamp,
-            path,
-            preview: "Count to 5".to_string(),
-            model_provider: "test-provider".to_string(),
-            cwd: PathBuf::from("/"),
-            cli_version: "0.0.0".to_string(),
-            source: SessionSource::VSCode,
-            git_info: None,
-        };
-
-        assert_eq!(summary, expected);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_summary_from_rollout_returns_empty_preview_when_no_user_message() -> Result<()> {
-        use codex_protocol::protocol::RolloutItem;
-        use codex_protocol::protocol::RolloutLine;
-        use codex_protocol::protocol::SessionMetaLine;
-        use std::fs;
-        use std::fs::FileTimes;
-
-        let temp_dir = TempDir::new()?;
-        let path = temp_dir.path().join("rollout.jsonl");
-
-        let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
-        let timestamp = "2025-09-05T16:53:11.850Z".to_string();
-
-        let session_meta = SessionMeta {
-            id: conversation_id,
-            timestamp: timestamp.clone(),
-            model_provider: None,
-            ..SessionMeta::default()
-        };
-
-        let line = RolloutLine {
-            timestamp: timestamp.clone(),
-            item: RolloutItem::SessionMeta(SessionMetaLine {
-                meta: session_meta.clone(),
-                git: None,
-            }),
-        };
-
-        fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
-        let parsed = chrono::DateTime::parse_from_rfc3339(&timestamp)?.with_timezone(&Utc);
-        let times = FileTimes::new().set_modified(parsed.into());
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)?
-            .set_times(times)?;
-
-        let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
-
-        let expected = ConversationSummary {
-            conversation_id,
-            timestamp: Some(timestamp.clone()),
-            updated_at: Some(timestamp),
-            path: path.clone(),
-            preview: String::new(),
-            model_provider: "fallback".to_string(),
-            cwd: PathBuf::new(),
-            cli_version: String::new(),
-            source: SessionSource::VSCode,
-            git_info: None,
-        };
-
-        assert_eq!(summary, expected);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_summary_from_rollout_preserves_agent_nickname() -> Result<()> {
-        use codex_protocol::protocol::RolloutItem;
-        use codex_protocol::protocol::RolloutLine;
-        use codex_protocol::protocol::SessionMetaLine;
-        use std::fs;
-
-        let temp_dir = TempDir::new()?;
-        let path = temp_dir.path().join("rollout.jsonl");
-
-        let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
-        let parent_thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
-        let timestamp = "2025-09-05T16:53:11.850Z".to_string();
-
-        let session_meta = SessionMeta {
-            id: conversation_id,
-            timestamp: timestamp.clone(),
-            source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            }),
-            agent_nickname: Some("atlas".to_string()),
-            agent_role: Some("explorer".to_string()),
-            model_provider: Some("test-provider".to_string()),
-            ..SessionMeta::default()
-        };
-
-        let line = RolloutLine {
-            timestamp,
-            item: RolloutItem::SessionMeta(SessionMetaLine {
-                meta: session_meta,
-                git: None,
-            }),
-        };
-        fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
-
-        let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
-        let fallback_cwd = AbsolutePathBuf::from_absolute_path("/")?;
-        let thread = summary_to_thread(summary, &fallback_cwd);
-
-        assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
-        assert_eq!(thread.agent_role, Some("explorer".to_string()));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_summary_from_rollout_preserves_forked_from_id() -> Result<()> {
-        use codex_protocol::protocol::RolloutItem;
-        use codex_protocol::protocol::RolloutLine;
-        use codex_protocol::protocol::SessionMetaLine;
-        use std::fs;
-
-        let temp_dir = TempDir::new()?;
-        let path = temp_dir.path().join("rollout.jsonl");
-
-        let conversation_id = ThreadId::from_string("bfd12a78-5900-467b-9bc5-d3d35df08191")?;
-        let forked_from_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
-        let timestamp = "2025-09-05T16:53:11.850Z".to_string();
-
-        let session_meta = SessionMeta {
-            id: conversation_id,
-            forked_from_id: Some(forked_from_id),
-            timestamp: timestamp.clone(),
-            model_provider: Some("test-provider".to_string()),
-            ..SessionMeta::default()
-        };
-
-        let line = RolloutLine {
-            timestamp,
-            item: RolloutItem::SessionMeta(SessionMetaLine {
-                meta: session_meta,
-                git: None,
-            }),
-        };
-        fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
-
-        assert_eq!(
-            forked_from_id_from_rollout(path.as_path()).await,
-            Some(forked_from_id.to_string())
-        );
         Ok(())
     }
 

@@ -1,7 +1,5 @@
 use crate::codex_message_processor::ApiVersion;
-use crate::codex_message_processor::read_rollout_items_from_rollout;
-use crate::codex_message_processor::read_summary_from_rollout;
-use crate::codex_message_processor::summary_to_thread;
+use crate::codex_message_processor::thread_from_stored_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
@@ -111,7 +109,6 @@ use codex_app_server_protocol::convert_patch_changes;
 use codex_app_server_protocol::guardian_auto_approval_review_notification;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
-use codex_core::find_thread_name_by_id;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
@@ -140,6 +137,10 @@ use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUse
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
+use codex_thread_store::LocalThreadStore;
+use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
+use codex_thread_store::ThreadReadSource as StoreThreadReadSource;
+use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
@@ -147,7 +148,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
-use tracing::warn;
 
 type JsonValue = serde_json::Value;
 
@@ -175,7 +175,8 @@ pub(crate) async fn apply_bespoke_event_handling(
     thread_watch_manager: ThreadWatchManager,
     api_version: ApiVersion,
     fallback_model_provider: String,
-    codex_home: &Path,
+    thread_store: &LocalThreadStore,
+    _codex_home: &Path,
 ) {
     let Event {
         id: event_turn_id,
@@ -1827,46 +1828,39 @@ pub(crate) async fn apply_bespoke_event_handling(
                     outgoing.send_error(request_id, error).await;
                     return;
                 };
-                let response = match read_summary_from_rollout(
-                    rollout_path.as_path(),
-                    fallback_model_provider.as_str(),
-                )
-                .await
+                let response = match thread_store
+                    .read_thread(StoreReadThreadParams {
+                        source: StoreThreadReadSource::LocalPath {
+                            rollout_path: rollout_path.clone(),
+                        },
+                        include_history: true,
+                    })
+                    .await
                 {
-                    Ok(summary) => {
+                    Ok(stored_thread) => {
                         let fallback_cwd = conversation.config_snapshot().await.cwd;
-                        let mut thread = summary_to_thread(summary, &fallback_cwd);
-                        match read_rollout_items_from_rollout(rollout_path.as_path()).await {
-                            Ok(items) => {
-                                thread.turns = build_turns_from_rollout_items(&items);
-                                thread.status = thread_watch_manager
-                                    .loaded_status_for_thread(&thread.id)
-                                    .await;
-                                match find_thread_name_by_id(codex_home, &conversation_id).await {
-                                    Ok(name) => {
-                                        thread.name = name;
-                                    }
-                                    Err(err) => {
-                                        warn!(
-                                            "Failed to read thread name for {conversation_id}: {err}"
-                                        );
-                                    }
-                                }
-                                ThreadRollbackResponse { thread }
-                            }
-                            Err(err) => {
-                                let error = JSONRPCErrorError {
-                                    code: INTERNAL_ERROR_CODE,
-                                    message: format!(
-                                        "failed to load rollout `{}`: {err}",
-                                        rollout_path.display()
-                                    ),
-                                    data: None,
-                                };
-                                outgoing.send_error(request_id.clone(), error).await;
-                                return;
-                            }
-                        }
+                        let (mut thread, history) = thread_from_stored_thread(
+                            stored_thread,
+                            fallback_model_provider.as_str(),
+                            &fallback_cwd,
+                        );
+                        let Some(history) = history else {
+                            let error = JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!(
+                                    "failed to load rollout `{}`",
+                                    rollout_path.display()
+                                ),
+                                data: None,
+                            };
+                            outgoing.send_error(request_id.clone(), error).await;
+                            return;
+                        };
+                        thread.turns = build_turns_from_rollout_items(&history.items);
+                        thread.status = thread_watch_manager
+                            .loaded_status_for_thread(&thread.id)
+                            .await;
+                        ThreadRollbackResponse { thread }
                     }
                     Err(err) => {
                         let error = JSONRPCErrorError {
@@ -3119,6 +3113,7 @@ mod tests {
         thread_state: Arc<Mutex<ThreadState>>,
         thread_watch_manager: ThreadWatchManager,
         analytics_events_client: AnalyticsEventsClient,
+        thread_store: LocalThreadStore,
         codex_home: PathBuf,
     }
 
@@ -3139,6 +3134,7 @@ mod tests {
                 self.thread_watch_manager.clone(),
                 ApiVersion::V2,
                 "test-provider".to_string(),
+                &self.thread_store,
                 &self.codex_home,
             )
             .await;
@@ -3429,6 +3425,7 @@ mod tests {
     async fn guardian_command_execution_notifications_wrap_review_lifecycle() -> Result<()> {
         let codex_home = TempDir::new()?;
         let config = load_default_config_for_test(&codex_home).await;
+        let thread_store = LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(&config));
         let thread_manager = Arc::new(
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
@@ -3467,6 +3464,7 @@ mod tests {
                 "http://localhost".to_string(),
                 Some(false),
             ),
+            thread_store,
             codex_home: codex_home.path().to_path_buf(),
         };
 

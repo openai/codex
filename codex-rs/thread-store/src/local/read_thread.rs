@@ -14,6 +14,7 @@ use super::helpers::stored_thread_from_rollout_item;
 use crate::ReadThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadReadSource;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
@@ -25,19 +26,34 @@ pub(super) async fn read_thread(
     // with list/read behavior for normal persisted sessions. SQLite is a fallback
     // for metadata rows that refer to rollouts not discoverable under codex_home,
     // such as explicit-path resumes or legacy state.
-    let Some(path) = resolve_rollout_path(store, &params).await? else {
-        return read_thread_from_sqlite_fallback(store, params).await;
+    let (path, include_archived) = match params.source {
+        ThreadReadSource::ThreadId {
+            thread_id,
+            include_archived,
+        } => {
+            let Some(path) = resolve_rollout_path(store, thread_id, include_archived).await? else {
+                return read_thread_from_sqlite_fallback(
+                    store,
+                    thread_id,
+                    include_archived,
+                    params.include_history,
+                )
+                .await;
+            };
+            (path, include_archived)
+        }
+        ThreadReadSource::LocalPath { rollout_path } => (rollout_path, true),
     };
 
-    read_thread_from_rollout_path(store, params, path).await
+    read_thread_from_rollout_path(store, path, include_archived, params.include_history).await
 }
 
 async fn resolve_rollout_path(
     store: &LocalThreadStore,
-    params: &ReadThreadParams,
+    thread_id: codex_protocol::ThreadId,
+    include_archived: bool,
 ) -> ThreadStoreResult<Option<std::path::PathBuf>> {
-    let thread_id = params.thread_id;
-    let path = if params.include_archived {
+    let path = if include_archived {
         match find_thread_path_by_id_str(store.config.codex_home.as_path(), &thread_id.to_string())
             .await
             .map_err(|err| ThreadStoreError::InvalidRequest {
@@ -65,35 +81,47 @@ async fn resolve_rollout_path(
 
 async fn read_thread_from_rollout_path(
     store: &LocalThreadStore,
-    params: ReadThreadParams,
     path: std::path::PathBuf,
+    include_archived: bool,
+    include_history: bool,
 ) -> ThreadStoreResult<StoredThread> {
-    let thread_id = params.thread_id;
     let archived = path.starts_with(
         store
             .config
             .codex_home
             .join(codex_rollout::ARCHIVED_SESSIONS_SUBDIR),
     );
+    if archived && !include_archived {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!("archived rollout is not eligible: {}", path.display()),
+        });
+    }
     let Some(item) = read_thread_item_from_rollout(path.clone()).await else {
         // Some materialized sessions, such as standalone shell-command turns, have
         // valid persisted history and SQLite metadata before they have a user-message
         // preview that the rollout summary reader can use.
+        let session_meta_thread =
+            stored_thread_from_session_meta(store, path.clone(), archived).await?;
+        let thread_id = session_meta_thread.thread_id;
         let mut thread =
             if let Ok(Some(mut metadata)) = read_sqlite_metadata(store, thread_id).await {
                 metadata.rollout_path = path.clone();
                 stored_thread_from_sqlite_metadata(store, metadata).await
             } else {
-                stored_thread_from_session_meta(store, path.clone(), archived).await?
+                session_meta_thread
             };
-        if params.include_history {
+        if include_history {
             let Some(path) = thread.rollout_path.clone() else {
                 return Err(ThreadStoreError::Internal {
                     message: format!("failed to load thread history for thread {thread_id}"),
                 });
             };
             let items = load_history_items(&path).await?;
-            thread.history = Some(StoredThreadHistory { thread_id, items });
+            thread.history = Some(StoredThreadHistory {
+                thread_id,
+                rollout_path: Some(path),
+                items,
+            });
         }
         return Ok(thread);
     };
@@ -102,6 +130,13 @@ async fn read_thread_from_rollout_path(
             .ok_or_else(|| ThreadStoreError::Internal {
                 message: format!("failed to read thread id from {}", path.display()),
             })?;
+    if let Some(updated_at) = read_rollout_updated_at(path.as_path()) {
+        thread.updated_at = updated_at;
+        if archived {
+            thread.archived_at = Some(updated_at);
+        }
+    }
+    let thread_id = thread.thread_id;
     thread.forked_from_id = read_session_meta_line(path.as_path())
         .await
         .ok()
@@ -122,21 +157,26 @@ async fn read_thread_from_rollout_path(
     {
         set_thread_name_from_title(&mut thread, title);
     }
-    if params.include_history {
+    if include_history {
         let items = load_history_items(&path).await?;
-        thread.history = Some(StoredThreadHistory { thread_id, items });
+        thread.history = Some(StoredThreadHistory {
+            thread_id,
+            rollout_path: Some(path),
+            items,
+        });
     }
     Ok(thread)
 }
 
 async fn read_thread_from_sqlite_fallback(
     store: &LocalThreadStore,
-    params: ReadThreadParams,
+    thread_id: codex_protocol::ThreadId,
+    include_archived: bool,
+    include_history: bool,
 ) -> ThreadStoreResult<StoredThread> {
-    let thread_id = params.thread_id;
     let metadata = read_sqlite_metadata(store, thread_id).await?;
-    let Some(metadata) = metadata
-        .filter(|metadata| params.include_archived || !metadata_is_archived(store, metadata))
+    let Some(metadata) =
+        metadata.filter(|metadata| include_archived || !metadata_is_archived(store, metadata))
     else {
         return Err(ThreadStoreError::InvalidRequest {
             message: format!("no rollout found for thread id {thread_id}"),
@@ -144,16 +184,40 @@ async fn read_thread_from_sqlite_fallback(
     };
 
     let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
-    if params.include_history {
+    if include_history {
         let Some(path) = thread.rollout_path.clone() else {
             return Err(ThreadStoreError::Internal {
                 message: format!("failed to load thread history for thread {thread_id}"),
             });
         };
         let items = load_history_items(&path).await?;
-        thread.history = Some(StoredThreadHistory { thread_id, items });
+        thread.history = Some(StoredThreadHistory {
+            thread_id,
+            rollout_path: Some(path),
+            items,
+        });
     }
     Ok(thread)
+}
+
+pub(super) async fn load_history(
+    store: &LocalThreadStore,
+    source: ThreadReadSource,
+) -> ThreadStoreResult<StoredThreadHistory> {
+    let thread = read_thread(
+        store,
+        ReadThreadParams {
+            source,
+            include_history: true,
+        },
+    )
+    .await?;
+    thread.history.ok_or_else(|| ThreadStoreError::Internal {
+        message: format!(
+            "failed to load thread history for thread {}",
+            thread.thread_id
+        ),
+    })
 }
 
 async fn read_sqlite_metadata(
@@ -395,8 +459,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: true,
             })
             .await
@@ -422,8 +488,10 @@ mod tests {
 
         let active_only_err = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -438,8 +506,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: true,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: true,
+                },
                 include_history: false,
             })
             .await
@@ -465,8 +535,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: true,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: true,
+                },
                 include_history: false,
             })
             .await
@@ -499,8 +571,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -540,8 +614,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -585,8 +661,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -634,8 +712,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -657,8 +737,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -717,8 +799,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: true,
             })
             .await
@@ -768,8 +852,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: true,
             })
             .await
@@ -844,8 +930,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -912,8 +1000,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: true,
             })
             .await
@@ -953,8 +1043,10 @@ mod tests {
 
         let active_only_err = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -969,8 +1061,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: true,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: true,
+                },
                 include_history: false,
             })
             .await
@@ -1011,8 +1105,10 @@ mod tests {
 
         let active_only_err = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await
@@ -1027,8 +1123,10 @@ mod tests {
 
         let thread = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: true,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: true,
+                },
                 include_history: false,
             })
             .await
@@ -1047,8 +1145,10 @@ mod tests {
 
         let err = store
             .read_thread(ReadThreadParams {
-                thread_id,
-                include_archived: false,
+                source: ThreadReadSource::ThreadId {
+                    thread_id,
+                    include_archived: false,
+                },
                 include_history: false,
             })
             .await

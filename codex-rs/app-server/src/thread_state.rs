@@ -8,10 +8,10 @@ use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::Mutex;
@@ -27,7 +27,7 @@ type PendingInterruptQueue = Vec<(
 
 pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
-    pub(crate) rollout_path: PathBuf,
+    pub(crate) history_items: Vec<RolloutItem>,
     pub(crate) config_snapshot: ThreadConfigSnapshot,
     pub(crate) instruction_sources: Vec<AbsolutePathBuf>,
     pub(crate) thread_summary: codex_app_server_protocol::Thread,

@@ -14,6 +14,7 @@ use crate::SetThreadNameParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
+use crate::ThreadReadSource;
 use crate::ThreadRecorder;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
@@ -69,13 +70,19 @@ impl ThreadStore for RemoteThreadStore {
 
     async fn load_history(
         &self,
-        _params: LoadThreadHistoryParams,
+        params: LoadThreadHistoryParams,
     ) -> ThreadStoreResult<StoredThreadHistory> {
-        Err(not_implemented("load_history"))
+        Err(unsupported_or_not_implemented(
+            "load_history",
+            &params.source,
+        ))
     }
 
-    async fn read_thread(&self, _params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
-        Err(not_implemented("read_thread"))
+    async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
+        Err(unsupported_or_not_implemented(
+            "read_thread",
+            &params.source,
+        ))
     }
 
     async fn list_threads(&self, params: ListThreadsParams) -> ThreadStoreResult<ThreadPage> {
@@ -108,5 +115,48 @@ impl ThreadStore for RemoteThreadStore {
 fn not_implemented(method: &str) -> ThreadStoreError {
     ThreadStoreError::Internal {
         message: format!("remote thread store does not implement {method} yet"),
+    }
+}
+
+fn unsupported_or_not_implemented(method: &str, source: &ThreadReadSource) -> ThreadStoreError {
+    match source {
+        ThreadReadSource::LocalPath { .. } => ThreadStoreError::InvalidRequest {
+            message: format!(
+                "remote thread store does not support local rollout paths for {method}"
+            ),
+        },
+        ThreadReadSource::ThreadId { .. } => not_implemented(method),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::ReadThreadParams;
+    use crate::RemoteThreadStore;
+    use crate::ThreadReadSource;
+    use crate::ThreadStore;
+    use crate::ThreadStoreError;
+
+    #[tokio::test]
+    async fn read_thread_rejects_local_paths() {
+        let store = RemoteThreadStore::new("http://localhost:1");
+
+        let err = store
+            .read_thread(ReadThreadParams {
+                source: ThreadReadSource::LocalPath {
+                    rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
+                },
+                include_history: false,
+            })
+            .await
+            .expect_err("local paths should not be supported by remote store");
+
+        assert!(matches!(
+            err,
+            ThreadStoreError::InvalidRequest { message }
+                if message == "remote thread store does not support local rollout paths for read_thread"
+        ));
     }
 }

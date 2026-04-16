@@ -62,13 +62,28 @@ pub struct AppendThreadItemsParams {
     pub items: Vec<RolloutItem>,
 }
 
+/// Identifies a persisted thread either by durable thread id or by a local rollout path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThreadReadSource {
+    /// Preferred storage-neutral lookup by thread id.
+    ThreadId {
+        /// Thread id to read.
+        thread_id: ThreadId,
+        /// Whether archived threads are eligible.
+        include_archived: bool,
+    },
+    /// Local-only compatibility lookup for callers that still hold rollout paths.
+    LocalPath {
+        /// Local rollout path to read.
+        rollout_path: PathBuf,
+    },
+}
+
 /// Parameters for loading persisted history for resume, fork, rollback, and memory jobs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoadThreadHistoryParams {
-    /// Thread id to load.
-    pub thread_id: ThreadId,
-    /// Whether archived threads are eligible.
-    pub include_archived: bool,
+    /// Thread source to load.
+    pub source: ThreadReadSource,
 }
 
 /// Persisted rollout history for a thread, without any filesystem path requirement.
@@ -76,6 +91,8 @@ pub struct LoadThreadHistoryParams {
 pub struct StoredThreadHistory {
     /// Thread id represented by the history.
     pub thread_id: ThreadId,
+    /// Local rollout path when the backing store is filesystem-based.
+    pub rollout_path: Option<PathBuf>,
     /// Persisted rollout items in replay order.
     pub items: Vec<RolloutItem>,
 }
@@ -83,10 +100,8 @@ pub struct StoredThreadHistory {
 /// Parameters for reading a thread summary and optionally its replay history.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadThreadParams {
-    /// Thread id to read.
-    pub thread_id: ThreadId,
-    /// Whether archived threads are eligible.
-    pub include_archived: bool,
+    /// Thread source to read.
+    pub source: ThreadReadSource,
     /// Whether persisted rollout items should be included in the response.
     pub include_history: bool,
 }
