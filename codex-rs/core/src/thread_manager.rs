@@ -137,6 +137,7 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
+    pub thread_start_warnings: Vec<String>,
 }
 
 // TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
@@ -926,7 +927,9 @@ impl ThreadManagerState {
             Some(_) | None => crate::file_watcher::WatchRegistration::default(),
         };
         let CodexSpawnOk {
-            codex, thread_id, ..
+            codex,
+            thread_id,
+            thread_start_warnings,
         } = Codex::spawn(CodexSpawnArgs {
             config,
             auth_manager,
@@ -949,7 +952,7 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
         })
         .await?;
-        self.finalize_thread_spawn(codex, thread_id, watch_registration)
+        self.finalize_thread_spawn(codex, thread_id, watch_registration, thread_start_warnings)
             .await
     }
 
@@ -958,6 +961,7 @@ impl ThreadManagerState {
         codex: Codex,
         thread_id: ThreadId,
         watch_registration: crate::file_watcher::WatchRegistration,
+        thread_start_warnings: Vec<String>,
     ) -> CodexResult<NewThread> {
         let event = codex.next_event().await?;
         let session_configured = match event {
@@ -982,6 +986,7 @@ impl ThreadManagerState {
             thread_id,
             thread,
             session_configured,
+            thread_start_warnings,
         })
     }
 

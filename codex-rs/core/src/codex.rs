@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use crate::SkillRenderReport;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
@@ -418,12 +417,12 @@ pub struct Codex {
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 
-/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
-/// the submission id for the initial `ConfigureSession` request and the
-/// unique session id.
+/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`], the
+/// unique session id, and any warnings known at thread start.
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub thread_id: ThreadId,
+    pub thread_start_warnings: Vec<String>,
 }
 
 pub(crate) struct CodexSpawnArgs {
@@ -601,6 +600,14 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        let implicit_skills = loaded_skills.allowed_skills_for_implicit_invocation();
+        let thread_start_warnings = render_skills_section_with_budget(
+            &implicit_skills,
+            default_skill_metadata_budget(model_info.context_window),
+        )
+        .and_then(|rendered| rendered.report.warning_message())
+        .into_iter()
+        .collect();
         let base_instructions = config
             .base_instructions
             .clone()
@@ -718,7 +725,11 @@ impl Codex {
             session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
         };
 
-        Ok(CodexSpawnOk { codex, thread_id })
+        Ok(CodexSpawnOk {
+            codex,
+            thread_id,
+            thread_start_warnings,
+        })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -1349,11 +1360,6 @@ pub(crate) struct SessionSettingsUpdate {
 pub(crate) struct AppServerClientMetadata {
     pub(crate) client_name: Option<String>,
     pub(crate) client_version: Option<String>,
-}
-
-struct InitialContextBuild {
-    items: Vec<ResponseItem>,
-    skills_report: Option<SkillRenderReport>,
 }
 
 impl Session {
@@ -3827,18 +3833,8 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
-        self.build_initial_context_with_report(turn_context)
-            .await
-            .items
-    }
-
-    async fn build_initial_context_with_report(
-        &self,
-        turn_context: &TurnContext,
-    ) -> InitialContextBuild {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
-        let mut skills_report = None;
         let shell = self.user_shell();
         let (
             reference_context_item,
@@ -3953,7 +3949,6 @@ impl Session {
             default_skill_metadata_budget(turn_context.model_info.context_window),
         ) {
             developer_sections.push(rendered_skills.text);
-            skills_report = Some(rendered_skills.report);
         }
         let loaded_plugins = self
             .services
@@ -4016,10 +4011,7 @@ impl Session {
         {
             items.push(guardian_developer_message);
         }
-        InitialContextBuild {
-            items,
-            skills_report,
-        }
+        items
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
@@ -4066,24 +4058,16 @@ impl Session {
             state.reference_context_item()
         };
         let should_inject_full_context = reference_context_item.is_none();
-        let (context_items, skills_report) = if should_inject_full_context {
-            let initial_context = self.build_initial_context_with_report(turn_context).await;
-            (initial_context.items, initial_context.skills_report)
+        let context_items = if should_inject_full_context {
+            self.build_initial_context(turn_context).await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            (
-                self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
-                    .await,
-                None,
-            )
+            self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
+                .await
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
-                .await;
-        }
-        if let Some(message) = skills_report.and_then(|report| report.warning_message()) {
-            self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
                 .await;
         }
         // Persist one `TurnContextItem` per real user turn so resume/lazy replay can recover the

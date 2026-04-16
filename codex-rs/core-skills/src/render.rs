@@ -2,11 +2,11 @@ use crate::model::SkillMetadata;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_output_truncation::approx_token_count;
 
 pub const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 pub const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 1;
 const DEFAULT_OMITTED_SKILL_SAMPLE_LIMIT: usize = 5;
-const APPROX_BYTES_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillMetadataBudget {
@@ -23,11 +23,7 @@ impl SkillMetadataBudget {
 
     fn cost(self, text: &str) -> usize {
         match self {
-            Self::Tokens(_) => {
-                text.len()
-                    .saturating_add(APPROX_BYTES_PER_TOKEN.saturating_sub(1))
-                    / APPROX_BYTES_PER_TOKEN
-            }
+            Self::Tokens(_) => approx_token_count(text),
             Self::Characters(_) => text.chars().count(),
         }
     }
@@ -195,18 +191,16 @@ fn render_skill_lines(
     let mut omitted_samples = Vec::new();
     let mut used = 0usize;
     let mut omitted_count = 0usize;
-    let mut budget_reached = false;
 
     for skill in ordered_skills {
         let line = render_skill_line(skill);
         let line_cost = budget.cost(&format!("{line}\n"));
-        if !budget_reached && used.saturating_add(line_cost) <= budget.limit() {
+        if used.saturating_add(line_cost) <= budget.limit() {
             used = used.saturating_add(line_cost);
             included.push(line);
             continue;
         }
 
-        budget_reached = true;
         omitted_count = omitted_count.saturating_add(1);
         if omitted_samples.len() < DEFAULT_OMITTED_SKILL_SAMPLE_LIMIT {
             omitted_samples.push(OmittedSkillSummary {
@@ -333,6 +327,24 @@ mod tests {
         assert!(rendered.text.contains("- admin-skill:"));
         assert!(!rendered.text.contains("- repo-skill:"));
         assert!(!rendered.text.contains("- user-skill:"));
+    }
+
+    #[test]
+    fn budgeted_rendering_keeps_scanning_after_oversized_entry() {
+        let mut oversized = make_skill("oversized-system-skill", SkillScope::System);
+        oversized.description = "desc ".repeat(100);
+        let repo = make_skill("repo-skill", SkillScope::Repo);
+        let repo_cost = SkillMetadataBudget::Characters(usize::MAX)
+            .cost(&format!("{}\n", render_skill_line(&repo)));
+        let budget = SkillMetadataBudget::Characters(repo_cost);
+
+        let rendered =
+            render_skills_section_with_budget(&[oversized, repo], budget).expect("skills render");
+
+        assert_eq!(rendered.report.included_count, 1);
+        assert_eq!(rendered.report.omitted_count, 1);
+        assert!(!rendered.text.contains("- oversized-system-skill:"));
+        assert!(rendered.text.contains("- repo-skill:"));
     }
 
     #[test]

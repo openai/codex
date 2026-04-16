@@ -93,7 +93,6 @@ pub(crate) use skills::SkillError;
 pub(crate) use skills::SkillInjections;
 pub(crate) use skills::SkillLoadOutcome;
 pub(crate) use skills::SkillMetadata;
-pub(crate) use skills::SkillRenderReport;
 pub(crate) use skills::SkillsLoadInput;
 pub(crate) use skills::SkillsManager;
 pub(crate) use skills::build_skill_injections;

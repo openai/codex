@@ -68,6 +68,7 @@ pub async fn run_codex_tool_session(
         thread_id,
         thread,
         session_configured,
+        ..
     } = match thread_manager.start_thread(config).await {
         Ok(res) => res,
         Err(e) => {
