@@ -429,7 +429,7 @@ Experimental: use `memory/reset` to clear local memory artifacts and sqlite-back
 
 ### Example: Set and update a thread goal
 
-Use `thread/goal/set` with an `objective` to create or replace the current goal for a materialized thread. Replacement resets `tokensUsed` and `createdAt`. Omit `objective` to update the existing goal’s status or token budget while preserving usage history. Clients can set `budgetStopped` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
+Use `thread/goal/set` with an `objective` to create or replace the current goal for a materialized thread. Replacement resets `tokensUsed` and `createdAt`. Omit `objective` to update the existing goal’s status or token budget while preserving usage history. Clients can set `budgetLimited` when they stop because a token budget is exhausted or nearly exhausted; the system also sets it when accounting crosses a configured token budget.
 
 ```json
 { "method": "thread/goal/set", "id": 27, "params": {

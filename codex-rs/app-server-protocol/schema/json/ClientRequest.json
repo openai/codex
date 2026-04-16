@@ -2840,7 +2840,7 @@
       "enum": [
         "active",
         "paused",
-        "budgetStopped",
+        "budgetLimited",
         "complete"
       ],
       "type": "string"
