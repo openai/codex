@@ -1645,6 +1645,20 @@ pub enum HookScope {
     Turn,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HookSource {
+    System,
+    User,
+    Project,
+    Mdm,
+    SessionFlags,
+    LegacyManagedConfigFile,
+    LegacyManagedConfigMdm,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum HookRunStatus {
@@ -1681,6 +1695,8 @@ pub struct HookRunSummary {
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
     pub source_path: AbsolutePathBuf,
+    #[serde(default)]
+    pub source: HookSource,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,

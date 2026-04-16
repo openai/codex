@@ -139,6 +139,7 @@ export type { HookPromptFragment } from "./HookPromptFragment";
 export type { HookRunStatus } from "./HookRunStatus";
 export type { HookRunSummary } from "./HookRunSummary";
 export type { HookScope } from "./HookScope";
+export type { HookSource } from "./HookSource";
 export type { HookStartedNotification } from "./HookStartedNotification";
 export type { ItemCompletedNotification } from "./ItemCompletedNotification";
 export type { ItemGuardianApprovalReviewCompletedNotification } from "./ItemGuardianApprovalReviewCompletedNotification";

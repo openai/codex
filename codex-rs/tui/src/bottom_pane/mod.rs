@@ -90,6 +90,7 @@ mod skills_toggle_view;
 mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
+pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
@@ -115,6 +116,7 @@ mod pending_thread_approvals;
 pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
+mod selection_tabs;
 mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
@@ -850,6 +852,14 @@ impl BottomPane {
             .last()
             .filter(|view| view.view_id() == Some(view_id))
             .and_then(|view| view.selected_index())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn active_tab_id_for_active_view(&self, view_id: &'static str) -> Option<&str> {
+        self.view_stack
+            .last()
+            .filter(|view| view.view_id() == Some(view_id))
+            .and_then(|view| view.active_tab_id())
     }
 
     /// Update the pending-input preview shown above the composer.

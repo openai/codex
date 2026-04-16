@@ -1,6 +1,12 @@
+use super::CURRENT_THREAD_SECTION_TOKEN_BUDGET;
+use super::NOTES_SECTION_TOKEN_BUDGET;
+use super::RECENT_WORK_SECTION_TOKEN_BUDGET;
+use super::STARTUP_CONTEXT_HEADER;
+use super::WORKSPACE_SECTION_TOKEN_BUDGET;
 use super::build_current_thread_section;
 use super::build_recent_work_section;
 use super::build_workspace_section_with_user_root;
+use super::format_section;
 use super::format_startup_context_blob;
 use chrono::TimeZone;
 use chrono::Utc;
@@ -174,20 +180,56 @@ fn current_thread_section_keeps_latest_turns_when_history_exceeds_budget() {
 }
 
 #[test]
-fn startup_context_blob_is_wrapped_in_tags_and_fits_budget() {
-    let body = format!(
-        "Startup context from Codex.\n{}\n{}",
-        "recent work ".repeat(1_200),
-        "workspace tree ".repeat(800),
-    );
+fn startup_context_blob_is_wrapped_in_tags_without_final_truncation() {
+    let body = "Startup context from Codex.\n## Current Thread\nhello";
+    let wrapped = format_startup_context_blob(body);
 
-    let wrapped = format_startup_context_blob(&body, /*budget_tokens*/ 200);
+    assert_eq!(
+        wrapped,
+        "<startup_context>\nStartup context from Codex.\n## Current Thread\nhello\n</startup_context>"
+    );
+}
+
+#[test]
+fn fixed_section_budgets_apply_per_section_without_total_blob_truncation() {
+    let body = [
+        STARTUP_CONTEXT_HEADER.to_string(),
+        format_section(
+            "Current Thread",
+            Some("current thread ".repeat(2_000)),
+            CURRENT_THREAD_SECTION_TOKEN_BUDGET,
+        )
+        .expect("current thread section"),
+        format_section(
+            "Recent Work",
+            Some("recent work ".repeat(3_000)),
+            RECENT_WORK_SECTION_TOKEN_BUDGET,
+        )
+        .expect("recent work section"),
+        format_section(
+            "Machine / Workspace Map",
+            Some("workspace map ".repeat(2_500)),
+            WORKSPACE_SECTION_TOKEN_BUDGET,
+        )
+        .expect("workspace section"),
+        format_section(
+            "Notes",
+            Some("notes ".repeat(500)),
+            NOTES_SECTION_TOKEN_BUDGET,
+        )
+        .expect("notes section"),
+    ]
+    .join("\n\n");
+
+    let wrapped = format_startup_context_blob(&body);
 
     assert!(wrapped.starts_with("<startup_context>\n"));
     assert!(wrapped.ends_with("\n</startup_context>"));
-    assert!(wrapped.contains("Startup context from Codex."));
     assert!(wrapped.contains("tokens truncated"));
-    assert!(wrapped.len().div_ceil(4) <= 200);
+    assert!(wrapped.contains("## Current Thread"));
+    assert!(wrapped.contains("## Recent Work"));
+    assert!(wrapped.contains("## Machine / Workspace Map"));
+    assert!(wrapped.contains("## Notes"));
 }
 
 #[tokio::test]
