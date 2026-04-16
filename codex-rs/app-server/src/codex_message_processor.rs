@@ -2273,8 +2273,14 @@ impl CodexMessageProcessor {
             ephemeral,
             session_start_source,
             environment_id,
+            environment_ids,
             persist_extended_history,
         } = params;
+        let environment_id = environment_ids
+            .as_ref()
+            .and_then(|environment_ids| environment_ids.first())
+            .cloned()
+            .or(environment_id);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
