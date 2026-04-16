@@ -523,6 +523,9 @@
             },
             "web_search_request": {
               "type": "boolean"
+            },
+            "workspace_owner_usage_nudge": {
+              "type": "boolean"
             }
           },
           "type": "object"
@@ -2379,6 +2382,9 @@
           "type": "boolean"
         },
         "web_search_request": {
+          "type": "boolean"
+        },
+        "workspace_owner_usage_nudge": {
           "type": "boolean"
         }
       },
