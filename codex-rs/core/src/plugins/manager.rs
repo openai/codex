@@ -2,10 +2,6 @@ use super::PluginLoadOutcome;
 use super::curated_plugins_repo_path;
 use super::installed_marketplaces::installed_marketplace_roots_from_config;
 use super::read_curated_plugins_sha;
-use super::remote::enable_remote_plugin;
-use super::remote::fetch_remote_featured_plugin_ids;
-use super::remote::fetch_remote_plugin_status;
-use super::remote::uninstall_remote_plugin;
 use super::startup_sync::start_startup_remote_plugin_sync_once;
 use super::sync_openai_plugins_repo;
 use crate::SkillMetadata;
@@ -43,6 +39,7 @@ use codex_core_plugins::marketplace::load_marketplace;
 use codex_core_plugins::marketplace::resolve_marketplace_plugin;
 use codex_core_plugins::remote::RemotePluginFetchError;
 use codex_core_plugins::remote::RemotePluginMutationError;
+use codex_core_plugins::remote::RemotePluginServiceConfig;
 use codex_core_plugins::store::PluginInstallResult as StorePluginInstallResult;
 use codex_core_plugins::store::PluginStore;
 use codex_core_plugins::store::PluginStoreError;
@@ -96,6 +93,12 @@ struct NonCuratedCacheRefreshState {
     requested_roots: Option<Vec<AbsolutePathBuf>>,
     last_refreshed_roots: Option<Vec<AbsolutePathBuf>>,
     in_flight: bool,
+}
+
+fn remote_plugin_service_config(config: &Config) -> RemotePluginServiceConfig {
+    RemotePluginServiceConfig {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+    }
 }
 
 fn featured_plugin_ids_cache_key(
@@ -492,8 +495,12 @@ impl PluginsManager {
         if let Some(featured_plugin_ids) = self.cached_featured_plugin_ids(&cache_key) {
             return Ok(featured_plugin_ids);
         }
-        let featured_plugin_ids =
-            fetch_remote_featured_plugin_ids(config, auth, self.restriction_product).await?;
+        let featured_plugin_ids = codex_core_plugins::remote::fetch_remote_featured_plugin_ids(
+            &remote_plugin_service_config(config),
+            auth,
+            self.restriction_product,
+        )
+        .await?;
         self.write_featured_plugin_ids_cache(cache_key, &featured_plugin_ids);
         Ok(featured_plugin_ids)
     }
@@ -525,9 +532,13 @@ impl PluginsManager {
         // This only forwards the backend mutation before the local install flow. We rely on
         // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
         // reconcile pass here.
-        enable_remote_plugin(config, auth, &plugin_id)
-            .await
-            .map_err(PluginInstallError::from)?;
+        codex_core_plugins::remote::enable_remote_plugin(
+            &remote_plugin_service_config(config),
+            auth,
+            &plugin_id,
+        )
+        .await
+        .map_err(PluginInstallError::from)?;
         self.install_resolved_plugin(resolved).await
     }
 
@@ -608,9 +619,13 @@ impl PluginsManager {
         // This only forwards the backend mutation before the local uninstall flow. We rely on
         // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
         // reconcile pass here.
-        uninstall_remote_plugin(config, auth, &plugin_key)
-            .await
-            .map_err(PluginUninstallError::from)?;
+        codex_core_plugins::remote::uninstall_remote_plugin(
+            &remote_plugin_service_config(config),
+            auth,
+            &plugin_key,
+        )
+        .await
+        .map_err(PluginUninstallError::from)?;
         self.uninstall_plugin_id(plugin_id).await
     }
 
@@ -659,9 +674,12 @@ impl PluginsManager {
         }
 
         info!("starting remote plugin sync");
-        let remote_plugins = fetch_remote_plugin_status(config, auth)
-            .await
-            .map_err(PluginRemoteSyncError::from)?;
+        let remote_plugins = codex_core_plugins::remote::fetch_remote_plugin_status(
+            &remote_plugin_service_config(config),
+            auth,
+        )
+        .await
+        .map_err(PluginRemoteSyncError::from)?;
         let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
         let curated_marketplace_root = curated_plugins_repo_path(self.codex_home.as_path());
         let curated_marketplace_path = AbsolutePathBuf::try_from(

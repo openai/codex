@@ -6,7 +6,6 @@ mod installed_marketplaces;
 mod manager;
 mod marketplace_add;
 mod mentions;
-mod remote;
 mod render;
 mod startup_sync;
 #[cfg(test)]
