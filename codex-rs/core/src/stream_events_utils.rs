@@ -157,7 +157,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     if !turn_context
         .config
         .memories
-        .no_memories_if_mcp_or_web_search
+        .disable_on_external_context
         || !response_item_may_include_external_context(item)
     {
         return;
