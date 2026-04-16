@@ -22,8 +22,10 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,7 +42,7 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
@@ -141,6 +143,17 @@ impl CodexThread {
 
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         self.codex.session.total_token_usage().await
+    }
+
+    /// Returns the complete token usage snapshot currently cached for this thread.
+    ///
+    /// This accessor is intentionally narrower than direct session access: it lets
+    /// app-server lifecycle paths replay restored usage after resume or fork without
+    /// exposing broader session mutation authority. A caller that only reads
+    /// `total_token_usage` would drop last-turn usage and make the v2
+    /// `thread/tokenUsage/updated` payload incomplete.
+    pub async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
+        self.codex.session.token_usage_info().await
     }
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.

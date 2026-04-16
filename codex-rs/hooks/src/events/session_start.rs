@@ -7,6 +7,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
 use crate::engine::CommandShell;
@@ -36,7 +37,7 @@ impl SessionStartSource {
 #[derive(Debug, Clone)]
 pub struct SessionStartRequest {
     pub session_id: ThreadId,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
@@ -279,13 +280,13 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> Sessio
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
     use super::SessionStartHandlerData;
@@ -414,8 +415,8 @@ mod tests {
                 command: stopping_command,
                 timeout_sec: 5,
                 status_message: None,
-                source_path: PathBuf::from("/tmp/home/.codex/hooks.json"),
-                is_project: false,
+                source_path: test_path_buf("/tmp/home/.codex/hooks.json").abs(),
+                source: codex_protocol::protocol::HookSource::User,
                 display_order: 0,
             },
             ConfiguredHandler {
@@ -424,8 +425,8 @@ mod tests {
                 command: project_command,
                 timeout_sec: 5,
                 status_message: None,
-                source_path: PathBuf::from("/tmp/project/.codex/hooks.json"),
-                is_project: true,
+                source_path: test_path_buf("/tmp/project/.codex/hooks.json").abs(),
+                source: codex_protocol::protocol::HookSource::Project,
                 display_order: 1,
             },
         ];
@@ -438,7 +439,7 @@ mod tests {
             },
             SessionStartRequest {
                 session_id: ThreadId::new(),
-                cwd: temp.path().to_path_buf(),
+                cwd: temp.path().to_path_buf().abs(),
                 transcript_path: None,
                 model: "gpt-5".to_string(),
                 permission_mode: "default".to_string(),
@@ -477,8 +478,8 @@ mod tests {
             command: "echo hook".to_string(),
             timeout_sec: 600,
             status_message: None,
-            source_path: PathBuf::from("/tmp/hooks.json"),
-            is_project: false,
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
         }
     }

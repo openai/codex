@@ -7,6 +7,7 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 
 use super::common;
@@ -22,7 +23,7 @@ use crate::schema::PostToolUseToolInput;
 pub struct PostToolUseRequest {
     pub session_id: ThreadId,
     pub turn_id: String,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
@@ -302,13 +303,13 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PostTo
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
@@ -482,7 +483,13 @@ mod tests {
         let runs = preview(&[handler()], &request);
 
         assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].id, "post-tool-use:0:/tmp/hooks.json:tool-call-456");
+        assert_eq!(
+            runs[0].id,
+            format!(
+                "post-tool-use:0:{}:tool-call-456",
+                test_path_buf("/tmp/hooks.json").display()
+            )
+        );
 
         let parsed = parse_completed(
             &handler(),
@@ -517,8 +524,8 @@ mod tests {
             command: "python3 post_tool_use_hook.py".to_string(),
             timeout_sec: 5,
             status_message: Some("running post tool use hook".to_string()),
-            source_path: PathBuf::from("/tmp/hooks.json"),
-            is_project: false,
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
         }
     }
@@ -539,7 +546,7 @@ mod tests {
         super::PostToolUseRequest {
             session_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             transcript_path: None,
             model: "gpt-test".to_string(),
             permission_mode: "default".to_string(),

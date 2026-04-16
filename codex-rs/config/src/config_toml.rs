@@ -596,7 +596,7 @@ pub struct GhostSnapshotToml {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    pub fn derive_sandbox_policy(
+    pub async fn derive_sandbox_policy(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
@@ -610,11 +610,13 @@ impl ConfigToml {
         let resolved_sandbox_mode = sandbox_mode_override
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
-            .or_else(|| {
+            .or(if sandbox_mode_was_explicit {
+                None
+            } else {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                self.get_active_project(resolved_cwd).and_then(|p| {
+                self.get_active_project(resolved_cwd).await.and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
@@ -676,7 +678,7 @@ impl ConfigToml {
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+    pub async fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
         let projects = self.projects.as_ref()?;
 
         for normalized_cwd in normalized_project_lookup_keys(resolved_cwd) {
@@ -688,7 +690,7 @@ impl ConfigToml {
         // If cwd lives inside a git repo/worktree, check whether the root git project
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd) {
+        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd).await {
             for normalized_repo_root in normalized_project_lookup_keys(&repo_root) {
                 if let Some(project_config_for_root) =
                     project_config_for_lookup_key(projects, &normalized_repo_root)

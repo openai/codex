@@ -9,10 +9,6 @@ use crate::policy_transforms::EffectiveSandboxPermissions;
 use crate::policy_transforms::effective_file_system_sandbox_policy;
 use crate::policy_transforms::effective_network_sandbox_policy;
 use crate::policy_transforms::should_require_platform_sandbox;
-#[cfg(target_os = "macos")]
-use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
-#[cfg(target_os = "macos")]
-use crate::seatbelt::create_seatbelt_command_args_for_policies;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
@@ -113,6 +109,7 @@ pub struct SandboxTransformRequest<'a> {
 #[derive(Debug)]
 pub enum SandboxTransformError {
     MissingLinuxSandboxExecutable,
+    UnreadableGlobPatternsUnsupported,
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -125,6 +122,10 @@ impl std::fmt::Display for SandboxTransformError {
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
+            Self::UnreadableGlobPatternsUnsupported => write!(
+                f,
+                "platform sandbox backend cannot enforce unreadable glob patterns"
+            ),
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -200,6 +201,15 @@ impl SandboxManager {
         );
         let effective_network_policy =
             effective_network_sandbox_policy(network_policy, additional_permissions.as_ref());
+        if matches!(
+            sandbox,
+            SandboxType::MacosSeatbelt | SandboxType::LinuxSeccomp
+        ) && !effective_file_system_policy
+            .get_unreadable_globs_with_cwd(sandbox_policy_cwd)
+            .is_empty()
+        {
+            return Err(SandboxTransformError::UnreadableGlobPatternsUnsupported);
+        }
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
@@ -208,14 +218,19 @@ impl SandboxManager {
             SandboxType::None => (os_argv_to_strings(argv), None),
             #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
-                let mut args = create_seatbelt_command_args_for_policies(
-                    os_argv_to_strings(argv),
-                    &effective_file_system_policy,
-                    effective_network_policy,
+                use crate::seatbelt::CreateSeatbeltCommandArgsParams;
+                use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+                use crate::seatbelt::create_seatbelt_command_args;
+
+                let mut args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+                    command: os_argv_to_strings(argv),
+                    file_system_sandbox_policy: &effective_file_system_policy,
+                    network_sandbox_policy: effective_network_policy,
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
-                );
+                    extra_allow_unix_sockets: &[],
+                });
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(MACOS_PATH_TO_SEATBELT_EXECUTABLE.to_string());
                 full_command.append(&mut args);

@@ -67,11 +67,7 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 
 ssh "${remote_host}" "mkdir -p ${remote_path}"
-
-if ! ssh "${remote_host}" 'command -v rsync >/dev/null 2>&1'; then
-  echo "remote rsync is required on ${remote_host}" >&2
-  exit 1
-fi
+ssh "${remote_host}" -C "sudo apt-get install rsync libcap-dev"
 
 sync_instance_id="$(date +%s)-$$"
 

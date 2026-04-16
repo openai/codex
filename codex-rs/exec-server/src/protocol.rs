@@ -69,6 +69,9 @@ pub struct ExecParams {
     pub env_policy: Option<ExecEnvPolicy>,
     pub env: HashMap<String, String>,
     pub tty: bool,
+    /// Keep non-tty stdin writable through `process/write`.
+    #[serde(default)]
+    pub pipe_stdin: bool,
     pub arg0: Option<String>,
 }
 

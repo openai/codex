@@ -483,7 +483,7 @@ impl ShellHandler {
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(
             exec_params.command.clone(),
-            exec_params.cwd.to_path_buf(),
+            exec_params.cwd.clone(),
             source,
             freeform,
         );

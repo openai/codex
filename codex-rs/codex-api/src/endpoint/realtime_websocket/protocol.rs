@@ -130,6 +130,7 @@ pub(super) struct SessionTurnDetection {
     pub(super) r#type: TurnDetectionType,
     pub(super) interrupt_response: bool,
     pub(super) create_response: bool,
+    pub(super) silence_duration_ms: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

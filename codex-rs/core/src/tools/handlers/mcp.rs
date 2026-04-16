@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
+use crate::original_image_detail::can_request_original_image_detail;
 use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -56,6 +57,7 @@ impl ToolHandler for McpHandler {
         Ok(McpToolOutput {
             result,
             wall_time: started.elapsed(),
+            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
         })
     }
 }

@@ -45,9 +45,11 @@ pub(super) fn conversation_handoff_append_message(
     handoff_id: String,
     output_text: String,
 ) -> RealtimeOutboundMessage {
-    let output_text = format!("{AGENT_FINAL_MESSAGE_PREFIX}{output_text}");
     match event_parser {
-        RealtimeEventParser::V1 => v1_conversation_handoff_append_message(handoff_id, output_text),
+        RealtimeEventParser::V1 => v1_conversation_handoff_append_message(
+            handoff_id,
+            format!("{AGENT_FINAL_MESSAGE_PREFIX}{output_text}"),
+        ),
         RealtimeEventParser::RealtimeV2 => {
             v2_conversation_handoff_append_message(handoff_id, output_text)
         }

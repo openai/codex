@@ -665,7 +665,7 @@ async fn project_trust_context(
         .first()
         .cloned()
         .unwrap_or_else(|| normalized_project_trust_key(project_root.as_path()));
-    let repo_root = resolve_root_git_project_for_trust(cwd.as_path());
+    let repo_root = resolve_root_git_project_for_trust(cwd.as_path()).await;
     let repo_root_lookup_keys = repo_root
         .as_ref()
         .map(|root| normalized_project_trust_keys(root));

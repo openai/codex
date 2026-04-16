@@ -126,7 +126,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
-        let cwd = req.cwd.to_path_buf();
+        let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let guardian_review_id = ctx.guardian_review_id.clone();
@@ -139,7 +139,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     GuardianApprovalRequest::ExecCommand {
                         id: call_id,
                         command,
-                        cwd,
+                        cwd: cwd.clone(),
                         sandbox_permissions: req.sandbox_permissions,
                         additional_permissions: req.additional_permissions.clone(),
                         justification: req.justification.clone(),
@@ -157,7 +157,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                         call_id,
                         /*approval_id*/ None,
                         command,
-                        cwd,
+                        cwd.clone(),
                         reason,
                         ctx.network_approval_context.clone(),
                         req.exec_approval_requirement

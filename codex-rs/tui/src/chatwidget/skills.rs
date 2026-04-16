@@ -9,14 +9,13 @@ use crate::bottom_pane::SkillsToggleItem;
 use crate::bottom_pane::SkillsToggleView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::legacy_core::TOOL_MENTION_SIGIL;
-use crate::legacy_core::connectors::connector_mention_slug;
 use crate::legacy_core::skills::model::SkillDependencies;
 use crate::legacy_core::skills::model::SkillInterface;
 use crate::legacy_core::skills::model::SkillMetadata;
 use crate::legacy_core::skills::model::SkillToolDependency;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
-use codex_chatgpt::connectors::AppInfo;
+use codex_app_server_protocol::AppInfo;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -296,12 +295,12 @@ pub(crate) fn find_app_mentions(
 
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
     for app in apps.iter().filter(|app| app.is_enabled) {
-        let slug = connector_mention_slug(app);
+        let slug = codex_connectors::metadata::connector_mention_slug(app);
         *slug_counts.entry(slug).or_insert(0) += 1;
     }
 
     for app in apps.iter().filter(|app| app.is_enabled) {
-        let slug = connector_mention_slug(app);
+        let slug = codex_connectors::metadata::connector_mention_slug(app);
         let slug_count = slug_counts.get(&slug).copied().unwrap_or(0);
         if mentions.names.contains(&slug)
             && !explicit_names.contains(&slug)

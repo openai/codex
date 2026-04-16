@@ -9,9 +9,6 @@ inputs:
     required: false
     default: "false"
 outputs:
-  repository-cache-hit:
-    description: Whether the Bazel repository cache restore hit.
-    value: ${{ steps.cache_bazel_repository_restore.outputs.cache-hit }}
   repository-cache-path:
     description: Filesystem path used for the Bazel repository cache.
     value: ${{ steps.setup_bazel.outputs.repository-cache-path }}

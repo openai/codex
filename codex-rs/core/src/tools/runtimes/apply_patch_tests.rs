@@ -43,7 +43,7 @@ fn guardian_review_request_includes_patch_context() {
         .join("guardian-apply-patch-test.txt")
         .abs();
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
-    let expected_cwd = action.cwd.to_path_buf();
+    let expected_cwd = action.cwd.clone();
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
         action,
@@ -108,7 +108,7 @@ fn file_system_sandbox_context_uses_active_attempt() {
         network_policy: NetworkSandboxPolicy::Restricted,
         enforce_managed_network: false,
         manager: &manager,
-        sandbox_cwd: path.as_path(),
+        sandbox_cwd: &path,
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: true,
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
@@ -154,7 +154,7 @@ fn no_sandbox_attempt_has_no_file_system_context() {
         network_policy: NetworkSandboxPolicy::Enabled,
         enforce_managed_network: false,
         manager: &manager,
-        sandbox_cwd: path.as_path(),
+        sandbox_cwd: &path,
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,

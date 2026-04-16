@@ -5,10 +5,10 @@ pub(crate) mod dispatcher;
 pub(crate) mod output_parser;
 pub(crate) mod schema_loader;
 
-use std::path::PathBuf;
-
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::events::post_tool_use::PostToolUseOutcome;
 use crate::events::post_tool_use::PostToolUseRequest;
@@ -34,8 +34,8 @@ pub(crate) struct ConfiguredHandler {
     pub command: String,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
-    pub source_path: PathBuf,
-    pub is_project: bool,
+    pub source_path: AbsolutePathBuf,
+    pub source: HookSource,
     pub display_order: i64,
 }
 

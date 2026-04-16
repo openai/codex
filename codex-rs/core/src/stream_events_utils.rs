@@ -1,5 +1,3 @@
-use std::path::Path;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -27,6 +25,7 @@ use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_rollout::state_db;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_stream_parser::strip_proposed_plan_blocks;
 use futures::Future;
 use tracing::debug;
@@ -35,10 +34,10 @@ use tracing::instrument;
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
 pub(crate) fn image_generation_artifact_path(
-    codex_home: &Path,
+    codex_home: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
-) -> PathBuf {
+) -> AbsolutePathBuf {
     let sanitize = |value: &str| {
         let mut sanitized: String = value
             .chars()
@@ -104,11 +103,11 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
 }
 
 async fn save_image_generation_result(
-    codex_home: &std::path::Path,
+    codex_home: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
     result: &str,
-) -> Result<PathBuf> {
+) -> Result<AbsolutePathBuf> {
     let bytes = BASE64_STANDARD
         .decode(result.trim().as_bytes())
         .map_err(|err| {
@@ -137,11 +136,20 @@ pub(crate) async fn record_completed_response_item(
         sess.defer_mailbox_delivery_to_next_turn(&turn_context.sub_id)
             .await;
     }
-    maybe_mark_thread_memory_mode_polluted_from_web_search(sess, turn_context, item).await;
+    mark_thread_memory_mode_polluted_if_external_context(sess, turn_context, item).await;
     record_stage1_output_usage_for_completed_item(turn_context, item).await;
 }
 
-async fn maybe_mark_thread_memory_mode_polluted_from_web_search(
+fn response_item_may_include_external_context(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+    )
+}
+
+pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     sess: &Session,
     turn_context: &TurnContext,
     item: &ResponseItem,
@@ -150,7 +158,7 @@ async fn maybe_mark_thread_memory_mode_polluted_from_web_search(
         .config
         .memories
         .no_memories_if_mcp_or_web_search
-        || !matches!(item, ResponseItem::WebSearchCall { .. })
+        || !response_item_may_include_external_context(item)
     {
         return;
     }
@@ -361,7 +369,7 @@ pub(crate) async fn handle_non_tool_response_item(
             if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
                 let session_id = sess.conversation_id.to_string();
                 match save_image_generation_result(
-                    turn_context.config.codex_home.as_path(),
+                    &turn_context.config.codex_home,
                     &session_id,
                     &image_item.id,
                     &image_item.result,
@@ -369,15 +377,15 @@ pub(crate) async fn handle_non_tool_response_item(
                 .await
                 {
                     Ok(path) => {
-                        image_item.saved_path = Some(path.to_string_lossy().into_owned());
+                        image_item.saved_path = Some(path);
                         let image_output_path = image_generation_artifact_path(
-                            turn_context.config.codex_home.as_path(),
+                            &turn_context.config.codex_home,
                             &session_id,
                             "<image_id>",
                         );
                         let image_output_dir = image_output_path
                             .parent()
-                            .unwrap_or(turn_context.config.codex_home.as_path());
+                            .unwrap_or_else(|| turn_context.config.codex_home.clone());
                         let message: ResponseItem = DeveloperInstructions::new(format!(
                             "Generated images are saved to {} as {} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.",
                             image_output_dir.display(),
@@ -389,13 +397,13 @@ pub(crate) async fn handle_non_tool_response_item(
                     }
                     Err(err) => {
                         let output_path = image_generation_artifact_path(
-                            turn_context.config.codex_home.as_path(),
+                            &turn_context.config.codex_home,
                             &session_id,
                             &image_item.id,
                         );
                         let output_dir = output_path
                             .parent()
-                            .unwrap_or(turn_context.config.codex_home.as_path());
+                            .unwrap_or_else(|| turn_context.config.codex_home.clone());
                         tracing::warn!(
                             call_id = %image_item.id,
                             output_dir = %output_dir.display(),
