@@ -661,7 +661,7 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
             .wrap(Wrap { trim: false })
             .render(actions_intro_area, buf);
         selection_option_row_with_dim(
-            0,
+            /*index*/ 0,
             ActionMenuOption::Proceed.label().to_string(),
             self.focus == FocusArea::Actions
                 && self.highlighted_action == ActionMenuOption::Proceed,
@@ -669,14 +669,14 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
         )
         .render(proceed_area, buf);
         selection_option_row_with_dim(
-            1,
+            /*index*/ 1,
             ActionMenuOption::Skip.label().to_string(),
             self.focus == FocusArea::Actions && self.highlighted_action == ActionMenuOption::Skip,
             /*dim*/ self.focus != FocusArea::Actions,
         )
         .render(skip_area, buf);
         selection_option_row_with_dim(
-            2,
+            /*index*/ 2,
             ActionMenuOption::SkipForever.label().to_string(),
             self.focus == FocusArea::Actions
                 && self.highlighted_action == ActionMenuOption::SkipForever,
