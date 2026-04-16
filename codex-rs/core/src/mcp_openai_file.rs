@@ -115,6 +115,7 @@ async fn build_uploaded_local_argument_value(
     let upload_auth = CoreAuthProvider {
         token: Some(token_data.access_token),
         account_id: token_data.account_id,
+        is_fedramp_account: auth.is_fedramp_account(),
     };
     let uploaded = upload_local_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
