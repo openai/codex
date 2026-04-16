@@ -185,10 +185,42 @@ enum ParseMode {
     Streaming,
 }
 
+struct PatchScope<'a> {
+    lines: &'a [&'a str],
+    body_end_index: usize,
+    allow_incomplete_final_hunk: bool,
+}
+
+impl<'a> PatchScope<'a> {
+    fn complete(lines: &'a [&'a str]) -> Self {
+        Self {
+            lines,
+            body_end_index: lines.len().saturating_sub(1),
+            allow_incomplete_final_hunk: false,
+        }
+    }
+
+    fn streaming(lines: &'a [&'a str]) -> Self {
+        let body_end_index = if lines
+            .last()
+            .is_some_and(|line| line.trim() == END_PATCH_MARKER)
+        {
+            lines.len().saturating_sub(1)
+        } else {
+            lines.len()
+        };
+        Self {
+            lines,
+            body_end_index,
+            allow_incomplete_final_hunk: true,
+        }
+    }
+}
+
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
     let lines: Vec<&str> = patch.trim().lines().collect();
-    let lines: &[&str] = match check_patch_boundaries_strict(&lines) {
-        Ok(()) => &lines,
+    let scope = match check_patch_boundaries_strict(&lines) {
+        Ok(scope) => scope,
         Err(e) => match mode {
             ParseMode::Strict => {
                 return Err(e);
@@ -199,25 +231,14 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
     };
 
     let mut hunks: Vec<Hunk> = Vec::new();
-    // The above checks ensure that lines.len() >= 2 for strict/lenient mode.
-    // Streaming mode may omit the end marker, so its body extends through the
-    // final line unless the final line is an explicit end marker.
-    let body_end_index = if matches!(mode, ParseMode::Streaming)
-        && lines
-            .last()
-            .is_some_and(|line| line.trim() != END_PATCH_MARKER)
-    {
-        lines.len()
-    } else {
-        lines.len().saturating_sub(1)
-    };
-    let mut remaining_lines = &lines[1..body_end_index];
+    let mut remaining_lines = &scope.lines[1..scope.body_end_index];
     let mut line_number = 2;
     while !remaining_lines.is_empty() {
         let parsed_hunk = parse_one_hunk(remaining_lines, line_number);
         let (hunk, hunk_lines) = match parsed_hunk {
             Ok(parsed) => parsed,
-            Err(err) if matches!(mode, ParseMode::Streaming) => {
+            // Return accumulated hunks even if parsing the last one failed in streaming mode.
+            Err(err) if scope.allow_incomplete_final_hunk => {
                 if hunks.is_empty() {
                     return Err(err);
                 }
@@ -229,7 +250,7 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
         line_number += hunk_lines;
         remaining_lines = &remaining_lines[hunk_lines..]
     }
-    let patch = lines.join("\n");
+    let patch = scope.lines.join("\n");
     Ok(ApplyPatchArgs {
         hunks,
         patch,
@@ -240,22 +261,25 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
 fn check_patch_boundaries_streaming<'a>(
     original_lines: &'a [&'a str],
     original_parse_error: ParseError,
-) -> Result<&'a [&'a str], ParseError> {
+) -> Result<PatchScope<'a>, ParseError> {
     match original_lines {
-        [first, ..] if first.trim() == BEGIN_PATCH_MARKER => Ok(original_lines),
+        [first, ..] if first.trim() == BEGIN_PATCH_MARKER => {
+            Ok(PatchScope::streaming(original_lines))
+        }
         _ => Err(original_parse_error),
     }
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
 /// returning an error if they do not match the expected markers.
-fn check_patch_boundaries_strict(lines: &[&str]) -> Result<(), ParseError> {
+fn check_patch_boundaries_strict<'a>(lines: &'a [&'a str]) -> Result<PatchScope<'a>, ParseError> {
     let (first_line, last_line) = match lines {
         [] => (None, None),
         [first] => (Some(first), Some(first)),
         [first, .., last] => (Some(first), Some(last)),
     };
-    check_start_and_end_lines_strict(first_line, last_line)
+    check_start_and_end_lines_strict(first_line, last_line)?;
+    Ok(PatchScope::complete(lines))
 }
 
 /// If we are in lenient mode, we check if the first line starts with `<<EOF`
@@ -268,7 +292,7 @@ fn check_patch_boundaries_strict(lines: &[&str]) -> Result<(), ParseError> {
 fn check_patch_boundaries_lenient<'a>(
     original_lines: &'a [&'a str],
     original_parse_error: ParseError,
-) -> Result<&'a [&'a str], ParseError> {
+) -> Result<PatchScope<'a>, ParseError> {
     match original_lines {
         [first, .., last] => {
             if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
@@ -276,10 +300,7 @@ fn check_patch_boundaries_lenient<'a>(
                 && original_lines.len() >= 4
             {
                 let inner_lines = &original_lines[1..original_lines.len() - 1];
-                match check_patch_boundaries_strict(inner_lines) {
-                    Ok(()) => Ok(inner_lines),
-                    Err(e) => Err(e),
-                }
+                check_patch_boundaries_strict(inner_lines)
             } else {
                 Err(original_parse_error)
             }
@@ -366,7 +387,7 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
                 continue;
             }
 
-            if remaining_lines[0].starts_with("***") {
+            if remaining_lines[0].starts_with('*') {
                 break;
             }
 
@@ -563,6 +584,68 @@ fn test_parse_patch_streaming() {
             ],
             patch: "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt"
                 .to_string(),
+            workdir: None,
+        })
+    );
+}
+
+#[test]
+fn test_parse_patch_streaming_large_patch_by_character() {
+    let patch = "\
+*** Begin Patch
+*** Add File: added.txt
++alpha
++beta
+*** Update File: updated.txt
+*** Move to: moved.txt
+@@
+-old
++new
+ unchanged
+*** Delete File: deleted.txt
+*** End Patch";
+
+    let mut max_hunk_count = 0;
+    let mut saw_hunk_counts = Vec::new();
+    for i in 1..=patch.len() {
+        let partial = &patch[..i];
+        if let Ok(parsed) = parse_patch_streaming(partial) {
+            let hunk_count = parsed.hunks.len();
+            assert!(
+                hunk_count >= max_hunk_count,
+                "hunk count should never decrease while streaming: {hunk_count} < {max_hunk_count} for {partial:?}",
+            );
+            if hunk_count > max_hunk_count {
+                saw_hunk_counts.push(hunk_count);
+                max_hunk_count = hunk_count;
+            }
+        }
+    }
+
+    assert_eq!(saw_hunk_counts, vec![1, 2, 3]);
+    assert_eq!(
+        parse_patch_streaming(patch),
+        Ok(ApplyPatchArgs {
+            hunks: vec![
+                AddFile {
+                    path: PathBuf::from("added.txt"),
+                    contents: "alpha\nbeta\n".to_string(),
+                },
+                UpdateFile {
+                    path: PathBuf::from("updated.txt"),
+                    move_path: Some(PathBuf::from("moved.txt")),
+                    chunks: vec![UpdateFileChunk {
+                        change_context: None,
+                        old_lines: vec!["old".to_string(), "unchanged".to_string()],
+                        new_lines: vec!["new".to_string(), "unchanged".to_string()],
+                        is_end_of_file: false,
+                    }],
+                },
+                DeleteFile {
+                    path: PathBuf::from("deleted.txt"),
+                },
+            ],
+            patch: patch.to_string(),
             workdir: None,
         })
     );

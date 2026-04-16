@@ -156,7 +156,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::BackgroundEvent(_)
         | EventMsg::StreamError(_)
         | EventMsg::PatchApplyBegin(_)
-        | EventMsg::PatchApplyDelta(_)
+        | EventMsg::PatchApplyUpdated(_)
         | EventMsg::TurnDiff(_)
         | EventMsg::GetHistoryEntryResponse(_)
         | EventMsg::UndoStarted(_)

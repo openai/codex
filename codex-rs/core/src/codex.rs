@@ -7546,7 +7546,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyBegin(_)
-        | EventMsg::PatchApplyDelta(_)
+        | EventMsg::PatchApplyUpdated(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::ViewImageToolCall(_)
         | EventMsg::ImageGenerationBegin(_)
@@ -7974,19 +7974,7 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                if active_tool_argument_diff_consumer
-                    .as_ref()
-                    .is_some_and(|(active_call_id, _)| {
-                        matches!(
-                            &item,
-                            ResponseItem::FunctionCall { call_id, .. }
-                                | ResponseItem::CustomToolCall { call_id, .. }
-                                if call_id == active_call_id
-                        )
-                    })
-                {
-                    active_tool_argument_diff_consumer = None;
-                }
+                active_tool_argument_diff_consumer = None;
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
