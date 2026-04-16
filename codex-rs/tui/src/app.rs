@@ -2573,15 +2573,11 @@ impl App {
         &mut self,
         result: Result<SkillsListResponse>,
         failure_message: &str,
-    ) -> bool {
+    ) {
         match result {
-            Ok(response) => {
-                self.handle_skills_list_response(response);
-                true
-            }
+            Ok(response) => self.handle_skills_list_response(response),
             Err(err) => {
                 tracing::warn!("{failure_message}: {err:#}");
-                false
             }
         }
     }
