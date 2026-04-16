@@ -136,6 +136,7 @@ use codex_app_server_protocol::ThreadDecrementElicitationParams;
 use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadIncrementElicitationParams;
 use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
@@ -4228,6 +4229,10 @@ impl CodexMessageProcessor {
 
                 let connection_id = request_id.connection_id;
                 let token_usage_thread = response.thread.clone();
+                let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+                    &response_history.get_rollout_items(),
+                    &token_usage_thread,
+                );
                 self.outgoing.send_response(request_id, response).await;
                 // The client needs restored usage before it starts another turn.
                 // Sending after the response preserves JSON-RPC request ordering while
@@ -4238,6 +4243,7 @@ impl CodexMessageProcessor {
                     thread_id,
                     &token_usage_thread,
                     codex_thread.as_ref(),
+                    token_usage_turn_id,
                 )
                 .await;
             }
@@ -4877,6 +4883,17 @@ impl CodexMessageProcessor {
 
         let connection_id = request_id.connection_id;
         let token_usage_thread = response.thread.clone();
+        let token_usage_turn_id = if let Some(turn_id) =
+            latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
+        {
+            Some(turn_id)
+        } else {
+            latest_token_usage_turn_id_from_rollout_path(
+                rollout_path.as_path(),
+                &token_usage_thread,
+            )
+            .await
+        };
         self.outgoing.send_response(request_id, response).await;
         // Mirror the resume contract for forks: the new thread is usable as soon
         // as the response arrives, so restored usage must follow immediately.
@@ -4886,6 +4903,7 @@ impl CodexMessageProcessor {
             thread_id,
             &token_usage_thread,
             forked_thread.as_ref(),
+            token_usage_turn_id,
         )
         .await;
 
@@ -8563,6 +8581,11 @@ async fn handle_pending_thread_resume_request(
         reasoning_effort,
     };
     let token_usage_thread = response.thread.clone();
+    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
+        pending.rollout_path.as_path(),
+        &token_usage_thread,
+    )
+    .await;
     outgoing.send_response(request_id, response).await;
     // Rejoining a loaded thread has the same UI contract as a cold resume, but
     // uses the live conversation state instead of reconstructing a new session.
@@ -8572,6 +8595,7 @@ async fn handle_pending_thread_resume_request(
         conversation_id,
         &token_usage_thread,
         conversation.as_ref(),
+        token_usage_turn_id,
     )
     .await;
     outgoing
@@ -8592,13 +8616,14 @@ async fn send_thread_token_usage_update_to_connection(
     thread_id: ThreadId,
     thread: &Thread,
     conversation: &CodexThread,
+    token_usage_turn_id: Option<String>,
 ) {
     let Some(info) = conversation.token_usage_info().await else {
         return;
     };
     let notification = ThreadTokenUsageUpdatedNotification {
         thread_id: thread_id.to_string(),
-        turn_id: latest_token_usage_turn_id(thread),
+        turn_id: token_usage_turn_id.unwrap_or_else(|| latest_token_usage_turn_id(thread)),
         token_usage: ThreadTokenUsage::from(info),
     };
     outgoing
@@ -8609,19 +8634,71 @@ async fn send_thread_token_usage_update_to_connection(
         .await;
 }
 
-/// Chooses the turn id that should own a replayed token usage update.
+async fn latest_token_usage_turn_id_for_thread_path(thread: &Thread) -> Option<String> {
+    let rollout_path = thread.path.as_deref()?;
+    latest_token_usage_turn_id_from_rollout_path(rollout_path, thread).await
+}
+
+async fn latest_token_usage_turn_id_from_rollout_path(
+    rollout_path: &Path,
+    thread: &Thread,
+) -> Option<String> {
+    let rollout_items = read_rollout_items_from_rollout(rollout_path).await.ok()?;
+    latest_token_usage_turn_id_from_rollout_items(&rollout_items, thread)
+}
+
+struct TokenUsageTurnOwner {
+    id: String,
+    position: Option<usize>,
+}
+
+fn latest_token_usage_turn_id_from_rollout_items(
+    rollout_items: &[RolloutItem],
+    thread: &Thread,
+) -> Option<String> {
+    let owner = latest_token_usage_turn_owner_from_rollout_items(rollout_items)?;
+    if thread.turns.iter().any(|turn| turn.id == owner.id) {
+        return Some(owner.id);
+    }
+    owner
+        .position
+        .and_then(|position| thread.turns.get(position))
+        .map(|turn| turn.id.clone())
+}
+
+fn latest_token_usage_turn_owner_from_rollout_items(
+    rollout_items: &[RolloutItem],
+) -> Option<TokenUsageTurnOwner> {
+    let mut builder = ThreadHistoryBuilder::new();
+    let mut token_usage_turn_owner = None;
+
+    for item in rollout_items {
+        if matches!(item, RolloutItem::EventMsg(EventMsg::TokenCount(_))) {
+            token_usage_turn_owner =
+                builder
+                    .active_turn_snapshot()
+                    .map(|turn| TokenUsageTurnOwner {
+                        id: turn.id,
+                        position: builder.active_turn_position(),
+                    });
+        }
+        builder.handle_rollout_item(item);
+    }
+
+    token_usage_turn_owner
+}
+
+/// Chooses a fallback turn id that should own a replayed token usage update.
 ///
-/// Token usage restored from rollout represents the latest completed persisted
-/// accounting, so an in-progress turn should not claim it. Falling back to the last
-/// turn preserves a stable wire shape for unusual histories that contain only an
-/// in-progress turn or no turns at all; a caller that used the active turn blindly
-/// would make the TUI attribute old usage to work that has not completed yet.
+/// Normal replay derives the owner from the rollout position of the latest
+/// `TokenCount` event. This fallback only preserves a stable wire shape for
+/// unusual histories where that rollout information cannot be read.
 fn latest_token_usage_turn_id(thread: &Thread) -> String {
     thread
         .turns
         .iter()
         .rev()
-        .find(|turn| !matches!(turn.status, TurnStatus::InProgress))
+        .find(|turn| matches!(turn.status, TurnStatus::Completed | TurnStatus::Failed))
         .or_else(|| thread.turns.last())
         .map(|turn| turn.id.clone())
         .unwrap_or_default()
