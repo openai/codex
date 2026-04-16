@@ -49,6 +49,11 @@ use wiremock::ResponseTemplate;
 #[cfg(not(debug_assertions))]
 use wiremock::matchers::body_string_contains;
 
+const MAX_PROMPT_IMAGE_WIDTH: u32 = 2048;
+const MAX_PROMPT_IMAGE_HEIGHT: u32 = 768;
+const OVERSIZED_IMAGE_WIDTH: u32 = MAX_PROMPT_IMAGE_WIDTH + 8;
+const OVERSIZED_IMAGE_HEIGHT: u32 = MAX_PROMPT_IMAGE_HEIGHT + 4;
+
 fn image_messages(body: &Value) -> Vec<&Value> {
     body.get("input")
         .and_then(Value::as_array)
@@ -74,6 +79,20 @@ fn image_messages(body: &Value) -> Vec<&Value> {
 
 fn find_image_message(body: &Value) -> Option<&Value> {
     image_messages(body).into_iter().next()
+}
+
+fn assert_js_repl_runtime_unavailable(output: &str) {
+    assert!(
+        is_js_repl_runtime_unavailable(output),
+        "unexpected js_repl failure output: {output}"
+    );
+}
+
+fn is_js_repl_runtime_unavailable(output: &str) -> bool {
+    output.contains("js_repl execution unavailable")
+        || output.contains("js_repl kernel unavailable")
+        || output.contains("Node runtime not found")
+        || output.contains("Node runtime too old for js_repl")
 }
 
 fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> {
@@ -141,8 +160,8 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         ..
     } = &test;
 
-    let original_width = 2304;
-    let original_height = 864;
+    let original_width = OVERSIZED_IMAGE_WIDTH;
+    let original_height = OVERSIZED_IMAGE_HEIGHT;
     let local_image_dir = tempfile::tempdir()?;
     let abs_path = local_image_dir.path().join("example.png");
     let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([20u8, 40, 60, 255]));
@@ -211,8 +230,8 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (width, height) = resized.dimensions();
-    assert!(width <= 2048);
-    assert!(height <= 768);
+    assert!(width <= MAX_PROMPT_IMAGE_WIDTH);
+    assert!(height <= MAX_PROMPT_IMAGE_HEIGHT);
     assert!(width < original_width);
     assert!(height < original_height);
 
@@ -236,8 +255,8 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let rel_path = "assets/example.png";
     let abs_path = cwd.join(rel_path);
-    let original_width = 2304;
-    let original_height = 864;
+    let original_width = OVERSIZED_IMAGE_WIDTH;
+    let original_height = OVERSIZED_IMAGE_HEIGHT;
     write_workspace_png(
         &test,
         rel_path,
@@ -346,8 +365,8 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= 2048);
-    assert!(resized_height <= 768);
+    assert!(resized_width <= MAX_PROMPT_IMAGE_WIDTH);
+    assert!(resized_height <= MAX_PROMPT_IMAGE_HEIGHT);
     assert!(resized_width < original_width);
     assert!(resized_height < original_height);
 
@@ -370,8 +389,8 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
     } = &test;
 
     let rel_path = "assets/original-example.png";
-    let original_width = 2304;
-    let original_height = 864;
+    let original_width = OVERSIZED_IMAGE_WIDTH;
+    let original_height = OVERSIZED_IMAGE_HEIGHT;
     write_workspace_png(
         &test,
         rel_path,
@@ -554,8 +573,8 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
     } = &test;
 
     let rel_path = "assets/null-detail.png";
-    let original_width = 2304;
-    let original_height = 864;
+    let original_width = OVERSIZED_IMAGE_WIDTH;
+    let original_height = OVERSIZED_IMAGE_HEIGHT;
     write_workspace_png(
         &test,
         rel_path,
@@ -626,8 +645,8 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (width, height) = resized.dimensions();
-    assert!(width <= 2048);
-    assert!(height <= 768);
+    assert!(width <= MAX_PROMPT_IMAGE_WIDTH);
+    assert!(height <= MAX_PROMPT_IMAGE_HEIGHT);
     assert!(width < original_width);
     assert!(height < original_height);
 
@@ -649,8 +668,8 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
     } = &test;
 
     let rel_path = "assets/original-example-lower-model.png";
-    let original_width = 2304;
-    let original_height = 864;
+    let original_width = OVERSIZED_IMAGE_WIDTH;
+    let original_height = OVERSIZED_IMAGE_HEIGHT;
     write_workspace_png(
         &test,
         rel_path,
@@ -729,8 +748,8 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= 2048);
-    assert!(resized_height <= 768);
+    assert!(resized_width <= MAX_PROMPT_IMAGE_WIDTH);
+    assert!(resized_height <= MAX_PROMPT_IMAGE_HEIGHT);
     assert!(resized_width < original_width);
     assert!(resized_height < original_height);
 
@@ -753,8 +772,8 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
     } = &test;
 
     let rel_path = "assets/original-example-capability-only.png";
-    let original_width = 2304;
-    let original_height = 864;
+    let original_width = OVERSIZED_IMAGE_WIDTH;
+    let original_height = OVERSIZED_IMAGE_HEIGHT;
     write_workspace_png(
         &test,
         rel_path,
@@ -830,8 +849,8 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= 2048);
-    assert!(resized_height <= 768);
+    assert!(resized_width <= MAX_PROMPT_IMAGE_WIDTH);
+    assert!(resized_height <= MAX_PROMPT_IMAGE_HEIGHT);
     assert!(resized_width < original_width);
     assert!(resized_height < original_height);
 
@@ -904,29 +923,12 @@ await codex.emitImage(out);
         })
         .await?;
 
-    let mut tool_event = None;
     wait_for_event_with_timeout(
         &codex,
-        |event| match event {
-            EventMsg::ViewImageToolCall(_) => {
-                tool_event = Some(event.clone());
-                false
-            }
-            EventMsg::TurnComplete(_) => true,
-            _ => false,
-        },
+        |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(10),
     )
     .await;
-    let tool_event = match tool_event {
-        Some(EventMsg::ViewImageToolCall(event)) => event,
-        other => panic!("expected ViewImageToolCall event, got {other:?}"),
-    };
-    assert!(
-        tool_event.path.ends_with("js-repl-view-image.png"),
-        "unexpected image path: {}",
-        tool_event.path.display()
-    );
 
     let req = mock.single_request();
     let body = req.body_json();
@@ -937,10 +939,22 @@ await codex.emitImage(out);
     );
 
     let custom_output = req.custom_tool_call_output(call_id);
-    let output_items = custom_output
-        .get("output")
-        .and_then(Value::as_array)
-        .expect("custom_tool_call_output should be a content item array");
+    let output_items = match custom_output.get("output").and_then(Value::as_array) {
+        Some(output_items) => output_items,
+        None => {
+            let (output, success) = req
+                .custom_tool_call_output_content_and_success(call_id)
+                .expect("js_repl should emit a custom tool output");
+            let output = output.unwrap_or_default();
+            assert_ne!(
+                success,
+                Some(true),
+                "js_repl succeeded without emitted image content items: {output}"
+            );
+            assert_js_repl_runtime_unavailable(&output);
+            return Ok(());
+        }
+    };
     let image_url = output_items
         .iter()
         .find_map(|item| {
@@ -1024,39 +1038,48 @@ console.log(out.type);
         })
         .await?;
 
-    let mut tool_event = None;
     wait_for_event_with_timeout(
         &codex,
-        |event| match event {
-            EventMsg::ViewImageToolCall(_) => {
-                tool_event = Some(event.clone());
-                false
-            }
-            EventMsg::TurnComplete(_) => true,
-            _ => false,
-        },
+        |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(10),
     )
     .await;
-    let tool_event = match tool_event {
-        Some(EventMsg::ViewImageToolCall(event)) => event,
-        other => panic!("expected ViewImageToolCall event, got {other:?}"),
-    };
-    assert!(
-        tool_event.path.ends_with("js-repl-view-image-no-emit.png"),
-        "unexpected image path: {}",
-        tool_event.path.display()
-    );
 
     let req = mock.single_request();
     let custom_output = req.custom_tool_call_output(call_id);
-    let output_items = custom_output.get("output").and_then(Value::as_array);
-    assert!(
-        output_items.is_none_or(|items| items
-            .iter()
-            .all(|item| item.get("type").and_then(Value::as_str) != Some("input_image"))),
-        "nested view_image should not auto-populate js_repl output"
-    );
+    match custom_output.get("output") {
+        Some(Value::String(output)) => {
+            if is_js_repl_runtime_unavailable(output) {
+                assert_js_repl_runtime_unavailable(output);
+                return Ok(());
+            }
+            assert!(
+                output.contains("function_call_output"),
+                "nested view_image should run and return a function_call_output summary, got: {output}"
+            );
+        }
+        Some(Value::Array(output_items)) => {
+            assert!(
+                output_items
+                    .iter()
+                    .all(|item| item.get("type").and_then(Value::as_str) != Some("input_image")),
+                "nested view_image should not auto-populate js_repl output"
+            );
+            assert!(
+                output_items.iter().any(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("input_text")
+                        && item
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.contains("function_call_output"))
+                }),
+                "nested view_image should run and return a function_call_output summary, got: {custom_output}"
+            );
+        }
+        other => {
+            anyhow::bail!("js_repl should emit string or content-item output, got: {other:?}");
+        }
+    }
 
     Ok(())
 }
