@@ -11,13 +11,11 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
-use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
 
+use crate::message_processor::ConnectionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -25,7 +23,6 @@ use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
-use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
@@ -117,9 +114,7 @@ enum OutboundControlEvent {
         connection_id: ConnectionId,
         writer: mpsc::Sender<QueuedOutgoingMessage>,
         disconnect_sender: Option<CancellationToken>,
-        initialized: Arc<AtomicBool>,
-        experimental_api_enabled: Arc<AtomicBool>,
-        opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+        connection_state: Arc<ConnectionState>,
     },
     /// Remove state for a closed/disconnected connection.
     Closed { connection_id: ConnectionId },
@@ -606,17 +601,13 @@ pub async fn run_main_with_transport(
                                 connection_id,
                                 writer,
                                 disconnect_sender,
-                                initialized,
-                                experimental_api_enabled,
-                                opted_out_notification_methods,
+                                connection_state,
                             } => {
                                 outbound_connections.insert(
                                     connection_id,
                                     OutboundConnectionState::new(
                                         writer,
-                                        initialized,
-                                        experimental_api_enabled,
-                                        opted_out_notification_methods,
+                                        connection_state,
                                         disconnect_sender,
                                     ),
                                 );
@@ -672,7 +663,7 @@ pub async fn run_main_with_transport(
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
-        let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
+        let mut connections = HashMap::<ConnectionId, Arc<ConnectionState>>::new();
         let transport_shutdown_token = transport_shutdown_token.clone();
         async move {
             let mut listen_for_threads = true;
@@ -716,37 +707,20 @@ pub async fn run_main_with_transport(
                                 writer,
                                 disconnect_sender,
                             } => {
-                                let outbound_initialized = Arc::new(AtomicBool::new(false));
-                                let outbound_experimental_api_enabled =
-                                    Arc::new(AtomicBool::new(false));
-                                let outbound_opted_out_notification_methods =
-                                    Arc::new(RwLock::new(HashSet::new()));
+                                let connection_state = Arc::new(ConnectionState::default());
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer,
                                         disconnect_sender,
-                                        initialized: Arc::clone(&outbound_initialized),
-                                        experimental_api_enabled: Arc::clone(
-                                            &outbound_experimental_api_enabled,
-                                        ),
-                                        opted_out_notification_methods: Arc::clone(
-                                            &outbound_opted_out_notification_methods,
-                                        ),
+                                        connection_state: Arc::clone(&connection_state),
                                     })
                                     .await
                                     .is_err()
                                 {
                                     break;
                                 }
-                                connections.insert(
-                                    connection_id,
-                                    ConnectionState::new(
-                                        outbound_initialized,
-                                        outbound_experimental_api_enabled,
-                                        outbound_opted_out_notification_methods,
-                                    ),
-                                );
+                                connections.insert(connection_id, connection_state);
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
                                 if connections.remove(&connection_id).is_none() {
@@ -767,43 +741,21 @@ pub async fn run_main_with_transport(
                             TransportEvent::IncomingMessage { connection_id, message } => {
                                 match message {
                                     JSONRPCMessage::Request(request) => {
-                                        let Some(connection_state) = connections.get_mut(&connection_id) else {
+                                        let Some(connection_state) = connections.get(&connection_id) else {
                                             warn!("dropping request from unknown connection: {connection_id:?}");
                                             continue;
                                         };
                                         let was_initialized =
-                                            connection_state.session.initialized();
+                                            connection_state.initialized();
                                         processor
                                             .process_request(
                                                 connection_id,
                                                 request,
                                                 transport,
-                                                Arc::clone(&connection_state.session),
+                                                Arc::clone(connection_state),
                                             )
                                             .await;
-                                        let opted_out_notification_methods_snapshot = connection_state
-                                            .session
-                                            .opted_out_notification_methods();
-                                        let experimental_api_enabled =
-                                            connection_state.session.experimental_api_enabled();
-                                        let is_initialized = connection_state.session.initialized();
-                                        if let Ok(mut opted_out_notification_methods) = connection_state
-                                            .outbound_opted_out_notification_methods
-                                            .write()
-                                        {
-                                            *opted_out_notification_methods =
-                                                opted_out_notification_methods_snapshot;
-                                        } else {
-                                            warn!(
-                                                "failed to update outbound opted-out notifications"
-                                            );
-                                        }
-                                        connection_state
-                                            .outbound_experimental_api_enabled
-                                            .store(
-                                                experimental_api_enabled,
-                                                std::sync::atomic::Ordering::Release,
-                                            );
+                                        let is_initialized = connection_state.initialized();
                                         if !was_initialized && is_initialized {
                                             processor
                                                 .send_initialize_notifications_to_connection(
@@ -846,7 +798,7 @@ pub async fn run_main_with_transport(
                             Ok(thread_id) => {
                                 let mut initialized_connection_ids = Vec::new();
                                 for (connection_id, connection_state) in &connections {
-                                    if connection_state.session.initialized() {
+                                    if connection_state.initialized() {
                                         initialized_connection_ids.push(*connection_id);
                                     }
                                 }

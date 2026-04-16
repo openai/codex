@@ -39,21 +39,17 @@
 //! helpers, surface-specific startup policy, and bounded shutdown.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
-use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::error_code::OVERLOADED_ERROR_CODE;
-use crate::message_processor::ConnectionSessionState;
+use crate::message_processor::ConnectionState;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -363,18 +359,14 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
 
         let (writer_tx, mut writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(channel_capacity);
-        let outbound_initialized = Arc::new(AtomicBool::new(false));
-        let outbound_experimental_api_enabled = Arc::new(AtomicBool::new(false));
-        let outbound_opted_out_notification_methods = Arc::new(RwLock::new(HashSet::new()));
+        let connection_state = Arc::new(ConnectionState::default());
 
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
         outbound_connections.insert(
             IN_PROCESS_CONNECTION_ID,
             OutboundConnectionState::new(
                 writer_tx,
-                Arc::clone(&outbound_initialized),
-                Arc::clone(&outbound_experimental_api_enabled),
-                Arc::clone(&outbound_opted_out_notification_methods),
+                Arc::clone(&connection_state),
                 /*disconnect_sender*/ None,
             ),
         );
@@ -406,7 +398,6 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 remote_control_handle: None,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
-            let session = Arc::new(ConnectionSessionState::default());
             let mut listen_for_threads = true;
 
             loop {
@@ -414,32 +405,15 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     command = processor_rx.recv() => {
                         match command {
                             Some(ProcessorCommand::Request(request)) => {
-                                let was_initialized = session.initialized();
+                                let was_initialized = connection_state.initialized();
                                 processor
                                     .process_client_request(
                                         IN_PROCESS_CONNECTION_ID,
                                         *request,
-                                        Arc::clone(&session),
-                                        &outbound_initialized,
+                                        Arc::clone(&connection_state),
                                     )
                                     .await;
-                                let opted_out_notification_methods_snapshot =
-                                    session.opted_out_notification_methods();
-                                let experimental_api_enabled =
-                                    session.experimental_api_enabled();
-                                let is_initialized = session.initialized();
-                                if let Ok(mut opted_out_notification_methods) =
-                                    outbound_opted_out_notification_methods.write()
-                                {
-                                    *opted_out_notification_methods =
-                                        opted_out_notification_methods_snapshot;
-                                } else {
-                                    warn!("failed to update outbound opted-out notifications");
-                                }
-                                outbound_experimental_api_enabled.store(
-                                    experimental_api_enabled,
-                                    Ordering::Release,
-                                );
+                                let is_initialized = connection_state.initialized();
                                 if !was_initialized && is_initialized {
                                     processor.send_initialize_notifications().await;
                                 }
@@ -455,7 +429,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                let connection_ids = if session.initialized() {
+                                let connection_ids = if connection_state.initialized() {
                                     vec![IN_PROCESS_CONNECTION_ID]
                                 } else {
                                     Vec::<ConnectionId>::new()

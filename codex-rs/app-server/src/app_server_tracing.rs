@@ -7,7 +7,7 @@
 //! deriving client identity from the typed [`ClientRequest`] rather than
 //! from a parsed JSON envelope.
 
-use crate::message_processor::ConnectionSessionState;
+use crate::message_processor::ConnectionState;
 use crate::outgoing_message::ConnectionId;
 use crate::transport::AppServerTransport;
 use codex_app_server_protocol::ClientRequest;
@@ -25,7 +25,7 @@ pub(crate) fn request_span(
     request: &JSONRPCRequest,
     transport: AppServerTransport,
     connection_id: ConnectionId,
-    session: &ConnectionSessionState,
+    session: &ConnectionState,
 ) -> Span {
     let initialize_client_info = initialize_client_info(request);
     let method = request.method.as_str();
@@ -62,7 +62,7 @@ pub(crate) fn request_span(
 pub(crate) fn typed_request_span(
     request: &ClientRequest,
     connection_id: ConnectionId,
-    session: &ConnectionSessionState,
+    session: &ConnectionState,
 ) -> Span {
     let method = request.method();
     let span = app_server_request_span_template(&method, "in-process", request.id(), connection_id);
@@ -142,7 +142,7 @@ fn attach_parent_context(
 
 fn client_name<'a>(
     initialize_client_info: Option<&'a InitializeParams>,
-    session: &'a ConnectionSessionState,
+    session: &'a ConnectionState,
 ) -> Option<&'a str> {
     if let Some(params) = initialize_client_info {
         return Some(params.client_info.name.as_str());
@@ -152,7 +152,7 @@ fn client_name<'a>(
 
 fn client_version<'a>(
     initialize_client_info: Option<&'a InitializeParams>,
-    session: &'a ConnectionSessionState,
+    session: &'a ConnectionState,
 ) -> Option<&'a str> {
     if let Some(params) = initialize_client_info {
         return Some(params.client_info.version.as_str());
