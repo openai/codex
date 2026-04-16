@@ -389,7 +389,7 @@
             "experimental_windows_sandbox": {
               "type": "boolean"
             },
-            "external_migrate": {
+            "external_migration": {
               "type": "boolean"
             },
             "fast_mode": {
@@ -2321,7 +2321,7 @@
         "experimental_windows_sandbox": {
           "type": "boolean"
         },
-        "external_migrate": {
+        "external_migration": {
           "type": "boolean"
         },
         "fast_mode": {

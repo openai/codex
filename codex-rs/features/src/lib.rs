@@ -813,9 +813,9 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::ExternalMigrate,
-        key: "external_migrate",
+        key: "external_migration",
         stage: Stage::Experimental {
-            name: "External migrate",
+            name: "External migration",
             menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
             announcement: "",
         },
