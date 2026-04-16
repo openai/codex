@@ -33,19 +33,6 @@ struct EnvironmentConfig {
     default_cwd: Option<PathBuf>,
 }
 
-/// Resolves the current or explicitly selected execution environment for a
-/// session.
-pub trait EnvironmentProvider: Send + Sync + std::fmt::Debug {
-    async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError>;
-
-    async fn environment(
-        &self,
-        environment_id: Option<&str>,
-    ) -> Result<Option<Arc<Environment>>, ExecServerError>;
-
-    fn default_cwd(&self, environment_id: Option<&str>) -> Result<Option<&Path>, ExecServerError>;
-}
-
 /// Lazily creates and caches the active environment for a session.
 ///
 /// The manager keeps the session's environment selection stable so subagents
@@ -221,11 +208,9 @@ impl EnvironmentManager {
             }
         }
     }
-}
 
-impl EnvironmentProvider for EnvironmentManager {
     /// Returns the cached environment, creating it on first access.
-    async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
+    pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
         self.current_environment
             .get_or_try_init(|| async {
                 if self.disabled {
@@ -248,7 +233,7 @@ impl EnvironmentProvider for EnvironmentManager {
             .map(std::option::Option::<&Arc<Environment>>::cloned)
     }
 
-    async fn environment(
+    pub async fn environment(
         &self,
         environment_id: Option<&str>,
     ) -> Result<Option<Arc<Environment>>, ExecServerError> {
@@ -259,30 +244,13 @@ impl EnvironmentProvider for EnvironmentManager {
         }
     }
 
-    fn default_cwd(&self, environment_id: Option<&str>) -> Result<Option<&Path>, ExecServerError> {
-        Ok(self
-            .environment_config(environment_id)?
-            .and_then(|environment_config| environment_config.default_cwd.as_deref()))
-    }
-}
-
-impl EnvironmentManager {
-    pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
-        <Self as EnvironmentProvider>::current(self).await
-    }
-
-    pub async fn environment(
-        &self,
-        environment_id: Option<&str>,
-    ) -> Result<Option<Arc<Environment>>, ExecServerError> {
-        <Self as EnvironmentProvider>::environment(self, environment_id).await
-    }
-
     pub fn default_cwd(
         &self,
         environment_id: Option<&str>,
     ) -> Result<Option<&Path>, ExecServerError> {
-        <Self as EnvironmentProvider>::default_cwd(self, environment_id)
+        Ok(self
+            .environment_config(environment_id)?
+            .and_then(|environment_config| environment_config.default_cwd.as_deref()))
     }
 
     async fn local_environment(&self) -> Result<Arc<Environment>, ExecServerError> {
