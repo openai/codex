@@ -131,7 +131,12 @@ async fn handle_set_goal(
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: SetGoalArgs = parse_arguments(arguments)?;
-    if args.status == Some(ToolGoalStatus::Complete) {
+    if args.objective.is_none()
+        && matches!(
+            args.status,
+            Some(ToolGoalStatus::Paused | ToolGoalStatus::BudgetLimited | ToolGoalStatus::Complete)
+        )
+    {
         session
             .account_thread_goal_progress(turn_context, GoalAccountingBoundary::Tool)
             .await

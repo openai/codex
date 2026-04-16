@@ -6001,6 +6001,78 @@ async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_respon
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stopping_goal_accounts_current_turn_uncached_tokens_before_tool_response()
+-> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::GoalMode)
+            .expect("goal mode should be enableable in tests");
+    });
+    let test = builder.build(&server).await?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "call-set-goal",
+                    "set_goal",
+                    r#"{"objective":"write a report","token_budget":1000}"#,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call("call-pause-goal", "set_goal", r#"{"status":"paused"}"#),
+                ev_completed_with_usage(
+                    "resp-2", /*input_tokens*/ 900, /*cached_input_tokens*/ 400,
+                    /*output_tokens*/ 80, /*reasoning_output_tokens*/ 20,
+                    /*total_tokens*/ 1_000,
+                ),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "Goal paused."),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "write a report".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await?;
+
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            let event = test.codex.next_event().await?;
+            if matches!(event.msg, EventMsg::TurnComplete(_)) {
+                return anyhow::Ok(());
+            }
+        }
+    })
+    .await??;
+
+    let pause_output = responses
+        .function_call_output_text("call-pause-goal")
+        .expect("pause tool output should be sent to the model");
+    let pause_output: serde_json::Value = serde_json::from_str(&pause_output)?;
+    assert_eq!(pause_output["goal"]["tokensUsed"], 580);
+    assert_eq!(pause_output["remainingTokens"], 420);
+    assert_eq!(pause_output["goal"]["status"], "paused");
+
+    Ok(())
+}
+
 fn ev_completed_with_usage(
     id: &str,
     input_tokens: i64,
