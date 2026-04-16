@@ -66,6 +66,14 @@ pub(crate) fn compile_permission_profile(
                         ),
                     );
                 }
+                for pattern in unbounded_unreadable_globstar_paths(filesystem) {
+                    push_warning(
+                        startup_warnings,
+                        format!(
+                            "Filesystem deny-read glob `{pattern}` uses `**`. Non-macOS sandboxing does not support unbounded `**` natively; set `unreadable_glob_scan_max_depth` in this filesystem profile to cap Linux glob expansion and silence this warning, or enumerate explicit depths such as `*.env`, `*/*.env`, and `*/*/*.env`."
+                        ),
+                    );
+                }
             }
             for (path, permission) in &filesystem.entries {
                 entries.extend(compile_filesystem_permission(
@@ -82,12 +90,17 @@ pub(crate) fn compile_permission_profile(
             missing_filesystem_entries_warning(profile_name),
         );
     }
+    let unreadable_glob_scan_max_depth = validate_unreadable_glob_scan_max_depth(
+        profile
+            .filesystem
+            .as_ref()
+            .and_then(|filesystem| filesystem.unreadable_glob_scan_max_depth),
+    )?;
 
     let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
-    Ok((
-        FileSystemSandboxPolicy::restricted(entries),
-        network_sandbox_policy,
-    ))
+    let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(entries);
+    file_system_sandbox_policy.unreadable_glob_scan_max_depth = unreadable_glob_scan_max_depth;
+    Ok((file_system_sandbox_policy, network_sandbox_policy))
 }
 
 /// Returns a list of paths that must be readable by shell tools in order
@@ -331,6 +344,42 @@ fn unsupported_read_write_glob_paths(filesystem: &FilesystemPermissionsToml) -> 
         }
     }
     patterns
+}
+
+fn unbounded_unreadable_globstar_paths(filesystem: &FilesystemPermissionsToml) -> Vec<String> {
+    if filesystem.unreadable_glob_scan_max_depth.is_some() {
+        return Vec::new();
+    }
+
+    let mut patterns = Vec::new();
+    for (path, permission) in &filesystem.entries {
+        match permission {
+            FilesystemPermissionToml::Access(FileSystemAccessMode::None) => {
+                if path.contains("**") {
+                    patterns.push(path.clone());
+                }
+            }
+            FilesystemPermissionToml::Access(_) => {}
+            FilesystemPermissionToml::Scoped(scoped_entries) => {
+                for (subpath, access) in scoped_entries {
+                    if *access == FileSystemAccessMode::None && subpath.contains("**") {
+                        patterns.push(format!("{path}/{subpath}"));
+                    }
+                }
+            }
+        }
+    }
+    patterns
+}
+
+fn validate_unreadable_glob_scan_max_depth(max_depth: Option<usize>) -> io::Result<Option<usize>> {
+    match max_depth {
+        Some(0) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unreadable_glob_scan_max_depth must be at least 1",
+        )),
+        _ => Ok(max_depth),
+    }
 }
 
 fn contains_glob_chars(path: &str) -> bool {

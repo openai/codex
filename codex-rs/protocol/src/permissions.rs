@@ -138,6 +138,9 @@ pub enum FileSystemSandboxKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct FileSystemSandboxPolicy {
     pub kind: FileSystemSandboxKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub unreadable_glob_scan_max_depth: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<FileSystemSandboxEntry>,
 }
@@ -257,6 +260,7 @@ impl Default for FileSystemSandboxPolicy {
     fn default() -> Self {
         Self {
             kind: FileSystemSandboxKind::Restricted,
+            unreadable_glob_scan_max_depth: None,
             entries: vec![FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
                     value: FileSystemSpecialPath::Root,
@@ -271,6 +275,7 @@ impl FileSystemSandboxPolicy {
     pub fn unrestricted() -> Self {
         Self {
             kind: FileSystemSandboxKind::Unrestricted,
+            unreadable_glob_scan_max_depth: None,
             entries: Vec::new(),
         }
     }
@@ -278,6 +283,7 @@ impl FileSystemSandboxPolicy {
     pub fn external_sandbox() -> Self {
         Self {
             kind: FileSystemSandboxKind::ExternalSandbox,
+            unreadable_glob_scan_max_depth: None,
             entries: Vec::new(),
         }
     }
@@ -285,6 +291,7 @@ impl FileSystemSandboxPolicy {
     pub fn restricted(entries: Vec<FileSystemSandboxEntry>) -> Self {
         Self {
             kind: FileSystemSandboxKind::Restricted,
+            unreadable_glob_scan_max_depth: None,
             entries,
         }
     }
@@ -317,6 +324,7 @@ impl FileSystemSandboxPolicy {
         if !matches!(rebuilt.kind, FileSystemSandboxKind::Restricted) {
             return rebuilt;
         }
+        rebuilt.unreadable_glob_scan_max_depth = existing.unreadable_glob_scan_max_depth;
 
         for deny_entry in existing
             .entries

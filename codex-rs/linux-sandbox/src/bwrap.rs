@@ -182,7 +182,9 @@ fn create_bwrap_flags(
     } = create_filesystem_args(
         file_system_sandbox_policy,
         sandbox_policy_cwd,
-        options.unreadable_glob_scan_max_depth,
+        options
+            .unreadable_glob_scan_max_depth
+            .or(file_system_sandbox_policy.unreadable_glob_scan_max_depth),
     )?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();

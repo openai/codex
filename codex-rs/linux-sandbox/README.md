@@ -68,6 +68,16 @@ commands that would enter the bubblewrap path.
   Failure:  any other rg failure aborts sandbox construction
   ```
 
+  Users can cap the scan depth per permissions profile:
+
+  ```toml
+  [permissions.workspace.filesystem]
+  unreadable_glob_scan_max_depth = 2
+
+  [permissions.workspace.filesystem.":project_roots"]
+  "**/*.env" = "none"
+  ```
+
 - When bubblewrap is active, symlink-in-path and non-existent protected paths inside
   writable roots are blocked by mounting `/dev/null` on the symlink or first
   missing component.
