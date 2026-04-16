@@ -500,6 +500,9 @@
             "tui_app_server": {
               "type": "boolean"
             },
+            "unavailable_dummy_tools": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -852,7 +855,8 @@
         "max_raw_memories_for_consolidation": {
           "description": "Maximum number of recent raw memories retained for global consolidation.",
           "format": "uint",
-          "minimum": 0.0,
+          "maximum": 4096.0,
+          "minimum": 1.0,
           "type": "integer"
         },
         "max_rollout_age_days": {
@@ -863,7 +867,8 @@
         "max_rollouts_per_startup": {
           "description": "Maximum number of rollout candidates processed per pass.",
           "format": "uint",
-          "minimum": 0.0,
+          "maximum": 128.0,
+          "minimum": 1.0,
           "type": "integer"
         },
         "max_unused_days": {
@@ -1491,6 +1496,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "experimental_environment": {
+          "default": null,
+          "type": "string"
         },
         "http_headers": {
           "additionalProperties": {
@@ -2358,6 +2367,9 @@
           "type": "boolean"
         },
         "tui_app_server": {
+          "type": "boolean"
+        },
+        "unavailable_dummy_tools": {
           "type": "boolean"
         },
         "undo": {

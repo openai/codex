@@ -50,6 +50,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
+        source: handler.source,
         display_order: handler.display_order,
         status: HookRunStatus::Running,
         status_message: handler.status_message.clone(),
@@ -95,6 +96,7 @@ pub(crate) fn completed_summary(
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
+        source: handler.source,
         display_order: handler.display_order,
         status,
         status_message: handler.status_message.clone(),
@@ -118,6 +120,7 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
 #[cfg(test)]
 mod tests {
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookSource;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
 
@@ -137,6 +140,7 @@ mod tests {
             timeout_sec: 5,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: HookSource::User,
             display_order,
         }
     }

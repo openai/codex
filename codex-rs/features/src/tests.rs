@@ -128,9 +128,18 @@ fn tool_suggest_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn tool_search_is_under_development_and_disabled_by_default() {
-    assert_eq!(Feature::ToolSearch.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::ToolSearch.default_enabled(), false);
+fn tool_search_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::ToolSearch.stage(), Stage::Stable);
+    assert_eq!(Feature::ToolSearch.default_enabled(), true);
+}
+
+#[test]
+fn unavailable_dummy_tools_is_under_development_and_disabled_by_default() {
+    assert_eq!(
+        Feature::UnavailableDummyTools.stage(),
+        Stage::UnderDevelopment
+    );
+    assert_eq!(Feature::UnavailableDummyTools.default_enabled(), false);
 }
 
 #[test]
@@ -152,17 +161,17 @@ fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
 }
 
 #[test]
+fn image_generation_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::ImageGeneration.stage(), Stage::Stable);
+    assert_eq!(Feature::ImageGeneration.default_enabled(), true);
+}
+
+#[test]
 fn image_detail_original_is_a_removed_feature_key() {
     assert_eq!(
         feature_for_key("image_detail_original"),
         Some(Feature::ImageDetailOriginal)
     );
-}
-
-#[test]
-fn image_generation_is_under_development() {
-    assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::ImageGeneration.default_enabled(), false);
 }
 
 #[test]

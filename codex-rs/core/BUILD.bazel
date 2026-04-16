@@ -1,4 +1,4 @@
-load("//:defs.bzl", "codex_rust_crate", "workspace_root_test")
+load("//:defs.bzl", "codex_rust_crate")
 
 filegroup(
     name = "model_availability_nux_fixtures",
@@ -31,15 +31,6 @@ codex_rust_crate(
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
         "templates/realtime/backend_prompt.md",
     ],
-    integration_test_flaky_by_stem = {
-        "all": [
-            "suite::abort_tasks::interrupt_tool_records_history_entries",
-            "suite::apply_patch_cli::apply_patch_cli_rejects_invalid_hunk_header::applypatchmodeloutput_function_expects",
-        ],
-        "responses_headers": [
-            "responses_stream_includes_turn_metadata_header_for_git_workspace_e2e",
-        ],
-    },
     integration_test_timeout = "long",
     test_data_extra = [
         "config.schema.json",
@@ -57,12 +48,6 @@ codex_rust_crate(
         "//:AGENTS.md",
     ],
     test_tags = ["no-sandbox"],
-    unit_test_args = [
-        "--skip",
-        "guardian::tests::guardian_parallel_reviews_fork_from_last_committed_trunk_history",
-        "--skip",
-        "agent::control::tests::completion_watcher_notifies_parent_when_child_is_missing",
-    ],
     unit_test_timeout = "long",
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
@@ -71,42 +56,4 @@ codex_rust_crate(
         "//codex-rs/responses-api-proxy:codex-responses-api-proxy",
         "//codex-rs/cli:codex",
     ],
-)
-
-workspace_root_test(
-    name = "core-guardian-parallel-reviews-flaky-test",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-        "INSTA_SNAPSHOT_PATH": "src",
-    },
-    test_bin = ":core-unit-tests-bin",
-    workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
-    args = [
-        "--exact",
-        "guardian::tests::guardian_parallel_reviews_fork_from_last_committed_trunk_history",
-    ],
-    tags = [
-        "flaky",
-        "no-sandbox",
-    ],
-    timeout = "long",
-)
-
-workspace_root_test(
-    name = "core-completion-watcher-missing-child-flaky-test",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-        "INSTA_SNAPSHOT_PATH": "src",
-    },
-    test_bin = ":core-unit-tests-bin",
-    workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
-    args = [
-        "--exact",
-        "agent::control::tests::completion_watcher_notifies_parent_when_child_is_missing",
-    ],
-    tags = [
-        "flaky",
-        "no-sandbox",
-    ],
-    timeout = "long",
 )

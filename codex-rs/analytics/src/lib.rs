@@ -22,7 +22,6 @@ pub use events::GuardianReviewedAction;
 pub use facts::AnalyticsJsonRpcError;
 pub use facts::AppInvocation;
 pub use facts::CodexCompactionEvent;
-pub use facts::CodexHookSource;
 pub use facts::CodexTurnSteerEvent;
 pub use facts::CompactionImplementation;
 pub use facts::CompactionPhase;

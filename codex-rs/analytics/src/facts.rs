@@ -17,6 +17,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
@@ -243,26 +244,6 @@ pub enum CompactionStatus {
     Interrupted,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CodexHookSource {
-    System,
-    User,
-    Project,
-    Unknown,
-}
-
-impl CodexHookSource {
-    pub fn metric_tag(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::User => "user",
-            Self::Project => "project",
-            Self::Unknown => "unknown",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct CodexCompactionEvent {
     pub thread_id: String,
@@ -347,7 +328,7 @@ pub(crate) struct HookRunInput {
 
 pub struct HookRunFact {
     pub event_name: HookEventName,
-    pub hook_source: CodexHookSource,
+    pub hook_source: HookSource,
     pub status: HookRunStatus,
 }
 

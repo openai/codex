@@ -411,12 +411,12 @@ fn system_requirements_toml_file() -> io::Result<AbsolutePathBuf> {
 }
 
 #[cfg(unix)]
-pub(crate) fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
+fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
     AbsolutePathBuf::from_absolute_path(Path::new(SYSTEM_CONFIG_TOML_FILE_UNIX))
 }
 
 #[cfg(windows)]
-pub(crate) fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
+fn system_config_toml_file() -> io::Result<AbsolutePathBuf> {
     windows_system_config_toml_file()
 }
 
@@ -650,7 +650,7 @@ async fn project_trust_context(
     let projects = project_trust_config.projects.unwrap_or_default();
 
     let project_root_key = project_trust_key(project_root.as_path());
-    let repo_root = resolve_root_git_project_for_trust(cwd.as_path());
+    let repo_root = resolve_root_git_project_for_trust(cwd.as_path()).await;
     let repo_root_key = repo_root.as_ref().map(|root| project_trust_key(root));
 
     let projects_trust = projects

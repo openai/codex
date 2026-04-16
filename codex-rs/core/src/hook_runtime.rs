@@ -1,9 +1,7 @@
 use std::future::Future;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_analytics::CodexHookSource;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
 use codex_hooks::PostToolUseOutcome;
@@ -22,14 +20,15 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::config_loader::system_config_toml_file;
 use crate::event_mapping::parse_turn_item;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -330,24 +329,15 @@ pub(crate) async fn emit_hook_completed_events(
     completed_events: Vec<HookCompletedEvent>,
 ) {
     for completed in completed_events {
-        let hook_source = hook_source_for_path(
-            completed.run.source_path.as_path(),
-            turn_context.config.codex_home.as_path(),
-            turn_context.cwd.as_path(),
-        );
-        emit_hook_completed_metrics(turn_context, &completed, hook_source);
-        track_hook_completed_analytics(sess, turn_context, &completed, hook_source);
+        emit_hook_completed_metrics(turn_context, &completed);
+        track_hook_completed_analytics(sess, turn_context, &completed);
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
     }
 }
 
-fn emit_hook_completed_metrics(
-    turn_context: &TurnContext,
-    completed: &HookCompletedEvent,
-    hook_source: CodexHookSource,
-) {
-    let tags = hook_run_metric_tags(&completed.run, hook_source);
+fn emit_hook_completed_metrics(turn_context: &TurnContext, completed: &HookCompletedEvent) {
+    let tags = hook_run_metric_tags(&completed.run);
     turn_context
         .session_telemetry
         .counter(HOOK_RUN_METRIC, /*inc*/ 1, &tags);
@@ -366,14 +356,9 @@ fn track_hook_completed_analytics(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     completed: &HookCompletedEvent,
-    hook_source: CodexHookSource,
 ) {
-    let (tracking, hook) = hook_run_analytics_payload(
-        sess.conversation_id.to_string(),
-        turn_context,
-        completed,
-        hook_source,
-    );
+    let (tracking, hook) =
+        hook_run_analytics_payload(sess.conversation_id.to_string(), turn_context, completed);
     sess.services
         .analytics_events_client
         .track_hook_run(tracking, hook);
@@ -383,7 +368,6 @@ fn hook_run_analytics_payload(
     thread_id: String,
     turn_context: &TurnContext,
     completed: &HookCompletedEvent,
-    hook_source: CodexHookSource,
 ) -> (codex_analytics::TrackEventsContext, HookRunFact) {
     (
         build_track_events_context(
@@ -396,48 +380,37 @@ fn hook_run_analytics_payload(
         ),
         HookRunFact {
             event_name: completed.run.event_name,
-            hook_source,
+            hook_source: completed.run.source,
             status: completed.run.status,
         },
     )
 }
 
-fn hook_run_metric_tags(
-    run: &HookRunSummary,
-    hook_source: CodexHookSource,
-) -> [(&'static str, &'static str); 3] {
+fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 3] {
+    let hook_name = match run.event_name {
+        HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::SessionStart => "SessionStart",
+        HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::Stop => "Stop",
+    };
+    let hook_source = match run.source {
+        HookSource::System => "system",
+        HookSource::User => "user",
+        HookSource::Project => "project",
+        HookSource::Mdm => "mdm",
+        HookSource::SessionFlags => "session_flags",
+        HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
+        HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
+        HookSource::Unknown => "unknown",
+    };
+
     [
-        ("hook_name", run.event_name.analytics_name()),
-        ("source", hook_source.metric_tag()),
+        ("hook_name", hook_name),
+        ("source", hook_source),
         ("status", run.status.metric_tag()),
     ]
 }
-
-fn hook_source_for_path(source_path: &Path, codex_home: &Path, cwd: &Path) -> CodexHookSource {
-    if let Ok(system_config_path) = system_config_toml_file()
-        && let Some(system_config_dir) = system_config_path.as_path().parent()
-        && source_path.starts_with(system_config_dir)
-    {
-        return CodexHookSource::System;
-    }
-
-    if source_path == codex_home.join("hooks.json") {
-        return CodexHookSource::User;
-    }
-
-    // Project hooks are loaded from a `.codex/hooks.json` rooted at or above the
-    // current working directory, so classify by walking cwd ancestors.
-    if source_path.ends_with(Path::new(".codex").join("hooks.json"))
-        && cwd
-            .ancestors()
-            .any(|ancestor| source_path.starts_with(ancestor.join(".codex")))
-    {
-        return CodexHookSource::Project;
-    }
-
-    CodexHookSource::Unknown
-}
-
 fn hook_permission_mode(turn_context: &TurnContext) -> String {
     match turn_context.approval_policy.value() {
         AskForApproval::Never => "bypassPermissions",
@@ -451,13 +424,13 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
 
 #[cfg(test)]
 mod tests {
-    use codex_analytics::CodexHookSource;
     use codex_protocol::models::ContentItem;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookExecutionMode;
     use codex_protocol::protocol::HookHandlerType;
     use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookScope;
+    use codex_protocol::protocol::HookSource;
     use pretty_assertions::assert_eq;
 
     use super::additional_context_messages;
@@ -508,21 +481,17 @@ mod tests {
         let (_session, turn_context) = make_session_and_context().await;
         let completed = HookCompletedEvent {
             turn_id: Some("turn-from-hook".to_string()),
-            run: sample_hook_run(HookRunStatus::Blocked),
+            run: sample_hook_run(HookRunStatus::Blocked, HookSource::Project),
         };
 
-        let (tracking, hook) = hook_run_analytics_payload(
-            "thread-123".to_string(),
-            &turn_context,
-            &completed,
-            CodexHookSource::Unknown,
-        );
+        let (tracking, hook) =
+            hook_run_analytics_payload("thread-123".to_string(), &turn_context, &completed);
 
         assert_eq!(tracking.thread_id, "thread-123");
         assert_eq!(tracking.turn_id, "turn-from-hook");
         assert_eq!(tracking.model_slug, turn_context.model_info.slug);
         assert_eq!(hook.event_name, HookEventName::Stop);
-        assert_eq!(hook.hook_source, CodexHookSource::Unknown);
+        assert_eq!(hook.hook_source, HookSource::Project);
         assert_eq!(hook.status, HookRunStatus::Blocked);
     }
 
@@ -531,26 +500,23 @@ mod tests {
         let (_session, turn_context) = make_session_and_context().await;
         let completed = HookCompletedEvent {
             turn_id: None,
-            run: sample_hook_run(HookRunStatus::Failed),
+            run: sample_hook_run(HookRunStatus::Failed, HookSource::Unknown),
         };
 
-        let (tracking, hook) = hook_run_analytics_payload(
-            "thread-123".to_string(),
-            &turn_context,
-            &completed,
-            CodexHookSource::Unknown,
-        );
+        let (tracking, hook) =
+            hook_run_analytics_payload("thread-123".to_string(), &turn_context, &completed);
 
         assert_eq!(tracking.turn_id, turn_context.sub_id);
+        assert_eq!(hook.hook_source, HookSource::Unknown);
         assert_eq!(hook.status, HookRunStatus::Failed);
     }
 
     #[test]
     fn hook_run_metric_tags_match_analytics_shape() {
-        let run = sample_hook_run(HookRunStatus::Blocked);
+        let run = sample_hook_run(HookRunStatus::Blocked, HookSource::Project);
 
         assert_eq!(
-            hook_run_metric_tags(&run, CodexHookSource::Project),
+            hook_run_metric_tags(&run),
             [
                 ("hook_name", "Stop"),
                 ("source", "project"),
@@ -560,53 +526,20 @@ mod tests {
     }
 
     #[test]
-    fn hook_source_for_path_classifies_user_project_and_unknown() {
-        let codex_home = test_path_buf("/tmp/custom-codex-home").abs();
-        let cwd = test_path_buf("/tmp/worktree/src").abs();
-
-        let system_hooks_path = super::system_config_toml_file()
-            .expect("system config path")
-            .parent()
-            .expect("system config directory")
-            .join("hooks.json");
+    fn hook_run_metric_tags_include_expanded_hook_sources() {
+        let run = sample_hook_run(HookRunStatus::Completed, HookSource::LegacyManagedConfigMdm);
 
         assert_eq!(
-            super::hook_source_for_path(
-                system_hooks_path.as_path(),
-                codex_home.as_path(),
-                cwd.as_path(),
-            ),
-            CodexHookSource::System,
-        );
-        assert_eq!(
-            super::hook_source_for_path(
-                codex_home.join("hooks.json").as_path(),
-                codex_home.as_path(),
-                cwd.as_path(),
-            ),
-            CodexHookSource::User,
-        );
-        assert_eq!(
-            super::hook_source_for_path(
-                test_path_buf("/tmp/worktree/.codex/hooks.json")
-                    .abs()
-                    .as_path(),
-                codex_home.as_path(),
-                cwd.as_path(),
-            ),
-            CodexHookSource::Project,
-        );
-        assert_eq!(
-            super::hook_source_for_path(
-                test_path_buf("/tmp/hooks.json").abs().as_path(),
-                codex_home.as_path(),
-                cwd.as_path(),
-            ),
-            CodexHookSource::Unknown,
+            hook_run_metric_tags(&run),
+            [
+                ("hook_name", "Stop"),
+                ("source", "legacy_managed_config_mdm"),
+                ("status", "completed"),
+            ]
         );
     }
 
-    fn sample_hook_run(status: HookRunStatus) -> HookRunSummary {
+    fn sample_hook_run(status: HookRunStatus, source: HookSource) -> HookRunSummary {
         HookRunSummary {
             id: "stop:0:/tmp/hooks.json".to_string(),
             event_name: HookEventName::Stop,
@@ -614,6 +547,7 @@ mod tests {
             execution_mode: HookExecutionMode::Sync,
             scope: HookScope::Turn,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source,
             display_order: 0,
             status,
             status_message: None,
