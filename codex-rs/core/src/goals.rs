@@ -39,6 +39,7 @@ pub(crate) enum GoalAccountingBoundary {
 
 #[derive(Debug)]
 pub(crate) struct GoalAccountingState {
+    accounting_lock: Mutex<()>,
     last_accounted_token_usage: Mutex<TokenUsage>,
     completed_this_turn: AtomicBool,
 }
@@ -46,6 +47,7 @@ pub(crate) struct GoalAccountingState {
 impl GoalAccountingState {
     pub(crate) fn new() -> Self {
         Self {
+            accounting_lock: Mutex::new(()),
             last_accounted_token_usage: Mutex::new(TokenUsage::default()),
             completed_this_turn: AtomicBool::new(false),
         }
@@ -199,6 +201,7 @@ impl Session {
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
             return Ok(());
         }
+        let _accounting_guard = turn_context.goal_accounting.accounting_lock.lock().await;
         let current_token_usage = self.total_token_usage().await.unwrap_or_default();
         let token_delta = turn_context
             .goal_accounting
@@ -210,9 +213,20 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
-        let mode = if matches!(boundary, GoalAccountingBoundary::Turn)
-            && turn_context.goal_accounting.completed_this_turn()
-        {
+        let account_terminal_goal = if turn_context.goal_accounting.completed_this_turn() {
+            true
+        } else if matches!(boundary, GoalAccountingBoundary::Turn) {
+            match state_db.get_thread_goal(self.conversation_id).await? {
+                Some(goal) if goal.status == codex_state::ThreadGoalStatus::Complete => {
+                    *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal));
+                    true
+                }
+                Some(_) | None => false,
+            }
+        } else {
+            false
+        };
+        let mode = if account_terminal_goal {
             codex_state::ThreadGoalAccountingMode::ActiveOrComplete
         } else {
             codex_state::ThreadGoalAccountingMode::ActiveOnly
