@@ -3863,13 +3863,42 @@ async fn make_goal_session_and_context_with_rx() -> (
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
 ) {
-    make_session_and_context_with_dynamic_tools_config_and_rx(Vec::new(), |config| {
-        config
-            .features
-            .enable(Feature::GoalMode)
-            .expect("goal mode should be enableable in tests");
-    })
+    let (session, turn_context, rx) =
+        make_session_and_context_with_dynamic_tools_config_and_rx(Vec::new(), |config| {
+            config
+                .features
+                .enable(Feature::GoalMode)
+                .expect("goal mode should be enableable in tests");
+        })
+        .await;
+    upsert_goal_test_thread(session.as_ref()).await;
+    (session, turn_context, rx)
+}
+
+async fn upsert_goal_test_thread(session: &Session) {
+    let config = session.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
     .await
+    .expect("goal test state db should initialize");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        session.conversation_id,
+        config
+            .codex_home
+            .join("goal-test-rollout.jsonl")
+            .to_path_buf(),
+        chrono::Utc::now(),
+        SessionSource::Cli,
+    );
+    builder.cwd = config.cwd.to_path_buf();
+    builder.model_provider = Some(config.model_provider_id.clone());
+    let metadata = builder.build(config.model_provider_id.as_str());
+    state_db
+        .upsert_thread(&metadata)
+        .await
+        .expect("goal test thread should be upserted");
 }
 
 async fn make_session_and_context_with_dynamic_tools_config_and_rx(
@@ -5838,8 +5867,7 @@ async fn goal_accounting_charges_out_of_band_goal() -> anyhow::Result<()> {
         )
         .await?;
     assert!(!sess.thread_goal_may_exist.load(Ordering::SeqCst));
-    tc.goal_accounting
-        .mark_turn_started(TokenUsage::default())
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
         .await;
     {
         let mut state = sess.state.lock().await;
@@ -5869,6 +5897,196 @@ async fn goal_accounting_charges_out_of_band_goal() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
+    let mut state = sess.state.lock().await;
+    state.set_token_info(Some(TokenUsageInfo {
+        total_token_usage,
+        last_token_usage: TokenUsage::default(),
+        model_context_window: None,
+    }));
+}
+
+fn pre_goal_token_usage() -> TokenUsage {
+    TokenUsage {
+        input_tokens: 30,
+        cached_input_tokens: 10,
+        output_tokens: 20,
+        reasoning_output_tokens: 5,
+        total_tokens: 55,
+    }
+}
+
+fn post_goal_token_usage() -> TokenUsage {
+    TokenUsage {
+        input_tokens: 50,
+        cached_input_tokens: 10,
+        output_tokens: 30,
+        reasoning_output_tokens: 5,
+        total_tokens: 75,
+    }
+}
+
+#[tokio::test]
+async fn goal_accounting_resets_baseline_for_out_of_band_replacement() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "old goal",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(1_000),
+        )
+        .await?;
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
+        .await;
+    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "new goal",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(1_000),
+        )
+        .await?;
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!("new goal", goal.objective);
+    assert_eq!(0, goal.tokens_used);
+
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(30, goal.tokens_used);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_accounting_resets_baseline_when_goal_resumes_mid_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::Paused),
+            token_budget: Some(Some(1_000)),
+        },
+    )
+    .await?;
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
+        .await;
+    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: None,
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::Active),
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(0, goal.tokens_used);
+
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(30, goal.tokens_used);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_accounting_charges_goal_activated_and_paused_mid_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::Paused),
+            token_budget: Some(Some(1_000)),
+        },
+    )
+    .await?;
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
+        .await;
+    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: None,
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::Active),
+            token_budget: None,
+        },
+    )
+    .await?;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .update_thread_goal(
+            sess.conversation_id,
+            codex_state::ThreadGoalUpdate {
+                status: Some(codex_state::ThreadGoalStatus::Paused),
+                token_budget: None,
+            },
+        )
+        .await?;
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Turn)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
+    assert_eq!(30, goal.tokens_used);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn goal_accounting_charges_out_of_band_completed_goal_at_turn_boundary() -> anyhow::Result<()>
 {
@@ -5887,8 +6105,7 @@ async fn goal_accounting_charges_out_of_band_completed_goal_at_turn_boundary() -
             /*token_budget*/ Some(1_000),
         )
         .await?;
-    tc.goal_accounting
-        .mark_turn_started(TokenUsage::default())
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
         .await;
     {
         let mut state = sess.state.lock().await;
@@ -6000,8 +6217,7 @@ async fn parallel_goal_accounting_charges_delta_once() -> anyhow::Result<()> {
             /*token_budget*/ Some(1_000),
         )
         .await?;
-    tc.goal_accounting
-        .mark_turn_started(TokenUsage::default())
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
         .await;
     {
         let mut state = sess.state.lock().await;
@@ -6049,8 +6265,7 @@ async fn unchanged_tool_boundary_accounting_preserves_checkpoint_for_turn_bounda
         },
     )
     .await?;
-    tc.goal_accounting
-        .mark_turn_started(TokenUsage::default())
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
         .await;
     {
         let mut state = sess.state.lock().await;
