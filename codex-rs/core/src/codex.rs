@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::SkillRenderReport;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::Mailbox;
@@ -23,6 +24,7 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
@@ -33,7 +35,7 @@ use crate::realtime_conversation::handle_audio as handle_realtime_conversation_a
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
-use crate::render_skills_section;
+use crate::render_skills_section_with_budget;
 use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills_load_input_from_config;
@@ -1347,6 +1349,11 @@ pub(crate) struct SessionSettingsUpdate {
 pub(crate) struct AppServerClientMetadata {
     pub(crate) client_name: Option<String>,
     pub(crate) client_version: Option<String>,
+}
+
+struct InitialContextBuild {
+    items: Vec<ResponseItem>,
+    skills_report: Option<SkillRenderReport>,
 }
 
 impl Session {
@@ -3820,8 +3827,18 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        self.build_initial_context_with_report(turn_context)
+            .await
+            .items
+    }
+
+    async fn build_initial_context_with_report(
+        &self,
+        turn_context: &TurnContext,
+    ) -> InitialContextBuild {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
+        let mut skills_report = None;
         let shell = self.user_shell();
         let (
             reference_context_item,
@@ -3931,8 +3948,12 @@ impl Session {
             .turn_skills
             .outcome
             .allowed_skills_for_implicit_invocation();
-        if let Some(skills_section) = render_skills_section(&implicit_skills) {
-            developer_sections.push(skills_section);
+        if let Some(rendered_skills) = render_skills_section_with_budget(
+            &implicit_skills,
+            default_skill_metadata_budget(turn_context.model_info.context_window),
+        ) {
+            developer_sections.push(rendered_skills.text);
+            skills_report = Some(rendered_skills.report);
         }
         let loaded_plugins = self
             .services
@@ -3995,7 +4016,10 @@ impl Session {
         {
             items.push(guardian_developer_message);
         }
-        items
+        InitialContextBuild {
+            items,
+            skills_report,
+        }
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
@@ -4042,16 +4066,24 @@ impl Session {
             state.reference_context_item()
         };
         let should_inject_full_context = reference_context_item.is_none();
-        let context_items = if should_inject_full_context {
-            self.build_initial_context(turn_context).await
+        let (context_items, skills_report) = if should_inject_full_context {
+            let initial_context = self.build_initial_context_with_report(turn_context).await;
+            (initial_context.items, initial_context.skills_report)
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
-            self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
-                .await
+            (
+                self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
+                    .await,
+                None,
+            )
         };
         let turn_context_item = turn_context.to_turn_context_item();
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
+                .await;
+        }
+        if let Some(message) = skills_report.and_then(|report| report.warning_message()) {
+            self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
                 .await;
         }
         // Persist one `TurnContextItem` per real user turn so resume/lazy replay can recover the

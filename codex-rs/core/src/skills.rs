@@ -21,11 +21,13 @@ pub use codex_core_skills::SkillError;
 pub use codex_core_skills::SkillLoadOutcome;
 pub use codex_core_skills::SkillMetadata;
 pub use codex_core_skills::SkillPolicy;
+pub use codex_core_skills::SkillRenderReport;
 pub use codex_core_skills::SkillsLoadInput;
 pub use codex_core_skills::SkillsManager;
 pub use codex_core_skills::build_skill_name_counts;
 pub use codex_core_skills::collect_env_var_dependencies;
 pub use codex_core_skills::config_rules;
+pub use codex_core_skills::default_skill_metadata_budget;
 pub use codex_core_skills::detect_implicit_skill_invocation_for_command;
 pub use codex_core_skills::filter_skill_load_outcome_for_product;
 pub use codex_core_skills::injection;
@@ -38,6 +40,7 @@ pub use codex_core_skills::model;
 pub use codex_core_skills::remote;
 pub use codex_core_skills::render;
 pub use codex_core_skills::render_skills_section;
+pub use codex_core_skills::render_skills_section_with_budget;
 pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(
