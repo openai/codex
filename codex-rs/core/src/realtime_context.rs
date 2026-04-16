@@ -62,8 +62,8 @@ pub(crate) async fn build_realtime_startup_context(
     let history = sess.clone_history().await;
     let current_thread_section = build_current_thread_section(history.raw_items());
     let recent_threads = load_recent_threads(sess).await;
-    let recent_work_section = build_recent_work_section(&cwd, &recent_threads);
-    let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir());
+    let recent_work_section = build_recent_work_section(&cwd, &recent_threads).await;
+    let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir()).await;
 
     if current_thread_section.is_none()
         && recent_work_section.is_none()
@@ -144,16 +144,18 @@ async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
     }
 }
 
-fn build_recent_work_section(cwd: &Path, recent_threads: &[StoredThread]) -> Option<String> {
+async fn build_recent_work_section(cwd: &Path, recent_threads: &[StoredThread]) -> Option<String> {
     let mut groups: HashMap<PathBuf, Vec<&StoredThread>> = HashMap::new();
     for entry in recent_threads {
-        let group =
-            resolve_root_git_project_for_trust(&entry.cwd).unwrap_or_else(|| entry.cwd.clone());
+        let group = resolve_root_git_project_for_trust(&entry.cwd)
+            .await
+            .unwrap_or_else(|| entry.cwd.clone());
         groups.entry(group).or_default().push(entry);
     }
 
-    let current_group =
-        resolve_root_git_project_for_trust(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let current_group = resolve_root_git_project_for_trust(cwd)
+        .await
+        .unwrap_or_else(|| cwd.to_path_buf());
     let mut groups = groups.into_iter().collect::<Vec<_>>();
     groups.sort_by(|(left_group, left_entries), (right_group, right_entries)| {
         let left_latest = left_entries
@@ -178,14 +180,13 @@ fn build_recent_work_section(cwd: &Path, recent_threads: &[StoredThread]) -> Opt
             ))
     });
 
-    let sections = groups
-        .into_iter()
-        .take(MAX_RECENT_WORK_GROUPS)
-        .filter_map(|(group, mut entries)| {
-            entries.sort_by_key(|entry| Reverse(entry.updated_at));
-            format_thread_group(&current_group, &group, entries)
-        })
-        .collect::<Vec<_>>();
+    let mut sections = Vec::new();
+    for (group, mut entries) in groups.into_iter().take(MAX_RECENT_WORK_GROUPS) {
+        entries.sort_by_key(|entry| Reverse(entry.updated_at));
+        if let Some(section) = format_thread_group(&current_group, &group, entries).await {
+            sections.push(section);
+        }
+    }
     (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
@@ -306,11 +307,11 @@ pub(crate) fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: 
     }
 }
 
-fn build_workspace_section_with_user_root(
+async fn build_workspace_section_with_user_root(
     cwd: &Path,
     user_root: Option<PathBuf>,
 ) -> Option<String> {
-    let git_root = resolve_root_git_project_for_trust(cwd);
+    let git_root = resolve_root_git_project_for_trust(cwd).await;
     let cwd_tree = render_tree(cwd);
     let git_root_tree = git_root
         .as_ref()
@@ -466,13 +467,16 @@ fn format_startup_context_blob(body: &str, budget_tokens: usize) -> String {
     }
 }
 
-fn format_thread_group(
+async fn format_thread_group(
     current_group: &Path,
     group: &Path,
     entries: Vec<&StoredThread>,
 ) -> Option<String> {
     let latest = entries.first()?;
-    let group_label = if resolve_root_git_project_for_trust(latest.cwd.as_path()).is_some() {
+    let group_label = if resolve_root_git_project_for_trust(latest.cwd.as_path())
+        .await
+        .is_some()
+    {
         format!("### Git repo: {}", group.display())
     } else {
         format!("### Directory: {}", group.display())

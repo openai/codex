@@ -457,8 +457,8 @@ fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
         .collect()
 }
 
-fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
-    let config = test_config();
+async fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
+    let config = test_config().await;
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
         "gpt-5-codex",
         &config.to_models_manager_config(),
@@ -766,6 +766,117 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
 }
 
 #[tokio::test]
+async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> anyhow::Result<()> {
+    #[derive(Default)]
+    struct ProbeToolRuntime {
+        enforce_managed_network: Vec<bool>,
+    }
+
+    impl crate::tools::sandboxing::Approvable<()> for ProbeToolRuntime {
+        type ApprovalKey = String;
+
+        fn approval_keys(&self, _req: &()) -> Vec<Self::ApprovalKey> {
+            vec!["probe".to_string()]
+        }
+
+        fn start_approval_async<'a>(
+            &'a mut self,
+            _req: &'a (),
+            _ctx: crate::tools::sandboxing::ApprovalCtx<'a>,
+        ) -> futures::future::BoxFuture<'a, ReviewDecision> {
+            Box::pin(async { ReviewDecision::Approved })
+        }
+    }
+
+    impl crate::tools::sandboxing::Sandboxable for ProbeToolRuntime {
+        fn sandbox_preference(&self) -> codex_sandboxing::SandboxablePreference {
+            codex_sandboxing::SandboxablePreference::Auto
+        }
+    }
+
+    impl crate::tools::sandboxing::ToolRuntime<(), ()> for ProbeToolRuntime {
+        async fn run(
+            &mut self,
+            _req: &(),
+            attempt: &crate::tools::sandboxing::SandboxAttempt<'_>,
+            _ctx: &crate::tools::sandboxing::ToolCtx,
+        ) -> Result<(), crate::tools::sandboxing::ToolError> {
+            self.enforce_managed_network
+                .push(attempt.enforce_managed_network);
+            Ok(())
+        }
+    }
+
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &SandboxPolicy::DangerFullAccess,
+    )?;
+
+    let session = make_session_with_config(move |config| {
+        config.permissions.sandbox_policy =
+            codex_config::Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        config.permissions.network = Some(network_spec);
+
+        let layers = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut requirements = config.config_layer_stack.requirements().clone();
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
+                enabled: Some(true),
+                ..Default::default()
+            },
+            RequirementSource::CloudRequirements,
+        ));
+        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        requirements_toml.network = Some(crate::config_loader::NetworkRequirementsToml {
+            enabled: Some(true),
+            ..Default::default()
+        });
+        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+            .expect("rebuild config layer stack with network requirements");
+    })
+    .await?;
+
+    let turn = session.new_default_turn().await;
+    assert!(turn.network.is_none());
+
+    let mut orchestrator = crate::tools::orchestrator::ToolOrchestrator::new();
+    let mut tool = ProbeToolRuntime::default();
+    let tool_ctx = crate::tools::sandboxing::ToolCtx {
+        session: Arc::clone(&session),
+        turn: Arc::clone(&turn),
+        call_id: "probe-call".to_string(),
+        tool_name: "probe".to_string(),
+    };
+
+    orchestrator
+        .run(
+            &mut tool,
+            &(),
+            &tool_ctx,
+            turn.as_ref(),
+            AskForApproval::Never,
+        )
+        .await
+        .expect("probe runtime should succeed");
+
+    assert_eq!(tool.enforce_managed_network, vec![false]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> anyhow::Result<()> {
     let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
@@ -870,7 +981,7 @@ async fn get_base_instructions_no_user_content() {
     ];
 
     let (session, _turn_context) = make_session_and_context().await;
-    let config = test_config();
+    let config = test_config().await;
 
     for test_case in test_cases {
         let model_info = model_info_for_slug(test_case.slug, &config);
@@ -1035,10 +1146,10 @@ fn collect_explicit_app_ids_from_skill_items_skips_plain_mentions_with_skill_con
     assert_eq!(connector_ids, HashSet::<String>::new());
 }
 
-#[test]
-fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
+#[tokio::test]
+async fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
 
     let exposure = build_mcp_tool_exposure(
@@ -1057,10 +1168,10 @@ fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
     assert!(exposure.deferred_tools.is_none());
 }
 
-#[test]
-fn mcp_tool_exposure_searches_large_effective_tool_sets() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
+#[tokio::test]
+async fn mcp_tool_exposure_searches_large_effective_tool_sets() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
 
     let exposure = build_mcp_tool_exposure(
@@ -1083,10 +1194,10 @@ fn mcp_tool_exposure_searches_large_effective_tool_sets() {
     assert_eq!(deferred_tool_names, expected_tool_names);
 }
 
-#[test]
-fn mcp_tool_exposure_directly_exposes_explicit_apps_without_deferred_overlap() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
+#[tokio::test]
+async fn mcp_tool_exposure_directly_exposes_explicit_apps_without_deferred_overlap() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
     mcp_tools.extend([(
         "mcp__codex_apps__calendar_create_event".to_string(),
