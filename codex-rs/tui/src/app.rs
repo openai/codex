@@ -8225,6 +8225,8 @@ mod tests {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
+        // Seed the previous setting so this test exercises the thread-mode update path.
+        app.config.memories.generate_memories = true;
 
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
         let started = app_server.start_thread(&app.config).await?;
