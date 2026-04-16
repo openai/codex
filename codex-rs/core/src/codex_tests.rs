@@ -1528,6 +1528,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         approval_policy: turn_context.approval_policy.value(),
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
+        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),

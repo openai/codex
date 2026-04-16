@@ -2614,6 +2614,7 @@ dependencies = [
  "codex-utils-string",
  "codex-utils-template",
  "encoding_rs",
+ "globset",
  "http 1.4.0",
  "icu_decimal",
  "icu_locale_core",

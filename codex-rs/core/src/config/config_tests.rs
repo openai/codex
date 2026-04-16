@@ -658,6 +658,74 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
 }
 
 #[tokio::test]
+async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            entries: BTreeMap::from([(
+                                ":project_roots".to_string(),
+                                FilesystemPermissionToml::Scoped(BTreeMap::from([
+                                    (".".to_string(), FileSystemAccessMode::Write),
+                                    ("**/*.env".to_string(), FileSystemAccessMode::None),
+                                ])),
+                            )]),
+                        }),
+                        network: None,
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let expected_pattern = AbsolutePathBuf::resolve_path_against_base("**/*.env", cwd.path())
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        config
+            .permissions
+            .file_system_sandbox_policy
+            .entries
+            .contains(&FileSystemSandboxEntry {
+                path: FileSystemPath::Pattern {
+                    pattern: expected_pattern,
+                },
+                access: FileSystemAccessMode::None,
+            })
+    );
+    assert!(
+        !config
+            .permissions
+            .file_system_sandbox_policy
+            .entries
+            .iter()
+            .any(|entry| matches!(
+                &entry.path,
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::ProjectRoots { subpath: Some(subpath) },
+                } if subpath == std::path::Path::new("**/*.env")
+            )),
+        "glob should compile to a filesystem pattern entry, not a literal filesystem entry"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn permissions_profiles_require_default_permissions() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;

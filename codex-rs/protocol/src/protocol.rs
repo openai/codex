@@ -2840,6 +2840,8 @@ pub struct TurnContextItem {
     pub sandbox_policy: SandboxPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
@@ -4970,6 +4972,7 @@ mod tests {
 
         assert_eq!(item.trace_id, None);
         assert_eq!(item.network, None);
+        assert_eq!(item.file_system_sandbox_policy, None);
         Ok(())
     }
 
@@ -4987,6 +4990,14 @@ mod tests {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
             }),
+            file_system_sandbox_policy: Some(FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Pattern {
+                        pattern: "/tmp/private/**/*.txt".to_string(),
+                    },
+                    access: FileSystemAccessMode::None,
+                },
+            ])),
             model: "gpt-5".to_string(),
             personality: None,
             collaboration_mode: None,
@@ -5005,6 +5016,19 @@ mod tests {
             json!({
                 "allowed_domains": ["api.example.com"],
                 "denied_domains": ["blocked.example.com"],
+            })
+        );
+        assert_eq!(
+            value["file_system_sandbox_policy"],
+            json!({
+                "kind": "restricted",
+                "entries": [{
+                    "path": {
+                        "type": "pattern",
+                        "pattern": "/tmp/private/**/*.txt"
+                    },
+                    "access": "none"
+                }]
             })
         );
         Ok(())

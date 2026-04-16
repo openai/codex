@@ -9187,6 +9187,7 @@ guardian_approval = true
             approval_policy: primary_session.approval_policy,
             sandbox_policy: primary_session.sandbox_policy.clone(),
             network: None,
+            file_system_sandbox_policy: None,
             model: "gpt-agent".to_string(),
             personality: None,
             collaboration_mode: None,

@@ -5,12 +5,14 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_config::permissions_toml::FilesystemPermissionToml;
+use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_network_proxy::NetworkProxyConfig;
 #[cfg(test)]
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
+use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -42,6 +44,7 @@ pub(crate) fn resolve_permission_profile<'a>(
 pub(crate) fn compile_permission_profile(
     permissions: &PermissionsToml,
     profile_name: &str,
+    cwd: &Path,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
     let profile = resolve_permission_profile(permissions, profile_name)?;
@@ -54,8 +57,24 @@ pub(crate) fn compile_permission_profile(
                 missing_filesystem_entries_warning(profile_name),
             );
         } else {
+            if cfg!(any(target_os = "linux", target_os = "windows")) {
+                for pattern in unsupported_read_write_glob_paths(filesystem) {
+                    push_warning(
+                        startup_warnings,
+                        format!(
+                            "Filesystem glob `{pattern}` uses `read` or `write` access, which is not fully supported by this platform's sandboxing. Use an exact path or trailing `/**` subtree rule instead. `none` deny-read globs are supported."
+                        ),
+                    );
+                }
+            }
             for (path, permission) in &filesystem.entries {
-                compile_filesystem_permission(path, permission, &mut entries, startup_warnings)?;
+                compile_filesystem_permission(
+                    path,
+                    permission,
+                    cwd,
+                    &mut entries,
+                    startup_warnings,
+                )?;
             }
         }
     } else {
@@ -66,7 +85,6 @@ pub(crate) fn compile_permission_profile(
     }
 
     let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
-
     Ok((
         FileSystemSandboxPolicy::restricted(entries),
         network_sandbox_policy,
@@ -118,24 +136,69 @@ fn compile_network_sandbox_policy(network: Option<&NetworkToml>) -> NetworkSandb
 fn compile_filesystem_permission(
     path: &str,
     permission: &FilesystemPermissionToml,
+    cwd: &Path,
     entries: &mut Vec<FileSystemSandboxEntry>,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<()> {
     match permission {
-        FilesystemPermissionToml::Access(access) => entries.push(FileSystemSandboxEntry {
-            path: compile_filesystem_path(path, startup_warnings)?,
-            access: *access,
-        }),
+        FilesystemPermissionToml::Access(access) => {
+            entries.push(FileSystemSandboxEntry {
+                path: compile_filesystem_access_path(path, *access, startup_warnings)?,
+                access: *access,
+            });
+        }
         FilesystemPermissionToml::Scoped(scoped_entries) => {
             for (subpath, access) in scoped_entries {
-                entries.push(FileSystemSandboxEntry {
-                    path: compile_scoped_filesystem_path(path, subpath, startup_warnings)?,
-                    access: *access,
-                });
+                let has_glob = contains_glob_chars(subpath);
+                let can_compile_as_pattern = match parse_special_path(path) {
+                    Some(FileSystemSpecialPath::ProjectRoots { .. }) | None => true,
+                    Some(_) => false,
+                };
+                if has_glob && *access == FileSystemAccessMode::None && can_compile_as_pattern {
+                    // Scoped glob syntax is a first-class filesystem policy
+                    // pattern entry. Literal scoped paths continue through the
+                    // exact-path parser so existing path semantics stay intact.
+                    let entry = FileSystemSandboxEntry {
+                        path: FileSystemPath::Pattern {
+                            pattern: compile_scoped_filesystem_pattern(
+                                path, subpath, *access, cwd,
+                            )?,
+                        },
+                        access: *access,
+                    };
+                    if !entries.iter().any(|existing| existing == &entry) {
+                        entries.push(entry);
+                    }
+                } else {
+                    let subpath = compile_read_write_glob_path(subpath, *access)?;
+                    entries.push(FileSystemSandboxEntry {
+                        path: compile_scoped_filesystem_path(path, subpath, startup_warnings)?,
+                        access: *access,
+                    });
+                }
             }
         }
     }
     Ok(())
+}
+
+fn compile_filesystem_access_path(
+    path: &str,
+    access: FileSystemAccessMode,
+    startup_warnings: &mut Vec<String>,
+) -> io::Result<FileSystemPath> {
+    if !contains_glob_chars(path) {
+        return compile_filesystem_path(path, startup_warnings);
+    }
+
+    if access == FileSystemAccessMode::None {
+        return Ok(FileSystemPath::Pattern {
+            pattern: parse_absolute_path(path)?.to_string_lossy().into_owned(),
+        });
+    }
+
+    let path = compile_read_write_glob_path(path, access)?;
+    compile_filesystem_path(path, startup_warnings)
 }
 
 fn compile_filesystem_path(
@@ -184,6 +247,91 @@ fn compile_scoped_filesystem_path(
     let base = parse_absolute_path(path)?;
     let path = AbsolutePathBuf::resolve_path_against_base(&subpath, base.as_path());
     Ok(FileSystemPath::Path { path })
+}
+
+fn compile_scoped_filesystem_pattern(
+    path: &str,
+    subpath: &str,
+    access: FileSystemAccessMode,
+    cwd: &Path,
+) -> io::Result<String> {
+    // Pattern entries currently mean deny-read only. Supporting broader access
+    // modes here would imply glob-based read/write allow semantics that the
+    // sandbox policy does not express yet.
+    if access != FileSystemAccessMode::None {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("filesystem glob subpath `{subpath}` only supports `none` access"),
+        ));
+    }
+    let subpath = parse_relative_subpath(subpath)?;
+
+    match parse_special_path(path) {
+        Some(FileSystemSpecialPath::ProjectRoots { .. }) => {
+            Ok(AbsolutePathBuf::resolve_path_against_base(&subpath, cwd)
+                .to_string_lossy()
+                .to_string())
+        }
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("filesystem path `{path}` does not support nested entries"),
+        )),
+        None => {
+            let base = parse_absolute_path(path)?;
+            Ok(base.join(&subpath).to_string_lossy().to_string())
+        }
+    }
+}
+
+fn compile_read_write_glob_path(path: &str, access: FileSystemAccessMode) -> io::Result<&str> {
+    if !contains_glob_chars(path) {
+        return Ok(path);
+    }
+
+    let path_without_trailing_glob = remove_trailing_glob_suffix(path);
+    if !contains_glob_chars(path_without_trailing_glob) {
+        return Ok(path_without_trailing_glob);
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "filesystem glob path `{path}` only supports `none` access; use an exact path or trailing `/**` for `{access}` subtree access"
+        ),
+    ))
+}
+
+fn unsupported_read_write_glob_paths(filesystem: &FilesystemPermissionsToml) -> Vec<String> {
+    let mut patterns = Vec::new();
+    for (path, permission) in &filesystem.entries {
+        match permission {
+            FilesystemPermissionToml::Access(access) => {
+                if *access != FileSystemAccessMode::None
+                    && contains_glob_chars(remove_trailing_glob_suffix(path))
+                {
+                    patterns.push(path.clone());
+                }
+            }
+            FilesystemPermissionToml::Scoped(scoped_entries) => {
+                for (subpath, access) in scoped_entries {
+                    if *access != FileSystemAccessMode::None
+                        && contains_glob_chars(remove_trailing_glob_suffix(subpath))
+                    {
+                        patterns.push(format!("{path}/{subpath}"));
+                    }
+                }
+            }
+        }
+    }
+    patterns
+}
+
+fn contains_glob_chars(path: &str) -> bool {
+    path.chars().any(|ch| matches!(ch, '*' | '?' | '[' | ']'))
+}
+
+fn remove_trailing_glob_suffix(path: &str) -> &str {
+    path.strip_suffix("/**").unwrap_or(path)
 }
 
 // WARNING: keep this parser forward-compatible.

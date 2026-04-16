@@ -1622,6 +1622,7 @@ impl Config {
                 compile_permission_profile(
                     permissions,
                     default_permissions,
+                    resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut sandbox_policy = file_system_sandbox_policy
@@ -2006,9 +2007,10 @@ impl Config {
             if effective_sandbox_policy == original_sandbox_policy {
                 file_system_sandbox_policy
             } else {
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
                     &effective_sandbox_policy,
                     resolved_cwd.as_path(),
+                    &file_system_sandbox_policy,
                 )
             };
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
