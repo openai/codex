@@ -869,8 +869,6 @@ pub(crate) struct ChatWidget {
     thread_rename_block_message: Option<String>,
     active_side_conversation: bool,
     forked_from: Option<ThreadId>,
-    /// Pretty parent label used only for the next fork banner inserted on session configure.
-    next_fork_banner_parent_label: Option<String>,
     interrupted_turn_notice_mode: InterruptedTurnNoticeMode,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -2095,22 +2093,6 @@ impl ChatWidget {
     }
 
     fn emit_forked_thread_event(&mut self, forked_from_id: ThreadId) {
-        if let Some(label) = self.next_fork_banner_parent_label.take() {
-            let line: Line<'static> = vec![
-                "• ".dim(),
-                "Thread forked from ".into(),
-                label.cyan(),
-                " (".into(),
-                forked_from_id.to_string().cyan(),
-                ")".into(),
-            ]
-            .into();
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                PlainHistoryCell::new(vec![line]),
-            )));
-            return;
-        }
-
         let app_event_tx = self.app_event_tx.clone();
         let codex_home = self.config.codex_home.clone();
         tokio::spawn(async move {
@@ -4960,7 +4942,6 @@ impl ChatWidget {
             thread_rename_block_message: None,
             active_side_conversation: false,
             forked_from: None,
-            next_fork_banner_parent_label: None,
             interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
             queued_user_messages: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
@@ -7238,10 +7219,6 @@ impl ChatWidget {
 
     pub(crate) fn set_thread_rename_block_message(&mut self, message: impl Into<String>) {
         self.thread_rename_block_message = Some(message.into());
-    }
-
-    pub(crate) fn set_next_fork_banner_parent_label(&mut self, label: Option<String>) {
-        self.next_fork_banner_parent_label = label;
     }
 
     pub(crate) fn set_interrupted_turn_notice_mode(&mut self, mode: InterruptedTurnNoticeMode) {

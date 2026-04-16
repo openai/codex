@@ -250,7 +250,6 @@ pub(super) async fn make_chatwidget_manual(
         thread_rename_block_message: None,
         active_side_conversation: false,
         forked_from: None,
-        next_fork_banner_parent_label: None,
         interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,

@@ -3427,9 +3427,7 @@ impl App {
         self.active_thread_rx = Some(receiver);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-        let mut chat_widget = ChatWidget::new_with_app_event(init);
-        let next_fork_banner_parent_label = self.take_next_side_fork_banner_parent_label(thread_id);
-        chat_widget.set_next_fork_banner_parent_label(next_fork_banner_parent_label);
+        let chat_widget = ChatWidget::new_with_app_event(init);
         self.replace_chat_widget(chat_widget);
 
         self.reset_for_thread_switch(tui)?;
@@ -9569,13 +9567,8 @@ guardian_approval = true
 
         let parent_thread_id = ThreadId::new();
         let side_thread_id = ThreadId::new();
-        app.side_threads.insert(
-            side_thread_id,
-            SideThreadState {
-                parent_thread_id,
-                next_fork_banner_parent_label: None,
-            },
-        );
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
 
         assert_eq!(
             app.side_start_block_message(),
@@ -9589,18 +9582,43 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn side_thread_snapshot_hides_forked_parent_transcript() {
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(/*capacity*/ 4);
+        let session = ThreadSessionState {
+            forked_from_id: Some(parent_thread_id),
+            ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+        };
+        let parent_turn = test_turn(
+            "parent-turn",
+            TurnStatus::Completed,
+            vec![ThreadItem::UserMessage {
+                id: "parent-user".to_string(),
+                content: vec![AppServerUserInput::Text {
+                    text: "parent prompt should stay hidden".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            }],
+        );
+
+        App::install_side_thread_snapshot(&mut store, session, vec![parent_turn]);
+
+        let stored_session = store.session.as_ref().expect("side session");
+        assert_eq!(stored_session.thread_id, side_thread_id);
+        assert_eq!(stored_session.forked_from_id, None);
+        assert_eq!(store.turns, Vec::<Turn>::new());
+        assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[tokio::test]
     async fn side_discard_selection_keeps_current_side_thread() {
         let mut app = make_test_app().await;
         let parent_thread_id = ThreadId::new();
         let side_thread_id = ThreadId::new();
         app.active_thread_id = Some(side_thread_id);
-        app.side_threads.insert(
-            side_thread_id,
-            SideThreadState {
-                parent_thread_id,
-                next_fork_banner_parent_label: None,
-            },
-        );
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
 
         assert_eq!(
             app.side_threads_to_discard_after_switch(side_thread_id),
@@ -9625,7 +9643,6 @@ guardian_approval = true
             side_thread_id,
             SideThreadState {
                 parent_thread_id: ThreadId::new(),
-                next_fork_banner_parent_label: None,
             },
         );
         app.agent_navigation.upsert(

@@ -30,8 +30,6 @@ Do not modify files, source, git state, permissions, configuration, or any other
 pub(super) struct SideThreadState {
     /// Thread to return to when the current side conversation is dismissed.
     pub(super) parent_thread_id: ThreadId,
-    /// Pretty parent label for the next synthetic fork banner, consumed on first attach.
-    pub(super) next_fork_banner_parent_label: Option<String>,
 }
 
 impl App {
@@ -134,15 +132,6 @@ impl App {
         side_threads_to_discard
     }
 
-    pub(super) fn take_next_side_fork_banner_parent_label(
-        &mut self,
-        thread_id: ThreadId,
-    ) -> Option<String> {
-        self.side_threads
-            .get_mut(&thread_id)
-            .and_then(|state| state.next_fork_banner_parent_label.take())
-    }
-
     pub(super) async fn discard_side_thread(
         &mut self,
         app_server: &mut AppServerSession,
@@ -176,23 +165,6 @@ impl App {
         }
     }
 
-    async fn fork_banner_parent_label(&self, parent_thread_id: ThreadId) -> Option<String> {
-        if self.chat_widget.thread_id() == Some(parent_thread_id) {
-            return self
-                .chat_widget
-                .thread_name()
-                .filter(|name| !name.trim().is_empty());
-        }
-
-        let channel = self.thread_event_channels.get(&parent_thread_id)?;
-        let store = channel.store.lock().await;
-        store
-            .session
-            .as_ref()
-            .and_then(|session| session.thread_name.clone())
-            .filter(|name| !name.trim().is_empty())
-    }
-
     fn side_developer_instructions(existing_instructions: Option<&str>) -> String {
         match existing_instructions {
             Some(existing_instructions) if !existing_instructions.trim().is_empty() => {
@@ -213,6 +185,17 @@ impl App {
 
     pub(super) fn side_start_block_message(&self) -> Option<&'static str> {
         (!self.side_threads.is_empty()).then_some(SIDE_ALREADY_OPEN_MESSAGE)
+    }
+
+    pub(super) fn install_side_thread_snapshot(
+        store: &mut ThreadEventStore,
+        mut session: ThreadSessionState,
+        _forked_turns: Vec<Turn>,
+    ) {
+        // The forked history remains available to the model through core state, but side
+        // conversations should visually start at the side boundary.
+        session.forked_from_id = None;
+        store.set_session(session, Vec::new());
     }
 
     pub(super) async fn select_agent_thread_and_discard_side_chain(
@@ -262,20 +245,13 @@ impl App {
         {
             Ok(forked) => {
                 let child_thread_id = forked.session.thread_id;
-                let next_fork_banner_parent_label =
-                    self.fork_banner_parent_label(parent_thread_id).await;
                 let channel = self.ensure_thread_channel(child_thread_id);
                 {
                     let mut store = channel.store.lock().await;
-                    store.set_session(forked.session, forked.turns);
+                    Self::install_side_thread_snapshot(&mut store, forked.session, forked.turns);
                 }
-                self.side_threads.insert(
-                    child_thread_id,
-                    SideThreadState {
-                        parent_thread_id,
-                        next_fork_banner_parent_label,
-                    },
-                );
+                self.side_threads
+                    .insert(child_thread_id, SideThreadState { parent_thread_id });
                 if let Err(err) = self
                     .select_agent_thread_and_discard_side_chain(tui, app_server, child_thread_id)
                     .await
