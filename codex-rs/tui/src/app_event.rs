@@ -553,6 +553,9 @@ pub(crate) enum AppEvent {
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 
+    /// Dismiss all active bottom-pane views.
+    DismissAllBottomPaneViews,
+
     /// Submit a user message with an explicit collaboration mask.
     SubmitUserMessageWithMode {
         text: String,

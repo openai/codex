@@ -5220,6 +5220,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn dismiss_all_bottom_pane_views(&mut self) {
+        self.bottom_pane.pop_all_views();
+        self.request_redraw();
+    }
+
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }
@@ -10530,6 +10535,7 @@ impl ChatWidget {
                         },
                         user_facing_hint: None,
                     });
+                    tx3.send(AppEvent::DismissAllBottomPaneViews);
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),

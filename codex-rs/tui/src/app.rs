@@ -5650,6 +5650,9 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
+            AppEvent::DismissAllBottomPaneViews => {
+                self.chat_widget.dismiss_all_bottom_pane_views();
+            }
             AppEvent::SubmitUserMessageWithMode {
                 text,
                 collaboration_mode,

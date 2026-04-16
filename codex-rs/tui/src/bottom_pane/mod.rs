@@ -386,6 +386,12 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn pop_all_views(&mut self) {
+        while !self.view_stack.is_empty() {
+            self.pop_active_view();
+        }
+    }
+
     fn on_view_stack_depth_decreased(&mut self) {
         if self.view_stack.is_empty() {
             self.on_active_view_complete();
