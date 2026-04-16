@@ -5,12 +5,25 @@ use std::path::Path;
 use tempfile::tempdir;
 
 const ALTERNATE_MARKETPLACE_RELATIVE_PATH: &str = ".claude-plugin/marketplace.json";
+const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
 
 fn write_alternate_marketplace(repo_root: &Path, contents: &str) -> AbsolutePathBuf {
     let marketplace_path = repo_root.join(ALTERNATE_MARKETPLACE_RELATIVE_PATH);
     fs::create_dir_all(marketplace_path.parent().unwrap()).unwrap();
     fs::write(&marketplace_path, contents).unwrap();
     AbsolutePathBuf::try_from(marketplace_path).unwrap()
+}
+
+fn write_primary_plugin_manifest(plugin_root: &Path, contents: &str) {
+    let manifest_path = plugin_root.join(".codex-plugin/plugin.json");
+    fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    fs::write(manifest_path, contents).unwrap();
+}
+
+fn write_alternate_plugin_manifest(plugin_root: &Path, contents: &str) {
+    let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH);
+    fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+    fs::write(manifest_path, contents).unwrap();
 }
 
 #[test]
@@ -124,8 +137,10 @@ fn resolve_marketplace_plugin_reports_missing_plugin() {
 fn list_marketplaces_supports_alternate_manifest_layout() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("plugins/string-source-plugin");
 
     fs::create_dir_all(repo_root.join(".git")).unwrap();
+    write_alternate_plugin_manifest(&plugin_root, r#"{"name":"string-source-plugin"}"#);
     let marketplace_path = write_alternate_marketplace(
         &repo_root,
         r#"{
@@ -170,12 +185,68 @@ fn list_marketplaces_supports_alternate_manifest_layout() {
 }
 
 #[test]
+fn list_marketplaces_skips_plugins_without_discoverable_manifest() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let valid_plugin_root = repo_root.join("plugins/valid-plugin");
+
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    write_primary_plugin_manifest(&valid_plugin_root, r#"{"name":"valid-plugin"}"#);
+    let marketplace_path = write_alternate_marketplace(
+        &repo_root,
+        r#"{
+  "name": "alternate-marketplace",
+  "plugins": [
+    {
+      "name": "valid-plugin",
+      "source": "./plugins/valid-plugin"
+    },
+    {
+      "name": "missing-plugin",
+      "source": "./plugins/missing-plugin"
+    }
+  ]
+}"#,
+    );
+
+    let marketplaces = list_marketplaces_with_home(
+        &[AbsolutePathBuf::try_from(repo_root.clone()).unwrap()],
+        /*home_dir*/ None,
+    )
+    .unwrap()
+    .marketplaces;
+
+    assert_eq!(
+        marketplaces,
+        vec![Marketplace {
+            name: "alternate-marketplace".to_string(),
+            path: marketplace_path,
+            interface: None,
+            plugins: vec![MarketplacePlugin {
+                name: "valid-plugin".to_string(),
+                source: MarketplacePluginSource::Local {
+                    path: AbsolutePathBuf::try_from(valid_plugin_root).unwrap(),
+                },
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: None,
+                },
+                interface: None,
+            }],
+        }]
+    );
+}
+
+#[test]
 fn list_marketplaces_prefers_first_supported_manifest_layout() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("plugins/agents-plugin");
 
     fs::create_dir_all(repo_root.join(".git")).unwrap();
     fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_primary_plugin_manifest(&plugin_root, r#"{"name":"agents-plugin"}"#);
     fs::write(
         repo_root.join(".agents/plugins/marketplace.json"),
         r#"{
@@ -229,6 +300,16 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
     fs::create_dir_all(repo_root.join(".git")).unwrap();
     fs::create_dir_all(home_root.join(".agents/plugins")).unwrap();
     fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_primary_plugin_manifest(
+        &home_root.join("home-shared"),
+        r#"{"name":"shared-plugin"}"#,
+    );
+    write_primary_plugin_manifest(&home_root.join("home-only"), r#"{"name":"home-only"}"#);
+    write_primary_plugin_manifest(
+        &repo_root.join("repo-shared"),
+        r#"{"name":"shared-plugin"}"#,
+    );
+    write_primary_plugin_manifest(&repo_root.join("repo-only"), r#"{"name":"repo-only"}"#);
     fs::write(
         home_root.join(".agents/plugins/marketplace.json"),
         r#"{
@@ -367,6 +448,8 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
     fs::create_dir_all(repo_root.join(".git")).unwrap();
     fs::create_dir_all(home_root.join(".agents/plugins")).unwrap();
     fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_primary_plugin_manifest(&home_root.join("home-plugin"), r#"{"name":"local-plugin"}"#);
+    write_primary_plugin_manifest(&repo_root.join("repo-plugin"), r#"{"name":"local-plugin"}"#);
 
     fs::write(
         home_marketplace.clone(),
@@ -470,6 +553,7 @@ fn list_marketplaces_dedupes_multiple_roots_in_same_repo() {
     fs::create_dir_all(repo_root.join(".git")).unwrap();
     fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
     fs::create_dir_all(&nested_root).unwrap();
+    write_primary_plugin_manifest(&repo_root.join("plugin"), r#"{"name":"local-plugin"}"#);
     fs::write(
         repo_root.join(".agents/plugins/marketplace.json"),
         r#"{
@@ -527,6 +611,7 @@ fn list_marketplaces_reads_marketplace_display_name() {
 
     fs::create_dir_all(repo_root.join(".git")).unwrap();
     fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_primary_plugin_manifest(&repo_root.join("plugin"), r#"{"name":"local-plugin"}"#);
     fs::write(
         repo_root.join(".agents/plugins/marketplace.json"),
         r#"{
@@ -572,6 +657,10 @@ fn list_marketplaces_skips_invalid_plugins_but_keeps_marketplace() {
     fs::create_dir_all(valid_repo_root.join(".agents/plugins")).unwrap();
     fs::create_dir_all(invalid_repo_root.join(".git")).unwrap();
     fs::create_dir_all(invalid_repo_root.join(".agents/plugins")).unwrap();
+    write_primary_plugin_manifest(
+        &valid_repo_root.join("plugin"),
+        r#"{"name":"valid-plugin"}"#,
+    );
     fs::write(
         valid_repo_root.join(".agents/plugins/marketplace.json"),
         r#"{
@@ -631,6 +720,10 @@ fn list_marketplaces_reports_marketplace_load_errors() {
     fs::create_dir_all(valid_repo_root.join(".agents/plugins")).unwrap();
     fs::create_dir_all(invalid_repo_root.join(".git")).unwrap();
     fs::create_dir_all(invalid_repo_root.join(".agents/plugins")).unwrap();
+    write_primary_plugin_manifest(
+        &valid_repo_root.join("plugin"),
+        r#"{"name":"valid-plugin"}"#,
+    );
     fs::write(
         valid_repo_root.join(".agents/plugins/marketplace.json"),
         r#"{
@@ -680,6 +773,10 @@ fn list_marketplaces_skips_unsupported_plugin_sources_but_keeps_local_plugins() 
     let repo_root = tmp.path().join("repo");
 
     fs::create_dir_all(repo_root.join(".git")).unwrap();
+    write_primary_plugin_manifest(
+        &repo_root.join("plugins/local-plugin"),
+        r#"{"name":"local-plugin"}"#,
+    );
     write_alternate_marketplace(
         &repo_root,
         r#"{
@@ -825,6 +922,10 @@ fn list_marketplaces_ignores_legacy_top_level_policy_fields() {
 
     fs::create_dir_all(repo_root.join(".git")).unwrap();
     fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_primary_plugin_manifest(
+        &repo_root.join("plugins/demo-plugin"),
+        r#"{"name":"demo-plugin"}"#,
+    );
     fs::write(
         repo_root.join(".agents/plugins/marketplace.json"),
         r#"{

@@ -279,11 +279,20 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
         let Some(source_path) = resolve_supported_plugin_source_path(path, &name, source) else {
             continue;
         };
+        // Only list marketplace plugins that Codex can actually load.
+        let Some(manifest) = load_plugin_manifest(source_path.as_path()) else {
+            warn!(
+                path = %path.display(),
+                plugin = name,
+                source_path = %source_path.display(),
+                "skipping marketplace plugin that failed to load"
+            );
+            continue;
+        };
         let source = MarketplacePluginSource::Local {
             path: source_path.clone(),
         };
-        let mut interface =
-            load_plugin_manifest(source_path.as_path()).and_then(|manifest| manifest.interface);
+        let mut interface = manifest.interface;
         if let Some(category) = category {
             // Marketplace taxonomy wins when both sources provide a category.
             interface

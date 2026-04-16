@@ -247,6 +247,111 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
 }
 
 #[tokio::test]
+async fn plugin_list_uses_alternate_discoverable_manifest_and_skips_undiscoverable_plugins()
+-> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let valid_plugin_root = repo_root.path().join("plugins/valid-plugin");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".claude-plugin"))?;
+    std::fs::create_dir_all(valid_plugin_root.join(".claude-plugin"))?;
+    write_plugins_enabled_config(codex_home.path())?;
+
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".claude-plugin/marketplace.json"))?;
+    let valid_plugin_path = AbsolutePathBuf::try_from(valid_plugin_root.clone())?;
+
+    std::fs::write(
+        marketplace_path.as_path(),
+        r#"{
+  "name": "alternate-marketplace",
+  "plugins": [
+    {
+      "name": "valid-plugin",
+      "source": "./plugins/valid-plugin"
+    },
+    {
+      "name": "missing-plugin",
+      "source": "./plugins/missing-plugin"
+    }
+  ]
+}"#,
+    )?;
+    std::fs::write(
+        valid_plugin_root.join(".claude-plugin/plugin.json"),
+        r#"{
+  "name": "valid-plugin",
+  "interface": {
+    "displayName": "Valid Plugin"
+  }
+}"#,
+    )?;
+
+    let home = codex_home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home.as_str())),
+            ("USERPROFILE", Some(home.as_str())),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            force_remote_sync: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert_eq!(
+        response.marketplaces,
+        vec![PluginMarketplaceEntry {
+            name: "alternate-marketplace".to_string(),
+            path: marketplace_path,
+            interface: None,
+            plugins: vec![PluginSummary {
+                id: "valid-plugin@alternate-marketplace".to_string(),
+                name: "valid-plugin".to_string(),
+                source: PluginSource::Local {
+                    path: valid_plugin_path,
+                },
+                installed: false,
+                enabled: false,
+                install_policy: PluginInstallPolicy::Available,
+                auth_policy: PluginAuthPolicy::OnInstall,
+                interface: Some(codex_app_server_protocol::PluginInterface {
+                    display_name: Some("Valid Plugin".to_string()),
+                    short_description: None,
+                    long_description: None,
+                    developer_name: None,
+                    category: None,
+                    capabilities: Vec::new(),
+                    website_url: None,
+                    privacy_policy_url: None,
+                    terms_of_service_url: None,
+                    default_prompt: None,
+                    brand_color: None,
+                    composer_icon: None,
+                    logo: None,
+                    screenshots: Vec::new(),
+                }),
+            }],
+        }]
+    );
+    assert!(response.marketplace_load_errors.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_accepts_omitted_cwds() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::create_dir_all(codex_home.path().join(".agents/plugins"))?;

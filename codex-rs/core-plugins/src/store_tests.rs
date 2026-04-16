@@ -173,13 +173,9 @@ fn install_rejects_blank_manifest_version() {
         .expect_err("blank manifest version should be rejected");
     let err = err.to_string().replace('\\', "/");
 
-    assert!(
-        err.starts_with("invalid plugin version in manifest "),
-        "unexpected error: {err}"
-    );
-    assert!(
-        err.ends_with("sample-plugin/.codex-plugin/plugin.json: must not be blank"),
-        "unexpected error: {err}"
+    assert_eq!(
+        err,
+        "invalid plugin version in plugin manifest: must not be blank"
     );
 }
 

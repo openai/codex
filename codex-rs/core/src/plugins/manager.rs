@@ -1053,9 +1053,7 @@ impl PluginsManager {
             ));
         }
         let manifest = load_plugin_manifest(source_path.as_path()).ok_or_else(|| {
-            MarketplaceError::InvalidPlugin(
-                "missing or invalid .codex-plugin/plugin.json".to_string(),
-            )
+            MarketplaceError::InvalidPlugin("missing or invalid plugin manifest".to_string())
         })?;
         let description = manifest.description.clone();
         let manifest_paths = &manifest.paths;

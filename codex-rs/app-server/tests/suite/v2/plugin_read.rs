@@ -515,7 +515,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
     assert!(
         err.error
             .message
-            .contains("missing or invalid .codex-plugin/plugin.json")
+            .contains("missing or invalid plugin manifest")
     );
     Ok(())
 }
