@@ -2727,6 +2727,11 @@ pub struct ThreadStartParams {
     /// used.
     #[ts(optional = nullable)]
     pub environment_id: Option<String>,
+    /// Optional ordered environment ids to use for this thread. For now only
+    /// the first id is used. When omitted or empty, `environmentId` is used as
+    /// a fallback for compatibility.
+    #[ts(optional = nullable)]
+    pub environment_ids: Option<Vec<String>>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,

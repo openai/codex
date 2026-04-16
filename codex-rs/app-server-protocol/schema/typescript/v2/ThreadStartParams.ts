@@ -19,6 +19,11 @@ approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, conf
  * used.
  */
 environmentId?: string | null, /**
+ * Optional ordered environment ids to use for this thread. For now only
+ * the first id is used. When omitted or empty, `environmentId` is used as
+ * a fallback for compatibility.
+ */
+environmentIds?: Array<string> | null, /**
  * If true, opt into emitting raw Responses API items on the event stream.
  * This is for internal use only (e.g. Codex Cloud).
  */

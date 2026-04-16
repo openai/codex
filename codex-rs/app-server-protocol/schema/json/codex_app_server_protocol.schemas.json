@@ -14590,6 +14590,16 @@
               "null"
             ]
           },
+          "environmentIds": {
+            "description": "Optional ordered environment ids to use for this thread. For now only the first id is used. When omitted or empty, `environmentId` is used as a fallback for compatibility.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ephemeral": {
             "type": [
               "boolean",
