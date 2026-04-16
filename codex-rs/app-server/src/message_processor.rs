@@ -746,7 +746,6 @@ impl MessageProcessor {
             self.outgoing.send_error(connection_request_id, error).await;
             return;
         }
-        let connection_id = connection_request_id.connection_id;
         if self.config.features.enabled(Feature::GeneralAnalytics)
             && let ClientRequest::TurnStart { request_id, .. }
             | ClientRequest::TurnSteer { request_id, .. } = &codex_request

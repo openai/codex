@@ -262,6 +262,7 @@ impl ChatWidget {
         let view = CustomPromptView::new(
             "Add marketplace".to_string(),
             "owner/repo, git URL, or local marketplace path".to_string(),
+            String::new(),
             Some("Examples: owner/repo, git URL, ./marketplace".to_string()),
             Box::new(move |source: String| {
                 let source = source.trim().to_string();
