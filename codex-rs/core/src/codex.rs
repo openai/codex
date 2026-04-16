@@ -5567,15 +5567,15 @@ mod handlers {
             errors.push("state db unavailable; memory rows were not cleared".to_string());
         }
 
-        let memory_root = crate::memories::memory_root(&config.codex_home);
-        if let Err(err) = crate::memories::clear_memory_root_contents(&memory_root).await {
+        if let Err(err) = crate::memories::clear_memory_roots_contents(&config.codex_home).await {
             errors.push(format!(
-                "failed clearing memory directory {}: {err}",
-                memory_root.display()
+                "failed clearing memory directories under {}: {err}",
+                config.codex_home.display()
             ));
         }
 
         if errors.is_empty() {
+            let memory_root = crate::memories::memory_root(&config.codex_home);
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Warning(WarningEvent {
