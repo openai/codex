@@ -1649,6 +1649,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-app-server-protocol",
  "codex-config",
  "codex-connectors",
  "codex-core",
@@ -2936,6 +2937,7 @@ dependencies = [
  "codex-cli",
  "codex-cloud-requirements",
  "codex-config",
+ "codex-connectors",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",

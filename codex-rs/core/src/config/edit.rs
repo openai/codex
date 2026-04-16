@@ -237,6 +237,13 @@ mod document_helpers {
         if let Some(timeout) = config.tool_timeout_sec {
             entry["tool_timeout_sec"] = value(timeout.as_secs_f64());
         }
+        if let Some(approval_mode) = config.default_tools_approval_mode {
+            entry["default_tools_approval_mode"] = value(match approval_mode {
+                AppToolApproval::Auto => "auto",
+                AppToolApproval::Prompt => "prompt",
+                AppToolApproval::Approve => "approve",
+            });
+        }
         if let Some(enabled_tools) = &config.enabled_tools
             && !enabled_tools.is_empty()
         {
