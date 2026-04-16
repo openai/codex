@@ -160,8 +160,16 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
     Ok(schema)
 }
 
-/// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
-/// schema representation. This function:
+/// Sanitize one schema node so it can fit our limited schema representation.
+///
+/// `schema_node` is the current node being normalized in place.
+/// `root_schema` is the original top-level schema so local `$ref` pointers can
+/// be resolved against it.
+/// `active_refs` tracks the local `$ref` pointers on the current recursion
+/// stack so self-referential definitions can be cut off without recursing
+/// forever.
+///
+/// This function:
 /// - Ensures every typed schema object has a `"type"` when required.
 /// - Resolves local `$ref` indirections and unwraps single-variant
 ///   `oneOf`/`anyOf`/`allOf` wrappers before inferring a fallback type.
@@ -170,18 +178,18 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 /// - Fills required child fields for object/array schema types, including
 ///   nullable unions, with permissive defaults when absent.
 fn sanitize_json_schema(
-    value: &mut JsonValue,
+    schema_node: &mut JsonValue,
     root_schema: &JsonValue,
     active_refs: &mut Vec<String>,
 ) {
-    match value {
+    match schema_node {
         JsonValue::Bool(_) => {
             // JSON Schema boolean form: true/false. Coerce to an accept-all string.
-            *value = json!({ "type": "string" });
+            *schema_node = json!({ "type": "string" });
         }
         JsonValue::Array(values) => {
-            for value in values {
-                sanitize_json_schema(value, root_schema, active_refs);
+            for array_value in values {
+                sanitize_json_schema(array_value, root_schema, active_refs);
             }
         }
         JsonValue::Object(map) => {
@@ -192,8 +200,8 @@ fn sanitize_json_schema(
                 .and_then(|reference| reference.strip_prefix('#'))
             {
                 if active_refs.iter().any(|active_ref| active_ref == pointer) {
-                    *value = cyclic_reference_fallback(map, root_schema.pointer(pointer));
-                    sanitize_json_schema(value, root_schema, active_refs);
+                    *schema_node = cyclic_reference_fallback(map, root_schema.pointer(pointer));
+                    sanitize_json_schema(schema_node, root_schema, active_refs);
                     return;
                 }
 
@@ -201,15 +209,15 @@ fn sanitize_json_schema(
             }
 
             if let Some(replacement) = resolve_json_schema_reference(map, root_schema) {
-                *value = replacement;
-                sanitize_json_schema(value, root_schema, active_refs);
+                *schema_node = replacement;
+                sanitize_json_schema(schema_node, root_schema, active_refs);
                 active_refs.pop();
                 return;
             }
 
             if let Some(replacement) = unwrap_single_variant_combiner(map) {
-                *value = replacement;
-                sanitize_json_schema(value, root_schema, active_refs);
+                *schema_node = replacement;
+                sanitize_json_schema(schema_node, root_schema, active_refs);
                 return;
             }
 
