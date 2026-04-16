@@ -1,5 +1,5 @@
-use super::PluginManifestInterface;
-use super::load_plugin_manifest;
+use crate::manifest::PluginManifestInterface;
+use crate::manifest::load_plugin_manifest;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_git_utils::get_git_repo_root;
@@ -231,7 +231,7 @@ pub fn validate_marketplace_root(root: &Path) -> Result<String, MarketplaceError
     Ok(marketplace.name)
 }
 
-pub(crate) fn find_marketplace_manifest_path(root: &Path) -> Option<AbsolutePathBuf> {
+pub fn find_marketplace_manifest_path(root: &Path) -> Option<AbsolutePathBuf> {
     MARKETPLACE_MANIFEST_RELATIVE_PATHS
         .iter()
         .find_map(|relative_path| {
@@ -265,7 +265,7 @@ fn marketplace_root_from_layout(marketplace_path: &Path, relative_path: &str) ->
     Some(current.to_path_buf())
 }
 
-pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
+pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(path)?;
     let mut plugins = Vec::new();
 
@@ -311,7 +311,8 @@ pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Ma
     })
 }
 
-fn list_marketplaces_with_home(
+#[doc(hidden)]
+pub fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
