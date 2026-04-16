@@ -1455,25 +1455,7 @@ impl Config {
             .get_active_project(resolved_cwd.as_path())
             .await
             .unwrap_or(ProjectConfig { trust_level: None });
-        Self::load_config_with_layer_stack_inner(
-            cfg,
-            overrides,
-            codex_home,
-            config_layer_stack,
-            resolved_cwd,
-            active_project,
-        )
-        .await
-    }
 
-    async fn load_config_with_layer_stack_inner(
-        cfg: ConfigToml,
-        overrides: ConfigOverrides,
-        codex_home: AbsolutePathBuf,
-        config_layer_stack: ConfigLayerStack,
-        resolved_cwd: AbsolutePathBuf,
-        active_project: ProjectConfig,
-    ) -> std::io::Result<Self> {
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
