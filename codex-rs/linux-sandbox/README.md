@@ -59,9 +59,8 @@ commands that would enter the bubblewrap path.
   still win. For example, `/repo = write`, `/repo/a = none`, `/repo/a/b = write`
   keeps `/repo` writable, denies `/repo/a`, and reopens `/repo/a/b` as
   writable again.
-- When the default bubblewrap pipeline is active, unreadable glob entries are
-  expanded before launching the sandbox and matching files are masked in
-  bubblewrap:
+- When bubblewrap is active, unreadable glob entries are expanded before
+  launching the sandbox and matching files are masked in bubblewrap:
 
   ```text
   Prefer:   rg --files --hidden --no-ignore --glob <pattern> -- <search-root>
