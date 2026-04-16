@@ -34,13 +34,10 @@ pub(crate) fn load_local_chatgpt_auth(
         .or(tokens.id_token.chatgpt_account_id.clone())
         .ok_or_else(|| "local ChatGPT auth is missing chatgpt account id".to_string())?;
     if let Some(expected_workspaces) = forced_chatgpt_workspace_id
-        && !expected_workspaces
-            .iter()
-            .any(|expected_workspace| chatgpt_account_id == *expected_workspace)
+        && !expected_workspaces.contains(&chatgpt_account_id)
     {
         return Err(format!(
-            "local ChatGPT auth must use one of workspace(s) {:?}, but found {chatgpt_account_id:?}",
-            expected_workspaces
+            "local ChatGPT auth must use one of workspace(s) {expected_workspaces:?}, but found {chatgpt_account_id:?}",
         ));
     }
 
