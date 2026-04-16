@@ -4538,9 +4538,7 @@ impl Session {
         if has_active_turn {
             self.abort_all_tasks(TurnAbortReason::Interrupted).await;
         } else {
-            if self.thread_goal_may_exist()
-                && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
-            {
+            if let Err(err) = self.pause_active_thread_goal_for_interrupt().await {
                 warn!("failed to pause active thread goal after interrupt: {err}");
             }
             self.cancel_mcp_startup().await;
