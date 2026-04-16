@@ -463,17 +463,6 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     let sandbox_group_sid = resolve_sandbox_users_group_sid()?;
     let sandbox_group_psid = sid_bytes_to_psid(&sandbox_group_sid)?;
     let mut refresh_errors: Vec<String> = Vec::new();
-    let users_sid = resolve_sid("Users")?;
-    let users_psid = sid_bytes_to_psid(&users_sid)?;
-    let auth_sid = resolve_sid("Authenticated Users")?;
-    let auth_psid = sid_bytes_to_psid(&auth_sid)?;
-    let everyone_sid = resolve_sid("Everyone")?;
-    let everyone_psid = sid_bytes_to_psid(&everyone_sid)?;
-    let rx_psids = vec![users_psid, auth_psid, everyone_psid];
-    let subjects = ReadAclSubjects {
-        sandbox_group_psid,
-        rx_psids: &rx_psids,
-    };
     // Stale cleanup must happen before the helper re-grants read ACLs because
     // the cleanup primitive revokes all ACEs for the sandbox group SID.
     match unsafe {
@@ -497,15 +486,39 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
             log_line(log, &format!("cleanup stale deny-read ACLs failed: {err}"))?;
         }
     }
-    apply_read_acls(
-        &payload.read_roots,
-        &subjects,
-        log,
-        &mut refresh_errors,
-        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-        "read",
-        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
-    )?;
+    if !payload.read_roots.is_empty() {
+        let users_sid = resolve_sid("Users")?;
+        let users_psid = sid_bytes_to_psid(&users_sid)?;
+        let auth_sid = resolve_sid("Authenticated Users")?;
+        let auth_psid = sid_bytes_to_psid(&auth_sid)?;
+        let everyone_sid = resolve_sid("Everyone")?;
+        let everyone_psid = sid_bytes_to_psid(&everyone_sid)?;
+        let rx_psids = vec![users_psid, auth_psid, everyone_psid];
+        let subjects = ReadAclSubjects {
+            sandbox_group_psid,
+            rx_psids: &rx_psids,
+        };
+        apply_read_acls(
+            &payload.read_roots,
+            &subjects,
+            log,
+            &mut refresh_errors,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            "read",
+            OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+        )?;
+        unsafe {
+            if !users_psid.is_null() {
+                LocalFree(users_psid as HLOCAL);
+            }
+            if !auth_psid.is_null() {
+                LocalFree(auth_psid as HLOCAL);
+            }
+            if !everyone_psid.is_null() {
+                LocalFree(everyone_psid as HLOCAL);
+            }
+        }
+    }
     // Deny-read ACEs are applied after read grants so the DACL ends with
     // explicit deny entries that take precedence over the broad read allowlist.
     match unsafe { apply_deny_read_acls(&payload.deny_read_paths, sandbox_group_psid) } {
@@ -527,15 +540,6 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     unsafe {
         if !sandbox_group_psid.is_null() {
             LocalFree(sandbox_group_psid as HLOCAL);
-        }
-        if !users_psid.is_null() {
-            LocalFree(users_psid as HLOCAL);
-        }
-        if !auth_psid.is_null() {
-            LocalFree(auth_psid as HLOCAL);
-        }
-        if !everyone_psid.is_null() {
-            LocalFree(everyone_psid as HLOCAL);
         }
     }
     if !refresh_errors.is_empty() {

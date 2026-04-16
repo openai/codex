@@ -29,6 +29,8 @@ windows_modules!(
     workspace_acl
 );
 
+mod deny_read_resolver;
+
 #[cfg(target_os = "windows")]
 #[path = "conpty/mod.rs"]
 mod conpty;
@@ -82,6 +84,7 @@ pub use deny_read_acl::cleanup_stale_persistent_deny_read_acls;
 pub use deny_read_acl::plan_deny_read_acl_paths;
 #[cfg(target_os = "windows")]
 pub use deny_read_acl::write_persistent_deny_read_acl_record;
+pub use deny_read_resolver::resolve_windows_deny_read_paths;
 #[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]

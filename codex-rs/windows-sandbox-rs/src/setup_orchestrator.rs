@@ -15,6 +15,7 @@ use crate::allow::compute_allow_paths;
 use crate::helper_materialization::helper_bin_dir;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
+use crate::path_normalization::canonicalize_path;
 use crate::policy::SandboxPolicy;
 use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
@@ -830,13 +831,7 @@ fn build_payload_deny_write_paths(
     let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
         .unwrap_or_default()
         .into_iter()
-        .map(|path| {
-            if path.exists() {
-                dunce::canonicalize(&path).unwrap_or(path)
-            } else {
-                path
-            }
-        })
+        .map(|path| canonicalize_path(&path))
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
     deny_write_paths
@@ -849,13 +844,7 @@ fn build_payload_deny_read_paths(explicit_deny_read_paths: Option<Vec<PathBuf>>)
     explicit_deny_read_paths
         .unwrap_or_default()
         .into_iter()
-        .map(|path| {
-            if path.exists() {
-                dunce::canonicalize(&path).unwrap_or(path)
-            } else {
-                path
-            }
-        })
+        .map(|path| canonicalize_path(&path))
         .collect()
 }
 

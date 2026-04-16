@@ -89,12 +89,24 @@ pub fn write_persistent_deny_read_acl_record(
     paths: &[PathBuf],
 ) -> Result<()> {
     let record_path = deny_read_acl_record_path(codex_home, kind);
+    let planned_paths = plan_deny_read_acl_paths(paths);
+    if planned_paths.is_empty() {
+        match std::fs::remove_file(&record_path) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("remove deny-read ACL record {}", record_path.display())
+                });
+            }
+        }
+    }
     if let Some(parent) = record_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create deny-read ACL record dir {}", parent.display()))?;
     }
     let record = DenyReadAclRecord {
-        paths: plan_deny_read_acl_paths(paths),
+        paths: planned_paths,
     };
     let contents = serde_json::to_vec_pretty(&record)
         .with_context(|| format!("serialize deny-read ACL record {}", record_path.display()))?;
