@@ -9,6 +9,8 @@ use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
 use crate::facts::TurnSubmissionType;
+use crate::responses_api::CodexResponsesApiCallStatus;
+use crate::responses_api::CodexResponsesApiItemMetadata;
 use codex_app_server_protocol::CodexErrorInfo;
 use codex_login::default_client::originator;
 use codex_plugin::PluginTelemetryMetadata;
@@ -40,6 +42,7 @@ pub(crate) enum TrackEventRequest {
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
     Compaction(Box<CodexCompactionEventRequest>),
+    ResponsesApiCall(Box<CodexResponsesApiCallEventRequest>),
     TurnEvent(Box<CodexTurnEventRequest>),
     TurnSteer(CodexTurnSteerEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
@@ -327,6 +330,43 @@ pub(crate) struct CodexCompactionEventParams {
 pub(crate) struct CodexCompactionEventRequest {
     pub(crate) event_type: &'static str,
     pub(crate) event_params: CodexCompactionEventParams,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexResponsesApiCallEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) ephemeral: bool,
+    pub(crate) thread_source: Option<String>,
+    pub(crate) initialization_mode: ThreadInitializationMode,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) app_server_client: CodexAppServerClientMetadata,
+    pub(crate) runtime: CodexRuntimeMetadata,
+    pub(crate) responses_id: Option<String>,
+    pub(crate) turn_responses_call_index: u64,
+    pub(crate) model: Option<String>,
+    pub(crate) model_provider: Option<String>,
+    pub(crate) reasoning_effort: Option<String>,
+    pub(crate) status: CodexResponsesApiCallStatus,
+    pub(crate) error: Option<String>,
+    pub(crate) started_at: u64,
+    pub(crate) completed_at: Option<u64>,
+    pub(crate) duration_ms: Option<u64>,
+    pub(crate) input_item_count: usize,
+    pub(crate) output_item_count: usize,
+    pub(crate) input_tokens: Option<i64>,
+    pub(crate) cached_input_tokens: Option<i64>,
+    pub(crate) output_tokens: Option<i64>,
+    pub(crate) reasoning_output_tokens: Option<i64>,
+    pub(crate) total_tokens: Option<i64>,
+    pub(crate) items: Vec<CodexResponsesApiItemMetadata>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexResponsesApiCallEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexResponsesApiCallEventParams,
 }
 
 #[derive(Serialize)]
