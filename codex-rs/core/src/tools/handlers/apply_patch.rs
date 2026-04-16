@@ -37,7 +37,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::PatchApplyDeltaEvent;
+use codex_protocol::protocol::PatchApplyUpdatedEvent;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_sandboxing::policy_transforms::normalize_additional_permissions;
@@ -64,12 +64,12 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
         }
 
         self.push_delta(call_id, diff)
-            .map(EventMsg::PatchApplyDelta)
+            .map(EventMsg::PatchApplyUpdated)
     }
 }
 
 impl ApplyPatchArgumentDiffConsumer {
-    fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyDeltaEvent> {
+    fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyUpdatedEvent> {
         self.input.push_str(delta);
 
         let ApplyPatchArgs { hunks, .. } = parse_patch_streaming(&self.input).ok()?;
@@ -80,14 +80,9 @@ impl ApplyPatchArgumentDiffConsumer {
             return None;
         }
 
-        let active_path = hunks.last().map(Hunk::path).map(Path::to_path_buf);
         let changes = convert_apply_patch_hunks_to_protocol(&hunks);
         self.last_progress = Some(hunks);
-        Some(PatchApplyDeltaEvent {
-            call_id,
-            changes,
-            active_path,
-        })
+        Some(PatchApplyUpdatedEvent { call_id, changes })
     }
 }
 

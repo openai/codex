@@ -158,8 +158,12 @@ impl App {
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
-                self.pending_app_server_requests
-                    .resolve_notification(&notification.request_id);
+                if let Some(request) = self
+                    .pending_app_server_requests
+                    .resolve_notification(&notification.request_id)
+                {
+                    self.chat_widget.dismiss_app_server_request(&request);
+                }
             }
             ServerNotification::McpServerStatusUpdated(_) => {
                 self.refresh_mcp_startup_expected_servers_from_config();

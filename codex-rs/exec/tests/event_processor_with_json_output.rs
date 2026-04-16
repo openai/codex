@@ -465,6 +465,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 tool: "tool_x".to_string(),
                 status: ApiMcpToolCallStatus::InProgress,
                 arguments: json!({ "key": "value" }),
+                mcp_app_resource_uri: None,
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -480,11 +481,12 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 tool: "tool_x".to_string(),
                 status: ApiMcpToolCallStatus::Completed,
                 arguments: json!({ "key": "value" }),
-                result: Some(McpToolCallResult {
+                mcp_app_resource_uri: None,
+                result: Some(Box::new(McpToolCallResult {
                     content: Vec::new(),
                     structured_content: None,
                     meta: None,
-                }),
+                })),
                 error: None,
                 duration_ms: Some(1_000),
             },
@@ -548,6 +550,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
                 tool: "tool_y".to_string(),
                 status: ApiMcpToolCallStatus::Failed,
                 arguments: json!({ "param": 42 }),
+                mcp_app_resource_uri: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: "tool exploded".to_string(),
@@ -594,6 +597,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                 tool: "tool_z".to_string(),
                 status: ApiMcpToolCallStatus::InProgress,
                 arguments: serde_json::Value::Null,
+                mcp_app_resource_uri: None,
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -609,14 +613,15 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                 tool: "tool_z".to_string(),
                 status: ApiMcpToolCallStatus::Completed,
                 arguments: serde_json::Value::Null,
-                result: Some(McpToolCallResult {
+                mcp_app_resource_uri: None,
+                result: Some(Box::new(McpToolCallResult {
                     content: vec![json!({
                         "type": "text",
                         "text": "done",
                     })],
                     structured_content: Some(json!({ "status": "ok" })),
                     meta: None,
-                }),
+                })),
                 error: None,
                 duration_ms: Some(10),
             },
