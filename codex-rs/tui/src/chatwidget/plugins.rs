@@ -841,7 +841,7 @@ impl ChatWidget {
             if plugin.summary.enabled {
                 "Installed"
             } else {
-                "Installed · Disabled"
+                "Disabled"
             }
         } else {
             match plugin.summary.install_policy {
@@ -1014,7 +1014,7 @@ fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
         if plugin.enabled {
             "Installed"
         } else {
-            "Installed · Disabled"
+            "Disabled"
         }
     } else {
         match plugin.install_policy {

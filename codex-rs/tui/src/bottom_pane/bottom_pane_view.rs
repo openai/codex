@@ -50,6 +50,7 @@ pub(crate) trait BottomPaneView: Renderable {
     }
 
     /// Active tab id for tabbed list-based views.
+    #[allow(dead_code)]
     fn active_tab_id(&self) -> Option<&str> {
         None
     }
