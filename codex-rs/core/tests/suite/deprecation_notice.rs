@@ -198,7 +198,7 @@ async fn emits_deprecation_notice_for_use_legacy_landlock() -> anyhow::Result<()
     );
     assert_eq!(
         details.as_deref(),
-        Some("Remove this setting to use the default Linux sandbox pipeline."),
+        Some("Remove this setting to stop opting into the legacy Linux sandbox behavior."),
     );
 
     Ok(())

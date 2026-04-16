@@ -471,7 +471,8 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
             };
             let summary = format!("`{label}` is deprecated and will be removed soon.");
             let details =
-                "Remove this setting to use the default Linux sandbox pipeline.".to_string();
+                "Remove this setting to stop opting into the legacy Linux sandbox behavior."
+                    .to_string();
             (summary, Some(details))
         }
         _ => {

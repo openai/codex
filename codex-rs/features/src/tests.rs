@@ -184,7 +184,7 @@ fn use_legacy_landlock_config_records_deprecation_notice() {
     );
     assert_eq!(
         usages[0].details.as_deref(),
-        Some("Remove this setting to use the default Linux sandbox pipeline.")
+        Some("Remove this setting to stop opting into the legacy Linux sandbox behavior.")
     );
 }
 
