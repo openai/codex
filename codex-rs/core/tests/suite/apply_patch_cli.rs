@@ -35,6 +35,7 @@ use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
 use test_case::test_case;
@@ -748,7 +749,48 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 
     mount_apply_patch(&harness, call_id, patch, "failed", model_output).await;
 
-    harness.submit("attempt partial apply patch").await?;
+    let test = harness.test();
+    let turn_complete_timeout = if model_output == ApplyPatchModelOutput::ShellViaHeredoc {
+        // Heredoc shell execution can take noticeably longer on slower remote
+        // Linux Bazel workers before the failed apply_patch turn completes.
+        Duration::from_secs(60)
+    } else {
+        Duration::from_secs(30)
+    };
+    let model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "attempt partial apply patch".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: harness.cwd().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    let turn_id = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event_with_timeout(
+        &test.codex,
+        |event| match event {
+            EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+            _ => false,
+        },
+        turn_complete_timeout,
+    )
+    .await;
 
     assert!(
         !harness.path_exists("created.txt").await?,

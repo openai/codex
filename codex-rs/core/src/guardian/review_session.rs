@@ -874,16 +874,21 @@ mod tests {
         assert!(!guardian_config.features.enabled(Feature::CodexHooks));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn run_before_review_deadline_times_out_before_future_completes() {
-        let outcome = run_before_review_deadline(
-            tokio::time::Instant::now() + Duration::from_millis(10),
-            /*external_cancel*/ None,
-            async {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            },
-        )
-        .await;
+        let outcome = tokio::spawn(async {
+            run_before_review_deadline(
+                tokio::time::Instant::now() + Duration::from_millis(10),
+                /*external_cancel*/ None,
+                async {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                },
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(11)).await;
+        let outcome = outcome.await.expect("timeout task should join");
 
         assert!(matches!(
             outcome,
@@ -913,19 +918,27 @@ mod tests {
         ));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn run_before_review_deadline_with_cancel_cancels_token_on_timeout() {
         let cancel_token = CancellationToken::new();
 
-        let outcome = run_before_review_deadline_with_cancel(
-            tokio::time::Instant::now() + Duration::from_millis(10),
-            /*external_cancel*/ None,
-            &cancel_token,
-            async {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            },
-        )
-        .await;
+        let outcome = tokio::spawn({
+            let cancel_token = cancel_token.clone();
+            async move {
+                run_before_review_deadline_with_cancel(
+                    tokio::time::Instant::now() + Duration::from_millis(10),
+                    /*external_cancel*/ None,
+                    &cancel_token,
+                    async {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    },
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(11)).await;
+        let outcome = outcome.await.expect("timeout task should join");
 
         assert!(matches!(
             outcome,

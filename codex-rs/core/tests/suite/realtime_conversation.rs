@@ -301,9 +301,13 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 
     let mut builder = test_codex();
     let test = builder.build_with_websocket_server(&server).await?;
+    // Bazel CI can take a few seconds to bring up the subprocess and websocket
+    // client before the realtime handshake lands. Give this env-key fallback
+    // test enough headroom so it validates auth precedence instead of racing
+    // transport startup on slower runners.
     assert!(
         server
-            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(2))
+            .wait_for_handshakes(/*expected*/ 1, Duration::from_secs(10))
             .await
     );
 
