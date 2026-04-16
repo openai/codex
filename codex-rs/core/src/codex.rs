@@ -25,6 +25,7 @@ use crate::compact_remote::run_remote_prefix_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
+use crate::hook_runtime::emit_hook_completed_events;
 use crate::installation_id::resolve_installation_id;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::parse_turn_item;
@@ -2421,6 +2422,17 @@ impl Session {
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         let state = self.state.lock().await;
         state.token_info().map(|info| info.total_token_usage)
+    }
+
+    /// Returns the complete token usage snapshot currently cached for this session.
+    ///
+    /// Resume and fork reconstruction seed this state from the last persisted rollout
+    /// `TokenCount` event. Callers that need to replay restored usage to a client
+    /// should use this accessor instead of `total_token_usage`, because the app-server
+    /// notification includes both total and last-turn usage.
+    pub(crate) async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
+        let state = self.state.lock().await;
+        state.token_info()
     }
 
     pub(crate) async fn get_estimated_token_count(
@@ -6651,10 +6663,8 @@ pub(crate) async fn run_turn(
                         .await;
                     }
                     let stop_outcome = sess.hooks().run_stop(stop_request).await;
-                    for completed in stop_outcome.hook_events {
-                        sess.send_event(&turn_context, EventMsg::HookCompleted(completed))
-                            .await;
-                    }
+                    emit_hook_completed_events(&sess, &turn_context, stop_outcome.hook_events)
+                        .await;
                     if stop_outcome.should_block {
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
@@ -6746,13 +6756,16 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(CodexErr::InvalidImageRequest()) => {
-                let mut state = sess.state.lock().await;
-                error_or_panic(
-                    "Invalid image detected; sanitizing tool output to prevent poisoning",
-                );
-                if state.history.replace_last_turn_images("Invalid image") {
-                    continue;
+                {
+                    let mut state = sess.state.lock().await;
+                    error_or_panic(
+                        "Invalid image detected; sanitizing tool output to prevent poisoning",
+                    );
+                    if state.history.replace_last_turn_images("Invalid image") {
+                        continue;
+                    }
                 }
+
                 let event = EventMsg::Error(ErrorEvent {
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
