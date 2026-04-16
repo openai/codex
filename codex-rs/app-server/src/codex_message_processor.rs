@@ -7586,13 +7586,35 @@ impl CodexMessageProcessor {
 
         // Submit the interrupt. Turn interrupts respond upon TurnAborted; startup
         // interrupts respond here because startup cancellation has no turn event.
-        let _ = self
+        let submit_result = self
             .submit_core_op(&request_id, thread.as_ref(), Op::Interrupt)
             .await;
-        if is_startup_interrupt {
-            self.outgoing
-                .send_response(request_id, TurnInterruptResponse {})
+        match submit_result {
+            Ok(_) if is_startup_interrupt => {
+                self.outgoing
+                    .send_response(request_id, TurnInterruptResponse {})
+                    .await;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                if !is_startup_interrupt {
+                    let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
+                    let mut thread_state = thread_state.lock().await;
+                    thread_state
+                        .pending_interrupts
+                        .retain(|(pending_request_id, _)| pending_request_id != &request_id);
+                }
+                let interrupt_target = if is_startup_interrupt {
+                    "startup"
+                } else {
+                    "turn"
+                };
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to interrupt {interrupt_target}: {err}"),
+                )
                 .await;
+            }
         }
     }
 
