@@ -4367,7 +4367,12 @@ impl App {
 
         if let Some(status) = next_status {
             match app_server
-                .thread_goal_set(thread_id, None, Some(status), None)
+                .thread_goal_set(
+                    thread_id,
+                    /*objective*/ None,
+                    Some(status),
+                    /*token_budget*/ None,
+                )
                 .await
             {
                 Ok(response) => self.chat_widget.add_info_message(
