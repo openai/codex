@@ -345,6 +345,7 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && !is_packaged_windowsapps_dir(dir)
     {
         roots.push(dir.to_path_buf());
     }
@@ -352,6 +353,14 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
     roots
+}
+
+fn is_packaged_windowsapps_dir(path: &Path) -> bool {
+    let lower = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    lower.contains("\\program files\\windowsapps\\")
 }
 
 fn gather_legacy_full_read_roots(
@@ -865,6 +874,7 @@ mod tests {
     use super::build_payload_roots;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::is_packaged_windowsapps_dir;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -885,6 +895,26 @@ mod tests {
             .iter()
             .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
             .collect()
+    }
+
+    #[test]
+    fn packaged_windowsapps_dir_is_detected_case_insensitively() {
+        assert!(is_packaged_windowsapps_dir(&PathBuf::from(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3.4_x64__example\app\resources"
+        )));
+        assert!(is_packaged_windowsapps_dir(&PathBuf::from(
+            r"c:/PROGRAM FILES/WindowsApps/OpenAI.Codex_1.2.3.4_x64__example"
+        )));
+    }
+
+    #[test]
+    fn non_windowsapps_dir_is_not_treated_as_packaged() {
+        assert!(!is_packaged_windowsapps_dir(&PathBuf::from(
+            r"C:\Users\alice\.codex\.sandbox-bin"
+        )));
+        assert!(!is_packaged_windowsapps_dir(&PathBuf::from(
+            r"C:\Program Files\OpenAI\Codex"
+        )));
     }
 
     #[test]
