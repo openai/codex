@@ -341,6 +341,10 @@ export_lines=$(export -p | awk '
     print line
   }
 }')
+if ! printf '%s\n' "$export_lines" | grep -Eq '^(export|declare -x|typeset -x) PATH='; then
+  path_export=$(print -r -- "export PATH=${(qq)PATH}")
+  export_lines=$(printf '%s\n%s\n' "$export_lines" "$path_export" | sed '/^$/d')
+fi
 export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
 print "# exports $export_count"
 if [[ -n "$export_lines" ]]; then
