@@ -58,37 +58,16 @@ jobs:
           python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
           python3 -m unittest discover -s .github/scripts -p test_rusty_v8_bazel.py
 
-      - name: Set up Bazel CI
-        id: setup_bazel
-        uses: ./.github/actions/setup-bazel-ci
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
         with:
           target: ${{ matrix.target }}
           install-test-prereqs: "true"
-
-      # Restore the Bazel repository cache explicitly so external dependencies
-      # do not need to be re-downloaded on every CI run. Keep restore failures
-      # non-fatal so transient cache-service errors degrade to a cold build
-      # instead of failing the job.
-      - name: Restore bazel repository cache
-        id: cache_bazel_repository_restore
-        continue-on-error: true
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
-          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
-          restore-keys: |
-            bazel-cache-${{ matrix.target }}
-
       - name: Check MODULE.bazel.lock is up to date
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
-
-      - name: Set up Bazel execution logs
-        shell: bash
-        run: |
-          mkdir -p "${RUNNER_TEMP}/bazel-execution-logs"
-          echo "CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR=${RUNNER_TEMP}/bazel-execution-logs" >> "${GITHUB_ENV}"
 
       - name: bazel test //...
         env:
@@ -130,14 +109,14 @@ jobs:
           path: ${{ runner.temp }}/bazel-execution-logs
           if-no-files-found: ignore
 
-      # Save bazel repository cache explicitly; make non-fatal so cache uploading
-      # never fails the overall job. Only save when key wasn't hit.
+      # Save the Bazel repository cache after every non-cancelled run. Keep the
+      # upload non-fatal so cache service issues never fail the job itself.
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.cache_bazel_repository_restore.outputs.cache-hit != 'true'
+        if: always() && !cancelled()
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
-          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
 
   clippy:
@@ -162,31 +141,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Set up Bazel CI
-        id: setup_bazel
-        uses: ./.github/actions/setup-bazel-ci
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
         with:
           target: ${{ matrix.target }}
-
-      # Restore the Bazel repository cache explicitly so external dependencies
-      # do not need to be re-downloaded on every CI run. Keep restore failures
-      # non-fatal so transient cache-service errors degrade to a cold build
-      # instead of failing the job.
-      - name: Restore bazel repository cache
-        id: cache_bazel_repository_restore
-        continue-on-error: true
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
-        with:
-          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
-          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
-          restore-keys: |
-            bazel-cache-${{ matrix.target }}
-
-      - name: Set up Bazel execution logs
-        shell: bash
-        run: |
-          mkdir -p "${RUNNER_TEMP}/bazel-execution-logs"
-          echo "CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR=${RUNNER_TEMP}/bazel-execution-logs" >> "${GITHUB_ENV}"
 
       - name: bazel build --config=clippy lint targets
         env:
@@ -227,12 +186,94 @@ jobs:
           path: ${{ runner.temp }}/bazel-execution-logs
           if-no-files-found: ignore
 
-      # Save bazel repository cache explicitly; make non-fatal so cache uploading
-      # never fails the overall job. Only save when key wasn't hit.
+      # Save the Bazel repository cache after every non-cancelled run. Keep the
+      # upload non-fatal so cache service issues never fail the job itself.
       - name: Save bazel repository cache
         if: always() && !cancelled()
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
-          path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
+          key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+
+  verify-release-build:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-gnullvm
+    runs-on: ${{ matrix.os }}
+    name: Verify release build on ${{ matrix.os }} for ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: ${{ matrix.target }}
+
+      - name: bazel build verify-release-build targets
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          # This job exists to compile Rust code behind
+          # `cfg(not(debug_assertions))` so PR CI catches failures that would
+          # otherwise show up only in a release build. We do not need the full
+          # optimizer and debug-info work that normally comes with a release
+          # build to get that signal, so keep Bazel in `fastbuild` and disable
+          # Rust debug assertions explicitly.
+          bazel_wrapper_args=()
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            bazel_wrapper_args+=(--windows-msvc-host-platform)
+          fi
+
+          bazel_build_args=(
+            --compilation_mode=fastbuild
+            --@rules_rust//rust/settings:extra_rustc_flag=-Cdebug-assertions=no
+            --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebug-assertions=no
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
+            --build_metadata=TAG_job=verify-release-build
+            --build_metadata=TAG_rust_debug_assertions=off
+          )
+
+          bazel_target_lines="$(bash ./scripts/list-bazel-release-targets.sh)"
+          bazel_targets=()
+          while IFS= read -r target; do
+            bazel_targets+=("${target}")
+          done <<< "${bazel_target_lines}"
+
+          ./.github/scripts/run-bazel-ci.sh \
+            "${bazel_wrapper_args[@]}" \
+            -- \
+            build \
+            "${bazel_build_args[@]}" \
+            -- \
+            "${bazel_targets[@]}"
+
+      - name: Upload Bazel execution logs
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: bazel-execution-logs-verify-release-build-${{ matrix.target }}
+          path: ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: ignore
+
+      # Save the Bazel repository cache after every non-cancelled run. Keep the
+      # upload non-fatal so cache service issues never fail the job itself.
+      - name: Save bazel repository cache
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
           key: bazel-cache-${{ matrix.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}

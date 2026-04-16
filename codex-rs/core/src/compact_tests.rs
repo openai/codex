@@ -1,4 +1,6 @@
 use super::*;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use pretty_assertions::assert_eq;
 
 async fn process_compacted_history_with_test_session(
@@ -183,6 +185,30 @@ fn build_token_limited_compacted_history_appends_summary_message() {
         other => panic!("expected summary message, found {other:?}"),
     };
     assert_eq!(summary, summary_text);
+}
+
+#[test]
+fn should_use_remote_compact_task_for_azure_provider() {
+    let provider = ModelProviderInfo {
+        name: "Azure".into(),
+        base_url: Some("https://example.com/openai".into()),
+        env_key: Some("AZURE_OPENAI_API_KEY".into()),
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    assert!(should_use_remote_compact_task(&provider));
 }
 
 #[tokio::test]

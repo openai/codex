@@ -1,12 +1,13 @@
 use crate::CommandToolOptions;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
+use crate::ResponsesApiNamespace;
+use crate::ResponsesApiNamespaceTool;
 use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
 use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
 use crate::TOOL_SUGGEST_TOOL_NAME;
 use crate::ToolHandlerKind;
-use crate::ToolName;
 use crate::ToolRegistryPlan;
 use crate::ToolRegistryPlanParams;
 use crate::ToolSearchSource;
@@ -54,6 +55,7 @@ use crate::create_wait_agent_tool_v2;
 use crate::create_wait_tool;
 use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
+use crate::default_namespace_description;
 use crate::dynamic_tool_to_responses_api_tool;
 use crate::mcp_tool_to_responses_api_tool;
 use crate::request_permissions_tool_description;
@@ -61,7 +63,6 @@ use crate::request_user_input_tool_description;
 use crate::tool_registry_plan_types::agent_type_description;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
-use rmcp::model::Tool as McpTool;
 use std::collections::BTreeMap;
 
 pub fn build_tool_registry_plan(
@@ -76,9 +77,9 @@ pub fn build_tool_registry_plan(
             .tool_namespaces
             .into_iter()
             .flatten()
-            .map(|(name, detail)| {
+            .map(|(namespace, detail)| {
                 (
-                    name.clone(),
+                    namespace.clone(),
                     codex_code_mode::ToolNamespaceDescription {
                         name: detail.name.clone(),
                         description: detail.description.clone().unwrap_or_default(),
@@ -100,9 +101,8 @@ pub fn build_tool_registry_plan(
                 .iter()
                 .map(|configured_tool| &configured_tool.spec),
         );
-        enabled_tools.sort_by(|left, right| {
-            compare_code_mode_tool_names(&left.name, &right.name, &namespace_descriptions)
-        });
+        enabled_tools
+            .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
         plan.push_spec(
             create_code_mode_tool(
                 &enabled_tools,
@@ -266,10 +266,7 @@ pub fn build_tool_registry_plan(
         plan.register_handler(TOOL_SEARCH_TOOL_NAME, ToolHandlerKind::ToolSearch);
 
         for tool in deferred_mcp_tools {
-            plan.register_handler(
-                ToolName::namespaced(tool.tool_namespace, tool.tool_name),
-                ToolHandlerKind::Mcp,
-            );
+            plan.register_handler(tool.name.clone(), ToolHandlerKind::Mcp);
         }
     }
 
@@ -471,27 +468,64 @@ pub fn build_tool_registry_plan(
     }
 
     if let Some(mcp_tools) = params.mcp_tools {
-        let mut entries: Vec<(String, &McpTool)> = mcp_tools
-            .iter()
-            .map(|(name, tool)| (name.clone(), tool))
-            .collect();
-        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut entries = mcp_tools.to_vec();
+        entries.sort_by_key(|tool| tool.name.display());
+        let mut namespace_entries = BTreeMap::new();
 
-        for (name, tool) in entries {
-            match mcp_tool_to_responses_api_tool(name.clone(), tool) {
-                Ok(converted_tool) => {
-                    plan.push_spec(
-                        ToolSpec::Function(converted_tool),
-                        /*supports_parallel_tool_calls*/ false,
-                        config.code_mode_enabled,
-                    );
-                    plan.register_handler(name, ToolHandlerKind::Mcp);
+        for tool in entries {
+            let Some(namespace) = tool.name.namespace.as_ref() else {
+                let tool_name = &tool.name;
+                tracing::error!("Skipping MCP tool `{tool_name}`: MCP tools must be namespaced");
+                continue;
+            };
+            namespace_entries
+                .entry(namespace.clone())
+                .or_insert_with(Vec::new)
+                .push(tool);
+        }
+
+        for (namespace, mut entries) in namespace_entries {
+            entries.sort_by_key(|tool| tool.name.name.clone());
+            let tool_namespace = params
+                .tool_namespaces
+                .and_then(|namespaces| namespaces.get(&namespace));
+            let description = tool_namespace
+                .and_then(|namespace| namespace.description.as_deref())
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    let namespace_name = tool_namespace
+                        .map(|namespace| namespace.name.as_str())
+                        .unwrap_or(namespace.as_str());
+                    default_namespace_description(namespace_name)
+                });
+            let mut tools = Vec::new();
+            for tool in entries {
+                match mcp_tool_to_responses_api_tool(&tool.name, tool.tool) {
+                    Ok(converted_tool) => {
+                        tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
+                        plan.register_handler(tool.name, ToolHandlerKind::Mcp);
+                    }
+                    Err(error) => {
+                        let tool_name = &tool.name;
+                        tracing::error!(
+                            "Failed to convert `{tool_name}` MCP tool to OpenAI tool: {error:?}"
+                        );
+                    }
                 }
-                Err(error) => {
-                    tracing::error!(
-                        "Failed to convert {name:?} MCP tool to OpenAI tool: {error:?}"
-                    );
-                }
+            }
+
+            if !tools.is_empty() {
+                plan.push_spec(
+                    ToolSpec::Namespace(ResponsesApiNamespace {
+                        name: namespace,
+                        description,
+                        tools,
+                    }),
+                    /*supports_parallel_tool_calls*/ false,
+                    config.code_mode_enabled,
+                );
             }
         }
     }
@@ -518,39 +552,29 @@ pub fn build_tool_registry_plan(
     plan
 }
 
-fn compare_code_mode_tool_names(
-    left_name: &str,
-    right_name: &str,
+fn compare_code_mode_tools(
+    left: &codex_code_mode::ToolDefinition,
+    right: &codex_code_mode::ToolDefinition,
     namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
 ) -> std::cmp::Ordering {
-    let left_namespace = code_mode_namespace_name(left_name, namespace_descriptions);
-    let right_namespace = code_mode_namespace_name(right_name, namespace_descriptions);
+    let left_namespace = code_mode_namespace_name(left, namespace_descriptions);
+    let right_namespace = code_mode_namespace_name(right, namespace_descriptions);
 
     left_namespace
         .cmp(&right_namespace)
-        .then_with(|| {
-            code_mode_function_name(left_name, left_namespace)
-                .cmp(code_mode_function_name(right_name, right_namespace))
-        })
-        .then_with(|| left_name.cmp(right_name))
+        .then_with(|| left.tool_name.name.cmp(&right.tool_name.name))
+        .then_with(|| left.name.cmp(&right.name))
 }
 
 fn code_mode_namespace_name<'a>(
-    name: &str,
+    tool: &codex_code_mode::ToolDefinition,
     namespace_descriptions: &'a BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
 ) -> Option<&'a str> {
-    namespace_descriptions
-        .get(name)
+    tool.tool_name
+        .namespace
+        .as_ref()
+        .and_then(|namespace| namespace_descriptions.get(namespace))
         .map(|namespace_description| namespace_description.name.as_str())
-}
-
-fn code_mode_function_name<'a>(name: &'a str, namespace: Option<&str>) -> &'a str {
-    namespace
-        .and_then(|namespace| {
-            name.strip_prefix(namespace)
-                .and_then(|suffix| suffix.strip_prefix("__"))
-        })
-        .unwrap_or(name)
 }
 
 #[cfg(test)]
