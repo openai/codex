@@ -3836,6 +3836,11 @@ impl CodexMessageProcessor {
                     self.thread_view_from_loaded_thread(thread_id, loaded_thread, include_turns)
                         .await?
                 } else {
+                    if message == format!("no rollout found for thread id {thread_id}") {
+                        return Err(ThreadReadViewError::InvalidRequest(format!(
+                            "thread not loaded: {thread_id}"
+                        )));
+                    }
                     return Err(ThreadReadViewError::InvalidRequest(message));
                 }
             }
@@ -3848,7 +3853,7 @@ impl CodexMessageProcessor {
                         .await?
                 } else {
                     return Err(ThreadReadViewError::InvalidRequest(format!(
-                        "thread not found: {missing_thread_id}"
+                        "thread not loaded: {missing_thread_id}"
                     )));
                 }
             }

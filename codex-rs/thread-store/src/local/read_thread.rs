@@ -67,11 +67,28 @@ async fn read_thread_from_rollout_path(
     path: std::path::PathBuf,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
-    let item = read_thread_item_from_rollout(path.clone())
-        .await
-        .ok_or_else(|| ThreadStoreError::Internal {
-            message: format!("failed to read thread {}", path.display()),
-        })?;
+    let Some(item) = read_thread_item_from_rollout(path.clone()).await else {
+        // Some materialized sessions, such as standalone shell-command turns, have
+        // valid persisted history and SQLite metadata before they have a user-message
+        // preview that the rollout summary reader can use.
+        let Some(mut metadata) = read_sqlite_metadata(store, thread_id).await else {
+            return Err(ThreadStoreError::Internal {
+                message: format!("failed to read thread {}", path.display()),
+            });
+        };
+        metadata.rollout_path = path;
+        let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
+        if params.include_history {
+            let Some(path) = thread.rollout_path.clone() else {
+                return Err(ThreadStoreError::Internal {
+                    message: format!("failed to load thread history for thread {thread_id}"),
+                });
+            };
+            let items = load_history_items(&path).await?;
+            thread.history = Some(StoredThreadHistory { thread_id, items });
+        }
+        return Ok(thread);
+    };
     let archived = item.path.starts_with(
         store
             .config
@@ -119,15 +136,7 @@ async fn read_thread_from_sqlite_fallback(
     params: ReadThreadParams,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
-    let metadata = match codex_state::StateRuntime::init(
-        store.config.sqlite_home.clone(),
-        store.config.model_provider_id.clone(),
-    )
-    .await
-    {
-        Ok(runtime) => runtime.get_thread(thread_id).await.ok().flatten(),
-        Err(_) => None,
-    };
+    let metadata = read_sqlite_metadata(store, thread_id).await;
     let Some(metadata) =
         metadata.filter(|metadata| params.include_archived || metadata.archived_at.is_none())
     else {
@@ -147,6 +156,21 @@ async fn read_thread_from_sqlite_fallback(
         thread.history = Some(StoredThreadHistory { thread_id, items });
     }
     Ok(thread)
+}
+
+async fn read_sqlite_metadata(
+    store: &LocalThreadStore,
+    thread_id: codex_protocol::ThreadId,
+) -> Option<codex_state::ThreadMetadata> {
+    match codex_state::StateRuntime::init(
+        store.config.sqlite_home.clone(),
+        store.config.model_provider_id.clone(),
+    )
+    .await
+    {
+        Ok(runtime) => runtime.get_thread(thread_id).await.ok().flatten(),
+        Err(_) => None,
+    }
 }
 
 async fn stored_thread_from_sqlite_metadata(
@@ -268,6 +292,8 @@ fn parse_sandbox_policy(value: &str) -> codex_protocol::protocol::SandboxPolicy 
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::SessionSource;
@@ -520,6 +546,75 @@ mod tests {
             .expect("read thread");
 
         assert_eq!(thread.name, Some("Legacy title".to_string()));
+    }
+
+    #[tokio::test]
+    async fn read_thread_uses_sqlite_metadata_for_rollout_without_user_preview() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(217);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let day_dir = home.path().join("sessions/2025/01/03");
+        std::fs::create_dir_all(&day_dir).expect("sessions dir");
+        let rollout_path = day_dir.join(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"));
+        let mut file = std::fs::File::create(&rollout_path).expect("session file");
+        let meta = serde_json::json!({
+            "timestamp": "2025-01-03T12-00-00",
+            "type": "session_meta",
+            "payload": {
+                "id": uuid,
+                "timestamp": "2025-01-03T12-00-00",
+                "cwd": home.path(),
+                "originator": "test_originator",
+                "cli_version": "test_version",
+                "source": "cli",
+                "model_provider": "rollout-provider"
+            },
+        });
+        writeln!(file, "{meta}").expect("write session meta");
+
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            rollout_path.clone(),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.model_provider = Some("sqlite-provider".to_string());
+        builder.cwd = home.path().join("workspace");
+        builder.cli_version = Some("sqlite-cli".to_string());
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.title = "Command-only thread".to_string();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: true,
+            })
+            .await
+            .expect("read thread");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.rollout_path, Some(rollout_path));
+        assert_eq!(thread.preview, "");
+        assert_eq!(thread.name.as_deref(), Some("Command-only thread"));
+        assert_eq!(thread.model_provider, "sqlite-provider");
+        assert_eq!(thread.cwd, home.path().join("workspace"));
+        assert_eq!(thread.cli_version, "sqlite-cli");
+        let history = thread.history.expect("history should load");
+        assert_eq!(history.thread_id, thread_id);
+        assert_eq!(history.items.len(), 1);
     }
 
     #[tokio::test]
