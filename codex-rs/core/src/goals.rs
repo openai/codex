@@ -452,7 +452,7 @@ pub(crate) fn protocol_goal_status_from_state(
     match status {
         codex_state::ThreadGoalStatus::Active => ThreadGoalStatus::Active,
         codex_state::ThreadGoalStatus::Paused => ThreadGoalStatus::Paused,
-        codex_state::ThreadGoalStatus::BudgetStopped => ThreadGoalStatus::BudgetStopped,
+        codex_state::ThreadGoalStatus::BudgetLimited => ThreadGoalStatus::BudgetLimited,
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
 }
@@ -463,7 +463,7 @@ pub(crate) fn state_goal_status_from_protocol(
     match status {
         ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
         ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,
-        ThreadGoalStatus::BudgetStopped => codex_state::ThreadGoalStatus::BudgetStopped,
+        ThreadGoalStatus::BudgetLimited => codex_state::ThreadGoalStatus::BudgetLimited,
         ThreadGoalStatus::Complete => codex_state::ThreadGoalStatus::Complete,
     }
 }

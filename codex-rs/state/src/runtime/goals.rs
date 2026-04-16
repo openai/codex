@@ -129,52 +129,41 @@ WHERE thread_id = ?
             ));
         }
 
-        let Some(existing) = self.get_thread_goal(thread_id).await? else {
-            return Ok(ThreadGoalAccountingOutcome::Unchanged(None));
-        };
-        let should_account = match mode {
-            ThreadGoalAccountingMode::ActiveOnly => existing.status.is_active(),
-            ThreadGoalAccountingMode::ActiveOrComplete => {
-                existing.status.is_active() || existing.status == crate::ThreadGoalStatus::Complete
-            }
-        };
-        if !should_account {
-            return Ok(ThreadGoalAccountingOutcome::Unchanged(Some(existing)));
-        }
-
-        let tokens_used = existing.tokens_used.saturating_add(token_delta.max(0));
-        let budget_stopped = existing
-            .token_budget
-            .is_some_and(|budget| tokens_used >= budget);
-        let status = match existing.status {
-            crate::ThreadGoalStatus::Active if budget_stopped => {
-                crate::ThreadGoalStatus::BudgetStopped
-            }
-            crate::ThreadGoalStatus::Active => crate::ThreadGoalStatus::Active,
-            crate::ThreadGoalStatus::Complete => crate::ThreadGoalStatus::Complete,
-            crate::ThreadGoalStatus::Paused | crate::ThreadGoalStatus::BudgetStopped => {
-                existing.status
-            }
-        };
         let now_ms = datetime_to_epoch_millis(Utc::now());
-
-        sqlx::query(
+        let status_filter = match mode {
+            ThreadGoalAccountingMode::ActiveOnly => "status = 'active'",
+            ThreadGoalAccountingMode::ActiveOrComplete => "status IN ('active', 'complete')",
+        };
+        let query = format!(
             r#"
 UPDATE thread_goals
 SET
-    status = ?,
-    tokens_used = ?,
+    tokens_used = tokens_used + ?,
+    status = CASE
+        WHEN status = 'active' AND token_budget IS NOT NULL AND tokens_used + ? >= token_budget
+            THEN ?
+        ELSE status
+    END,
     updated_at_ms = ?
 WHERE thread_id = ?
-  AND status IN ('active', 'complete')
+  AND {status_filter}
             "#,
-        )
-        .bind(status.as_str())
-        .bind(tokens_used)
-        .bind(now_ms)
-        .bind(thread_id.to_string())
-        .execute(self.pool.as_ref())
-        .await?;
+        );
+
+        let result = sqlx::query(&query)
+            .bind(token_delta)
+            .bind(token_delta)
+            .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
+            .bind(now_ms)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(ThreadGoalAccountingOutcome::Unchanged(
+                self.get_thread_goal(thread_id).await?,
+            ));
+        }
 
         let updated = self
             .get_thread_goal(thread_id)
@@ -292,7 +281,7 @@ mod tests {
         let ThreadGoalAccountingOutcome::Updated(goal) = outcome else {
             panic!("budget crossing should update the goal");
         };
-        assert_eq!(crate::ThreadGoalStatus::BudgetStopped, goal.status);
+        assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
         assert_eq!(20, goal.tokens_used);
 
         let outcome = runtime
@@ -306,7 +295,7 @@ mod tests {
         let ThreadGoalAccountingOutcome::Unchanged(Some(goal)) = outcome else {
             panic!("terminal goal should not continue accounting");
         };
-        assert_eq!(crate::ThreadGoalStatus::BudgetStopped, goal.status);
+        assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
         assert_eq!(20, goal.tokens_used);
     }
 
@@ -351,5 +340,41 @@ mod tests {
         };
         assert_eq!(crate::ThreadGoalStatus::Complete, goal.status);
         assert_eq!(200, goal.tokens_used);
+    }
+
+    #[tokio::test]
+    async fn usage_accounting_adds_concurrent_token_deltas() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "count every token",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(1_000),
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        let first = runtime.account_thread_goal_usage(
+            thread_id,
+            /*token_delta*/ 40,
+            ThreadGoalAccountingMode::ActiveOnly,
+        );
+        let second = runtime.account_thread_goal_usage(
+            thread_id,
+            /*token_delta*/ 60,
+            ThreadGoalAccountingMode::ActiveOnly,
+        );
+        let (first, second) = tokio::join!(first, second);
+        first.expect("first usage accounting should succeed");
+        second.expect("second usage accounting should succeed");
+
+        let goal = runtime
+            .get_thread_goal(thread_id)
+            .await
+            .expect("goal read should succeed")
+            .expect("goal should exist");
+        assert_eq!(100, goal.tokens_used);
     }
 }
