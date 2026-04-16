@@ -2165,6 +2165,10 @@ async fn turn_lifecycle_includes_git_metadata_when_recorded() {
     let mut associated_remote_urls = BTreeMap::new();
     associated_remote_urls.insert(
         "origin".to_string(),
+        "https://user:placeholder@example.com/openai/codex.git?credential=placeholder".to_string(),
+    );
+    associated_remote_urls.insert(
+        "upstream".to_string(),
         "git@github.com:openai/codex.git".to_string(),
     );
     let mut git_workspaces = BTreeMap::new();
@@ -2209,7 +2213,8 @@ async fn turn_lifecycle_includes_git_metadata_when_recorded() {
         json!({
             "/workspace/codex": {
                 "associated_remote_urls": {
-                    "origin": "git@github.com:openai/codex.git"
+                    "origin": "https://example.com/openai/codex.git",
+                    "upstream": "github.com:openai/codex.git"
                 },
                 "latest_git_commit_hash": "abc123",
                 "has_changes": true

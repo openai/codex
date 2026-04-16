@@ -75,6 +75,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
+#[cfg(not(windows))]
+use std::process::Command;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -534,6 +536,147 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["output_tokens"], 0);
     assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
     assert_eq!(event["event_params"]["total_tokens"], 0);
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn turn_start_tracks_git_workspace_metadata_in_turn_analytics() -> Result<()> {
+    let workspace = TempDir::new()?;
+    let git_init = Command::new("git")
+        .arg("init")
+        .arg("-b")
+        .arg("main")
+        .current_dir(workspace.path())
+        .output()
+        .expect("git init");
+    assert!(git_init.status.success(), "git init failed: {git_init:?}");
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(workspace.path())
+        .status()
+        .expect("git config user.email");
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(workspace.path())
+        .status()
+        .expect("git config user.name");
+    std::fs::write(workspace.path().join("tracked.txt"), "tracked\n")?;
+    Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(workspace.path())
+        .status()
+        .expect("git add");
+    Command::new("git")
+        .args(["commit", "-m", "initial"])
+        .current_dir(workspace.path())
+        .status()
+        .expect("git commit");
+    Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://user:placeholder@example.com/openai/codex.git?credential=placeholder",
+        ])
+        .current_dir(workspace.path())
+        .status()
+        .expect("git remote add");
+    let expected_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(workspace.path())
+        .output()
+        .expect("git rev-parse HEAD");
+    assert!(expected_head.status.success(), "git rev-parse failed");
+    let expected_head = String::from_utf8(expected_head.stdout)?.trim().to_string();
+
+    let responses = vec![
+        create_shell_command_sse_response(
+            vec!["sh".to_string(), "-c".to_string(), "sleep 1".to_string()],
+            Some(workspace.path()),
+            Some(2_000),
+            "sleep-call",
+        )?,
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    let read_timeout = std::time::Duration::from_secs(30);
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let config_toml = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        format!("{config_toml}\n[features]\ngeneral_analytics = true\nshell_snapshot = false\n"),
+    )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(read_timeout, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.path().to_string_lossy().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        read_timeout,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        read_timeout,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        read_timeout,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let event = wait_for_analytics_event(&server, read_timeout, "codex_turn_event").await?;
+    assert_eq!(event["event_params"]["thread_id"], thread.id);
+    assert_eq!(event["event_params"]["turn_id"], turn.id);
+    let git_workspaces = event["event_params"]["git_workspaces"]
+        .as_object()
+        .expect("git_workspaces should be present");
+    assert_eq!(git_workspaces.len(), 1);
+    let workspace_metadata = git_workspaces
+        .values()
+        .next()
+        .expect("git workspace metadata should be present");
+    assert_eq!(
+        workspace_metadata["associated_remote_urls"]["origin"],
+        "https://example.com/openai/codex.git"
+    );
+    assert_eq!(
+        workspace_metadata["latest_git_commit_hash"],
+        expected_head.as_str()
+    );
+    assert_eq!(workspace_metadata["has_changes"], false);
 
     Ok(())
 }

@@ -59,6 +59,7 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
+use codex_git_utils::scrub_git_remote_url;
 use codex_login::default_client::originator;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -398,6 +399,15 @@ impl AnalyticsReducer {
             return;
         }
         let turn_id = input.turn_id.clone();
+        let mut git_workspaces = input.git_workspaces;
+        for metadata in git_workspaces.values_mut() {
+            let Some(remote_urls) = metadata.associated_remote_urls.as_mut() else {
+                continue;
+            };
+            for url in remote_urls.values_mut() {
+                *url = scrub_git_remote_url(url);
+            }
+        }
         let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
             connection_id: None,
             thread_id: None,
@@ -410,7 +420,7 @@ impl AnalyticsReducer {
             steer_count: 0,
         });
         turn_state.thread_id = Some(input.thread_id);
-        turn_state.git_workspaces = Some(input.git_workspaces);
+        turn_state.git_workspaces = Some(git_workspaces);
         self.maybe_emit_turn_event(&turn_id, out);
     }
 

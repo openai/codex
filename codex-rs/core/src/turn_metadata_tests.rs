@@ -47,6 +47,28 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
         .output()
         .await
         .expect("git commit");
+    Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/openai/codex.git",
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("git remote add");
+
+    let expected_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repo_path)
+        .output()
+        .await
+        .expect("git rev-parse");
+    let expected_head = String::from_utf8(expected_head.stdout)
+        .expect("git rev-parse stdout should be utf-8")
+        .trim()
+        .to_string();
 
     let header = build_turn_metadata_header(&repo_path, Some("none"))
         .await
@@ -59,6 +81,20 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
         .cloned()
         .expect("workspace");
 
+    assert_eq!(
+        workspace
+            .get("associated_remote_urls")
+            .and_then(Value::as_object)
+            .and_then(|remotes| remotes.get("origin"))
+            .and_then(Value::as_str),
+        Some("https://github.com/openai/codex.git")
+    );
+    assert_eq!(
+        workspace
+            .get("latest_git_commit_hash")
+            .and_then(Value::as_str),
+        Some(expected_head.as_str())
+    );
     assert_eq!(
         workspace.get("has_changes").and_then(Value::as_bool),
         Some(false)
