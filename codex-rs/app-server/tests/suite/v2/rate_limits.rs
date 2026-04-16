@@ -31,6 +31,7 @@ use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+const INTERNAL_ERROR_CODE: i64 = -32603;
 
 #[tokio::test]
 async fn get_account_rate_limits_requires_auth() -> Result<()> {
@@ -233,6 +234,66 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn send_add_credits_nudge_email_requires_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_add_credits_nudge_email_request(SendAddCreditsNudgeEmailParams {
+            credit_type: AddCreditsNudgeCreditType::Credits,
+        })
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.id, RequestId::Integer(request_id));
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        error.error.message,
+        "codex account authentication required to notify workspace owner"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn send_add_credits_nudge_email_requires_chatgpt_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
+
+    let request_id = mcp
+        .send_add_credits_nudge_email_request(SendAddCreditsNudgeEmailParams {
+            credit_type: AddCreditsNudgeCreditType::UsageLimit,
+        })
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.id, RequestId::Integer(request_id));
+    assert_eq!(error.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        error.error.message,
+        "chatgpt authentication required to notify workspace owner"
+    );
+
+    Ok(())
+}
+
 #[cfg_attr(target_os = "windows", ignore = "covered by Linux and macOS CI")]
 #[tokio::test]
 async fn send_add_credits_nudge_email_posts_expected_body() -> Result<()> {
@@ -320,6 +381,58 @@ async fn send_add_credits_nudge_email_maps_cooldown() -> Result<()> {
     let received: SendAddCreditsNudgeEmailResponse = to_response(response)?;
 
     assert_eq!(received.status, AddCreditsNudgeEmailStatus::CooldownActive);
+
+    Ok(())
+}
+
+#[cfg_attr(target_os = "windows", ignore = "covered by Linux and macOS CI")]
+#[tokio::test]
+async fn send_add_credits_nudge_email_surfaces_backend_failure() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let server = MockServer::start().await;
+    let server_url = server.uri();
+    write_chatgpt_base_url(codex_home.path(), &server_url)?;
+
+    Mock::given(method("POST"))
+        .and(path("/api/codex/accounts/send_add_credits_nudge_email"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_add_credits_nudge_email_request(SendAddCreditsNudgeEmailParams {
+            credit_type: AddCreditsNudgeCreditType::Credits,
+        })
+        .await?;
+
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.id, RequestId::Integer(request_id));
+    assert_eq!(error.error.code, INTERNAL_ERROR_CODE);
+    assert!(
+        error
+            .error
+            .message
+            .contains("failed to notify workspace owner"),
+        "unexpected error message: {}",
+        error.error.message
+    );
+    assert_eq!(error.error.data, None);
 
     Ok(())
 }
