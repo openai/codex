@@ -140,6 +140,11 @@ struct Inner {
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
+    // Once the transport closes, every executor operation should fail quickly
+    // with the same message. This process/filesystem-level latch prevents
+    // callers from waiting on request-specific timeouts after the environment
+    // is gone.
+    disconnected: std::sync::RwLock<Option<String>>,
     session_id: std::sync::RwLock<Option<String>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
@@ -171,6 +176,8 @@ pub enum ExecServerError {
     InitializeTimedOut { timeout: Duration },
     #[error("exec-server transport closed")]
     Closed,
+    #[error("{0}")]
+    Disconnected(String),
     #[error("failed to serialize or deserialize exec-server JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("exec-server protocol error: {0}")]
@@ -246,19 +253,11 @@ impl ExecServerClient {
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(EXEC_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(EXEC_METHOD, &params).await
     }
 
     pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(EXEC_READ_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(EXEC_READ_METHOD, &params).await
     }
 
     pub async fn write(
@@ -266,107 +265,73 @@ impl ExecServerClient {
         process_id: &ProcessId,
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(
-                EXEC_WRITE_METHOD,
-                &WriteParams {
-                    process_id: process_id.clone(),
-                    chunk: chunk.into(),
-                },
-            )
-            .await
-            .map_err(Into::into)
+        self.call(
+            EXEC_WRITE_METHOD,
+            &WriteParams {
+                process_id: process_id.clone(),
+                chunk: chunk.into(),
+            },
+        )
+        .await
     }
 
     pub async fn terminate(
         &self,
         process_id: &ProcessId,
     ) -> Result<TerminateResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(
-                EXEC_TERMINATE_METHOD,
-                &TerminateParams {
-                    process_id: process_id.clone(),
-                },
-            )
-            .await
-            .map_err(Into::into)
+        self.call(
+            EXEC_TERMINATE_METHOD,
+            &TerminateParams {
+                process_id: process_id.clone(),
+            },
+        )
+        .await
     }
 
     pub async fn fs_read_file(
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_READ_FILE_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_READ_FILE_METHOD, &params).await
     }
 
     pub async fn fs_write_file(
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_WRITE_FILE_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_WRITE_FILE_METHOD, &params).await
     }
 
     pub async fn fs_create_directory(
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_CREATE_DIRECTORY_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_CREATE_DIRECTORY_METHOD, &params).await
     }
 
     pub async fn fs_get_metadata(
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_GET_METADATA_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_GET_METADATA_METHOD, &params).await
     }
 
     pub async fn fs_read_directory(
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_READ_DIRECTORY_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_READ_DIRECTORY_METHOD, &params).await
     }
 
     pub async fn fs_remove(
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_REMOVE_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_REMOVE_METHOD, &params).await
     }
 
     pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
-        self.inner
-            .client
-            .call(FS_COPY_METHOD, &params)
-            .await
-            .map_err(Into::into)
+        self.call(FS_COPY_METHOD, &params).await
     }
 
     pub(crate) async fn register_session(
@@ -411,7 +376,7 @@ impl ExecServerClient {
                                 && let Err(err) =
                                     handle_server_notification(&inner, notification).await
                             {
-                                fail_all_sessions(
+                                mark_disconnected(
                                     &inner,
                                     format!("exec-server notification handling failed: {err}"),
                                 )
@@ -421,7 +386,7 @@ impl ExecServerClient {
                         }
                         RpcClientEvent::Disconnected { reason } => {
                             if let Some(inner) = weak.upgrade() {
-                                fail_all_sessions(&inner, disconnected_message(reason.as_deref()))
+                                mark_disconnected(&inner, disconnected_message(reason.as_deref()))
                                     .await;
                             }
                             return;
@@ -434,6 +399,7 @@ impl ExecServerClient {
                 client: rpc_client,
                 sessions: ArcSwap::from_pointee(HashMap::new()),
                 sessions_write_lock: Mutex::new(()),
+                disconnected: std::sync::RwLock::new(None),
                 session_id: std::sync::RwLock::new(None),
                 reader_task,
             }
@@ -450,6 +416,37 @@ impl ExecServerClient {
             .notify(INITIALIZED_METHOD, &serde_json::json!({}))
             .await
             .map_err(ExecServerError::Json)
+    }
+
+    async fn call<P, T>(&self, method: &str, params: &P) -> Result<T, ExecServerError>
+    where
+        P: serde::Serialize,
+        T: serde::de::DeserializeOwned,
+    {
+        // Reject new work before allocating a JSON-RPC request id. MCP tool
+        // calls, process writes, and fs operations all pass through here, so
+        // this is the shared low-level failure path after executor disconnect.
+        if let Some(error) = self.inner.disconnected_error() {
+            return Err(error);
+        }
+
+        match self.inner.client.call(method, params).await {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                let error = ExecServerError::from(error);
+                if is_transport_closed_error(&error) {
+                    // A call can race with disconnect after the preflight
+                    // check. Latch the disconnect once and fail every
+                    // registered process session before returning this call
+                    // error.
+                    let message = disconnected_message(/*reason*/ None);
+                    let message = mark_disconnected(&self.inner, message).await;
+                    Err(ExecServerError::Disconnected(message))
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 }
 
@@ -630,6 +627,26 @@ impl Session {
 }
 
 impl Inner {
+    fn disconnected_error(&self) -> Option<ExecServerError> {
+        self.disconnected
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .map(ExecServerError::Disconnected)
+    }
+
+    fn set_disconnected(&self, message: String) -> Option<String> {
+        let mut disconnected = self
+            .disconnected
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if disconnected.is_some() {
+            return None;
+        }
+        *disconnected = Some(message.clone());
+        Some(message)
+    }
+
     fn get_session(&self, process_id: &ProcessId) -> Option<Arc<SessionState>> {
         self.sessions.load().get(process_id).cloned()
     }
@@ -640,6 +657,12 @@ impl Inner {
         session: Arc<SessionState>,
     ) -> Result<(), ExecServerError> {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
+        // Do not register a process session that can never receive executor
+        // notifications. Without this check, remote MCP startup could create a
+        // dead session and wait for process output that will never arrive.
+        if let Some(error) = self.disconnected_error() {
+            return Err(error);
+        }
         let sessions = self.sessions.load();
         if sessions.contains_key(process_id) {
             return Err(ExecServerError::Protocol(format!(
@@ -680,20 +703,42 @@ fn disconnected_message(reason: Option<&str>) -> String {
 }
 
 fn is_transport_closed_error(error: &ExecServerError) -> bool {
-    matches!(error, ExecServerError::Closed)
-        || matches!(
-            error,
-            ExecServerError::Server {
-                code: -32000,
-                message,
-            } if message == "JSON-RPC transport closed"
-        )
+    matches!(
+        error,
+        ExecServerError::Closed | ExecServerError::Disconnected(_)
+    ) || matches!(
+        error,
+        ExecServerError::Server {
+            code: -32000,
+            message,
+        } if message == "JSON-RPC transport closed"
+    )
+}
+
+async fn mark_disconnected(inner: &Arc<Inner>, message: String) -> String {
+    // The first observer records the canonical disconnect reason and wakes all
+    // sessions. Later observers reuse that message so concurrent tool calls
+    // report one consistent environment failure.
+    if let Some(message) = inner.set_disconnected(message.clone()) {
+        fail_all_sessions(inner, message.clone()).await;
+        message
+    } else {
+        inner
+            .disconnected
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or(message)
+    }
 }
 
 async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
     let sessions = inner.take_all_sessions().await;
 
     for (_, session) in sessions {
+        // Sessions synthesize a closed read response and emit a pushed Failed
+        // event. That covers both polling consumers and streaming consumers
+        // such as executor-backed MCP stdio.
         session.set_failure(message.clone()).await;
     }
 }
