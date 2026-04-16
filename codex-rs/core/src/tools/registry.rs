@@ -246,9 +246,8 @@ impl ToolRegistry {
         let mcp_server_origin_ref = mcp_server_origin.as_deref();
 
         {
-            let mut active = invocation.session.active_turn.lock().await;
-            if let Some(active_turn) = active.as_mut() {
-                let mut turn_state = active_turn.turn_state.lock().await;
+            if let Some(active_turn) = invocation.session.active_turn_state().await {
+                let mut turn_state = active_turn.lock().await;
                 turn_state.tool_calls = turn_state.tool_calls.saturating_add(1);
             }
         }

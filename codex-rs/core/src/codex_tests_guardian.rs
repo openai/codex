@@ -302,9 +302,11 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
         .expect("test setup should allow enabling request permissions tool");
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     {
-        let mut active_turn = session.active_turn.lock().await;
-        let active_turn = active_turn.as_mut().expect("active turn");
-        let mut turn_state = active_turn.turn_state.lock().await;
+        let turn_state = {
+            let active_turn = session.active_turn.lock().await;
+            Arc::clone(&active_turn.as_ref().expect("active turn").turn_state)
+        };
+        let mut turn_state = turn_state.lock().await;
         turn_state.record_granted_permissions(PermissionProfile {
             network: Some(NetworkPermissions {
                 enabled: Some(true),

@@ -217,8 +217,10 @@ impl NetworkApprovalService {
     }
 
     pub(crate) async fn unregister_call(&self, registration_id: &str) {
-        let mut active_calls = self.active_calls.lock().await;
-        active_calls.shift_remove(registration_id);
+        {
+            let mut active_calls = self.active_calls.lock().await;
+            active_calls.shift_remove(registration_id);
+        }
         let mut call_outcomes = self.call_outcomes.lock().await;
         call_outcomes.remove(registration_id);
     }
@@ -336,8 +338,10 @@ impl NetworkApprovalService {
 
         let Some(turn_context) = Self::active_turn_context(session.as_ref()).await else {
             pending.set_decision(PendingApprovalDecision::Deny).await;
-            let mut pending_approvals = self.pending_host_approvals.lock().await;
-            pending_approvals.remove(&key);
+            {
+                let mut pending_approvals = self.pending_host_approvals.lock().await;
+                pending_approvals.remove(&key);
+            }
             self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
                 policy_denial_message,
             ))
@@ -346,8 +350,10 @@ impl NetworkApprovalService {
         };
         if !sandbox_policy_allows_network_approval_flow(turn_context.sandbox_policy.get()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
-            let mut pending_approvals = self.pending_host_approvals.lock().await;
-            pending_approvals.remove(&key);
+            {
+                let mut pending_approvals = self.pending_host_approvals.lock().await;
+                pending_approvals.remove(&key);
+            }
             self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
                 policy_denial_message,
             ))
@@ -356,8 +362,10 @@ impl NetworkApprovalService {
         }
         if !allows_network_approval_flow(turn_context.approval_policy.value()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
-            let mut pending_approvals = self.pending_host_approvals.lock().await;
-            pending_approvals.remove(&key);
+            {
+                let mut pending_approvals = self.pending_host_approvals.lock().await;
+                pending_approvals.remove(&key);
+            }
             self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
                 policy_denial_message,
             ))

@@ -101,9 +101,9 @@ fn request_from_client_request(request: ClientRequest) -> JSONRPCRequest {
         .expect("client request should convert to JSON-RPC")
 }
 
-fn tracing_test_guard() -> &'static tokio::sync::Mutex<()> {
-    static GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    GUARD.get_or_init(|| tokio::sync::Mutex::new(()))
+fn tracing_test_guard() -> &'static tokio::sync::Semaphore {
+    static GUARD: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    GUARD.get_or_init(|| tokio::sync::Semaphore::new(1))
 }
 
 struct TracingHarness {
@@ -505,7 +505,10 @@ where
 
 #[tokio::test(flavor = "current_thread")]
 async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
+    let _guard = tracing_test_guard()
+        .acquire()
+        .await
+        .expect("tracing test guard should stay open");
     let mut harness = TracingHarness::new().await?;
 
     let RemoteTrace {
@@ -584,7 +587,10 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
 
 #[tokio::test(flavor = "current_thread")]
 async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
-    let _guard = tracing_test_guard().lock().await;
+    let _guard = tracing_test_guard()
+        .acquire()
+        .await
+        .expect("tracing test guard should stay open");
     let mut harness = TracingHarness::new().await?;
     let thread_start_response = harness.start_thread(/*request_id*/ 2, /*trace*/ None).await;
     let thread_id = thread_start_response.thread.id.clone();
