@@ -667,6 +667,10 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .await
         .expect("child thread should be registered");
     assert_ne!(child_thread_id, parent_thread_id);
+    assert_eq!(
+        child_thread.codex.session.prompt_cache_key(),
+        parent_thread.codex.session.prompt_cache_key(),
+    );
     let history = child_thread.codex.session.clone_history().await;
     let expected_history = [
         ResponseItem::Message {
@@ -1522,7 +1526,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         manager,
         control,
     };
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
     let agent_path = AgentPath::from_string("/root/explorer".to_string())
         .expect("test agent path should be valid");
 
@@ -1612,13 +1616,22 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         .expect("resume should succeed");
     assert_eq!(resumed_thread_id, child_thread_id);
 
-    let resumed_snapshot = harness
+    let resumed_thread = harness
         .manager
         .get_thread(resumed_thread_id)
         .await
-        .expect("resumed child thread should exist")
-        .config_snapshot()
-        .await;
+        .expect("resumed child thread should exist");
+    assert_eq!(
+        resumed_thread.codex.session.prompt_cache_key(),
+        resumed_thread_id,
+        "resume should keep the resumed thread's own cache key"
+    );
+    assert_ne!(
+        resumed_thread.codex.session.prompt_cache_key(),
+        parent_thread.codex.session.prompt_cache_key(),
+        "resume must not opportunistically inherit cache state from a live parent"
+    );
+    let resumed_snapshot = resumed_thread.config_snapshot().await;
     let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: resumed_parent_thread_id,
         depth: resumed_depth,

@@ -8,6 +8,7 @@ use crate::codex::emit_subagent_session_started;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
+use crate::inherited_thread_state::InheritedThreadState;
 use crate::rollout::RolloutRecorder;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
@@ -218,6 +219,11 @@ impl AgentControl {
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match (session_source, options.fork_mode.as_ref()) {
             (Some(session_source), Some(_)) => {
+                let inherited_thread_state = InheritedThreadState::builder()
+                    .prompt_cache_key(
+                        parent_prompt_cache_key_for_source(&state, Some(&session_source)).await,
+                    )
+                    .build();
                 self.spawn_forked_thread(
                     &state,
                     config,
@@ -225,6 +231,7 @@ impl AgentControl {
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
+                    inherited_thread_state,
                 )
                 .await?
             }
@@ -238,6 +245,7 @@ impl AgentControl {
                         /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
                         inherited_exec_policy,
+                        Default::default(),
                     )
                     .await?
             }
@@ -324,6 +332,7 @@ impl AgentControl {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_forked_thread(
         &self,
         state: &Arc<ThreadManagerState>,
@@ -332,6 +341,7 @@ impl AgentControl {
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        inherited_thread_state: InheritedThreadState,
     ) -> CodexResult<crate::thread_manager::NewThread> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -397,6 +407,7 @@ impl AgentControl {
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                inherited_thread_state,
             )
             .await
     }
@@ -546,6 +557,7 @@ impl AgentControl {
                 session_source,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                Default::default(),
             )
             .await?;
         let mut agent_metadata = agent_metadata;
@@ -1158,6 +1170,24 @@ impl AgentControl {
 
         Ok(descendants)
     }
+}
+
+async fn parent_prompt_cache_key_for_source(
+    state: &Arc<ThreadManagerState>,
+    session_source: Option<&SessionSource>,
+) -> Option<ThreadId> {
+    let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id, ..
+    })) = session_source
+    else {
+        return None;
+    };
+
+    state
+        .get_thread(*parent_thread_id)
+        .await
+        .ok()
+        .map(|parent_thread| parent_thread.codex.session.prompt_cache_key())
 }
 
 fn thread_spawn_parent_thread_id(session_source: &SessionSource) -> Option<ThreadId> {
