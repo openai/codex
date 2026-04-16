@@ -2,26 +2,29 @@ load("//:defs.bzl", "MACOS_WEBRTC_RUSTC_LINK_FLAGS", "codex_rust_crate")
 
 codex_rust_crate(
     name = "tui",
-    crate_name = "codex_tui",
     compile_data = glob(
         include = ["**"],
+        allow_empty = True,
         exclude = [
             "**/* *",
             "BUILD.bazel",
             "Cargo.toml",
         ],
-        allow_empty = True,
     ) + [
         "//codex-rs/collaboration-mode-templates:templates/default.md",
         "//codex-rs/collaboration-mode-templates:templates/plan.md",
     ],
+    crate_name = "codex_tui",
+    extra_binaries = [
+        "//codex-rs/cli:codex",
+    ],
+    integration_compile_data_extra = ["src/test_backend.rs"],
+    rustc_flags_extra = MACOS_WEBRTC_RUSTC_LINK_FLAGS,
     test_data_extra = glob([
         "src/**/*.rs",
         "src/**/snapshots/**",
     ]) + ["//codex-rs/core:model_availability_nux_fixtures"],
-    integration_compile_data_extra = ["src/test_backend.rs"],
-    extra_binaries = [
-        "//codex-rs/cli:codex",
-    ],
-    rustc_flags_extra = MACOS_WEBRTC_RUSTC_LINK_FLAGS,
+    test_shard_counts = {
+        "tui-unit-tests": 8,
+    },
 )
