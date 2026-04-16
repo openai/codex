@@ -215,9 +215,27 @@
       const API_KEY_STORAGE_KEY = "codexWasmHarness.apiKey";
       const codex = new BrowserCodex(readStoredApiKey());
       const sandbox = createSandboxKernel();
+      const browserSessionOptions = {
+        cwd: "/workspace",
+        instructions: {
+          developer: [
+            "Code mode runs inside AppKernel, exposed in this demo through a browser iframe sandbox.",
+            "Browser network APIs and OPFS are available to code running in AppKernel.",
+            "Approved OPFS path layout:",
+            "- /workspace: active workspace files and entrypoints",
+            "- /workspace/cache: fetched artifacts and caches",
+            "- /workspace/repos: cloned or mirrored source trees",
+            "Approved GitHub URL prefixes:",
+            "- https://github.com/openai/",
+            "- https://raw.githubusercontent.com/openai/",
+            "Fetch, cache, and search source code yourself using the available browser APIs instead of assuming the harness preloads repository contents.",
+          ].join("\n"),
+        },
+      };
 
       apiKeyInput.value = readStoredApiKey();
       updateApiKeyStatus();
+      codex.setSessionOptions(browserSessionOptions);
       codex.set_code_executor(async (requestJson) =>
         sandbox.execute(requestJson),
       );

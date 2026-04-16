@@ -29,9 +29,31 @@ webapps can:
 - depend on `codex-wasm-harness` from a Git branch or local path;
 - construct `BrowserCodex` from JavaScript or wrap the crate with their own
   browser bindings;
+- provide session-scoped prompt inputs such as `cwd`, developer instructions,
+  and user/project-doc instructions;
 - supply their own browser/runtime implementations for host services such as
   code execution, event rendering, or persistence; and
 - keep app-specific browser glue out of the Codex repo.
+
+The intended boundary is:
+
+- the application resolves instruction sources such as `AGENTS.md`, AppKernel
+  policy, approved OPFS layout, and approved GitHub URL prefixes;
+- the harness accepts those resolved strings and injects them into the Codex
+  session as base, developer, or user instructions.
+
+Example:
+
+```js
+const codex = new BrowserCodex(apiKey);
+codex.setSessionOptions({
+  cwd: "/workspace",
+  instructions: {
+    developer: "Code runs inside AppKernel. OPFS and network APIs are available.",
+    user: "# AGENTS.md instructions for /workspace\n\n<INSTRUCTIONS>\n...\n</INSTRUCTIONS>",
+  },
+});
+```
 
 ## Current Limitations
 

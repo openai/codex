@@ -32,6 +32,22 @@ const BROWSER_CODEX_HOME: &str = "/codex-wasm";
 const BROWSER_CWD: &str = "/workspace";
 const DEFAULT_MODEL: &str = "gpt-5-codex";
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserInstructionOverrides {
+    base: Option<String>,
+    developer: Option<String>,
+    user: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BrowserSessionOptions {
+    cwd: Option<String>,
+    #[serde(default)]
+    instructions: BrowserInstructionOverrides,
+}
+
 #[derive(Default)]
 struct BrowserRuntimeState {
     executor: Mutex<Option<JsFunctionHandle>>,
@@ -213,6 +229,7 @@ pub struct BrowserCodex {
     api_key: String,
     runtime_state: Arc<BrowserRuntimeState>,
     session: Option<BrowserSession>,
+    session_options: BrowserSessionOptions,
 }
 
 #[wasm_bindgen]
@@ -224,11 +241,28 @@ impl BrowserCodex {
             api_key,
             runtime_state: Arc::new(BrowserRuntimeState::default()),
             session: None,
+            session_options: BrowserSessionOptions::default(),
         }
     }
 
     pub fn set_api_key(&mut self, api_key: String) {
         self.api_key = api_key;
+        self.session = None;
+    }
+
+    #[wasm_bindgen(js_name = setSessionOptions)]
+    pub fn set_session_options(&mut self, options: JsValue) -> Result<(), JsValue> {
+        let parsed = parse_browser_session_options(options).map_err(harness_error_to_js)?;
+        if self.session_options != parsed {
+            self.session = None;
+        }
+        self.session_options = parsed;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = clearSessionOptions)]
+    pub fn clear_session_options(&mut self) {
+        self.session_options = BrowserSessionOptions::default();
         self.session = None;
     }
 
@@ -312,7 +346,7 @@ impl BrowserCodex {
                     text: prompt,
                     text_elements: Vec::new(),
                 }],
-                cwd: PathBuf::from(BROWSER_CWD),
+                cwd: session.config.cwd.as_path().to_path_buf(),
                 approval_policy: session.config.permissions.approval_policy.get().clone(),
                 approvals_reviewer: Some(session.config.approvals_reviewer),
                 sandbox_policy: session.config.permissions.sandbox_policy.get().clone(),
@@ -354,9 +388,7 @@ impl BrowserCodex {
     }
 
     async fn create_session(&self) -> Result<BrowserSession, HarnessError> {
-        let config = build_browser_config()
-            .await
-            .map_err(|error| HarnessError::new(format!("build_browser_config: {error}")))?;
+        let config = build_browser_config(&self.session_options)?;
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key(self.api_key.trim()));
         let environment_manager = Arc::new(EnvironmentManager::new(None));
@@ -384,12 +416,11 @@ impl BrowserCodex {
     }
 }
 
-async fn build_browser_config() -> Result<Config, HarnessError> {
-    let mut config = Config::load_embedded_defaults(
-        PathBuf::from(BROWSER_CODEX_HOME),
-        PathBuf::from(BROWSER_CWD),
-    )
-    .map_err(|error| HarnessError::new(error.to_string()))?;
+fn build_browser_config(session_options: &BrowserSessionOptions) -> Result<Config, HarnessError> {
+    let cwd = session_options.cwd.as_deref().unwrap_or(BROWSER_CWD);
+    let mut config =
+        Config::load_embedded_defaults(PathBuf::from(BROWSER_CODEX_HOME), PathBuf::from(cwd))
+            .map_err(|error| HarnessError::new(error.to_string()))?;
     let _ = config.features.enable(Feature::CodeMode);
     let _ = config.features.enable(Feature::CodeModeOnly);
     config.model = Some(
@@ -398,7 +429,23 @@ async fn build_browser_config() -> Result<Config, HarnessError> {
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
     );
+    config.base_instructions = session_options.instructions.base.clone();
+    config.developer_instructions = session_options.instructions.developer.clone();
+    config.user_instructions = session_options.instructions.user.clone();
     Ok(config)
+}
+
+fn parse_browser_session_options(options: JsValue) -> Result<BrowserSessionOptions, HarnessError> {
+    if options.is_null() || options.is_undefined() {
+        return Ok(BrowserSessionOptions::default());
+    }
+
+    let json = js_sys::JSON::stringify(&options).map_err(js_exception)?;
+    let text = json
+        .as_string()
+        .ok_or_else(|| HarnessError::new("browser session options must be JSON-serializable"))?;
+    serde_json::from_str(&text)
+        .map_err(|error| HarnessError::new(format!("invalid browser session options: {error}")))
 }
 
 async fn await_possible_promise(value: JsValue) -> Result<JsValue, HarnessError> {
@@ -441,4 +488,38 @@ fn js_value_to_string_lossy(value: &JsValue) -> String {
 
 fn harness_error_to_js(error: HarnessError) -> JsValue {
     JsValue::from_str(error.message())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BrowserInstructionOverrides;
+    use super::BrowserSessionOptions;
+    use super::build_browser_config;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn build_browser_config_applies_session_options() {
+        let config = build_browser_config(&BrowserSessionOptions {
+            cwd: Some("/workspace/repo".to_string()),
+            instructions: BrowserInstructionOverrides {
+                base: Some("base".to_string()),
+                developer: Some("developer".to_string()),
+                user: Some("user".to_string()),
+            },
+        })
+        .expect("browser config");
+
+        assert_eq!(config.cwd.as_path().to_string_lossy(), "/workspace/repo");
+        assert_eq!(config.base_instructions.as_deref(), Some("base"));
+        assert_eq!(config.developer_instructions.as_deref(), Some("developer"));
+        assert_eq!(config.user_instructions.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn build_browser_config_defaults_to_workspace_cwd() {
+        let config =
+            build_browser_config(&BrowserSessionOptions::default()).expect("browser config");
+
+        assert_eq!(config.cwd.as_path().to_string_lossy(), "/workspace");
+    }
 }
