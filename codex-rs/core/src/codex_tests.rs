@@ -5404,6 +5404,25 @@ async fn interrupt_clears_queued_response_items_for_next_turn() {
 }
 
 #[tokio::test]
+async fn interrupt_without_active_turn_clears_queued_response_items_for_next_turn() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let queued_item = ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "continue the active goal".to_string(),
+        }],
+    };
+
+    sess.queue_response_items_for_next_turn(vec![queued_item])
+        .await;
+    assert!(sess.has_queued_response_items_for_next_turn().await);
+
+    sess.interrupt_task().await;
+
+    assert!(!sess.has_queued_response_items_for_next_turn().await);
+}
+
+#[tokio::test]
 async fn active_goal_continuation_is_not_queued_while_turn_is_active() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
