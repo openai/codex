@@ -30,6 +30,7 @@ use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -393,13 +394,45 @@ struct AppServerCommand {
 
 #[derive(Debug, Parser)]
 struct ExecServerCommand {
-    /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default).
+    /// Transport endpoint URL. Supported values: ws://IP:PORT (default).
     #[arg(
         long = "listen",
         value_name = "URL",
         default_value = "ws://127.0.0.1:0"
     )]
     listen: String,
+
+    /// Register this exec-server as a cloud executor instead of listening locally.
+    #[arg(long = "cloud", default_value_t = false)]
+    cloud: bool,
+
+    /// Cloud environments service base URL.
+    #[arg(long = "cloud-base-url", value_name = "URL")]
+    cloud_base_url: Option<String>,
+
+    /// Existing cloud environment id to attach to. Omit to let the service create one.
+    #[arg(long = "cloud-environment-id", value_name = "ID")]
+    cloud_environment_id: Option<String>,
+
+    /// Existing cloud executor id to reconnect.
+    #[arg(long = "cloud-executor-id", value_name = "ID")]
+    cloud_executor_id: Option<String>,
+
+    /// Registration idempotency id. Defaults to a deterministic id for this executor.
+    #[arg(long = "cloud-idempotency-id", value_name = "ID")]
+    cloud_idempotency_id: Option<String>,
+
+    /// Human-readable executor name. Defaults to the hostname.
+    #[arg(long = "cloud-name", value_name = "NAME")]
+    cloud_name: Option<String>,
+
+    /// Executor label in KEY=VALUE form. Repeatable.
+    #[arg(long = "cloud-label", value_name = "KEY=VALUE", action = clap::ArgAction::Append)]
+    cloud_label: Vec<String>,
+
+    /// Executor metadata as a JSON object.
+    #[arg(long = "cloud-metadata-json", value_name = "JSON")]
+    cloud_metadata_json: Option<String>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1046,7 +1079,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 root_remote_auth_token_env.as_deref(),
                 "exec-server",
             )?;
-            run_exec_server_command(cmd, &arg0_paths).await?;
+            run_exec_server_command(cmd, &arg0_paths, root_config_overrides).await?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
@@ -1121,6 +1154,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
 async fn run_exec_server_command(
     cmd: ExecServerCommand,
     arg0_paths: &Arg0DispatchPaths,
+    root_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
     let codex_self_exe = arg0_paths
         .codex_self_exe
@@ -1130,9 +1164,61 @@ async fn run_exec_server_command(
         codex_self_exe,
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
+    if cmd.cloud {
+        let cloud_base_url = cmd
+            .cloud_base_url
+            .or_else(|| std::env::var(codex_exec_server::CODEX_CLOUD_ENVIRONMENTS_BASE_URL_ENV_VAR).ok())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--cloud-base-url or CODEX_CLOUD_ENVIRONMENTS_BASE_URL is required in cloud mode"
+                )
+            })?;
+        let cli_overrides = root_config_overrides
+            .parse_overrides()
+            .map_err(anyhow::Error::msg)?;
+        let config = Config::load_with_cli_overrides(cli_overrides).await?;
+        let auth_manager = codex_login::AuthManager::shared_from_config(&config, false);
+        let mut cloud_config = codex_exec_server::CloudExecutorConfig::new(cloud_base_url);
+        cloud_config.cloud_environment_id = cmd.cloud_environment_id;
+        cloud_config.cloud_executor_id = cmd.cloud_executor_id;
+        cloud_config.cloud_idempotency_id = cmd.cloud_idempotency_id;
+        if let Some(name) = cmd.cloud_name {
+            cloud_config.cloud_name = name;
+        }
+        cloud_config.cloud_labels = parse_cloud_labels(cmd.cloud_label)?;
+        cloud_config.cloud_metadata = parse_cloud_metadata_json(cmd.cloud_metadata_json)?;
+        codex_exec_server::run_cloud_executor(cloud_config, auth_manager, runtime_paths).await?;
+        return Ok(());
+    }
     codex_exec_server::run_main(&cmd.listen, runtime_paths)
         .await
         .map_err(anyhow::Error::from_boxed)
+}
+
+fn parse_cloud_labels(labels: Vec<String>) -> anyhow::Result<BTreeMap<String, String>> {
+    let mut parsed = BTreeMap::new();
+    for label in labels {
+        let (key, value) = label
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("cloud labels must be in KEY=VALUE form"))?;
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("cloud label keys cannot be empty");
+        }
+        parsed.insert(key.to_string(), value.to_string());
+    }
+    Ok(parsed)
+}
+
+fn parse_cloud_metadata_json(metadata_json: Option<String>) -> anyhow::Result<serde_json::Value> {
+    let Some(metadata_json) = metadata_json else {
+        return Ok(serde_json::Value::Object(Default::default()));
+    };
+    let metadata = serde_json::from_str::<serde_json::Value>(&metadata_json)?;
+    if !metadata.is_object() {
+        anyhow::bail!("--cloud-metadata-json must be a JSON object");
+    }
+    Ok(metadata)
 }
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {

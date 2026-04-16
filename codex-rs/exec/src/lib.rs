@@ -67,6 +67,7 @@ use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthConfig;
+use codex_login::AuthManager;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 use codex_login::enforce_login_restrictions;
@@ -474,6 +475,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         arg0_paths.codex_self_exe.clone(),
         arg0_paths.codex_linux_sandbox_exe.clone(),
     )?;
+    let environment_auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
     let in_process_start_args = InProcessClientStartArgs {
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),
@@ -481,9 +484,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         loader_overrides: run_loader_overrides,
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
-        environment_manager: std::sync::Arc::new(EnvironmentManager::from_env_with_runtime_paths(
-            Some(local_runtime_paths),
-        )),
+        environment_manager: std::sync::Arc::new(
+            EnvironmentManager::from_env_with_runtime_paths_and_auth_manager(
+                Some(local_runtime_paths),
+                Some(environment_auth_manager),
+            ),
+        ),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,

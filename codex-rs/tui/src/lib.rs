@@ -723,15 +723,19 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
-        ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?,
-    )));
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
+    let preliminary_environment_manager = Arc::new(
+        EnvironmentManager::from_env_with_runtime_paths(Some(local_runtime_paths.clone())),
+    );
     let cwd = cli.cwd.clone();
-    let config_cwd =
-        config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
+    let config_cwd = config_cwd_for_app_server_target(
+        cwd.as_deref(),
+        &app_server_target,
+        &preliminary_environment_manager,
+    )?;
 
     #[allow(clippy::print_stderr)]
     let config_toml = match load_config_as_toml_with_cli_overrides(
@@ -981,6 +985,13 @@ pub async fn run_main(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+
+    let environment_manager = Arc::new(
+        EnvironmentManager::from_env_with_runtime_paths_and_chatgpt_login_config(
+            Some(local_runtime_paths),
+            &config,
+        ),
+    );
 
     run_ratatui_app(
         cli,
@@ -1755,6 +1766,34 @@ mod tests {
     use serial_test::serial;
     use tempfile::TempDir;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
             .codex_home(temp_dir.path().to_path_buf())
@@ -1982,6 +2021,34 @@ mod tests {
         };
         let target = AppServerTarget::Embedded;
         let environment_manager = EnvironmentManager::new(Some("ws://127.0.0.1:8765".to_string()));
+
+        let config_cwd =
+            config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
+
+        assert_eq!(config_cwd, None);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn config_cwd_for_app_server_target_omits_cwd_for_cloud_exec_server() -> std::io::Result<()> {
+        let _exec_server_url =
+            EnvVarGuard::remove(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR);
+        let _cloud_environment_id = EnvVarGuard::set(
+            codex_exec_server::CODEX_CLOUD_ENVIRONMENT_ID_ENV_VAR,
+            "env-1",
+        );
+        let _cloud_base_url = EnvVarGuard::set(
+            codex_exec_server::CODEX_CLOUD_ENVIRONMENTS_BASE_URL_ENV_VAR,
+            "https://cloud.example.test",
+        );
+        let remote_only_cwd = if cfg!(windows) {
+            Path::new(r"C:\definitely\not\local\to\this\test")
+        } else {
+            Path::new("/definitely/not/local/to/this/test")
+        };
+        let target = AppServerTarget::Embedded;
+        let environment_manager = EnvironmentManager::from_env_with_runtime_paths(None);
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;

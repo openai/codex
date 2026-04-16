@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use codex_app_server_protocol::JSONRPCNotification;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -158,12 +159,25 @@ pub enum ExecServerError {
     Protocol(String),
     #[error("exec-server rejected request ({code}): {message}")]
     Server { code: i64, message: String },
+    #[error("cloud environments request failed ({status}{code_suffix}): {message}", code_suffix = .code.as_ref().map(|code| format!(", {code}")).unwrap_or_default())]
+    CloudEnvironmentHttp {
+        status: reqwest::StatusCode,
+        code: Option<String>,
+        message: String,
+    },
+    #[error("cloud environment configuration error: {0}")]
+    CloudEnvironmentConfig(String),
+    #[error("cloud environment authentication error: {0}")]
+    CloudEnvironmentAuth(String),
+    #[error("cloud environments request failed: {0}")]
+    CloudEnvironmentRequest(#[from] reqwest::Error),
 }
 
 impl ExecServerClient {
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
+        ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
         let connect_timeout = args.connect_timeout;
         let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
