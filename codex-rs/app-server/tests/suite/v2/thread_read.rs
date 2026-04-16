@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::rollout_path;
 use app_test_support::test_absolute_path;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
@@ -153,6 +154,90 @@ async fn thread_read_can_include_turns() -> Result<()> {
         other => panic!("expected user message item, got {other:?}"),
     }
     assert_eq!(thread.status, ThreadStatus::NotLoaded);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_read_include_turns_supports_loaded_explicit_path_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let external_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let preview = "External saved user message";
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 8 },
+        Some("<external>".into()),
+    )];
+    let conversation_id = create_fake_rollout_with_text_elements(
+        external_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        preview,
+        text_elements
+            .iter()
+            .map(|elem| serde_json::to_value(elem).expect("serialize text element"))
+            .collect(),
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let external_rollout_path = rollout_path(external_home.path(), filename_ts, &conversation_id);
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            path: Some(external_rollout_path),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed, ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed.id, conversation_id);
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: conversation_id,
+            include_turns: true,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    assert_eq!(
+        thread.turns.len(),
+        1,
+        "expected explicit-path rollout to provide one turn"
+    );
+    let turn = &thread.turns[0];
+    assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(turn.items.len(), 1, "expected user message item");
+    match &turn.items[0] {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                &vec![UserInput::Text {
+                    text: preview.to_string(),
+                    text_elements: text_elements.into_iter().map(Into::into).collect(),
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
 
     Ok(())
 }

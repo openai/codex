@@ -434,6 +434,11 @@ enum ThreadShutdownResult {
     TimedOut,
 }
 
+enum ThreadReadViewError {
+    InvalidRequest(String),
+    Internal(String),
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -3782,96 +3787,76 @@ impl CodexMessageProcessor {
             }
         };
 
-        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
-        let stored_thread = match self
+        let thread = match self
+            .read_thread_view(thread_uuid, include_turns, /*include_archived*/ false)
+            .await
+        {
+            Ok(thread) => thread,
+            Err(ThreadReadViewError::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+            Err(ThreadReadViewError::Internal(message)) => {
+                self.send_internal_error(request_id, message).await;
+                return;
+            }
+        };
+        let response = ThreadReadResponse { thread };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    /// Builds an API thread view by composing persisted store data with loaded live state.
+    async fn read_thread_view(
+        &self,
+        thread_id: ThreadId,
+        include_turns: bool,
+        include_archived: bool,
+    ) -> Result<Thread, ThreadReadViewError> {
+        let loaded_thread = self.thread_manager.get_thread(thread_id).await.ok();
+
+        // Thread API views prefer persisted store data because that is the stable
+        // cross-process/cross-host source of truth. A live thread is only used as a
+        // fallback when the store cannot resolve the id but this app-server already has
+        // the thread loaded in memory.
+        let mut thread = match self
             .thread_store
             .read_thread(StoreReadThreadParams {
-                thread_id: thread_uuid,
-                include_archived: false,
+                thread_id,
+                include_archived,
                 include_history: include_turns,
             })
             .await
         {
-            Ok(thread) => Some(thread),
-            Err(ThreadStoreError::InvalidRequest { message }) if loaded_thread.is_some() => {
-                debug!("falling back to loaded thread for {thread_uuid}: {message}");
-                None
+            Ok(stored_thread) => {
+                self.thread_view_from_stored_thread(stored_thread, include_turns)?
             }
-            Err(ThreadStoreError::ThreadNotFound { .. }) if loaded_thread.is_some() => {
-                debug!("falling back to loaded thread for {thread_uuid}: thread not found");
-                None
+            Err(ThreadStoreError::InvalidRequest { message }) => {
+                if let Some(loaded_thread) = loaded_thread.as_ref() {
+                    debug!("falling back to loaded thread for {thread_id}: {message}");
+                    self.thread_view_from_loaded_thread(thread_id, loaded_thread, include_turns)
+                        .await?
+                } else {
+                    return Err(ThreadReadViewError::InvalidRequest(message));
+                }
+            }
+            Err(ThreadStoreError::ThreadNotFound {
+                thread_id: missing_thread_id,
+            }) => {
+                if let Some(loaded_thread) = loaded_thread.as_ref() {
+                    debug!("falling back to loaded thread for {thread_id}: thread not found");
+                    self.thread_view_from_loaded_thread(thread_id, loaded_thread, include_turns)
+                        .await?
+                } else {
+                    return Err(ThreadReadViewError::InvalidRequest(format!(
+                        "thread not found: {missing_thread_id}"
+                    )));
+                }
             }
             Err(err) => {
-                self.outgoing
-                    .send_error(request_id, thread_store_read_error(err))
-                    .await;
-                return;
+                return Err(ThreadReadViewError::Internal(format!(
+                    "failed to read thread: {err}"
+                )));
             }
-        };
-
-        let mut thread = if let Some(stored_thread) = stored_thread {
-            let fallback_provider = self.config.model_provider_id.as_str();
-            let Some((mut thread, history)) =
-                thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd)
-            else {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to read thread {thread_uuid}"),
-                )
-                .await;
-                return;
-            };
-            if include_turns {
-                let Some(history) = history else {
-                    self.send_internal_error(
-                        request_id,
-                        format!("failed to load rollout history for thread {thread_uuid}"),
-                    )
-                    .await;
-                    return;
-                };
-                thread.turns = build_turns_from_rollout_items(&history.items);
-            }
-            thread
-        } else {
-            // Only loaded live threads reach this branch. Stored threads should be read through the
-            // thread store above, while live threads may not have materialized a rollout yet.
-            let Some(thread) = loaded_thread.as_ref() else {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!("thread not loaded: {thread_uuid}"),
-                )
-                .await;
-                return;
-            };
-            let config_snapshot = thread.config_snapshot().await;
-            let loaded_rollout_path = thread.rollout_path();
-            if include_turns {
-                let message = if config_snapshot.ephemeral && loaded_rollout_path.is_none() {
-                    "ephemeral threads do not support includeTurns".to_string()
-                } else {
-                    format!(
-                        "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
-                    )
-                };
-                self.send_invalid_request_error(request_id, message).await;
-                return;
-            }
-            let mut thread =
-                build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path);
-            // Stored-thread metadata is applied inside LocalThreadStore. This is only for loaded
-            // live threads that are not yet readable from the store, such as a newly started thread
-            // with a precomputed rollout path but no materialized rollout file.
-            if let Some(summary) =
-                read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
-            {
-                merge_mutable_thread_metadata(
-                    &mut thread,
-                    summary_to_thread(summary, &self.config.cwd),
-                );
-            }
-            self.attach_thread_name(thread_uuid, &mut thread).await;
-            thread
         };
 
         let has_live_in_progress_turn = if let Some(loaded_thread) = loaded_thread.as_ref() {
@@ -3879,19 +3864,83 @@ impl CodexMessageProcessor {
         } else {
             false
         };
-
         let thread_status = self
             .thread_watch_manager
             .loaded_status_for_thread(&thread.id)
             .await;
-
         set_thread_status_and_interrupt_stale_turns(
             &mut thread,
             thread_status,
             has_live_in_progress_turn,
         );
-        let response = ThreadReadResponse { thread };
-        self.outgoing.send_response(request_id, response).await;
+        Ok(thread)
+    }
+
+    fn thread_view_from_stored_thread(
+        &self,
+        stored_thread: StoredThread,
+        include_turns: bool,
+    ) -> Result<Thread, ThreadReadViewError> {
+        let thread_id = stored_thread.thread_id;
+        let fallback_provider = self.config.model_provider_id.as_str();
+        let (mut thread, history) =
+            thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
+        if include_turns {
+            let Some(history) = history else {
+                return Err(ThreadReadViewError::Internal(format!(
+                    "failed to load rollout history for thread {thread_id}"
+                )));
+            };
+            thread.turns = build_turns_from_rollout_items(&history.items);
+        }
+        Ok(thread)
+    }
+
+    async fn thread_view_from_loaded_thread(
+        &self,
+        thread_id: ThreadId,
+        loaded_thread: &Arc<CodexThread>,
+        include_turns: bool,
+    ) -> Result<Thread, ThreadReadViewError> {
+        let config_snapshot = loaded_thread.config_snapshot().await;
+        let loaded_rollout_path = loaded_thread.rollout_path();
+        let mut thread =
+            build_thread_from_snapshot(thread_id, &config_snapshot, loaded_rollout_path.clone());
+
+        // Temporary live-thread metadata shim: stored-thread metadata is owned by
+        // ThreadStore, but loaded threads that are not yet readable from the store may
+        // still have local metadata. Keep this compatibility path centralized here so
+        // future remote threadstore implementations have one app-server boundary to replace.
+        if let Some(summary) =
+            read_summary_from_state_db_by_thread_id(&self.config, thread_id).await
+        {
+            merge_mutable_thread_metadata(
+                &mut thread,
+                summary_to_thread(summary, &self.config.cwd),
+            );
+        }
+        self.attach_thread_name(thread_id, &mut thread).await;
+
+        if include_turns {
+            let path = loaded_materialized_rollout_path(
+                thread_id,
+                &config_snapshot,
+                loaded_rollout_path.as_ref(),
+            )?;
+            // This path-based history load is a temporary local compatibility fallback for
+            // live threads resumed from explicit rollout paths outside codex_home. Stored
+            // thread reads should continue to go through ThreadStore; future pathless live
+            // history should come from ThreadManager/CodexThread instead of the filesystem.
+            let items = read_rollout_items_from_rollout(path).await.map_err(|err| {
+                ThreadReadViewError::Internal(format!(
+                    "failed to load rollout history {}: {err}",
+                    path.display()
+                ))
+            })?;
+            thread.turns = build_turns_from_rollout_items(&items);
+        }
+
+        Ok(thread)
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -4820,8 +4869,7 @@ impl CodexMessageProcessor {
         match params {
             GetConversationSummaryParams::RolloutPath { rollout_path } => {
                 // Legacy compatibility for clients that still hold local rollout paths. New
-                // callsites should prefer thread-id lookups through the thread store so hosted
-                // stores do not need to expose filesystem paths.
+                // callsites should prefer thread-id lookups through the thread store.
                 let path = if rollout_path.is_relative() {
                     self.config.codex_home.join(&rollout_path).to_path_buf()
                 } else {
@@ -9172,8 +9220,8 @@ fn thread_from_stored_thread(
     thread: StoredThread,
     fallback_provider: &str,
     fallback_cwd: &AbsolutePathBuf,
-) -> Option<(Thread, Option<codex_thread_store::StoredThreadHistory>)> {
-    let path = thread.rollout_path?;
+) -> (Thread, Option<codex_thread_store::StoredThreadHistory>) {
+    let path = thread.rollout_path;
     let git_info = thread.git_info.map(|info| ApiGitInfo {
         sha: info.commit_hash.map(|sha| sha.0),
         branch: info.branch,
@@ -9183,10 +9231,7 @@ fn thread_from_stored_thread(
         thread.cwd,
     ))
     .unwrap_or_else(|err| {
-        warn!(
-            path = %path.display(),
-            "failed to normalize thread cwd while reading stored thread: {err}"
-        );
+        warn!("failed to normalize thread cwd while reading stored thread: {err}");
         fallback_cwd.clone()
     });
     let source = with_thread_spawn_agent_metadata(
@@ -9208,7 +9253,7 @@ fn thread_from_stored_thread(
         created_at: thread.created_at.timestamp(),
         updated_at: thread.updated_at.timestamp(),
         status: ThreadStatus::NotLoaded,
-        path: Some(path),
+        path,
         cwd,
         cli_version: thread.cli_version,
         agent_nickname: source.get_nickname(),
@@ -9218,7 +9263,30 @@ fn thread_from_stored_thread(
         name: thread.name,
         turns: Vec::new(),
     };
-    Some((thread, history))
+    (thread, history)
+}
+
+fn loaded_materialized_rollout_path<'a>(
+    thread_id: ThreadId,
+    config_snapshot: &ThreadConfigSnapshot,
+    rollout_path: Option<&'a PathBuf>,
+) -> Result<&'a Path, ThreadReadViewError> {
+    let Some(path) = rollout_path else {
+        let message = if config_snapshot.ephemeral {
+            "ephemeral threads do not support includeTurns".to_string()
+        } else {
+            format!(
+                "thread {thread_id} is not materialized yet; includeTurns is unavailable before first user message"
+            )
+        };
+        return Err(ThreadReadViewError::InvalidRequest(message));
+    };
+    if !path.exists() {
+        return Err(ThreadReadViewError::InvalidRequest(format!(
+            "thread {thread_id} is not materialized yet; includeTurns is unavailable before first user message"
+        )));
+    }
+    Ok(path.as_path())
 }
 
 fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
