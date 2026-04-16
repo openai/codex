@@ -127,7 +127,9 @@ fn looks_like_local_path(source: &str) -> bool {
     Path::new(source).is_absolute()
         || looks_like_windows_absolute_path(source)
         || source.starts_with("./")
+        || source.starts_with(".\\")
         || source.starts_with("../")
+        || source.starts_with("..\\")
         || source.starts_with("~/")
         || source == "."
         || source == ".."

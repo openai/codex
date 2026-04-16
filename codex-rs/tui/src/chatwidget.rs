@@ -5279,11 +5279,8 @@ impl ChatWidget {
 
     fn show_rename_prompt(&mut self) {
         let tx = self.app_event_tx.clone();
-        let has_name = self
-            .thread_name
-            .as_ref()
-            .is_some_and(|name| !name.is_empty());
-        let title = if has_name {
+        let existing_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
+        let title = if existing_name.is_some() {
             "Rename thread"
         } else {
             "Name thread"
@@ -5291,6 +5288,7 @@ impl ChatWidget {
         let view = CustomPromptView::new(
             title.to_string(),
             "Type a name and press Enter".to_string(),
+            /*initial_text*/ existing_name.unwrap_or_default().to_string(),
             /*context_label*/ None,
             Box::new(move |name: String| {
                 let Some(name) = crate::legacy_core::util::normalize_thread_name(&name) else {
@@ -10599,6 +10597,7 @@ impl ChatWidget {
         let view = CustomPromptView::new(
             "Custom review instructions".to_string(),
             "Type instructions and press Enter".to_string(),
+            /*initial_text*/ String::new(),
             /*context_label*/ None,
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();

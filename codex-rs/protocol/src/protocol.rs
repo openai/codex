@@ -1223,11 +1223,15 @@ impl SandboxPolicy {
 
                 // Include /tmp on Unix unless explicitly excluded.
                 if cfg!(unix) && !exclude_slash_tmp {
-                    #[allow(clippy::expect_used)]
-                    let slash_tmp =
-                        AbsolutePathBuf::from_absolute_path("/tmp").expect("/tmp is absolute");
-                    if slash_tmp.as_path().is_dir() {
-                        roots.push(slash_tmp);
+                    match AbsolutePathBuf::from_absolute_path("/tmp") {
+                        Ok(slash_tmp) => {
+                            if slash_tmp.as_path().is_dir() {
+                                roots.push(slash_tmp);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Ignoring invalid /tmp for sandbox writable root: {e}");
+                        }
                     }
                 }
 
