@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Register or replace a named execution environment.",
+  "properties": {
+    "environmentId": {
+      "description": "Logical environment identifier used by thread and fs APIs.",
+      "type": "string"
+    },
+    "execServerUrl": {
+      "description": "Optional exec-server websocket URL; omit for local execution.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "environmentId"
+  ],
+  "title": "EnvironmentRegisterParams",
+  "type": "object"
+}

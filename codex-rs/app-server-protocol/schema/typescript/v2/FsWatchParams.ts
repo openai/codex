@@ -14,4 +14,8 @@ watchId: string,
 /**
  * Absolute file or directory path to watch.
  */
-path: AbsolutePathBuf, };
+path: AbsolutePathBuf,
+/**
+ * Optional environment selection. Omit to use the default environment.
+ */
+environmentId?: string | null, };

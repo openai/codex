@@ -730,6 +730,54 @@
             },
             "method": {
               "enum": [
+                "environment/register"
+              ],
+              "title": "Environment/registerRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/EnvironmentRegisterParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Environment/registerRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "environment/list"
+              ],
+              "title": "Environment/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/EnvironmentListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Environment/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "fs/readFile"
               ],
               "title": "Fs/readFileRequestMethod",
@@ -7243,6 +7291,95 @@
         ],
         "type": "object"
       },
+      "EnvironmentListEntry": {
+        "properties": {
+          "environmentId": {
+            "type": "string"
+          },
+          "execServerUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "environmentId"
+        ],
+        "type": "object"
+      },
+      "EnvironmentListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "List named execution environments registered with the app-server.",
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "EnvironmentListParams",
+        "type": "object"
+      },
+      "EnvironmentListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/EnvironmentListEntry"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "EnvironmentListResponse",
+        "type": "object"
+      },
+      "EnvironmentRegisterParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Register or replace a named execution environment.",
+        "properties": {
+          "environmentId": {
+            "description": "Logical environment identifier used by thread and fs APIs.",
+            "type": "string"
+          },
+          "execServerUrl": {
+            "description": "Optional exec-server websocket URL; omit for local execution.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "environmentId"
+        ],
+        "title": "EnvironmentRegisterParams",
+        "type": "object"
+      },
+      "EnvironmentRegisterResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `environment/register`.",
+        "title": "EnvironmentRegisterResponse",
+        "type": "object"
+      },
       "ErrorNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -7685,6 +7822,13 @@
             ],
             "description": "Absolute destination path."
           },
+          "environmentId": {
+            "description": "Optional environment selection. Omit to use the default environment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "recursive": {
             "description": "Required for directory copies; ignored for file copies.",
             "type": "boolean"
@@ -7715,6 +7859,13 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Create a directory on the host filesystem.",
         "properties": {
+          "environmentId": {
+            "description": "Optional environment selection. Omit to use the default environment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "path": {
             "allOf": [
               {
@@ -7747,6 +7898,13 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Request metadata for an absolute path.",
         "properties": {
+          "environmentId": {
+            "description": "Optional environment selection. Omit to use the default environment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "path": {
             "allOf": [
               {
@@ -7826,6 +7984,13 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "List direct child names for a directory.",
         "properties": {
+          "environmentId": {
+            "description": "Optional environment selection. Omit to use the default environment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "path": {
             "allOf": [
               {
@@ -7863,6 +8028,13 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Read a file from the host filesystem.",
         "properties": {
+          "environmentId": {
+            "description": "Optional environment selection. Omit to use the default environment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "path": {
             "allOf": [
               {
@@ -7897,6 +8069,13 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Remove a file or directory tree from the host filesystem.",
         "properties": {
+          "environmentId": {
+            "description": "Optional environment selection. Omit to use the default environment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "force": {
             "description": "Whether missing paths should be ignored. Defaults to `true`.",
             "type": [
@@ -7957,6 +8136,13 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Start filesystem watch notifications for an absolute path.",
         "properties": {
+          "environmentId": {
+            "description": "Optional environment selection. Omit to use the default environment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "path": {
             "allOf": [
               {
@@ -8003,6 +8189,13 @@
           "dataBase64": {
             "description": "File contents encoded as base64.",
             "type": "string"
+          },
+          "environmentId": {
+            "description": "Optional environment selection. Omit to use the default environment.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "path": {
             "allOf": [
@@ -14551,6 +14744,12 @@
             ]
           },
           "developerInstructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "environmentId": {
             "type": [
               "string",
               "null"

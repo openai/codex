@@ -18,4 +18,8 @@ recursive?: boolean | null,
 /**
  * Whether missing paths should be ignored. Defaults to `true`.
  */
-force?: boolean | null, };
+force?: boolean | null,
+/**
+ * Optional environment selection. Omit to use the default environment.
+ */
+environmentId?: string | null, };

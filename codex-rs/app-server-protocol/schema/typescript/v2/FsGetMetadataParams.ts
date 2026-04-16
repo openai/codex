@@ -10,4 +10,8 @@ export type FsGetMetadataParams = {
 /**
  * Absolute path to inspect.
  */
-path: AbsolutePathBuf, };
+path: AbsolutePathBuf,
+/**
+ * Optional environment selection. Omit to use the default environment.
+ */
+environmentId?: string | null, };

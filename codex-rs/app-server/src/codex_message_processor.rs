@@ -6122,7 +6122,7 @@ impl CodexMessageProcessor {
         let fs = match self
             .thread_manager
             .environment_manager()
-            .environment(None)
+            .environment(/*environment_id*/ None)
             .await
         {
             Ok(Some(environment)) => Some(environment.get_filesystem()),

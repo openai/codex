@@ -157,6 +157,12 @@
         "null"
       ]
     },
+    "environmentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "ephemeral": {
       "type": [
         "boolean",

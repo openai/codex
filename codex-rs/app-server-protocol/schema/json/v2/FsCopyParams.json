@@ -16,6 +16,13 @@
       ],
       "description": "Absolute destination path."
     },
+    "environmentId": {
+      "description": "Optional environment selection. Omit to use the default environment.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "recursive": {
       "description": "Required for directory copies; ignored for file copies.",
       "type": "boolean"

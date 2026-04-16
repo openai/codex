@@ -8,6 +8,13 @@
   },
   "description": "Create a directory on the host filesystem.",
   "properties": {
+    "environmentId": {
+      "description": "Optional environment selection. Omit to use the default environment.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "path": {
       "allOf": [
         {

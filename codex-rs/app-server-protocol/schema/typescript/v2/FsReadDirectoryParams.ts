@@ -10,4 +10,8 @@ export type FsReadDirectoryParams = {
 /**
  * Absolute directory path to read.
  */
-path: AbsolutePathBuf, };
+path: AbsolutePathBuf,
+/**
+ * Optional environment selection. Omit to use the default environment.
+ */
+environmentId?: string | null, };
