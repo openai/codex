@@ -1576,6 +1576,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     forked
         .thread
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
@@ -3603,6 +3604,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
 fn op_kind_distinguishes_turn_ops() {
     assert_eq!(
         Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

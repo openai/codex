@@ -26,6 +26,7 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
 
     codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -64,6 +65,7 @@ async fn override_turn_context_does_not_create_config_file() {
 
     codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

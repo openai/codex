@@ -433,6 +433,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     };
     codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
@@ -517,6 +518,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
 
     codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,

@@ -8384,6 +8384,7 @@ mod tests {
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
+                environments: None,
                 cwd: None,
                 approval_policy: Some(guardian_approvals.approval_policy),
                 approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
@@ -8475,6 +8476,7 @@ mod tests {
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
+                environments: None,
                 cwd: None,
                 approval_policy: None,
                 approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -8554,6 +8556,7 @@ mod tests {
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
+                environments: None,
                 cwd: None,
                 approval_policy: Some(guardian_approvals.approval_policy),
                 approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
@@ -8611,6 +8614,7 @@ mod tests {
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
+                environments: None,
                 cwd: None,
                 approval_policy: None,
                 approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -8670,6 +8674,7 @@ mod tests {
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
+                environments: None,
                 cwd: None,
                 approval_policy: Some(guardian_approvals.approval_policy),
                 approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
@@ -8757,6 +8762,7 @@ guardian_approval = true
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
+                environments: None,
                 cwd: None,
                 approval_policy: None,
                 approvals_reviewer: Some(ApprovalsReviewer::User),
