@@ -7,12 +7,14 @@ the process manager to spawn PTYs once an ExecRequest is prepared.
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
-use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::review_approval_request;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::approval::ApprovalRequest;
+use crate::tools::approval::ApprovalRequestKind;
+use crate::tools::approval::CommandApprovalRequest;
+use crate::tools::approval::request_approval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -28,12 +30,12 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
-use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::approvals::GuardianCommandSource;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::PermissionProfile;
@@ -129,46 +131,36 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
-        let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
-            if let Some(review_id) = guardian_review_id {
-                return review_approval_request(
-                    session,
-                    turn,
-                    review_id,
-                    GuardianApprovalRequest::ExecCommand {
+            request_approval(
+                session,
+                turn,
+                ctx.guardian_review_id.clone(),
+                ApprovalRequest::new(
+                    reason,
+                    retry_reason,
+                    ApprovalRequestKind::Command(CommandApprovalRequest {
                         id: call_id,
+                        approval_id: None,
+                        source: GuardianCommandSource::UnifiedExec,
                         command,
-                        cwd: cwd.clone(),
+                        cwd,
                         sandbox_permissions: req.sandbox_permissions,
                         additional_permissions: req.additional_permissions.clone(),
                         justification: req.justification.clone(),
-                        tty: req.tty,
-                    },
-                    retry_reason,
-                )
-                .await;
-            }
-            with_cached_approval(&session.services, "unified_exec", keys, || async move {
-                let available_decisions = None;
-                session
-                    .request_command_approval(
-                        turn,
-                        call_id,
-                        /*approval_id*/ None,
-                        command,
-                        cwd.clone(),
-                        reason,
-                        ctx.network_approval_context.clone(),
-                        req.exec_approval_requirement
+                        network_approval_context: ctx.network_approval_context.clone(),
+                        proposed_execpolicy_amendment: req
+                            .exec_approval_requirement
                             .proposed_execpolicy_amendment()
                             .cloned(),
-                        req.additional_permissions.clone(),
-                        available_decisions,
-                    )
-                    .await
-            })
+                        available_decisions: None,
+                        tty: req.tty,
+                    }),
+                )
+                .with_session_cache("unified_exec", keys),
+            )
             .await
+            .decision
         })
     }
 
