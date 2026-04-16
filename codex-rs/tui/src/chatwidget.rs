@@ -10572,6 +10572,7 @@ impl ChatWidget {
                         },
                         user_facing_hint: None,
                     });
+                    tx3.send(AppEvent::DismissAllBottomPaneViews);
                 })],
                 dismiss_on_select: true,
                 search_value: Some(search_val),
@@ -10606,6 +10607,7 @@ impl ChatWidget {
                     },
                     user_facing_hint: None,
                 });
+                tx.send(AppEvent::DismissAllBottomPaneViews);
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
