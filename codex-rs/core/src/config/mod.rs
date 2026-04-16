@@ -2282,7 +2282,11 @@ impl Config {
     }
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
-        self.config_layer_stack
+        !matches!(
+            self.permissions.sandbox_policy.get(),
+            SandboxPolicy::DangerFullAccess
+        ) && self
+            .config_layer_stack
             .requirements_toml()
             .network
             .is_some()

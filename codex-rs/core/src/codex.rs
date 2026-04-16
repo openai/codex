@@ -45,6 +45,7 @@ use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
 use crate::turn_metadata::TurnMetadataState;
+use crate::unavailable_tool::collect_unavailable_called_tools;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -1338,6 +1339,10 @@ impl Session {
         }
     }
 
+    fn managed_network_proxy_active_for_sandbox_policy(sandbox_policy: &SandboxPolicy) -> bool {
+        !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -2004,10 +2009,15 @@ impl Session {
                 .await;
         session_configuration.thread_name = thread_name.clone();
         let state = SessionState::new(session_configuration.clone());
+        let managed_network_requirements_configured = config
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some();
         let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
         let network_approval = Arc::new(NetworkApprovalService::default());
         // The managed proxy can call back into core for allowlist-miss decisions.
-        let network_policy_decider_session = if managed_network_requirements_enabled {
+        let network_policy_decider_session = if managed_network_requirements_configured {
             config
                 .permissions
                 .network
@@ -2016,7 +2026,7 @@ impl Session {
         } else {
             None
         };
-        let blocked_request_observer = if managed_network_requirements_enabled {
+        let blocked_request_observer = if managed_network_requirements_configured {
             config
                 .permissions
                 .network
@@ -2043,7 +2053,7 @@ impl Session {
                     config.permissions.sandbox_policy.get(),
                     network_policy_decider.as_ref().map(Arc::clone),
                     blocked_request_observer.as_ref().map(Arc::clone),
-                    managed_network_requirements_enabled,
+                    managed_network_requirements_configured,
                     network_proxy_audit_metadata,
                 )
                 .instrument(info_span!(
@@ -2200,7 +2210,11 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
-                network_proxy: session_network_proxy,
+                network_proxy: session_network_proxy.filter(|_| {
+                    Self::managed_network_proxy_active_for_sandbox_policy(
+                        session_configuration.sandbox_policy.get(),
+                    )
+                }),
                 rollout_path,
             }),
         })
@@ -2734,7 +2748,12 @@ impl Session {
             self.services
                 .network_proxy
                 .as_ref()
-                .map(StartedNetworkProxy::proxy),
+                .and_then(|started_proxy| {
+                    Self::managed_network_proxy_active_for_sandbox_policy(
+                        session_configuration.sandbox_policy.get(),
+                    )
+                    .then(|| started_proxy.proxy())
+                }),
             self.services.environment.clone(),
             sub_id,
             Arc::clone(&self.js_repl),
@@ -4944,6 +4963,8 @@ mod handlers {
     use crate::config_loader::load_config_layers_state;
     use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
     use crate::realtime_context::truncate_realtime_text_to_token_budget;
+    use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
+    use crate::realtime_conversation::prefix_realtime_v2_text;
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -5164,6 +5185,11 @@ mod handlers {
         if text.is_empty() {
             return;
         }
+        let text = if sess.conversation.is_running_v2().await {
+            prefix_realtime_v2_text(text, REALTIME_USER_TEXT_PREFIX)
+        } else {
+            text
+        };
         let text = truncate_realtime_text_to_token_budget(&text, REALTIME_TURN_TOKEN_BUDGET);
         if text.is_empty() {
             return;
@@ -7228,7 +7254,22 @@ pub(crate) async fn built_tools(
         &turn_context.config,
         &turn_context.tools_config,
     );
-    let direct_mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+    let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
+    let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
+    let unavailable_called_tools = if turn_context
+        .config
+        .features
+        .enabled(Feature::UnavailableDummyTools)
+    {
+        let exposed_tool_names = mcp_tools
+            .iter()
+            .chain(deferred_mcp_tools.iter())
+            .flat_map(|tools| tools.keys().map(String::as_str))
+            .collect::<HashSet<_>>();
+        collect_unavailable_called_tools(input, &exposed_tool_names)
+    } else {
+        Vec::new()
+    };
 
     let parallel_mcp_server_names = turn_context
         .config
@@ -7245,8 +7286,9 @@ pub(crate) async fn built_tools(
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: direct_mcp_tools,
-            deferred_mcp_tools: mcp_tool_exposure.deferred_tools,
+            mcp_tools,
+            deferred_mcp_tools,
+            unavailable_called_tools,
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

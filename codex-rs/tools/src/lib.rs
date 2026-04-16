@@ -53,6 +53,7 @@ pub use codex_protocol::ToolName;
 pub use dynamic_tool::parse_dynamic_tool;
 pub use image_detail::can_request_original_image_detail;
 pub use image_detail::normalize_output_image_detail;
+pub use image_detail::sanitize_original_image_detail;
 pub use js_repl_tool::create_js_repl_reset_tool;
 pub use js_repl_tool::create_js_repl_tool;
 pub use json_schema::AdditionalProperties;

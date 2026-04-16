@@ -164,7 +164,7 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
-mod app_server_requests;
+pub(crate) mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
 
@@ -1599,6 +1599,7 @@ impl App {
             self.config.cwd.to_path_buf(),
             version,
         )
+        .with_yolo_mode(history_cell::is_yolo_mode(&self.config))
         .display_lines(width)
     }
 
@@ -5895,8 +5896,13 @@ impl App {
                     .handle_server_notification(notification, /*replay_kind*/ None);
             }
             ThreadBufferedEvent::Request(request) => {
-                self.chat_widget
-                    .handle_server_request(request, /*replay_kind*/ None);
+                if self
+                    .pending_app_server_requests
+                    .contains_server_request(&request)
+                {
+                    self.chat_widget
+                        .handle_server_request(request, /*replay_kind*/ None);
+                }
             }
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event);
@@ -6884,6 +6890,11 @@ mod tests {
         let approval_request =
             exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
 
+        assert_eq!(
+            app.pending_app_server_requests
+                .note_server_request(&approval_request),
+            None
+        );
         app.enqueue_primary_thread_request(approval_request).await?;
         app.enqueue_primary_thread_session(
             test_thread_session(thread_id, test_path_buf("/tmp/project")),
@@ -6924,6 +6935,66 @@ mod tests {
         }
 
         panic!("expected approval action to submit a thread-scoped op");
+    }
+
+    #[tokio::test]
+    async fn resolved_buffered_approval_does_not_become_actionable_after_drain() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let approval_request =
+            exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, test_path_buf("/tmp/project")),
+            Vec::new(),
+        )
+        .await?;
+        while app_event_rx.try_recv().is_ok() {}
+
+        assert_eq!(
+            app.pending_app_server_requests
+                .note_server_request(&approval_request),
+            None
+        );
+        app.enqueue_thread_request(thread_id, approval_request)
+            .await?;
+
+        let resolved = app
+            .pending_app_server_requests
+            .resolve_notification(&AppServerRequestId::Integer(1))
+            .expect("matching app-server request should resolve");
+        app.chat_widget.dismiss_app_server_request(&resolved);
+        while app_event_rx.try_recv().is_ok() {}
+
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        let event = time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("timed out waiting for buffered approval event")
+            .expect("channel closed unexpectedly");
+
+        assert!(matches!(
+            &event,
+            ThreadBufferedEvent::Request(ServerRequest::CommandExecutionRequestApproval {
+                params,
+                ..
+            }) if params.turn_id == "turn-1"
+        ));
+
+        app.handle_thread_event_now(event);
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        while let Ok(app_event) = app_event_rx.try_recv() {
+            assert!(
+                !matches!(app_event, AppEvent::SubmitThreadOp { .. }),
+                "resolved buffered approval should not become actionable"
+            );
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
