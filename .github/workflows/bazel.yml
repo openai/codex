@@ -91,20 +91,27 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            set +e
             ./.github/scripts/run-bazel-ci.sh \
               --ci-config=ci-windows-cross-build \
               -- \
               build \
+              --keep_going \
               --build_tests_only \
               "${bazel_common_args[@]}" \
               -- \
               "${bazel_targets[@]}"
+            cross_build_status=$?
+            set -e
+
+            if [[ "${cross_build_status}" -ne 0 ]]; then
+              echo "::warning title=Windows cross-remote build::Best-effort remote cache warmup failed with exit code ${cross_build_status}; continuing to authoritative local Windows test."
+            fi
 
             ./.github/scripts/run-bazel-ci.sh \
               "${bazel_wrapper_args[@]}" \
               -- \
               test \
-              --nobuild \
               --test_verbose_timeout_warnings \
               "${bazel_common_args[@]}" \
               -- \
