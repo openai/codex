@@ -10808,6 +10808,12 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "userInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -12168,6 +12174,12 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "userInstructions": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -12469,6 +12481,12 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "userInstructions": {
+          "type": [
+            "string",
+            "null"
           ]
         }
       },

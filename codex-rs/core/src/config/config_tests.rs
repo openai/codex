@@ -3271,6 +3271,46 @@ fn cli_override_sets_compact_prompt() -> std::io::Result<()> {
 }
 
 #[test]
+fn load_config_uses_user_instructions_override() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(codex_home.path().join("AGENTS.md"), "from disk")?;
+    let overrides = ConfigOverrides {
+        user_instructions: Some(Some("  from request  ".to_string())),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        overrides,
+        codex_home.abs(),
+    )?;
+
+    assert_eq!(config.user_instructions.as_deref(), Some("from request"));
+
+    Ok(())
+}
+
+#[test]
+fn load_config_explicit_null_user_instructions_skips_disk_fallback() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(codex_home.path().join("AGENTS.md"), "from disk")?;
+    let overrides = ConfigOverrides {
+        user_instructions: Some(None),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        overrides,
+        codex_home.abs(),
+    )?;
+
+    assert_eq!(config.user_instructions, None);
+
+    Ok(())
+}
+
+#[test]
 fn loads_compact_prompt_from_file() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = codex_home.path().join("workspace");

@@ -1811,6 +1811,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id,
             model: Some("gpt-5.2-codex".to_string()),
+            user_instructions: Some(Some("Resumed user instructions sentinel".to_string())),
             personality: Some(Personality::Friendly),
             ..Default::default()
         })
@@ -1860,6 +1861,13 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     assert!(
         instructions_text.contains(CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT),
         "expected default base instructions from history, got {instructions_text:?}"
+    );
+    let user_texts = request.message_input_texts("user");
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text.contains("Resumed user instructions sentinel")),
+        "expected resumed user instructions in user input, got {user_texts:?}"
     );
 
     Ok(())

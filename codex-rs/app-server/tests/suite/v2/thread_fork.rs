@@ -26,6 +26,8 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -179,6 +181,153 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
     assert_eq!(started.thread, thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_honors_explicit_null_thread_instructions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock =
+        responses::mount_sse_sequence(&server, vec![body.clone(), body.clone(), body]).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    std::fs::write(
+        codex_home.path().join("AGENTS.md"),
+        "Config user instructions sentinel",
+    )?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let disabled_instruction_config = json!({
+        "include_permissions_instructions": false,
+        "include_apps_instructions": false,
+        "include_environment_context": false,
+        "features.apps": false,
+        "features.plugins": false,
+        "features.codex_hooks": false,
+        "skills.bundled.enabled": false,
+    });
+
+    let fork_params = [
+        (
+            json!({
+                "threadId": conversation_id.clone(),
+                "config": disabled_instruction_config.clone(),
+            }),
+            /*expect_user_instructions*/ true,
+        ),
+        (
+            json!({
+                "threadId": conversation_id.clone(),
+                "config": disabled_instruction_config.clone(),
+                "userInstructions": null,
+            }),
+            /*expect_user_instructions*/ false,
+        ),
+    ];
+
+    let mut forked_thread_ids = Vec::new();
+    for (params, _expect_user_instructions) in fork_params {
+        let fork_id = mcp.send_raw_request("thread/fork", Some(params)).await?;
+        let fork_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+        )
+        .await??;
+        let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+        forked_thread_ids.push(thread.id.clone());
+
+        let turn_id = mcp
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread.id,
+                input: vec![UserInput::Text {
+                    text: "continue".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let turn_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+        )
+        .await??;
+        let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+    }
+
+    let refork_id = mcp
+        .send_raw_request(
+            "thread/fork",
+            Some(json!({
+                "threadId": forked_thread_ids[1].clone(),
+                "config": disabled_instruction_config.clone(),
+            })),
+        )
+        .await?;
+    let refork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(refork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(refork_resp)?;
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "continue again".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    for (request, expect_user_instructions) in requests.into_iter().zip([true, false, false]) {
+        let user_texts = request.message_input_texts("user");
+        assert_eq!(
+            user_texts
+                .iter()
+                .any(|text| text.contains("Config user instructions sentinel")),
+            expect_user_instructions,
+            "unexpected config user instruction presence: {user_texts:?}"
+        );
+    }
 
     Ok(())
 }

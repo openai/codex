@@ -216,6 +216,10 @@ Start a fresh thread when you need a new Codex conversation.
     // current config settings.
     "model": "gpt-5.1-codex",
     "cwd": "/Users/me/project",
+    // Optional resolved contents of the client's user-level AGENTS.md. Omit to
+    // let app-server read its own CODEX_HOME AGENTS.md; pass null to suppress
+    // that fallback for this thread.
+    "userInstructions": "Use the team's local coding conventions.",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
