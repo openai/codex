@@ -331,7 +331,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
 
     let call_id = "rmcp-truncated";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__echo");
+    let namespace = format!("mcp__{server_name}__");
 
     // Build a very large message to exceed 10KiB once serialized.
     let large_msg = "long-message-with-newlines-".repeat(6000);
@@ -341,7 +341,12 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         &server,
         sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call(call_id, &tool_name, &args_json.to_string()),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                &args_json.to_string(),
+            ),
             responses::ev_completed("resp-1"),
         ]),
     )
@@ -370,6 +375,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -426,13 +432,13 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
 
     let call_id = "rmcp-image-no-trunc";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__image");
+    let namespace = format!("mcp__{server_name}__");
 
     mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, &tool_name, "{}"),
+            responses::ev_function_call_with_namespace(call_id, &namespace, "image", "{}"),
             ev_completed("resp-1"),
         ]),
     )
@@ -467,6 +473,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
@@ -705,7 +712,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
 
     let call_id = "rmcp-untruncated";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__echo");
+    let namespace = format!("mcp__{server_name}__");
     let large_msg = "a".repeat(80_000);
     let args_json = serde_json::json!({ "message": large_msg });
 
@@ -713,7 +720,12 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         &server,
         sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call(call_id, &tool_name, &args_json.to_string()),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                &args_json.to_string(),
+            ),
             responses::ev_completed("resp-1"),
         ]),
     )
@@ -742,6 +754,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,

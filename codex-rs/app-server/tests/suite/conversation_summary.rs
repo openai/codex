@@ -18,6 +18,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const FILENAME_TS: &str = "2025-01-02T12-00-00";
 const META_RFC3339: &str = "2025-01-02T12:00:00Z";
+const UPDATED_AT_RFC3339: &str = "2025-01-02T12:00:00.000Z";
 const PREVIEW: &str = "Summarize this conversation";
 const MODEL_PROVIDER: &str = "openai";
 
@@ -27,7 +28,7 @@ fn expected_summary(conversation_id: ThreadId, path: PathBuf) -> ConversationSum
         path,
         preview: PREVIEW.to_string(),
         timestamp: Some(META_RFC3339.to_string()),
-        updated_at: Some(META_RFC3339.to_string()),
+        updated_at: Some(UPDATED_AT_RFC3339.to_string()),
         model_provider: MODEL_PROVIDER.to_string(),
         cwd: PathBuf::from("/"),
         cli_version: "0.0.0".to_string(),

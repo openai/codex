@@ -4,7 +4,6 @@ mod protocol;
 mod websocket;
 
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
-use crate::transport::remote_control::websocket::load_remote_control_auth;
 
 pub use self::protocol::ClientId;
 use self::protocol::ServerEvent;
@@ -59,9 +58,6 @@ pub(crate) async fn start_remote_control(
     } else {
         None
     };
-    if initial_enabled {
-        validate_remote_control_auth(&auth_manager).await?;
-    }
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
     let join_handle = tokio::spawn(async move {
@@ -84,16 +80,6 @@ pub(crate) async fn start_remote_control(
             enabled_tx: Arc::new(enabled_tx),
         },
     ))
-}
-
-pub(crate) async fn validate_remote_control_auth(
-    auth_manager: &Arc<AuthManager>,
-) -> io::Result<()> {
-    match load_remote_control_auth(auth_manager).await {
-        Ok(_) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(()),
-        Err(err) => Err(err),
-    }
 }
 
 #[cfg(test)]

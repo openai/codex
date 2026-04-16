@@ -325,12 +325,17 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     let server = start_mock_server().await;
     let call_id = "call-123";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__echo");
+    let namespace = format!("mcp__{server_name}__");
     mount_sse_once(
         &server,
         responses::sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                "{\"message\":\"ping\"}",
+            ),
             ev_completed("resp-1"),
         ]),
     )
@@ -366,6 +371,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
                 supports_parallel_tool_calls: false,
