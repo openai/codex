@@ -164,6 +164,9 @@ fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
 fn image_generation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ImageGeneration.stage(), Stage::Stable);
     assert_eq!(Feature::ImageGeneration.default_enabled(), true);
+}
+
+#[test]
 fn image_detail_original_is_a_removed_feature_key() {
     assert_eq!(
         feature_for_key("image_detail_original"),
