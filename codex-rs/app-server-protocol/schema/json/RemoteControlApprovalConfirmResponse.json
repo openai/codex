@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RemoteControlApprovalDecision": {
+      "enum": [
+        "approve",
+        "deny"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "decision": {
+      "$ref": "#/definitions/RemoteControlApprovalDecision"
+    }
+  },
+  "required": [
+    "decision"
+  ],
+  "title": "RemoteControlApprovalConfirmResponse",
+  "type": "object"
+}

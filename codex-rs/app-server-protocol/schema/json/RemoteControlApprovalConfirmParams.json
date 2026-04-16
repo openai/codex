@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RemoteControlPairingMode": {
+      "enum": [
+        "session",
+        "server"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "approvalId": {
+      "type": "string"
+    },
+    "challenge": {
+      "type": "string"
+    },
+    "controllerName": {
+      "type": "string"
+    },
+    "environmentId": {
+      "type": "string"
+    },
+    "expiresAt": {
+      "format": "int64",
+      "type": "integer"
+    },
+    "mode": {
+      "$ref": "#/definitions/RemoteControlPairingMode"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "serverId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "approvalId",
+    "challenge",
+    "controllerName",
+    "environmentId",
+    "expiresAt",
+    "mode",
+    "prompt",
+    "serverId"
+  ],
+  "title": "RemoteControlApprovalConfirmParams",
+  "type": "object"
+}

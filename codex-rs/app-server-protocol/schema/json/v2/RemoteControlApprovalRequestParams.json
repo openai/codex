@@ -10,6 +10,15 @@
     }
   },
   "properties": {
+    "approvalId": {
+      "type": "string"
+    },
+    "challenge": {
+      "type": "string"
+    },
+    "controllerName": {
+      "type": "string"
+    },
     "environmentId": {
       "type": "string"
     },
@@ -20,12 +29,6 @@
     "mode": {
       "$ref": "#/definitions/RemoteControlPairingMode"
     },
-    "pairingCode": {
-      "type": "string"
-    },
-    "pairingId": {
-      "type": "string"
-    },
     "prompt": {
       "type": "string"
     },
@@ -34,14 +37,15 @@
     }
   },
   "required": [
+    "approvalId",
+    "challenge",
+    "controllerName",
     "environmentId",
     "expiresAt",
     "mode",
-    "pairingCode",
-    "pairingId",
     "prompt",
     "serverId"
   ],
-  "title": "RemoteControlPairingStartResponse",
+  "title": "RemoteControlApprovalRequestParams",
   "type": "object"
 }

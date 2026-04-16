@@ -1699,23 +1699,52 @@
         }
       ]
     },
+    "RemoteControlApprovalRequestParams": {
+      "properties": {
+        "approvalId": {
+          "type": "string"
+        },
+        "challenge": {
+          "type": "string"
+        },
+        "controllerName": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/definitions/RemoteControlPairingMode"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "serverId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approvalId",
+        "challenge",
+        "controllerName",
+        "environmentId",
+        "expiresAt",
+        "mode",
+        "prompt",
+        "serverId"
+      ],
+      "type": "object"
+    },
     "RemoteControlPairingMode": {
       "enum": [
         "session",
         "server"
       ],
       "type": "string"
-    },
-    "RemoteControlPairingStartParams": {
-      "properties": {
-        "mode": {
-          "$ref": "#/definitions/RemoteControlPairingMode"
-        }
-      },
-      "required": [
-        "mode"
-      ],
-      "type": "object"
     },
     "RequestId": {
       "anyOf": [
@@ -4678,13 +4707,13 @@
         },
         "method": {
           "enum": [
-            "remoteControl/pairing/start"
+            "remoteControl/approval/request"
           ],
-          "title": "RemoteControl/pairing/startRequestMethod",
+          "title": "RemoteControl/approval/requestRequestMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/RemoteControlPairingStartParams"
+          "$ref": "#/definitions/RemoteControlApprovalRequestParams"
         }
       },
       "required": [
@@ -4692,7 +4721,7 @@
         "method",
         "params"
       ],
-      "title": "RemoteControl/pairing/startRequest",
+      "title": "RemoteControl/approval/requestRequest",
       "type": "object"
     },
     {

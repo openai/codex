@@ -1,3 +1,4 @@
+use super::approval_key::RemoteControlApprovalKey;
 use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RemoteControlTarget;
@@ -25,6 +26,7 @@ pub(super) struct RemoteControlEnrollment {
     pub(super) environment_id: String,
     pub(super) server_id: String,
     pub(super) server_name: String,
+    pub(super) approval_key_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +81,7 @@ pub(super) async fn load_persisted_remote_control_enrollment(
                 environment_id: enrollment.environment_id,
                 server_id: enrollment.server_id,
                 server_name: enrollment.server_name,
+                approval_key_id: enrollment.approval_key_id,
             })
         }
         None => {
@@ -125,6 +128,7 @@ pub(super) async fn update_persisted_remote_control_enrollment(
                 server_id: enrollment.server_id.clone(),
                 environment_id: enrollment.environment_id.clone(),
                 server_name: enrollment.server_name.clone(),
+                approval_key_id: enrollment.approval_key_id.clone(),
             })
             .await
             .map_err(io::Error::other)?;
@@ -189,6 +193,8 @@ pub(crate) fn format_headers(headers: &HeaderMap) -> String {
 pub(super) async fn enroll_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
+    approval_key: &RemoteControlApprovalKey,
+    existing_enrollment: Option<&RemoteControlEnrollment>,
 ) -> io::Result<RemoteControlEnrollment> {
     let enroll_url = &remote_control_target.enroll_url;
     let server_name = gethostname().to_string_lossy().trim().to_string();
@@ -197,6 +203,10 @@ pub(super) async fn enroll_remote_control_server(
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         app_server_version: env!("CARGO_PKG_VERSION"),
+        approval_public_key: approval_key.public_key().to_string(),
+        approval_key_id: approval_key.key_id().to_string(),
+        server_id: existing_enrollment.map(|enrollment| enrollment.server_id.clone()),
+        environment_id: existing_enrollment.map(|enrollment| enrollment.environment_id.clone()),
     };
     let client = build_reqwest_client();
     let http_request = client
@@ -221,10 +231,10 @@ pub(super) async fn enroll_remote_control_server(
     let body_preview = preview_remote_control_response_body(&body);
     if !status.is_success() {
         let headers_str = format_headers(&headers);
-        let error_kind = if matches!(status.as_u16(), 401 | 403) {
-            ErrorKind::PermissionDenied
-        } else {
-            ErrorKind::Other
+        let error_kind = match status.as_u16() {
+            401 | 403 => ErrorKind::PermissionDenied,
+            404 => ErrorKind::NotFound,
+            _ => ErrorKind::Other,
         };
         return Err(io::Error::new(
             error_kind,
@@ -246,6 +256,7 @@ pub(super) async fn enroll_remote_control_server(
         environment_id: enrollment.environment_id,
         server_id: enrollment.server_id,
         server_name,
+        approval_key_id: approval_key.key_id().to_string(),
     })
 }
 
@@ -286,12 +297,14 @@ mod tests {
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
             server_name: "first-server".to_string(),
+            approval_key_id: "approval-key-a".to_string(),
         };
         let second_enrollment = RemoteControlEnrollment {
             account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
             server_name: "second-server".to_string(),
+            approval_key_id: "approval-key-b".to_string(),
         };
 
         update_persisted_remote_control_enrollment(
@@ -359,12 +372,14 @@ mod tests {
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
             server_name: "first-server".to_string(),
+            approval_key_id: "approval-key-a".to_string(),
         };
         let second_enrollment = RemoteControlEnrollment {
             account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
             server_name: "second-server".to_string(),
+            approval_key_id: "approval-key-b".to_string(),
         };
 
         update_persisted_remote_control_enrollment(
@@ -448,6 +463,13 @@ mod tests {
                 bearer_token: "Access Token".to_string(),
                 account_id: "account_id".to_string(),
             },
+            &RemoteControlApprovalKey::load_or_generate(
+                &remote_control_target,
+                "account_id",
+                /*app_server_client_name*/ None,
+            )
+            .expect("approval key should load"),
+            /*existing_enrollment*/ None,
         )
         .await
         .expect_err("invalid response should fail to parse");

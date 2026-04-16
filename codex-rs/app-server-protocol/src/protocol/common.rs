@@ -462,9 +462,9 @@ client_request_definitions! {
         params: v2::CollaborationModeListParams,
         response: v2::CollaborationModeListResponse,
     },
-    RemoteControlPairingStart => "remoteControl/pairing/start" {
-        params: v2::RemoteControlPairingStartParams,
-        response: v2::RemoteControlPairingStartResponse,
+    RemoteControlApprovalRequest => "remoteControl/approval/request" {
+        params: v2::RemoteControlApprovalRequestParams,
+        response: v2::RemoteControlApprovalRequestResponse,
     },
     #[experimental("mock/experimentalMethod")]
     /// Test-only method used to validate experimental gating.
@@ -884,6 +884,10 @@ server_request_definitions! {
     ChatgptAuthTokensRefresh => "account/chatgptAuthTokens/refresh" {
         params: v2::ChatgptAuthTokensRefreshParams,
         response: v2::ChatgptAuthTokensRefreshResponse,
+    },
+    RemoteControlApprovalConfirm => "remoteControl/approval/confirm" {
+        params: v2::RemoteControlApprovalConfirmParams,
+        response: v2::RemoteControlApprovalConfirmResponse,
     },
 
     /// DEPRECATED APIs below
@@ -1683,27 +1687,6 @@ mod tests {
                 "method": "collaborationMode/list",
                 "id": 7,
                 "params": {}
-            }),
-            serde_json::to_value(&request)?,
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn serialize_remote_control_pairing_start() -> Result<()> {
-        let request = ClientRequest::RemoteControlPairingStart {
-            request_id: RequestId::Integer(8),
-            params: v2::RemoteControlPairingStartParams {
-                mode: v2::RemoteControlPairingMode::Session,
-            },
-        };
-        assert_eq!(
-            json!({
-                "method": "remoteControl/pairing/start",
-                "id": 8,
-                "params": {
-                    "mode": "session"
-                }
             }),
             serde_json::to_value(&request)?,
         );

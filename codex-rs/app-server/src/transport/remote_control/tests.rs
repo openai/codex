@@ -2,8 +2,6 @@ use super::enroll::REMOTE_CONTROL_ACCOUNT_ID_HEADER;
 use super::enroll::RemoteControlEnrollment;
 use super::enroll::load_persisted_remote_control_enrollment;
 use super::enroll::update_persisted_remote_control_enrollment;
-use super::pairing::RemoteControlPairingMode;
-use super::pairing::start_remote_control_pairing;
 use super::protocol::ClientEnvelope;
 use super::protocol::ClientEvent;
 use super::protocol::ClientId;
@@ -114,6 +112,21 @@ fn remote_control_url_for_listener(listener: &TcpListener) -> String {
         .local_addr()
         .expect("listener should have a local addr");
     format!("http://{addr}/backend-api/")
+}
+
+fn test_approval_key_id(
+    remote_control_target: &super::protocol::RemoteControlTarget,
+    account_id: &str,
+    app_server_client_name: Option<&str>,
+) -> String {
+    RemoteControlApprovalKey::load_or_generate(
+        remote_control_target,
+        account_id,
+        app_server_client_name,
+    )
+    .expect("test approval key should load")
+    .key_id()
+    .to_string()
 }
 
 #[tokio::test]
@@ -776,16 +789,14 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         enroll_request.headers.get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
         Some(&"account_id".to_string())
     );
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&enroll_request.body)
-            .expect("enroll body should deserialize"),
-        json!({
-            "name": expected_server_name,
-            "os": std::env::consts::OS,
-            "arch": std::env::consts::ARCH,
-            "app_server_version": env!("CARGO_PKG_VERSION"),
-        })
-    );
+    let enroll_body = serde_json::from_str::<serde_json::Value>(&enroll_request.body)
+        .expect("enroll body should deserialize");
+    assert_eq!(enroll_body["name"], expected_server_name);
+    assert_eq!(enroll_body["os"], std::env::consts::OS);
+    assert_eq!(enroll_body["arch"], std::env::consts::ARCH);
+    assert_eq!(enroll_body["app_server_version"], env!("CARGO_PKG_VERSION"));
+    assert!(enroll_body["approval_public_key"].is_string());
+    assert!(enroll_body["approval_key_id"].is_string());
     respond_with_json(
         enroll_request.stream,
         json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
@@ -949,11 +960,17 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     let state_db = remote_control_state_runtime(&codex_home).await;
     let remote_control_target =
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
+    let approval_key_id = test_approval_key_id(
+        &remote_control_target,
+        "account_id",
+        /*app_server_client_name*/ None,
+    );
     let persisted_enrollment = RemoteControlEnrollment {
         account_id: "account_id".to_string(),
         environment_id: "env_persisted".to_string(),
         server_id: "srv_e_persisted".to_string(),
         server_name: "persisted-server".to_string(),
+        approval_key_id,
     };
     update_persisted_remote_control_enrollment(
         Some(state_db.as_ref()),
@@ -1005,111 +1022,6 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
 }
 
 #[tokio::test]
-async fn remote_control_pairing_start_uses_persisted_enrollment() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("listener should bind");
-    let remote_control_url = remote_control_url_for_listener(&listener);
-    let codex_home = TempDir::new().expect("temp dir should create");
-    let state_db = remote_control_state_runtime(&codex_home).await;
-    let remote_control_target =
-        normalize_remote_control_url(&remote_control_url).expect("target should parse");
-    let app_server_client_name = "desktop-client";
-    let persisted_enrollment = RemoteControlEnrollment {
-        account_id: "account_id".to_string(),
-        environment_id: "env_persisted".to_string(),
-        server_id: "srv_e_persisted".to_string(),
-        server_name: "persisted-server".to_string(),
-    };
-    update_persisted_remote_control_enrollment(
-        Some(state_db.as_ref()),
-        &remote_control_target,
-        "account_id",
-        Some(app_server_client_name),
-        Some(&persisted_enrollment),
-    )
-    .await
-    .expect("persisted enrollment should save");
-
-    let auth_manager = remote_control_auth_manager_with_home(&codex_home);
-    let pairing_task = tokio::spawn({
-        let remote_control_url = remote_control_url.clone();
-        let state_db = state_db.clone();
-        let auth_manager = auth_manager.clone();
-        async move {
-            start_remote_control_pairing(
-                &remote_control_url,
-                Some(state_db.as_ref()),
-                &auth_manager,
-                Some(app_server_client_name),
-                RemoteControlPairingMode::Session,
-            )
-            .await
-        }
-    });
-
-    let pairing_request = accept_http_request(&listener).await;
-    assert_eq!(
-        pairing_request.request_line,
-        "POST /backend-api/wham/remote/control/server/pairing/start HTTP/1.1"
-    );
-    assert_eq!(
-        pairing_request.headers.get("authorization"),
-        Some(&"Bearer Access Token".to_string())
-    );
-    assert_eq!(
-        pairing_request
-            .headers
-            .get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
-        Some(&"account_id".to_string())
-    );
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&pairing_request.body)
-            .expect("pairing body should deserialize"),
-        json!({
-            "server_id": "srv_e_persisted",
-            "environment_id": "env_persisted",
-            "mode": "session",
-        })
-    );
-    respond_with_json(
-        pairing_request.stream,
-        json!({
-            "pairing_id": "pair_123",
-            "pairing_code": "TXNHF-FHZDA",
-            "expires_at": "2026-04-15T12:34:56Z",
-            "server_id": "srv_e_persisted",
-            "environment_id": "env_persisted",
-            "mode": "session",
-            "prompt": "Allow this device to control this Codex session?",
-        }),
-    )
-    .await;
-
-    let pairing = pairing_task
-        .await
-        .expect("pairing task should join")
-        .expect("pairing should start");
-    assert_eq!(
-        pairing,
-        super::pairing::RemoteControlPairing {
-            pairing_id: "pair_123".to_string(),
-            pairing_code: "TXNHF-FHZDA".to_string(),
-            expires_at: time::OffsetDateTime::parse(
-                "2026-04-15T12:34:56Z",
-                &time::format_description::well_known::Rfc3339,
-            )
-            .expect("expiry should parse")
-            .unix_timestamp(),
-            server_id: "srv_e_persisted".to_string(),
-            environment_id: "env_persisted".to_string(),
-            mode: RemoteControlPairingMode::Session,
-            prompt: "Allow this device to control this Codex session?".to_string(),
-        }
-    );
-}
-
-#[tokio::test]
 async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1120,11 +1032,17 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
     let remote_control_target =
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
     let app_server_client_name = "stdio-client";
+    let approval_key_id = test_approval_key_id(
+        &remote_control_target,
+        "account_id",
+        Some(app_server_client_name),
+    );
     let persisted_enrollment = RemoteControlEnrollment {
         account_id: "account_id".to_string(),
         environment_id: "env_persisted".to_string(),
         server_id: "srv_e_persisted".to_string(),
         server_name: "persisted-server".to_string(),
+        approval_key_id,
     };
     update_persisted_remote_control_enrollment(
         Some(state_db.as_ref()),
@@ -1187,11 +1105,19 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         AuthCredentialsStoreMode::File,
     );
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
+    let remote_control_target =
+        normalize_remote_control_url(&remote_control_url).expect("target should parse");
+    let approval_key_id = test_approval_key_id(
+        &remote_control_target,
+        "account_id",
+        /*app_server_client_name*/ None,
+    );
     let expected_enrollment = RemoteControlEnrollment {
         account_id: "account_id".to_string(),
         environment_id: "env_ready".to_string(),
         server_id: "srv_e_ready".to_string(),
         server_name: expected_server_name,
+        approval_key_id,
     };
 
     let (transport_event_tx, _transport_event_rx) =
@@ -1255,17 +1181,24 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let remote_control_target =
         normalize_remote_control_url(&remote_control_url).expect("target should parse");
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
+    let approval_key_id = test_approval_key_id(
+        &remote_control_target,
+        "account_id",
+        /*app_server_client_name*/ None,
+    );
     let stale_enrollment = RemoteControlEnrollment {
         account_id: "account_id".to_string(),
         environment_id: "env_stale".to_string(),
         server_id: "srv_e_stale".to_string(),
         server_name: "stale-server".to_string(),
+        approval_key_id: approval_key_id.clone(),
     };
     let refreshed_enrollment = RemoteControlEnrollment {
         account_id: "account_id".to_string(),
         environment_id: "env_refreshed".to_string(),
         server_id: "srv_e_refreshed".to_string(),
         server_name: expected_server_name,
+        approval_key_id,
     };
     update_persisted_remote_control_enrollment(
         Some(state_db.as_ref()),

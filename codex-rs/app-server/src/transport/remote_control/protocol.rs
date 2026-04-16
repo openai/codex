@@ -11,7 +11,6 @@ use url::Url;
 pub(super) struct RemoteControlTarget {
     pub(super) websocket_url: String,
     pub(super) enroll_url: String,
-    pub(super) pairing_start_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -20,6 +19,12 @@ pub(super) struct EnrollRemoteServerRequest {
     pub(super) os: &'static str,
     pub(super) arch: &'static str,
     pub(super) app_server_version: &'static str,
+    pub(super) approval_public_key: String,
+    pub(super) approval_key_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) server_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) environment_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,9 +157,6 @@ pub(super) fn normalize_remote_control_url(
     let enroll_url = remote_control_url
         .join("wham/remote/control/server/enroll")
         .map_err(map_url_parse_error)?;
-    let pairing_start_url = remote_control_url
-        .join("wham/remote/control/server/pairing/start")
-        .map_err(map_url_parse_error)?;
     let mut websocket_url = remote_control_url
         .join("wham/remote/control/server")
         .map_err(map_url_parse_error)?;
@@ -172,7 +174,6 @@ pub(super) fn normalize_remote_control_url(
     Ok(RemoteControlTarget {
         websocket_url: websocket_url.to_string(),
         enroll_url: enroll_url.to_string(),
-        pairing_start_url: pairing_start_url.to_string(),
     })
 }
 
@@ -191,9 +192,6 @@ mod tests {
                     .to_string(),
                 enroll_url: "https://chatgpt.com/backend-api/wham/remote/control/server/enroll"
                     .to_string(),
-                pairing_start_url:
-                    "https://chatgpt.com/backend-api/wham/remote/control/server/pairing/start"
-                        .to_string(),
             }
         );
         assert_eq!(
@@ -205,9 +203,6 @@ mod tests {
                         .to_string(),
                 enroll_url:
                     "https://api.chatgpt-staging.com/backend-api/wham/remote/control/server/enroll"
-                        .to_string(),
-                pairing_start_url:
-                    "https://api.chatgpt-staging.com/backend-api/wham/remote/control/server/pairing/start"
                         .to_string(),
             }
         );
@@ -223,9 +218,6 @@ mod tests {
                     .to_string(),
                 enroll_url: "http://localhost:8080/backend-api/wham/remote/control/server/enroll"
                     .to_string(),
-                pairing_start_url:
-                    "http://localhost:8080/backend-api/wham/remote/control/server/pairing/start"
-                        .to_string(),
             }
         );
         assert_eq!(
@@ -236,9 +228,6 @@ mod tests {
                     .to_string(),
                 enroll_url: "https://localhost:8443/backend-api/wham/remote/control/server/enroll"
                     .to_string(),
-                pairing_start_url:
-                    "https://localhost:8443/backend-api/wham/remote/control/server/pairing/start"
-                        .to_string(),
             }
         );
     }

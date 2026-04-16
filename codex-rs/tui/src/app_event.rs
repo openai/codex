@@ -16,7 +16,6 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -294,14 +293,6 @@ pub(crate) enum AppEvent {
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
         result: Result<Vec<McpServerStatus>, String>,
-    },
-
-    /// Start a session-scoped remote-control pairing challenge.
-    StartRemoteControlPairing,
-
-    /// Result of starting a remote-control pairing challenge.
-    RemoteControlPairingLoaded {
-        result: Result<RemoteControlPairingStartResponse, String>,
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),

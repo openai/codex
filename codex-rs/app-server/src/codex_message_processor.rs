@@ -1149,9 +1149,9 @@ impl CodexMessageProcessor {
             | ClientRequest::ExperimentalFeatureEnablementSet { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
             }
-            ClientRequest::RemoteControlPairingStart { .. } => {
+            ClientRequest::RemoteControlApprovalRequest { .. } => {
                 warn!(
-                    "RemoteControlPairingStart request reached CodexMessageProcessor unexpectedly"
+                    "RemoteControlApprovalRequest request reached CodexMessageProcessor unexpectedly"
                 );
             }
             ClientRequest::FsReadFile { .. }

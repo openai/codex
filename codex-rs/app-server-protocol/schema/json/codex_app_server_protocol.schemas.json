@@ -1186,13 +1186,13 @@
             },
             "method": {
               "enum": [
-                "remoteControl/pairing/start"
+                "remoteControl/approval/request"
               ],
-              "title": "RemoteControl/pairing/startRequestMethod",
+              "title": "RemoteControl/approval/requestRequestMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/RemoteControlPairingStartParams"
+              "$ref": "#/definitions/v2/RemoteControlApprovalRequestParams"
             }
           },
           "required": [
@@ -1200,7 +1200,7 @@
             "method",
             "params"
           ],
-          "title": "RemoteControl/pairing/startRequest",
+          "title": "RemoteControl/approval/requestRequest",
           "type": "object"
         },
         {
@@ -3389,6 +3389,61 @@
       "title": "PermissionsRequestApprovalResponse",
       "type": "object"
     },
+    "RemoteControlApprovalConfirmParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "approvalId": {
+          "type": "string"
+        },
+        "challenge": {
+          "type": "string"
+        },
+        "controllerName": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/definitions/v2/RemoteControlPairingMode"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "serverId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approvalId",
+        "challenge",
+        "controllerName",
+        "environmentId",
+        "expiresAt",
+        "mode",
+        "prompt",
+        "serverId"
+      ],
+      "title": "RemoteControlApprovalConfirmParams",
+      "type": "object"
+    },
+    "RemoteControlApprovalConfirmResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/v2/RemoteControlApprovalDecision"
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "title": "RemoteControlApprovalConfirmResponse",
+      "type": "object"
+    },
     "RequestId": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "anyOf": [
@@ -4763,6 +4818,30 @@
             "params"
           ],
           "title": "Account/chatgptAuthTokens/refreshRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "remoteControl/approval/confirm"
+              ],
+              "title": "RemoteControl/approval/confirmRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/RemoteControlApprovalConfirmParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "RemoteControl/approval/confirmRequest",
           "type": "object"
         },
         {
@@ -11064,29 +11143,25 @@
         "title": "ReasoningTextDeltaNotification",
         "type": "object"
       },
-      "RemoteControlPairingMode": {
+      "RemoteControlApprovalDecision": {
         "enum": [
-          "session",
-          "server"
+          "approve",
+          "deny"
         ],
         "type": "string"
       },
-      "RemoteControlPairingStartParams": {
+      "RemoteControlApprovalRequestParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
-          "mode": {
-            "$ref": "#/definitions/v2/RemoteControlPairingMode"
-          }
-        },
-        "required": [
-          "mode"
-        ],
-        "title": "RemoteControlPairingStartParams",
-        "type": "object"
-      },
-      "RemoteControlPairingStartResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
+          "approvalId": {
+            "type": "string"
+          },
+          "challenge": {
+            "type": "string"
+          },
+          "controllerName": {
+            "type": "string"
+          },
           "environmentId": {
             "type": "string"
           },
@@ -11097,12 +11172,6 @@
           "mode": {
             "$ref": "#/definitions/v2/RemoteControlPairingMode"
           },
-          "pairingCode": {
-            "type": "string"
-          },
-          "pairingId": {
-            "type": "string"
-          },
           "prompt": {
             "type": "string"
           },
@@ -11111,16 +11180,55 @@
           }
         },
         "required": [
+          "approvalId",
+          "challenge",
+          "controllerName",
           "environmentId",
           "expiresAt",
           "mode",
-          "pairingCode",
-          "pairingId",
           "prompt",
           "serverId"
         ],
-        "title": "RemoteControlPairingStartResponse",
+        "title": "RemoteControlApprovalRequestParams",
         "type": "object"
+      },
+      "RemoteControlApprovalRequestResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "approvalKeyId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "$ref": "#/definitions/v2/RemoteControlApprovalDecision"
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signatureAlgorithm": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "RemoteControlApprovalRequestResponse",
+        "type": "object"
+      },
+      "RemoteControlPairingMode": {
+        "enum": [
+          "session",
+          "server"
+        ],
+        "type": "string"
       },
       "RequestId": {
         "anyOf": [

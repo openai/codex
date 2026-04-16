@@ -1,11 +1,14 @@
+mod approval_key;
 mod client_tracker;
 mod enroll;
-mod pairing;
 mod protocol;
 mod websocket;
 
-use crate::transport::remote_control::pairing::start_remote_control_pairing;
+use crate::transport::remote_control::approval_key::RemoteControlApprovalKey;
+use crate::transport::remote_control::approval_key::RemoteControlApprovalSignature;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
+use crate::transport::remote_control::websocket::RemoteControlWebsocketControls;
+use crate::transport::remote_control::websocket::load_remote_control_auth;
 
 pub use self::protocol::ClientId;
 use self::protocol::ServerEvent;
@@ -16,10 +19,9 @@ use super::TransportEvent;
 use super::next_connection_id;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
-pub(crate) use pairing::RemoteControlPairing;
-pub(crate) use pairing::RemoteControlPairingMode;
 use std::io;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -36,9 +38,7 @@ pub(super) struct QueuedServerEnvelope {
 #[derive(Clone)]
 pub(crate) struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
-    remote_control_url: String,
-    state_db: Option<Arc<StateRuntime>>,
-    auth_manager: Arc<AuthManager>,
+    approval_key: Arc<Mutex<Option<RemoteControlApprovalKey>>>,
 }
 
 impl RemoteControlHandle {
@@ -50,19 +50,42 @@ impl RemoteControlHandle {
         });
     }
 
-    pub(crate) async fn start_pairing(
+    pub(crate) fn sign_approval(
         &self,
-        app_server_client_name: Option<&str>,
-        mode: RemoteControlPairingMode,
-    ) -> io::Result<RemoteControlPairing> {
-        start_remote_control_pairing(
-            &self.remote_control_url,
-            self.state_db.as_deref(),
-            &self.auth_manager,
-            app_server_client_name,
-            mode,
-        )
-        .await
+        challenge: &str,
+    ) -> io::Result<RemoteControlApprovalSignature> {
+        let guard = self
+            .approval_key
+            .lock()
+            .map_err(|_| io::Error::other("remote control approval key lock poisoned"))?;
+        let Some(approval_key) = guard.as_ref() else {
+            return Err(io::Error::other(
+                "remote control approval key is not available",
+            ));
+        };
+        Ok(approval_key.sign(challenge))
+    }
+}
+
+struct RemoteControlApprovalKeyHandle {
+    approval_key: Arc<Mutex<Option<RemoteControlApprovalKey>>>,
+}
+
+impl RemoteControlApprovalKeyHandle {
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self {
+            approval_key: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn set(&self, approval_key: RemoteControlApprovalKey) -> io::Result<()> {
+        let mut guard = self
+            .approval_key
+            .lock()
+            .map_err(|_| io::Error::other("remote control approval key lock poisoned"))?;
+        *guard = Some(approval_key);
+        Ok(())
     }
 }
 
@@ -82,9 +105,10 @@ pub(crate) async fn start_remote_control(
     };
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
-    let handle_remote_control_url = remote_control_url.clone();
-    let handle_state_db = state_db.clone();
-    let handle_auth_manager = auth_manager.clone();
+    let approval_key = Arc::new(Mutex::new(None));
+    let approval_key_handle = RemoteControlApprovalKeyHandle {
+        approval_key: approval_key.clone(),
+    };
     let join_handle = tokio::spawn(async move {
         RemoteControlWebsocket::new(
             remote_control_url,
@@ -93,7 +117,10 @@ pub(crate) async fn start_remote_control(
             auth_manager,
             transport_event_tx,
             shutdown_token,
-            enabled_rx,
+            RemoteControlWebsocketControls {
+                enabled_rx,
+                approval_key_handle,
+            },
         )
         .run(app_server_client_name_rx)
         .await;
@@ -103,9 +130,7 @@ pub(crate) async fn start_remote_control(
         join_handle,
         RemoteControlHandle {
             enabled_tx: Arc::new(enabled_tx),
-            remote_control_url: handle_remote_control_url,
-            state_db: handle_state_db,
-            auth_manager: handle_auth_manager,
+            approval_key,
         },
     ))
 }

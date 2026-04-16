@@ -94,8 +94,6 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
-use codex_app_server_protocol::RemoteControlPairingMode;
-use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
@@ -456,12 +454,6 @@ fn is_unified_exec_source(source: ExecCommandSource) -> bool {
         source,
         ExecCommandSource::UnifiedExecStartup | ExecCommandSource::UnifiedExecInteraction
     )
-}
-
-fn format_remote_control_pairing_expiry(expires_at: i64) -> String {
-    chrono::DateTime::from_timestamp(expires_at, 0)
-        .map(|expires_at| expires_at.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| expires_at.to_string())
 }
 
 fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
@@ -6085,6 +6077,7 @@ impl ChatWidget {
             }
             ServerRequest::DynamicToolCall { .. }
             | ServerRequest::ChatgptAuthTokensRefresh { .. }
+            | ServerRequest::RemoteControlApprovalConfirm { .. }
             | ServerRequest::ApplyPatchApproval { .. }
             | ServerRequest::ExecCommandApproval { .. } => {
                 if replay_kind.is_none() {
@@ -9800,37 +9793,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn start_remote_control_pairing(&mut self) {
-        self.add_info_message(
-            "Starting remote control pairing...".to_string(),
-            Some("Enter the code shown here on your controller device.".to_string()),
-        );
-        self.app_event_tx.send(AppEvent::StartRemoteControlPairing);
-    }
-
-    pub(crate) fn on_remote_control_pairing_result(
-        &mut self,
-        result: Result<RemoteControlPairingStartResponse, String>,
-    ) {
-        match result {
-            Ok(pairing) => self.add_remote_control_pairing(pairing),
-            Err(err) => self.add_error_message(format!("Remote control pairing failed: {err}")),
-        }
-    }
-
-    fn add_remote_control_pairing(&mut self, pairing: RemoteControlPairingStartResponse) {
-        let mode_label = match pairing.mode {
-            RemoteControlPairingMode::Session => "This Codex session",
-            RemoteControlPairingMode::Server => "This Codex server",
-        };
-        let expires_at = format_remote_control_pairing_expiry(pairing.expires_at);
-
+    pub(crate) fn show_remote_control_instructions(&mut self) {
         self.add_plain_history_lines(vec![
-            "Remote control pairing".bold().into(),
-            pairing.prompt.into(),
-            vec!["Code: ".dim(), pairing.pairing_code.cyan().bold()].into(),
-            vec!["Scope: ".dim(), mode_label.into()].into(),
-            vec!["Expires: ".dim(), expires_at.into()].into(),
+            "Remote control".bold().into(),
+            "Open Codex on another device, choose this Codex server, then approve the prompt here."
+                .into(),
         ]);
     }
 

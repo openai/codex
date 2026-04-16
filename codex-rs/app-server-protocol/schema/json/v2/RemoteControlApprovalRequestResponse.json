@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "RemoteControlApprovalDecision": {
+      "enum": [
+        "approve",
+        "deny"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "approvalKeyId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "decision": {
+      "$ref": "#/definitions/RemoteControlApprovalDecision"
+    },
+    "signature": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "signatureAlgorithm": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "decision"
+  ],
+  "title": "RemoteControlApprovalRequestResponse",
+  "type": "object"
+}

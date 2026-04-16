@@ -1,9 +1,0 @@
----
-source: tui/src/chatwidget/tests/slash_commands.rs
-expression: rendered
----
-Remote control pairing
-Allow this device to control this Codex session?
-Code: TXNHF-FHZDA
-Scope: This Codex session
-Expires: 2026-04-15 11:54:56 UTC

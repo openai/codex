@@ -11,6 +11,7 @@ pub struct RemoteControlEnrollmentRecord {
     pub server_id: String,
     pub environment_id: String,
     pub server_name: String,
+    pub approval_key_id: String,
 }
 
 fn remote_control_app_server_client_name_key(app_server_client_name: Option<&str>) -> &str {
@@ -34,7 +35,7 @@ impl StateRuntime {
     ) -> anyhow::Result<Option<RemoteControlEnrollmentRecord>> {
         let row = sqlx::query(
             r#"
-SELECT websocket_url, account_id, app_server_client_name, server_id, environment_id, server_name
+SELECT websocket_url, account_id, app_server_client_name, server_id, environment_id, server_name, approval_key_id
 FROM remote_control_enrollments
 WHERE websocket_url = ? AND account_id = ? AND app_server_client_name = ?
             "#,
@@ -56,6 +57,7 @@ WHERE websocket_url = ? AND account_id = ? AND app_server_client_name = ?
                 server_id: row.try_get("server_id")?,
                 environment_id: row.try_get("environment_id")?,
                 server_name: row.try_get("server_name")?,
+                approval_key_id: row.try_get("approval_key_id")?,
             })
         })
         .transpose()
@@ -74,12 +76,14 @@ INSERT INTO remote_control_enrollments (
     server_id,
     environment_id,
     server_name,
+    approval_key_id,
     updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(websocket_url, account_id, app_server_client_name) DO UPDATE SET
     server_id = excluded.server_id,
     environment_id = excluded.environment_id,
     server_name = excluded.server_name,
+    approval_key_id = excluded.approval_key_id,
     updated_at = excluded.updated_at
             "#,
         )
@@ -91,6 +95,7 @@ ON CONFLICT(websocket_url, account_id, app_server_client_name) DO UPDATE SET
         .bind(&enrollment.server_id)
         .bind(&enrollment.environment_id)
         .bind(&enrollment.server_name)
+        .bind(&enrollment.approval_key_id)
         .bind(Utc::now().timestamp())
         .execute(self.pool.as_ref())
         .await?;
@@ -143,6 +148,7 @@ mod tests {
                 server_id: "srv_e_first".to_string(),
                 environment_id: "env_first".to_string(),
                 server_name: "first-server".to_string(),
+                approval_key_id: "approval-key-a".to_string(),
             })
             .await
             .expect("insert first enrollment");
@@ -155,6 +161,7 @@ mod tests {
                 server_id: "srv_e_second".to_string(),
                 environment_id: "env_second".to_string(),
                 server_name: "second-server".to_string(),
+                approval_key_id: "approval-key-b".to_string(),
             })
             .await
             .expect("insert second enrollment");
@@ -176,6 +183,7 @@ mod tests {
                 server_id: "srv_e_first".to_string(),
                 environment_id: "env_first".to_string(),
                 server_name: "first-server".to_string(),
+                approval_key_id: "approval-key-a".to_string(),
             })
         );
         assert_eq!(
@@ -220,6 +228,7 @@ mod tests {
                 server_id: "srv_e_first".to_string(),
                 environment_id: "env_first".to_string(),
                 server_name: "first-server".to_string(),
+                approval_key_id: "approval-key-a".to_string(),
             })
             .await
             .expect("insert first enrollment");
@@ -232,6 +241,7 @@ mod tests {
                 server_id: "srv_e_second".to_string(),
                 environment_id: "env_second".to_string(),
                 server_name: "second-server".to_string(),
+                approval_key_id: "approval-key-b".to_string(),
             })
             .await
             .expect("insert second enrollment");
@@ -275,6 +285,7 @@ mod tests {
                 server_id: "srv_e_second".to_string(),
                 environment_id: "env_second".to_string(),
                 server_name: "second-server".to_string(),
+                approval_key_id: "approval-key-b".to_string(),
             })
         );
 

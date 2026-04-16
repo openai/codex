@@ -1377,6 +1377,53 @@
       ],
       "type": "object"
     },
+    "RemoteControlApprovalConfirmParams": {
+      "properties": {
+        "approvalId": {
+          "type": "string"
+        },
+        "challenge": {
+          "type": "string"
+        },
+        "controllerName": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/definitions/RemoteControlPairingMode"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "serverId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approvalId",
+        "challenge",
+        "controllerName",
+        "environmentId",
+        "expiresAt",
+        "mode",
+        "prompt",
+        "serverId"
+      ],
+      "type": "object"
+    },
+    "RemoteControlPairingMode": {
+      "enum": [
+        "session",
+        "server"
+      ],
+      "type": "string"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -1672,6 +1719,30 @@
         "params"
       ],
       "title": "Account/chatgptAuthTokens/refreshRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "remoteControl/approval/confirm"
+          ],
+          "title": "RemoteControl/approval/confirmRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/RemoteControlApprovalConfirmParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "RemoteControl/approval/confirmRequest",
       "type": "object"
     },
     {

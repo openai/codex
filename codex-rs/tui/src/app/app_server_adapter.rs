@@ -306,6 +306,7 @@ fn server_request_thread_id(request: &ServerRequest) -> Option<ThreadId> {
             ThreadId::from_string(&params.thread_id).ok()
         }
         ServerRequest::ChatgptAuthTokensRefresh { .. }
+        | ServerRequest::RemoteControlApprovalConfirm { .. }
         | ServerRequest::ApplyPatchApproval { .. }
         | ServerRequest::ExecCommandApproval { .. } => None,
     }

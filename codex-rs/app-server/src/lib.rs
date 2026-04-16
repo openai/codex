@@ -120,6 +120,7 @@ enum OutboundControlEvent {
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+        registered_tx: oneshot::Sender<()>,
     },
     /// Remove state for a closed/disconnected connection.
     Closed { connection_id: ConnectionId },
@@ -609,6 +610,7 @@ pub async fn run_main_with_transport(
                                 initialized,
                                 experimental_api_enabled,
                                 opted_out_notification_methods,
+                                registered_tx,
                             } => {
                                 outbound_connections.insert(
                                     connection_id,
@@ -620,6 +622,7 @@ pub async fn run_main_with_transport(
                                         disconnect_sender,
                                     ),
                                 );
+                                let _ = registered_tx.send(());
                             }
                             OutboundControlEvent::Closed { connection_id } => {
                                 outbound_connections.remove(&connection_id);
@@ -721,6 +724,7 @@ pub async fn run_main_with_transport(
                                     Arc::new(AtomicBool::new(false));
                                 let outbound_opted_out_notification_methods =
                                     Arc::new(RwLock::new(HashSet::new()));
+                                let (registered_tx, registered_rx) = oneshot::channel();
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
@@ -733,10 +737,14 @@ pub async fn run_main_with_transport(
                                         opted_out_notification_methods: Arc::clone(
                                             &outbound_opted_out_notification_methods,
                                         ),
+                                        registered_tx,
                                     })
                                     .await
                                     .is_err()
                                 {
+                                    break;
+                                }
+                                if registered_rx.await.is_err() {
                                     break;
                                 }
                                 connections.insert(

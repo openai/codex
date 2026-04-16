@@ -1,4 +1,6 @@
 use crate::transport::TransportEvent;
+use crate::transport::remote_control::RemoteControlApprovalKeyHandle;
+use crate::transport::remote_control::approval_key::RemoteControlApprovalKey;
 use crate::transport::remote_control::client_tracker::ClientTracker;
 use crate::transport::remote_control::client_tracker::REMOTE_CONTROL_IDLE_SWEEP_INTERVAL;
 use crate::transport::remote_control::enroll::RemoteControlConnectionAuth;
@@ -126,12 +128,29 @@ pub(crate) struct RemoteControlWebsocket {
     server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
     used_rx: watch::Receiver<usize>,
     enabled_rx: watch::Receiver<bool>,
+    approval_key_handle: RemoteControlApprovalKeyHandle,
 }
 
 enum ConnectOutcome {
     Connected(Box<WebSocketStream<MaybeTlsStream<TcpStream>>>),
     Disabled,
     Shutdown,
+}
+
+pub(super) struct RemoteControlWebsocketControls {
+    pub(super) enabled_rx: watch::Receiver<bool>,
+    pub(super) approval_key_handle: RemoteControlApprovalKeyHandle,
+}
+
+pub(super) struct ConnectRemoteControlWebsocketArgs<'a> {
+    pub(super) remote_control_target: &'a RemoteControlTarget,
+    pub(super) state_db: Option<&'a StateRuntime>,
+    pub(super) auth_manager: &'a Arc<AuthManager>,
+    pub(super) auth_recovery: &'a mut UnauthorizedRecovery,
+    pub(super) enrollment: &'a mut Option<RemoteControlEnrollment>,
+    pub(super) subscribe_cursor: Option<&'a str>,
+    pub(super) app_server_client_name: Option<&'a str>,
+    pub(super) approval_key_handle: &'a RemoteControlApprovalKeyHandle,
 }
 
 impl RemoteControlWebsocket {
@@ -142,7 +161,7 @@ impl RemoteControlWebsocket {
         auth_manager: Arc<AuthManager>,
         transport_event_tx: mpsc::Sender<TransportEvent>,
         shutdown_token: CancellationToken,
-        enabled_rx: watch::Receiver<bool>,
+        controls: RemoteControlWebsocketControls,
     ) -> Self {
         let shutdown_token = shutdown_token.child_token();
         let (server_event_tx, server_event_rx) = mpsc::channel(super::CHANNEL_CAPACITY);
@@ -168,7 +187,8 @@ impl RemoteControlWebsocket {
             })),
             server_event_rx: Arc::new(Mutex::new(server_event_rx)),
             used_rx,
-            enabled_rx,
+            enabled_rx: controls.enabled_rx,
+            approval_key_handle: controls.approval_key_handle,
         }
     }
 
@@ -271,15 +291,16 @@ impl RemoteControlWebsocket {
                     }
                     return ConnectOutcome::Disabled;
                 }
-                connect_result = connect_remote_control_websocket(
-                    &remote_control_target,
-                    self.state_db.as_deref(),
-                    &self.auth_manager,
-                    &mut self.auth_recovery,
-                    &mut self.enrollment,
-                    subscribe_cursor.as_deref(),
+                connect_result = connect_remote_control_websocket(ConnectRemoteControlWebsocketArgs {
+                    remote_control_target: &remote_control_target,
+                    state_db: self.state_db.as_deref(),
+                    auth_manager: &self.auth_manager,
+                    auth_recovery: &mut self.auth_recovery,
+                    enrollment: &mut self.enrollment,
+                    subscribe_cursor: subscribe_cursor.as_deref(),
                     app_server_client_name,
-                ) => connect_result,
+                    approval_key_handle: &self.approval_key_handle,
+                }) => connect_result,
             };
 
             match connect_result {
@@ -722,17 +743,21 @@ pub(crate) async fn load_remote_control_auth(
 }
 
 pub(super) async fn connect_remote_control_websocket(
-    remote_control_target: &RemoteControlTarget,
-    state_db: Option<&StateRuntime>,
-    auth_manager: &Arc<AuthManager>,
-    auth_recovery: &mut UnauthorizedRecovery,
-    enrollment: &mut Option<RemoteControlEnrollment>,
-    subscribe_cursor: Option<&str>,
-    app_server_client_name: Option<&str>,
+    args: ConnectRemoteControlWebsocketArgs<'_>,
 ) -> io::Result<(
     WebSocketStream<MaybeTlsStream<TcpStream>>,
     tungstenite::http::Response<()>,
 )> {
+    let ConnectRemoteControlWebsocketArgs {
+        remote_control_target,
+        state_db,
+        auth_manager,
+        auth_recovery,
+        enrollment,
+        subscribe_cursor,
+        app_server_client_name,
+        approval_key_handle,
+    } = args;
     ensure_rustls_crypto_provider();
 
     let auth = load_remote_control_auth(auth_manager).await?;
@@ -759,14 +784,62 @@ pub(super) async fn connect_remote_control_websocket(
         .await;
     }
 
-    if enrollment.is_none() {
+    let approval_key = RemoteControlApprovalKey::load_or_generate(
+        remote_control_target,
+        &auth.account_id,
+        app_server_client_name,
+    )?;
+    let approval_key_id = approval_key.key_id().to_string();
+    approval_key_handle.set(approval_key.clone())?;
+    let should_refresh_enrollment = enrollment
+        .as_ref()
+        .is_none_or(|enrollment| enrollment.approval_key_id != approval_key_id);
+    if should_refresh_enrollment {
         info!(
-            "creating new remote control enrollment: websocket_url={}, enroll_url={}, account_id={}",
-            remote_control_target.websocket_url, remote_control_target.enroll_url, auth.account_id
+            "refreshing remote control enrollment: websocket_url={}, enroll_url={}, account_id={}, existing_server_id={:?}",
+            remote_control_target.websocket_url,
+            remote_control_target.enroll_url,
+            auth.account_id,
+            enrollment
+                .as_ref()
+                .map(|enrollment| enrollment.server_id.as_str())
         );
-        let new_enrollment = match enroll_remote_control_server(remote_control_target, &auth).await
+        let new_enrollment = match enroll_remote_control_server(
+            remote_control_target,
+            &auth,
+            &approval_key,
+            enrollment.as_ref(),
+        )
+        .await
         {
             Ok(new_enrollment) => new_enrollment,
+            Err(err) if err.kind() == ErrorKind::NotFound && enrollment.is_some() => {
+                info!(
+                    "remote control enrollment no longer exists on backend; re-enrolling with a new server: websocket_url={}, account_id={}",
+                    remote_control_target.websocket_url, auth.account_id
+                );
+                if let Err(clear_err) = update_persisted_remote_control_enrollment(
+                    state_db,
+                    remote_control_target,
+                    &auth.account_id,
+                    app_server_client_name,
+                    /*enrollment*/ None,
+                )
+                .await
+                {
+                    warn!(
+                        "failed to clear stale remote control enrollment in sqlite state db: {clear_err}"
+                    );
+                }
+                *enrollment = None;
+                enroll_remote_control_server(
+                    remote_control_target,
+                    &auth,
+                    &approval_key,
+                    /*existing_enrollment*/ None,
+                )
+                .await?
+            }
             Err(err)
                 if err.kind() == ErrorKind::PermissionDenied
                     && recover_remote_control_auth(auth_recovery).await =>
@@ -789,7 +862,7 @@ pub(super) async fn connect_remote_control_websocket(
             warn!("failed to persist remote control enrollment in sqlite state db: {err}");
         }
         info!(
-            "created new remote control enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
+            "refreshed remote control enrollment: websocket_url={}, account_id={}, server_id={}, environment_id={}",
             remote_control_target.websocket_url,
             new_enrollment.account_id,
             new_enrollment.server_id,
@@ -1030,17 +1103,20 @@ mod tests {
             environment_id: "env_test".to_string(),
             server_id: "srv_e_test".to_string(),
             server_name: "test-server".to_string(),
+            approval_key_id: test_approval_key_id(&remote_control_target),
         });
+        let approval_key_handle = RemoteControlApprovalKeyHandle::empty();
 
-        let err = match connect_remote_control_websocket(
-            &remote_control_target,
-            Some(state_db.as_ref()),
-            &auth_manager,
-            &mut auth_recovery,
-            &mut enrollment,
-            /*subscribe_cursor*/ None,
-            /*app_server_client_name*/ None,
-        )
+        let err = match connect_remote_control_websocket(ConnectRemoteControlWebsocketArgs {
+            remote_control_target: &remote_control_target,
+            state_db: Some(state_db.as_ref()),
+            auth_manager: &auth_manager,
+            auth_recovery: &mut auth_recovery,
+            enrollment: &mut enrollment,
+            subscribe_cursor: None,
+            app_server_client_name: None,
+            approval_key_handle: &approval_key_handle,
+        })
         .await
         {
             Ok(_) => panic!("http error response should fail the websocket connect"),
@@ -1078,6 +1154,7 @@ mod tests {
             environment_id: "env_test".to_string(),
             server_id: "srv_e_test".to_string(),
             server_name: "test-server".to_string(),
+            approval_key_id: test_approval_key_id(&remote_control_target),
         });
         save_auth(
             codex_home.path(),
@@ -1094,16 +1171,18 @@ mod tests {
             );
             respond_with_status_and_headers(stream, "401 Unauthorized", &[], "unauthorized").await;
         });
+        let approval_key_handle = RemoteControlApprovalKeyHandle::empty();
 
-        let err = connect_remote_control_websocket(
-            &remote_control_target,
-            Some(state_db.as_ref()),
-            &auth_manager,
-            &mut auth_recovery,
-            &mut enrollment,
-            /*subscribe_cursor*/ None,
-            /*app_server_client_name*/ None,
-        )
+        let err = connect_remote_control_websocket(ConnectRemoteControlWebsocketArgs {
+            remote_control_target: &remote_control_target,
+            state_db: Some(state_db.as_ref()),
+            auth_manager: &auth_manager,
+            auth_recovery: &mut auth_recovery,
+            enrollment: &mut enrollment,
+            subscribe_cursor: None,
+            app_server_client_name: None,
+            approval_key_handle: &approval_key_handle,
+        })
         .await
         .expect_err("unauthorized response should fail the websocket connect");
 
@@ -1162,15 +1241,18 @@ mod tests {
         )
         .expect("fresh auth should save");
 
-        let err = connect_remote_control_websocket(
-            &remote_control_target,
-            Some(state_db.as_ref()),
-            &auth_manager,
-            &mut auth_recovery,
-            &mut enrollment,
-            /*subscribe_cursor*/ None,
-            /*app_server_client_name*/ None,
-        )
+        let approval_key_handle = RemoteControlApprovalKeyHandle::empty();
+
+        let err = connect_remote_control_websocket(ConnectRemoteControlWebsocketArgs {
+            remote_control_target: &remote_control_target,
+            state_db: Some(state_db.as_ref()),
+            auth_manager: &auth_manager,
+            auth_recovery: &mut auth_recovery,
+            enrollment: &mut enrollment,
+            subscribe_cursor: None,
+            app_server_client_name: None,
+            approval_key_handle: &approval_key_handle,
+        })
         .await
         .expect_err("unauthorized enrollment should fail the websocket connect");
 
@@ -1216,7 +1298,10 @@ mod tests {
                     remote_control_auth_manager(),
                     transport_event_tx,
                     shutdown_token,
-                    enabled_rx,
+                    RemoteControlWebsocketControls {
+                        enabled_rx,
+                        approval_key_handle: RemoteControlApprovalKeyHandle::empty(),
+                    },
                 )
                 .run(/*app_server_client_name_rx*/ None)
                 .await
@@ -1522,6 +1607,17 @@ mod tests {
             reader.into_inner(),
             request_line.trim_end_matches("\r\n").to_string(),
         )
+    }
+
+    fn test_approval_key_id(remote_control_target: &RemoteControlTarget) -> String {
+        RemoteControlApprovalKey::load_or_generate(
+            remote_control_target,
+            "account_id",
+            /*app_server_client_name*/ None,
+        )
+        .expect("test approval key should load")
+        .key_id()
+        .to_string()
     }
 
     async fn connected_websocket_pair() -> (

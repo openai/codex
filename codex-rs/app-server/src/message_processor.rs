@@ -21,7 +21,6 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
 use crate::transport::RemoteControlHandle;
-use crate::transport::RemoteControlPairingMode as TransportRemoteControlPairingMode;
 use async_trait::async_trait;
 use axum::http::HeaderValue;
 use codex_analytics::AnalyticsEventsClient;
@@ -57,9 +56,11 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RemoteControlPairingMode;
-use codex_app_server_protocol::RemoteControlPairingStartParams;
-use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_app_server_protocol::RemoteControlApprovalConfirmParams;
+use codex_app_server_protocol::RemoteControlApprovalConfirmResponse;
+use codex_app_server_protocol::RemoteControlApprovalDecision;
+use codex_app_server_protocol::RemoteControlApprovalRequestParams;
+use codex_app_server_protocol::RemoteControlApprovalRequestResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
@@ -96,6 +97,7 @@ use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+const REMOTE_CONTROL_APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -949,16 +951,22 @@ impl MessageProcessor {
                 )
                 .await;
             }
-            ClientRequest::RemoteControlPairingStart { request_id, params } => {
-                self.handle_remote_control_pairing_start(
-                    ConnectionRequestId {
-                        connection_id,
-                        request_id,
-                    },
-                    params,
-                    app_server_client_name.as_deref(),
-                )
-                .await;
+            ClientRequest::RemoteControlApprovalRequest { request_id, params } => {
+                let processor = self.clone();
+                tokio::spawn(
+                    async move {
+                        processor
+                            .handle_remote_control_approval_request(
+                                ConnectionRequestId {
+                                    connection_id,
+                                    request_id,
+                                },
+                                params,
+                            )
+                            .await;
+                    }
+                    .instrument(request_context.span()),
+                );
             }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
@@ -1242,80 +1250,142 @@ impl MessageProcessor {
         }
     }
 
-    async fn handle_remote_control_pairing_start(
+    async fn handle_remote_control_approval_request(
         &self,
         request_id: ConnectionRequestId,
-        params: RemoteControlPairingStartParams,
-        app_server_client_name: Option<&str>,
+        params: RemoteControlApprovalRequestParams,
     ) {
-        let result = match &self.remote_control_handle {
-            Some(remote_control_handle) => {
-                remote_control_handle
-                    .start_pairing(
-                        app_server_client_name,
-                        remote_control_pairing_mode(params.mode),
-                    )
-                    .await
-            }
-            None => Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "remote control is not available for this app-server",
-            )),
+        let RemoteControlApprovalRequestParams {
+            approval_id,
+            server_id,
+            environment_id,
+            mode,
+            controller_name,
+            prompt,
+            expires_at,
+            challenge,
+        } = params;
+        let confirm_params = RemoteControlApprovalConfirmParams {
+            approval_id: approval_id.clone(),
+            server_id,
+            environment_id,
+            mode,
+            controller_name,
+            prompt,
+            expires_at,
+            challenge: challenge.clone(),
         };
 
-        match result {
-            Ok(pairing) => {
+        let (approval_request_id, rx) = self
+            .outgoing
+            .send_request(ServerRequestPayload::RemoteControlApprovalConfirm(
+                confirm_params,
+            ))
+            .await;
+
+        let result = match timeout(REMOTE_CONTROL_APPROVAL_TIMEOUT, rx).await {
+            Ok(Ok(Ok(result))) => result,
+            Ok(Ok(Err(error))) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Ok(Err(error)) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        remote_control_approval_error(format!(
+                            "remote control approval request canceled: {error}"
+                        )),
+                    )
+                    .await;
+                return;
+            }
+            Err(_) => {
+                let _canceled = self.outgoing.cancel_request(&approval_request_id).await;
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        remote_control_approval_error(format!(
+                            "remote control approval timed out after {}s",
+                            REMOTE_CONTROL_APPROVAL_TIMEOUT.as_secs()
+                        )),
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        match serde_json::from_value::<RemoteControlApprovalConfirmResponse>(result) {
+            Ok(response) => {
+                let signature = if response.decision == RemoteControlApprovalDecision::Approve {
+                    match self
+                        .remote_control_handle
+                        .as_ref()
+                        .map(|handle| handle.sign_approval(&challenge))
+                    {
+                        Some(Ok(signature)) => Some(signature),
+                        Some(Err(error)) => {
+                            self.outgoing
+                                .send_error(
+                                    request_id,
+                                    remote_control_approval_error(format!(
+                                        "failed to sign remote control approval: {error}"
+                                    )),
+                                )
+                                .await;
+                            return;
+                        }
+                        None => {
+                            self.outgoing
+                                .send_error(
+                                    request_id,
+                                    remote_control_approval_error(
+                                        "remote control approval key is unavailable".to_string(),
+                                    ),
+                                )
+                                .await;
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
                 self.outgoing
                     .send_response(
                         request_id,
-                        RemoteControlPairingStartResponse {
-                            pairing_id: pairing.pairing_id,
-                            pairing_code: pairing.pairing_code,
-                            expires_at: pairing.expires_at,
-                            server_id: pairing.server_id,
-                            environment_id: pairing.environment_id,
-                            mode: match pairing.mode {
-                                TransportRemoteControlPairingMode::Session => {
-                                    RemoteControlPairingMode::Session
-                                }
-                                TransportRemoteControlPairingMode::Server => {
-                                    RemoteControlPairingMode::Server
-                                }
-                            },
-                            prompt: pairing.prompt,
+                        RemoteControlApprovalRequestResponse {
+                            decision: response.decision,
+                            signature: signature
+                                .as_ref()
+                                .map(|signature| signature.signature.clone()),
+                            signature_algorithm: signature
+                                .as_ref()
+                                .map(|signature| signature.signature_algorithm.to_string()),
+                            approval_key_id: signature
+                                .as_ref()
+                                .map(|signature| signature.approval_key_id.clone()),
                         },
                     )
                     .await;
             }
             Err(error) => {
                 self.outgoing
-                    .send_error(request_id, remote_control_pairing_start_error(error))
+                    .send_error(
+                        request_id,
+                        remote_control_approval_error(format!(
+                            "invalid remote control approval response: {error}"
+                        )),
+                    )
                     .await;
             }
         }
     }
 }
 
-fn remote_control_pairing_mode(
-    mode: RemoteControlPairingMode,
-) -> TransportRemoteControlPairingMode {
-    match mode {
-        RemoteControlPairingMode::Session => TransportRemoteControlPairingMode::Session,
-        RemoteControlPairingMode::Server => TransportRemoteControlPairingMode::Server,
-    }
-}
-
-fn remote_control_pairing_start_error(error: std::io::Error) -> JSONRPCErrorError {
-    let code = match error.kind() {
-        std::io::ErrorKind::InvalidInput
-        | std::io::ErrorKind::NotFound
-        | std::io::ErrorKind::PermissionDenied
-        | std::io::ErrorKind::WouldBlock => INVALID_REQUEST_ERROR_CODE,
-        _ => INTERNAL_ERROR_CODE,
-    };
+fn remote_control_approval_error(message: String) -> JSONRPCErrorError {
     JSONRPCErrorError {
-        code,
-        message: error.to_string(),
+        code: INTERNAL_ERROR_CODE,
+        message,
         data: None,
     }
 }

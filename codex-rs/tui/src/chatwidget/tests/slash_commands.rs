@@ -567,57 +567,28 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 }
 
 #[tokio::test]
-async fn slash_remote_control_requests_pairing_via_app_server() {
+async fn slash_remote_control_shows_controller_instructions() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::RemoteControl);
 
     let mut cells = Vec::new();
-    let mut saw_start_pairing = false;
     while let Ok(event) = rx.try_recv() {
         match event {
             AppEvent::InsertHistoryCell(cell) => {
                 cells.push(cell.display_lines(/*width*/ 80));
             }
-            AppEvent::StartRemoteControlPairing => {
-                saw_start_pairing = true;
-            }
             other => panic!("unexpected app event: {other:?}"),
         }
     }
 
-    assert_eq!(cells.len(), 1, "expected pairing startup message");
+    assert_eq!(cells.len(), 1, "expected remote control instructions");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Starting remote control pairing"),
-        "expected pairing startup message, got {rendered:?}"
+        rendered.contains("Open Codex on another device"),
+        "expected remote-control instructions, got {rendered:?}"
     );
-    assert!(saw_start_pairing, "expected remote-control pairing event");
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
-}
-
-#[tokio::test]
-async fn remote_control_pairing_result_renders_code_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.on_remote_control_pairing_result(Ok(RemoteControlPairingStartResponse {
-        pairing_id: "pair_123".to_string(),
-        pairing_code: "TXNHF-FHZDA".to_string(),
-        expires_at: 1_776_254_096,
-        server_id: "srv_local".to_string(),
-        environment_id: "env_local".to_string(),
-        mode: RemoteControlPairingMode::Session,
-        prompt: "Allow this device to control this Codex session?".to_string(),
-    }));
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one pairing result message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert_chatwidget_snapshot!("remote_control_pairing_result", rendered);
-    assert!(
-        rendered.contains("TXNHF-FHZDA"),
-        "expected pairing code, got {rendered:?}"
-    );
 }
 
 #[tokio::test]

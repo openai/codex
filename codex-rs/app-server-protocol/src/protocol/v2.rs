@@ -1911,24 +1911,57 @@ pub enum RemoteControlPairingMode {
     Server,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct RemoteControlPairingStartParams {
-    pub mode: RemoteControlPairingMode,
+pub enum RemoteControlApprovalDecision {
+    Approve,
+    Deny,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct RemoteControlPairingStartResponse {
-    pub pairing_id: String,
-    pub pairing_code: String,
-    pub expires_at: i64,
+pub struct RemoteControlApprovalRequestParams {
+    pub approval_id: String,
     pub server_id: String,
     pub environment_id: String,
     pub mode: RemoteControlPairingMode,
+    pub controller_name: String,
     pub prompt: String,
+    pub expires_at: i64,
+    pub challenge: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlApprovalRequestResponse {
+    pub decision: RemoteControlApprovalDecision,
+    pub signature: Option<String>,
+    pub signature_algorithm: Option<String>,
+    pub approval_key_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlApprovalConfirmParams {
+    pub approval_id: String,
+    pub server_id: String,
+    pub environment_id: String,
+    pub mode: RemoteControlPairingMode,
+    pub controller_name: String,
+    pub prompt: String,
+    pub expires_at: i64,
+    pub challenge: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlApprovalConfirmResponse {
+    pub decision: RemoteControlApprovalDecision,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]

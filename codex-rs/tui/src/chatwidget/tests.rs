@@ -84,8 +84,6 @@ pub(super) use codex_app_server_protocol::PluginReadResponse;
 pub(super) use codex_app_server_protocol::PluginSource;
 pub(super) use codex_app_server_protocol::PluginSummary;
 pub(super) use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
-pub(super) use codex_app_server_protocol::RemoteControlPairingMode;
-pub(super) use codex_app_server_protocol::RemoteControlPairingStartResponse;
 pub(super) use codex_app_server_protocol::ServerNotification;
 pub(super) use codex_app_server_protocol::SkillSummary;
 pub(super) use codex_app_server_protocol::ThreadClosedNotification;
