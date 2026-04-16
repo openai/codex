@@ -60,6 +60,12 @@ Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
+## Auth Home
+
+When `CODEX_AUTH_HOME` is set, Codex stores CLI auth credentials in
+`CODEX_AUTH_HOME/auth.json` instead of `CODEX_HOME/auth.json`. The directory is
+created as needed. Other Codex state continues to use `CODEX_HOME`.
+
 ## Custom CA Certificates
 
 Codex can trust a custom root CA bundle for outbound HTTPS and secure websocket

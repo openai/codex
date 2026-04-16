@@ -41,7 +41,7 @@ const fn default_enabled() -> bool {
 #[serde(rename_all = "lowercase")]
 pub enum AuthCredentialsStoreMode {
     #[default]
-    /// Persist credentials in CODEX_HOME/auth.json.
+    /// Persist credentials in CODEX_AUTH_HOME/auth.json when set, otherwise CODEX_HOME/auth.json.
     File,
     /// Persist credentials in the keyring. Fail if unavailable.
     Keyring,

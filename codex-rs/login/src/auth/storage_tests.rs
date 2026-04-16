@@ -250,6 +250,18 @@ fn keyring_auth_storage_compute_store_key_for_home_directory() -> anyhow::Result
 }
 
 #[test]
+fn auth_home_store_key_path_does_not_depend_on_directory_existing() {
+    let root = tempdir().expect("tempdir");
+    let auth_home = root.path().join("missing").join("..").join("auth");
+
+    let before_create = compute_store_key_for_path(&normalize_auth_home_path(auth_home.clone()));
+    std::fs::create_dir_all(root.path().join("auth")).expect("create auth home");
+    let after_create = compute_store_key_for_path(&normalize_auth_home_path(auth_home));
+
+    assert_eq!(before_create, after_create);
+}
+
+#[test]
 fn keyring_auth_storage_save_persists_and_removes_fallback_file() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let mock_keyring = MockKeyringStore::default();

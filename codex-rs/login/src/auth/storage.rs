@@ -12,6 +12,7 @@ use std::io::Read;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,8 +55,48 @@ pub struct AgentIdentityAuthRecord {
     pub registered_at: String,
 }
 
+fn effective_auth_home(codex_home: &Path) -> PathBuf {
+    auth_home_from_env().unwrap_or_else(|| codex_home.to_path_buf())
+}
+
+fn auth_home_from_env() -> Option<PathBuf> {
+    std::env::var_os("CODEX_AUTH_HOME")
+        .filter(|value| !value.as_os_str().is_empty())
+        .map(PathBuf::from)
+        .map(normalize_auth_home_path)
+}
+
+fn normalize_auth_home_path(path: PathBuf) -> PathBuf {
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&path))
+            .unwrap_or(path)
+    };
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
-    codex_home.join("auth.json")
+    effective_auth_home(codex_home).join("auth.json")
 }
 
 pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
@@ -134,16 +175,23 @@ const KEYRING_SERVICE: &str = "Codex Auth";
 
 // turns codex_home path into a stable, short key string
 fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
-    let canonical = codex_home
-        .canonicalize()
-        .unwrap_or_else(|_| codex_home.to_path_buf());
-    let path_str = canonical.to_string_lossy();
+    let canonical = match auth_home_from_env() {
+        Some(auth_home) => auth_home,
+        None => codex_home
+            .canonicalize()
+            .unwrap_or_else(|_| codex_home.to_path_buf()),
+    };
+    Ok(compute_store_key_for_path(&canonical))
+}
+
+fn compute_store_key_for_path(path: &Path) -> String {
+    let path_str = path.to_string_lossy();
     let mut hasher = Sha256::new();
     hasher.update(path_str.as_bytes());
     let digest = hasher.finalize();
     let hex = format!("{digest:x}");
     let truncated = hex.get(..16).unwrap_or(&hex);
-    Ok(format!("cli|{truncated}"))
+    format!("cli|{truncated}")
 }
 
 #[derive(Clone, Debug)]
