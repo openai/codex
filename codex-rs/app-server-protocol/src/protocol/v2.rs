@@ -2750,6 +2750,15 @@ pub struct ThreadStartParams {
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct TurnEnvironmentParams {
+    pub environment_id: String,
+    #[ts(optional = nullable)]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct MockExperimentalMethodParams {
     /// Test-only payload field.
     #[ts(optional = nullable)]
@@ -4275,6 +4284,11 @@ pub struct TurnStartParams {
     #[experimental("turn/start.collaborationMode")]
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
+
+    /// Optional ordered environment ids with per-environment cwd overrides for
+    /// this turn. For now only the first entry is used to drive execution.
+    #[ts(optional = nullable)]
+    pub environments: Option<Vec<TurnEnvironmentParams>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

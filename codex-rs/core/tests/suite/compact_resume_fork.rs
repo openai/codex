@@ -571,6 +571,7 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
     std::fs::create_dir_all(&override_cwd)?;
     conversation
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: Some(override_cwd.to_path_buf()),
             approval_policy: None,
             approvals_reviewer: None,

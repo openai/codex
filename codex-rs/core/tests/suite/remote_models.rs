@@ -358,6 +358,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -601,6 +602,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     codex
         .submit(Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

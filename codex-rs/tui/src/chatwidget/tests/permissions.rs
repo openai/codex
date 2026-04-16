@@ -628,6 +628,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     assert_eq!(
         op,
         Op::OverrideTurnContext {
+            environments: None,
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),

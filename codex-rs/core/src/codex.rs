@@ -445,6 +445,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
+    pub(crate) environment_ids: Vec<String>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -498,6 +499,7 @@ impl Codex {
             inherited_exec_policy,
             parent_trace: _,
             analytics_events_client,
+            environment_ids,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -660,6 +662,13 @@ impl Codex {
             network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
+            environments: environment_ids
+                .into_iter()
+                .map(|environment_id| SessionEnvironment {
+                    environment_id,
+                    cwd: None,
+                })
+                .collect(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
@@ -693,6 +702,7 @@ impl Codex {
             skills_watcher,
             agent_control,
             environment,
+            environment_manager,
             analytics_events_client,
         )
         .await
@@ -884,6 +894,12 @@ impl TurnSkillsContext {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionEnvironment {
+    pub(crate) environment_id: String,
+    pub(crate) cwd: Option<AbsolutePathBuf>,
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -898,6 +914,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) environments: Vec<SessionEnvironment>,
     pub(crate) environment: Option<Arc<Environment>>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -1211,6 +1228,7 @@ pub(crate) struct SessionConfiguration {
     /// execution sandbox are resolved against this directory **instead** of
     /// the process-wide current working directory.
     cwd: AbsolutePathBuf,
+    environments: Vec<SessionEnvironment>,
     /// Directory containing all Codex state for this session.
     codex_home: AbsolutePathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -1251,6 +1269,18 @@ impl SessionConfiguration {
         }
     }
 
+    fn normalize_session_environment_cwd(
+        &self,
+        cwd: &PathBuf,
+        fallback_cwd: &AbsolutePathBuf,
+    ) -> AbsolutePathBuf {
+        AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(cwd.as_path()))
+            .unwrap_or_else(|e| {
+                warn!("failed to normalize update cwd: {cwd:?}: {e}");
+                fallback_cwd.clone()
+            })
+    }
+
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         let file_system_policy_matches_legacy = self.file_system_sandbox_policy
@@ -1286,20 +1316,28 @@ impl SessionConfiguration {
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
-
-        let absolute_cwd = updates
-            .cwd
-            .as_ref()
-            .map(|cwd| {
-                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
-                    cwd.as_path(),
-                ))
-                .unwrap_or_else(|e| {
-                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
-                    self.cwd.clone()
+        if let Some(environments) = updates.environments.as_ref() {
+            next_configuration.environments = environments
+                .iter()
+                .map(|environment| SessionEnvironment {
+                    environment_id: environment.environment_id.clone(),
+                    cwd: environment
+                        .cwd
+                        .as_ref()
+                        .map(|cwd| self.normalize_session_environment_cwd(cwd, &self.cwd)),
                 })
-            })
-            .unwrap_or_else(|| self.cwd.clone());
+                .collect();
+        }
+
+        let absolute_cwd = if let Some(cwd) = updates.cwd.as_ref() {
+            self.normalize_session_environment_cwd(cwd, &self.cwd)
+        } else {
+            next_configuration
+                .environments
+                .first()
+                .and_then(|environment| environment.cwd.clone())
+                .unwrap_or_else(|| self.cwd.clone())
+        };
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
@@ -1331,6 +1369,7 @@ impl SessionConfiguration {
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
+    pub(crate) environments: Option<Vec<codex_protocol::protocol::TurnEnvironment>>,
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
@@ -1673,6 +1712,7 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            environments: session_configuration.environments.clone(),
             environment,
             cwd,
             current_date: Some(current_date),
@@ -1724,6 +1764,7 @@ impl Session {
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
+        environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -2178,6 +2219,7 @@ impl Session {
                 config.js_repl_node_path.clone(),
             ),
             environment,
+            environment_manager,
         };
         services
             .model_client
@@ -2618,6 +2660,8 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
+        self.validate_selected_environment_update(updates.environments.as_ref())
+            .await?;
         let mut state = self.state.lock().await;
 
         match state.session_configuration.apply(&updates) {
@@ -2656,6 +2700,20 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
+        if let Err(err) = self
+            .validate_selected_environment_update(updates.environments.as_ref())
+            .await
+        {
+            self.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: err.to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            })
+            .await;
+            return Err(err);
+        }
         let (
             session_configuration,
             sandbox_policy_changed,
@@ -2723,6 +2781,17 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        let environment = self
+            .services
+            .environment_manager
+            .environment(Self::selected_environment_id(
+                &session_configuration.environments,
+            ))
+            .await
+            .unwrap_or_else(|err| {
+                error!("failed to create turn environment: {err}");
+                None
+            });
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
@@ -2745,9 +2814,7 @@ impl Session {
             .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let fs = self
-            .services
-            .environment
+        let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
         let skills_outcome = Arc::new(
@@ -2777,7 +2844,7 @@ impl Session {
                     )
                     .then(|| started_proxy.proxy())
                 }),
-            self.services.environment.clone(),
+            environment,
             sub_id,
             Arc::clone(&self.js_repl),
             skills_outcome,
@@ -2805,6 +2872,30 @@ impl Session {
             )
             .await;
         }
+    }
+
+    fn selected_environment_id(environments: &[SessionEnvironment]) -> Option<&str> {
+        environments
+            .first()
+            .map(|environment| environment.environment_id.as_str())
+    }
+
+    async fn validate_selected_environment_update(
+        &self,
+        environments: Option<&Vec<codex_protocol::protocol::TurnEnvironment>>,
+    ) -> ConstraintResult<()> {
+        let Some(environment_id) = environments
+            .and_then(|environments| environments.first())
+            .map(|environment| environment.environment_id.as_str())
+        else {
+            return Ok(());
+        };
+        self.services
+            .environment_manager
+            .environment(Some(environment_id))
+            .await
+            .map(|_| ())
+            .map_err(|err| anyhow::anyhow!(err.to_string()))
     }
 
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
@@ -4769,6 +4860,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     false
                 }
                 Op::OverrideTurnContext {
+                    environments,
                     cwd,
                     approval_policy,
                     approvals_reviewer,
@@ -4795,6 +4887,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         &sess,
                         sub.id.clone(),
                         SessionSettingsUpdate {
+                            environments,
                             cwd,
                             approval_policy,
                             approvals_reviewer,
@@ -6094,6 +6187,7 @@ async fn spawn_review_thread(
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
+        environments: parent_turn_context.environments.clone(),
         approval_policy: parent_turn_context.approval_policy.clone(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
