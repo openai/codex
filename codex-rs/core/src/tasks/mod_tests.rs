@@ -39,7 +39,7 @@ fn test_session_telemetry() -> SessionTelemetry {
 }
 
 #[test]
-fn goal_token_delta_excludes_cached_input_and_includes_reasoning() {
+fn goal_token_delta_excludes_cached_input_and_does_not_double_count_reasoning() {
     let usage = TokenUsage {
         input_tokens: 900,
         cached_input_tokens: 400,
@@ -48,7 +48,7 @@ fn goal_token_delta_excludes_cached_input_and_includes_reasoning() {
         total_tokens: 1_000,
     };
 
-    assert_eq!(600, goal_token_delta_for_usage(&usage));
+    assert_eq!(580, goal_token_delta_for_usage(&usage));
 }
 
 fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {

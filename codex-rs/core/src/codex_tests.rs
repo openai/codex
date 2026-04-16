@@ -5844,7 +5844,7 @@ async fn goal_accounting_charges_out_of_band_goal() -> anyhow::Result<()> {
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted after accounting");
-    assert_eq!(45, goal.tokens_used);
+    assert_eq!(40, goal.tokens_used);
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
 
     Ok(())
@@ -5915,11 +5915,11 @@ async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_respon
         .function_call_output_text("call-complete-goal")
         .expect("complete tool output should be sent to the model");
     let complete_output: serde_json::Value = serde_json::from_str(&complete_output)?;
-    assert_eq!(complete_output["goal"]["tokensUsed"], 600);
-    assert_eq!(complete_output["remainingTokens"], 400);
+    assert_eq!(complete_output["goal"]["tokensUsed"], 580);
+    assert_eq!(complete_output["remainingTokens"], 420);
     assert_eq!(
         complete_output["completionBudgetReport"],
-        "Goal achieved. Report final budget usage to the user: tokens used: 600 of 1000."
+        "Goal achieved. Report final budget usage to the user: tokens used: 580 of 1000."
     );
 
     let state_db = codex_state::StateRuntime::init(
@@ -5935,7 +5935,7 @@ async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_respon
         codex_state::ThreadGoalStatus::Complete,
         persisted_goal.status
     );
-    assert_eq!(600, persisted_goal.tokens_used);
+    assert_eq!(580, persisted_goal.tokens_used);
 
     Ok(())
 }
