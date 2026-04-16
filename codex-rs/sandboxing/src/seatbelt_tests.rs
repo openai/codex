@@ -3,6 +3,7 @@ use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::ProxyPolicyInputs;
 use super::UnixDomainSocketPolicy;
+use super::build_seatbelt_unreadable_glob_policy;
 use super::create_seatbelt_command_args;
 use super::create_seatbelt_command_args_for_legacy_policy;
 use super::dynamic_network_policy;
@@ -291,6 +292,41 @@ fn unreadable_globs_treat_unclosed_character_classes_as_literals() {
     assert!(regex.is_match("/tmp/repo/[local.env"));
     assert!(regex.is_match("/tmp/repo/[.env"));
     assert!(!regex.is_match("/tmp/repo/local.env"));
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_glob_policy_includes_canonicalized_static_prefix() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = TempDir::new().expect("temp dir");
+    let real_root = temp_dir.path().join("real-root");
+    let link_root = temp_dir.path().join("link-root");
+    fs::create_dir(&real_root).expect("create real root");
+    symlink(&real_root, &link_root).expect("create symlinked root");
+
+    let pattern = format!("{}/**/*.env", link_root.display());
+    let canonical_pattern = format!(
+        "{}/**/*.env",
+        real_root
+            .canonicalize()
+            .expect("canonicalize real root")
+            .display()
+    );
+    let expected_regex = seatbelt_regex_for_unreadable_glob(&canonical_pattern)
+        .expect("canonical glob should compile");
+    let mut policy = FileSystemSandboxPolicy::default();
+    policy.entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern { pattern },
+        access: FileSystemAccessMode::None,
+    });
+
+    let seatbelt_policy = build_seatbelt_unreadable_glob_policy(&policy, temp_dir.path());
+
+    assert!(
+        seatbelt_policy.contains(&format!(r#"(deny file-read* (regex #"{expected_regex}"))"#)),
+        "expected canonicalized glob regex in policy:\n{seatbelt_policy}"
+    );
 }
 
 #[test]

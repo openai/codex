@@ -20,6 +20,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
 use codex_features::Feature;
@@ -309,7 +310,8 @@ impl ToolHandler for UnifiedExecHandler {
                 }
 
                 emit_unified_exec_tty_metric(&turn.session_telemetry, tty);
-                manager
+                let session_command = command.clone();
+                match manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
@@ -330,11 +332,25 @@ impl ToolHandler for UnifiedExecHandler {
                         &context,
                     )
                     .await
-                    .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
+                {
+                    Ok(response) => response,
+                    Err(UnifiedExecError::SandboxDenied { output, .. }) => ExecCommandToolOutput {
+                        event_call_id: context.call_id.clone(),
+                        chunk_id: String::new(),
+                        wall_time: output.duration,
+                        raw_output: output.aggregated_output.text.into_bytes(),
+                        max_output_tokens,
+                        process_id: None,
+                        exit_code: Some(output.exit_code),
+                        original_token_count: None,
+                        session_command: Some(session_command),
+                    },
+                    Err(err) => {
+                        return Err(FunctionCallError::RespondToModel(format!(
                             "exec_command failed for `{command_for_display}`: {err:?}"
-                        ))
-                    })?
+                        )));
+                    }
+                }
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;

@@ -2389,8 +2389,9 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
     fs::write(&allowed_path, format!("{allowed}\n")).context("write allowed fixture")?;
 
     let call_id = "uexec-glob-deny-read";
-    let cmd =
-        format!("status=0; cat {denied_path:?} || status=$?; cat {allowed_path:?}; exit $status");
+    let cmd = format!(
+        "read_status=0; cat {denied_path:?} || read_status=$?; cat {allowed_path:?}; exit $read_status"
+    );
     let args = serde_json::json!({
         "cmd": cmd,
         "yield_time_ms": 500,

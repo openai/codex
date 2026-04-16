@@ -395,15 +395,49 @@ fn build_seatbelt_unreadable_glob_policy(
 
     let mut policy_components = Vec::new();
     for pattern in unreadable_globs {
-        let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern) else {
-            continue;
-        };
-        let regex = regex.replace('"', "\\\"");
-        policy_components.push(format!(r#"(deny file-read* (regex #"{regex}"))"#));
-        policy_components.push(format!(r#"(deny file-write-unlink (regex #"{regex}"))"#));
+        let mut regexes = BTreeSet::new();
+        if let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern) {
+            regexes.insert(regex);
+        }
+        if let Some(pattern) = canonicalize_glob_static_prefix_for_sandbox(&pattern)
+            && let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern)
+        {
+            regexes.insert(regex);
+        }
+        for regex in regexes {
+            let regex = regex.replace('"', "\\\"");
+            policy_components.push(format!(r#"(deny file-read* (regex #"{regex}"))"#));
+            policy_components.push(format!(r#"(deny file-write-unlink (regex #"{regex}"))"#));
+        }
     }
 
     policy_components.join("\n")
+}
+
+fn canonicalize_glob_static_prefix_for_sandbox(pattern: &str) -> Option<String> {
+    let first_glob_index = pattern
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '*' | '?' | '[' | ']').then_some(index));
+    let Some(first_glob_index) = first_glob_index else {
+        return normalize_path_for_sandbox(Path::new(pattern))
+            .map(|path| path.to_string_lossy().to_string());
+    };
+
+    let static_prefix = &pattern[..first_glob_index];
+    let prefix_end = if static_prefix.ends_with('/') {
+        static_prefix.len() - 1
+    } else {
+        static_prefix.rfind('/').unwrap_or(0)
+    };
+    if prefix_end == 0 {
+        return None;
+    }
+
+    let root = normalize_path_for_sandbox(Path::new(&pattern[..prefix_end]))?;
+    let root = root.to_string_lossy();
+    let suffix = &pattern[prefix_end..];
+    let normalized_pattern = format!("{root}{suffix}");
+    (normalized_pattern != pattern).then_some(normalized_pattern)
 }
 
 fn seatbelt_regex_for_unreadable_glob(pattern: &str) -> Option<String> {
