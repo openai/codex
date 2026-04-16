@@ -45,6 +45,8 @@ use crate::rollout::recorder::RolloutRecorder;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::UserShellCommandMode;
+use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -313,6 +315,7 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
             deferred_mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
@@ -735,6 +738,99 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
             .allowed_domains(),
         Some(vec!["*.example.com".to_string()])
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyhow::Result<()> {
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &SandboxPolicy::DangerFullAccess,
+    )?;
+
+    let session = make_session_with_config(move |config| {
+        config.permissions.sandbox_policy =
+            codex_config::Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        config.permissions.network = Some(network_spec);
+    })
+    .await?;
+
+    let turn_context = session.new_default_turn().await;
+    assert!(turn_context.network.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn workspace_write_turns_continue_to_expose_managed_network_proxy() -> anyhow::Result<()> {
+    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &sandbox_policy,
+    )?;
+
+    let session = make_session_with_config(move |config| {
+        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        config.permissions.network = Some(network_spec);
+    })
+    .await?;
+
+    let turn_context = session.new_default_turn().await;
+    assert!(turn_context.network.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::Result<()> {
+    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &sandbox_policy,
+    )?;
+
+    let (session, rx) = make_session_with_config_and_rx(move |config| {
+        config.permissions.sandbox_policy = codex_config::Constrained::allow_any(sandbox_policy);
+        config.permissions.network = Some(network_spec);
+    })
+    .await?;
+
+    let turn_context = session.new_default_turn().await;
+    assert!(turn_context.network.is_some());
+
+    #[cfg(windows)]
+    let command = r#"$val = $env:HTTP_PROXY; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
+    #[cfg(not(windows))]
+    let command = r#"sh -c "printf '%s' \"${HTTP_PROXY:-not-set}\"""#.to_string();
+
+    execute_user_shell_command(
+        Arc::clone(&session),
+        turn_context,
+        command,
+        CancellationToken::new(),
+        UserShellCommandMode::StandaloneTurn,
+    )
+    .await;
+
+    loop {
+        let event = rx.recv().await.expect("channel open");
+        if let EventMsg::ExecCommandEnd(event) = event.msg {
+            assert_eq!(event.exit_code, 0);
+            assert_eq!(event.stdout.trim(), "not-set");
+            break;
+        }
+    }
 
     Ok(())
 }
@@ -2998,6 +3094,109 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     };
 
     (session, turn_context)
+}
+
+async fn make_session_with_config(
+    mutator: impl FnOnce(&mut Config),
+) -> anyhow::Result<Arc<Session>> {
+    let (session, _rx_event) = make_session_with_config_and_rx(mutator).await?;
+    Ok(session)
+}
+
+async fn make_session_with_config_and_rx(
+    mutator: impl FnOnce(&mut Config),
+) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    mutator(&mut config);
+    let config = Arc::new(config);
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let models_manager = Arc::new(ModelsManager::new(
+        config.codex_home.to_path_buf(),
+        auth_manager.clone(),
+        /*model_catalog*/ None,
+        CollaborationModesConfig::default(),
+    ));
+    let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline_for_tests(
+        model.as_str(),
+        &config.to_models_manager_config(),
+    );
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort: config.model_reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let session_configuration = SessionConfiguration {
+        provider: config.model_provider.clone(),
+        collaboration_mode,
+        model_reasoning_summary: config.model_reasoning_summary,
+        developer_instructions: config.developer_instructions.clone(),
+        user_instructions: config.user_instructions.clone(),
+        service_tier: None,
+        personality: config.personality,
+        base_instructions: config
+            .base_instructions
+            .clone()
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+        compact_prompt: config.compact_prompt.clone(),
+        approval_policy: config.permissions.approval_policy.clone(),
+        approvals_reviewer: config.approvals_reviewer,
+        sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        cwd: config.cwd.clone(),
+        codex_home: config.codex_home.clone(),
+        thread_name: None,
+        original_config_do_not_use: Arc::clone(&config),
+        metrics_service_name: None,
+        app_server_client_name: None,
+        app_server_client_version: None,
+        session_source: SessionSource::Exec,
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        inherited_shell_snapshot: None,
+        user_shell_override: None,
+    };
+
+    let (tx_event, rx_event) = async_channel::unbounded();
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
+
+    let session = Session::new(
+        session_configuration,
+        Arc::clone(&config),
+        auth_manager,
+        models_manager,
+        Arc::new(ExecPolicyManager::default()),
+        tx_event,
+        agent_status_tx,
+        InitialHistory::New,
+        SessionSource::Exec,
+        skills_manager,
+        plugins_manager,
+        mcp_manager,
+        Arc::new(SkillsWatcher::noop()),
+        AgentControl::default(),
+        Some(Arc::new(
+            codex_exec_server::Environment::create(/*exec_server_url*/ None)
+                .await
+                .expect("create environment"),
+        )),
+        /*analytics_events_client*/ None,
+    )
+    .await?;
+
+    Ok((session, rx_event))
 }
 
 #[tokio::test]
@@ -5451,6 +5650,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         crate::tools::router::ToolRouterParams {
             deferred_mcp_tools,
             mcp_tools: Some(tools),
+            unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

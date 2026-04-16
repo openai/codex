@@ -146,6 +146,8 @@ pub enum Feature {
     Apps,
     /// Enable the tool_search tool for apps.
     ToolSearch,
+    /// Expose placeholder tools for unavailable historical tool calls.
+    UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
@@ -786,6 +788,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ToolSearch,
         key: "tool_search",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UnavailableDummyTools,
+        key: "unavailable_dummy_tools",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

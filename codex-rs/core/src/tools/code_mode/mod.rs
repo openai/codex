@@ -287,6 +287,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         ToolRouterParams {
             deferred_mcp_tools: None,
             mcp_tools: Some(listed_mcp_tools),
+            unavailable_called_tools: Vec::new(),
             parallel_mcp_server_names,
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
