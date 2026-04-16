@@ -438,6 +438,16 @@ enum ThreadShutdownResult {
     TimedOut,
 }
 
+struct ThreadReadViewSource {
+    thread: Thread,
+    rollout_path: Option<PathBuf>,
+}
+
+enum ThreadReadViewError {
+    InvalidRequest(String),
+    Internal(String),
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -3786,17 +3796,67 @@ impl CodexMessageProcessor {
             }
         };
 
-        let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
-        let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
-        let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
-            read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
+        let thread = match self.read_thread_view(thread_uuid, include_turns).await {
+            Ok(thread) => thread,
+            Err(ThreadReadViewError::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+                return;
+            }
+            Err(ThreadReadViewError::Internal(message)) => {
+                self.send_internal_error(request_id, message).await;
+                return;
+            }
+        };
+        let response = ThreadReadResponse { thread };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    /// Builds the API view for `thread/read` from persisted metadata plus optional live state.
+    async fn read_thread_view(
+        &self,
+        thread_id: ThreadId,
+        include_turns: bool,
+    ) -> Result<Thread, ThreadReadViewError> {
+        let loaded_thread = self.load_live_thread_for_read(thread_id).await;
+        let persisted = self
+            .load_persisted_thread_for_read(thread_id, include_turns, loaded_thread.as_ref())
+            .await?;
+        let live = if persisted.is_none() {
+            self.load_live_thread_view(thread_id, include_turns, loaded_thread.as_ref())
+                .await?
         } else {
-            read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
+            None
+        };
+        self.merge_thread_read_views(
+            thread_id,
+            include_turns,
+            loaded_thread.as_ref(),
+            persisted,
+            live,
+        )
+        .await
+    }
+
+    async fn load_live_thread_for_read(&self, thread_id: ThreadId) -> Option<Arc<CodexThread>> {
+        self.thread_manager.get_thread(thread_id).await.ok()
+    }
+
+    async fn load_persisted_thread_for_read(
+        &self,
+        thread_id: ThreadId,
+        include_turns: bool,
+        loaded_thread: Option<&Arc<CodexThread>>,
+    ) -> Result<Option<ThreadReadViewSource>, ThreadReadViewError> {
+        let loaded_thread_state_db = loaded_thread.and_then(|thread| thread.state_db());
+        let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
+            read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_id).await
+        } else {
+            read_summary_from_state_db_by_thread_id(&self.config, thread_id).await
         };
         let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
         if rollout_path.is_none() || include_turns {
             rollout_path =
-                match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
+                match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
                     .await
                 {
                     Ok(Some(path)) => Some(path),
@@ -3808,73 +3868,92 @@ impl CodexMessageProcessor {
                         }
                     }
                     Err(err) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("failed to locate thread id {thread_uuid}: {err}"),
-                        )
-                        .await;
-                        return;
+                        return Err(ThreadReadViewError::InvalidRequest(format!(
+                            "failed to locate thread id {thread_id}: {err}"
+                        )));
                     }
                 };
         }
 
         if include_turns && rollout_path.is_none() && db_summary.is_some() {
-            self.send_internal_error(
-                request_id,
-                format!("failed to locate rollout for thread {thread_uuid}"),
-            )
-            .await;
-            return;
+            return Err(ThreadReadViewError::Internal(format!(
+                "failed to locate rollout for thread {thread_id}"
+            )));
         }
 
-        let mut thread = if let Some(summary) = db_summary {
-            summary_to_thread(summary, &self.config.cwd)
-        } else if let Some(rollout_path) = rollout_path.as_ref() {
-            let fallback_provider = self.config.model_provider_id.as_str();
-            match read_summary_from_rollout(rollout_path, fallback_provider).await {
-                Ok(summary) => summary_to_thread(summary, &self.config.cwd),
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!(
-                            "failed to load rollout `{}` for thread {thread_uuid}: {err}",
-                            rollout_path.display()
-                        ),
-                    )
-                    .await;
-                    return;
-                }
-            }
+        if let Some(summary) = db_summary {
+            return Ok(Some(ThreadReadViewSource {
+                thread: summary_to_thread(summary, &self.config.cwd),
+                rollout_path,
+            }));
+        }
+
+        let Some(rollout_path) = rollout_path else {
+            return Ok(None);
+        };
+        let fallback_provider = self.config.model_provider_id.as_str();
+        match read_summary_from_rollout(&rollout_path, fallback_provider).await {
+            Ok(summary) => Ok(Some(ThreadReadViewSource {
+                thread: summary_to_thread(summary, &self.config.cwd),
+                rollout_path: Some(rollout_path),
+            })),
+            Err(err) => Err(ThreadReadViewError::Internal(format!(
+                "failed to load rollout `{}` for thread {thread_id}: {err}",
+                rollout_path.display()
+            ))),
+        }
+    }
+
+    async fn load_live_thread_view(
+        &self,
+        thread_id: ThreadId,
+        include_turns: bool,
+        loaded_thread: Option<&Arc<CodexThread>>,
+    ) -> Result<Option<ThreadReadViewSource>, ThreadReadViewError> {
+        let Some(thread) = loaded_thread else {
+            return Ok(None);
+        };
+        let config_snapshot = thread.config_snapshot().await;
+        let loaded_rollout_path = thread.rollout_path();
+        if include_turns && loaded_rollout_path.is_none() {
+            return Err(ThreadReadViewError::InvalidRequest(
+                "ephemeral threads do not support includeTurns".to_string(),
+            ));
+        }
+        let rollout_path = if include_turns {
+            loaded_rollout_path.clone()
         } else {
-            let Some(thread) = loaded_thread.as_ref() else {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!("thread not loaded: {thread_uuid}"),
-                )
-                .await;
-                return;
-            };
-            let config_snapshot = thread.config_snapshot().await;
-            let loaded_rollout_path = thread.rollout_path();
-            if include_turns && loaded_rollout_path.is_none() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "ephemeral threads do not support includeTurns".to_string(),
-                )
-                .await;
-                return;
-            }
-            if include_turns {
-                rollout_path = loaded_rollout_path.clone();
-            }
-            build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
+            None
+        };
+        Ok(Some(ThreadReadViewSource {
+            thread: build_thread_from_snapshot(thread_id, &config_snapshot, loaded_rollout_path),
+            rollout_path,
+        }))
+    }
+
+    async fn merge_thread_read_views(
+        &self,
+        thread_id: ThreadId,
+        include_turns: bool,
+        loaded_thread: Option<&Arc<CodexThread>>,
+        persisted: Option<ThreadReadViewSource>,
+        live: Option<ThreadReadViewSource>,
+    ) -> Result<Thread, ThreadReadViewError> {
+        let Some(ThreadReadViewSource {
+            mut thread,
+            rollout_path,
+        }) = persisted.or(live)
+        else {
+            return Err(ThreadReadViewError::InvalidRequest(format!(
+                "thread not loaded: {thread_id}"
+            )));
         };
         if thread.forked_from_id.is_none()
             && let Some(rollout_path) = rollout_path.as_ref()
         {
             thread.forked_from_id = forked_from_id_from_rollout(rollout_path).await;
         }
-        self.attach_thread_name(thread_uuid, &mut thread).await;
+        self.attach_thread_name(thread_id, &mut thread).await;
 
         if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
             match read_rollout_items_from_rollout(rollout_path).await {
@@ -3882,30 +3961,20 @@ impl CodexMessageProcessor {
                     thread.turns = build_turns_from_rollout_items(&items);
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!(
-                            "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
-                        ),
-                    )
-                    .await;
-                    return;
+                    return Err(ThreadReadViewError::InvalidRequest(format!(
+                        "thread {thread_id} is not materialized yet; includeTurns is unavailable before first user message"
+                    )));
                 }
                 Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!(
-                            "failed to load rollout `{}` for thread {thread_uuid}: {err}",
-                            rollout_path.display()
-                        ),
-                    )
-                    .await;
-                    return;
+                    return Err(ThreadReadViewError::Internal(format!(
+                        "failed to load rollout `{}` for thread {thread_id}: {err}",
+                        rollout_path.display()
+                    )));
                 }
             }
         }
 
-        let has_live_in_progress_turn = if let Some(loaded_thread) = loaded_thread.as_ref() {
+        let has_live_in_progress_turn = if let Some(loaded_thread) = loaded_thread {
             matches!(loaded_thread.agent_status().await, AgentStatus::Running)
         } else {
             false
@@ -3921,8 +3990,7 @@ impl CodexMessageProcessor {
             thread_status,
             has_live_in_progress_turn,
         );
-        let response = ThreadReadResponse { thread };
-        self.outgoing.send_response(request_id, response).await;
+        Ok(thread)
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
