@@ -345,6 +345,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_side_conversation_active(&mut self, active: bool) {
+        self.composer.set_side_conversation_active(active);
+        self.request_redraw();
+    }
+
     /// Update the key hint shown next to queued messages so it matches the
     /// binding that `ChatWidget` actually listens for.
     pub(crate) fn set_queued_message_edit_binding(&mut self, binding: KeyBinding) {
@@ -649,6 +654,11 @@ impl BottomPane {
 
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_thread_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.composer.set_thread_footer_hint_override(items);
         self.request_redraw();
     }
 

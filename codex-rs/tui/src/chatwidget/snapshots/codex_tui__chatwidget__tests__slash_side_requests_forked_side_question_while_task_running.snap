@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/side.rs
+expression: terminal.backend()
+---
+"                                                                                "
+"• Working (0s • esc to interrupt)                                               "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"   Side starting...                                                             "

@@ -69,6 +69,7 @@ use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ToolAccessPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::PlanItem;
@@ -1132,6 +1133,20 @@ pub(crate) async fn built_tools(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
+    if turn_context.tool_access_policy == ToolAccessPolicy::NoExternalTools {
+        return Ok(Arc::new(ToolRouter::from_config(
+            &turn_context.tools_config,
+            ToolRouterParams {
+                mcp_tools: None,
+                deferred_mcp_tools: None,
+                unavailable_called_tools: Vec::new(),
+                parallel_mcp_server_names: HashSet::new(),
+                discoverable_tools: None,
+                dynamic_tools: &[],
+            },
+        )));
+    }
+
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let all_mcp_tools = mcp_connection_manager

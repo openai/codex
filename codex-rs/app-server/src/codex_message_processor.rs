@@ -183,6 +183,7 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
+use codex_app_server_protocol::ToolAccessPolicy;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -4563,9 +4564,20 @@ impl CodexMessageProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
+            tool_access_policy,
             ephemeral,
             persist_extended_history,
         } = params;
+
+        if matches!(tool_access_policy, Some(ToolAccessPolicy::NoExternalTools)) && !ephemeral {
+            self.send_invalid_request_error(
+                request_id,
+                "toolAccessPolicy=noExternalTools is only supported for ephemeral forks"
+                    .to_string(),
+            )
+            .await;
+            return;
+        }
 
         let (rollout_path, source_thread_id) = if let Some(path) = path {
             (path, None)
@@ -4686,6 +4698,9 @@ impl CodexMessageProcessor {
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
+                tool_access_policy
+                    .map(ToolAccessPolicy::to_core)
+                    .unwrap_or_default(),
                 self.request_trace_context(&request_id).await,
             )
             .await
@@ -7430,6 +7445,7 @@ impl CodexMessageProcessor {
                 config,
                 rollout_path,
                 /*persist_extended_history*/ false,
+                /*tool_access_policy*/ Default::default(),
                 self.request_trace_context(request_id).await,
             )
             .await
@@ -9831,6 +9847,7 @@ mod tests {
             reasoning_effort: None,
             personality: None,
             session_source: SessionSource::Cli,
+            tool_access_policy: Default::default(),
         };
 
         assert_eq!(

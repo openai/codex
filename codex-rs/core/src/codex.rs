@@ -290,6 +290,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::ToolAccessPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
@@ -381,6 +382,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) agent_control: AgentControl,
+    pub(crate) tool_access_policy: ToolAccessPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
@@ -434,6 +436,7 @@ impl Codex {
             conversation_history,
             session_source,
             agent_control,
+            tool_access_policy,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
@@ -552,7 +555,9 @@ impl Codex {
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
-        let persisted_tools = if dynamic_tools.is_empty() {
+        let persisted_tools = if tool_access_policy == ToolAccessPolicy::NoExternalTools {
+            None
+        } else if dynamic_tools.is_empty() {
             let thread_id = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => conversation_history.forked_from_id(),
@@ -569,7 +574,9 @@ impl Codex {
         } else {
             None
         };
-        let dynamic_tools = if dynamic_tools.is_empty() {
+        let dynamic_tools = if tool_access_policy == ToolAccessPolicy::NoExternalTools {
+            Vec::new()
+        } else if dynamic_tools.is_empty() {
             persisted_tools
                 .or_else(|| conversation_history.get_dynamic_tools())
                 .unwrap_or_default()
@@ -611,6 +618,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            tool_access_policy,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
@@ -871,6 +879,7 @@ pub(crate) struct TurnContext {
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) js_repl: Arc<JsReplHandle>,
+    pub(crate) tool_access_policy: ToolAccessPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) turn_skills: TurnSkillsContext,
@@ -995,6 +1004,7 @@ impl TurnContext {
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy,
             js_repl: Arc::clone(&self.js_repl),
+            tool_access_policy: self.tool_access_policy,
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
             turn_skills: self.turn_skills.clone(),
@@ -1168,6 +1178,7 @@ pub(crate) struct SessionConfiguration {
     app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+    tool_access_policy: ToolAccessPolicy,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1192,6 +1203,7 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+            tool_access_policy: self.tool_access_policy,
         }
     }
 
@@ -1726,6 +1738,7 @@ impl Session {
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
             js_repl,
+            tool_access_policy: session_configuration.tool_access_policy,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
             turn_skills: TurnSkillsContext::new(skills_outcome),
@@ -1857,11 +1870,16 @@ impl Session {
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
+        let tool_access_policy = session_configuration.tool_access_policy;
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_servers = mcp_manager_for_mcp
-                .effective_servers(&config_for_mcp, auth.as_ref())
-                .await;
+            let mcp_servers = if tool_access_policy == ToolAccessPolicy::NoExternalTools {
+                HashMap::new()
+            } else {
+                mcp_manager_for_mcp
+                    .effective_servers(&config_for_mcp, auth.as_ref())
+                    .await
+            };
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
@@ -4893,6 +4911,7 @@ async fn spawn_review_thread(
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         js_repl: Arc::clone(&sess.js_repl),
+        tool_access_policy: parent_turn_context.tool_access_policy,
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,

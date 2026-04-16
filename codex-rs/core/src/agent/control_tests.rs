@@ -6,11 +6,13 @@ use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
+use crate::thread_manager::ForkSnapshot;
 use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::ToolAccessPolicy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
@@ -1454,6 +1456,68 @@ async fn spawn_thread_subagent_gets_random_nickname_in_session_source() {
     assert_eq!(depth, 1);
     assert!(agent_nickname.is_some());
     assert_eq!(agent_role, Some("explorer".to_string()));
+}
+
+#[tokio::test]
+async fn spawn_thread_subagent_inherits_parent_tool_access_policy() {
+    let harness = AgentControlHarness::new().await;
+    let (_root_thread_id, root_thread) = harness.start_thread().await;
+    root_thread.ensure_rollout_materialized().await;
+    root_thread
+        .flush_rollout()
+        .await
+        .expect("flush root rollout");
+    let root_rollout_path = root_thread
+        .rollout_path()
+        .expect("root thread should have a rollout path");
+
+    let side_parent = harness
+        .manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            harness.config.clone(),
+            root_rollout_path,
+            /*persist_extended_history*/ false,
+            ToolAccessPolicy::NoExternalTools,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork no-external-tools parent");
+    let side_parent_id = side_parent.thread_id;
+    assert_eq!(
+        side_parent
+            .thread
+            .config_snapshot()
+            .await
+            .tool_access_policy,
+        ToolAccessPolicy::NoExternalTools
+    );
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: side_parent_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    assert_eq!(
+        child_thread.config_snapshot().await.tool_access_policy,
+        ToolAccessPolicy::NoExternalTools
+    );
 }
 
 #[tokio::test]

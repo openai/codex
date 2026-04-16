@@ -272,6 +272,8 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
+Ephemeral forks can also pass `toolAccessPolicy: "noExternalTools"` to disable MCP servers, app connector tools, and dynamic external tools for the fork while leaving built-in Codex tools available. This policy is rejected for non-ephemeral forks.
+
 Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `persistExtendedHistory: true` to persist a richer subset of ThreadItems for non-lossy history when calling `thread/read`, `thread/resume`, and `thread/fork` later. This does not backfill events that were not persisted previously.
 
 ### Example: List threads (with pagination & filters)

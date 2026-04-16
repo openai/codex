@@ -1,0 +1,9 @@
+---
+source: tui_app_server/src/chatwidget/tests.rs
+expression: terminal.backend()
+---
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"   Save and close external editor to continue.                                  "

@@ -328,6 +328,7 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    thread_footer_hint_override: Option<Vec<(String, String)>>,
     remote_image_urls: Vec<String>,
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
@@ -359,6 +360,7 @@ pub(crate) struct ChatComposer {
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
+    side_conversation_active: bool,
     is_zellij: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
@@ -411,6 +413,7 @@ impl ChatComposer {
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
+            side_conversation_active: self.side_conversation_active,
         }
     }
 
@@ -470,6 +473,7 @@ impl ChatComposer {
             disable_paste_burst: false,
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
+            thread_footer_hint_override: None,
             remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
             pending_slash_command_history: None,
@@ -494,6 +498,7 @@ impl ChatComposer {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            side_conversation_active: false,
             is_zellij: matches!(
                 codex_terminal_detection::terminal_info().multiplexer,
                 Some(codex_terminal_detection::Multiplexer::Zellij {})
@@ -592,6 +597,10 @@ impl ChatComposer {
 
     pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
         self.audio_device_selection_enabled = enabled;
+    }
+
+    pub fn set_side_conversation_active(&mut self, active: bool) {
+        self.side_conversation_active = active;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -910,6 +919,14 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
+    }
+
+    /// Override the footer hint with thread-scoped UI, such as side-conversation navigation state.
+    ///
+    /// This lives below general footer overrides so temporary flows like external editor launch
+    /// or realtime status can still take precedence.
+    pub(crate) fn set_thread_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.thread_footer_hint_override = items;
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
@@ -3258,6 +3275,7 @@ impl ChatComposer {
                         realtime_conversation_enabled,
                         audio_device_selection_enabled,
                         windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
+                        side_conversation_active: self.side_conversation_active,
                     });
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
@@ -3711,12 +3729,16 @@ impl ChatComposer {
                     } else {
                         self.collaboration_mode_indicator
                     };
+                    let active_footer_hint_override = self
+                        .footer_hint_override
+                        .as_ref()
+                        .or(self.thread_footer_hint_override.as_ref());
                     let mut left_width = if self.footer_flash_visible() {
                         self.footer_flash
                             .as_ref()
                             .map(|flash| flash.line.width() as u16)
                             .unwrap_or(0)
-                    } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    } else if let Some(items) = active_footer_hint_override {
                         footer_hint_items_width(items)
                     } else if status_line_active {
                         truncated_status_line
@@ -3765,7 +3787,7 @@ impl ChatComposer {
                     let can_show_left_and_context =
                         can_show_left_with_context(hint_rect, left_width, right_width);
                     let has_override =
-                        self.footer_flash_visible() || self.footer_hint_override.is_some();
+                        self.footer_flash_visible() || active_footer_hint_override.is_some();
                     let single_line_layout = if has_override || status_line_active {
                         None
                     } else {
@@ -3843,7 +3865,7 @@ impl ChatComposer {
                         if let Some(flash) = self.footer_flash.as_ref() {
                             flash.line.render(inset_footer_hint_area(hint_rect), buf);
                         }
-                    } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    } else if let Some(items) = active_footer_hint_override {
                         render_footer_hint_items(hint_rect, buf, items);
                     } else if status_line_active {
                         if let Some(line) = truncated_status_line {
@@ -3860,7 +3882,6 @@ impl ChatComposer {
                             show_queue_hint,
                         );
                     }
-
                     if show_right && let Some(line) = &right_line {
                         render_context_right(hint_rect, buf, line);
                     }

@@ -7,6 +7,9 @@
 
 use super::*;
 
+const SIDE_STARTING_FOOTER_HINT: &str = "starting...";
+const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -53,7 +56,35 @@ impl ChatWidget {
         }
     }
 
+    fn request_side_conversation(
+        &mut self,
+        parent_thread_id: ThreadId,
+        user_message: Option<UserMessage>,
+    ) {
+        self.set_thread_footer_hint_override(Some(vec![(
+            "Side".to_string(),
+            SIDE_STARTING_FOOTER_HINT.to_string(),
+        )]));
+        self.request_redraw();
+        self.app_event_tx.send(AppEvent::StartSide {
+            parent_thread_id,
+            user_message,
+        });
+    }
+
+    fn request_empty_side_conversation(&mut self) {
+        let Some(parent_thread_id) = self.thread_id else {
+            self.add_error_message("'/side' is unavailable before the session starts.".to_string());
+            return;
+        };
+
+        self.request_side_conversation(parent_thread_id, /*user_message*/ None);
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
+            return;
+        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -160,6 +191,9 @@ impl ChatWidget {
                     return;
                 }
                 self.open_collaboration_modes_popup();
+            }
+            SlashCommand::Side => {
+                self.request_empty_side_conversation();
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
@@ -378,6 +412,9 @@ impl ChatWidget {
         args: String,
         _text_elements: Vec<TextElement>,
     ) {
+        if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
+            return;
+        }
         if !cmd.supports_inline_args() {
             self.dispatch_command(cmd);
             return;
@@ -431,6 +468,9 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
+                if !self.ensure_thread_rename_allowed() {
+                    return;
+                }
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 let Some((prepared_args, _prepared_elements)) = self
@@ -451,22 +491,8 @@ impl ChatWidget {
                 if !self.apply_plan_slash_command() {
                     return;
                 }
-                let Some((prepared_args, prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
+                let Some(user_message) = self.prepare_inline_args_user_message() else {
                     return;
-                };
-                let local_images = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let remote_image_urls = self.take_remote_image_urls();
-                let user_message = UserMessage {
-                    text: prepared_args,
-                    local_images,
-                    remote_image_urls,
-                    text_elements: prepared_elements,
-                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
@@ -476,6 +502,18 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Side if !trimmed.is_empty() => {
+                let Some(parent_thread_id) = self.thread_id else {
+                    self.add_error_message(
+                        "'/side' is unavailable before the session starts.".to_string(),
+                    );
+                    return;
+                };
+                let Some(user_message) = self.prepare_inline_args_user_message() else {
+                    return;
+                };
+                self.request_side_conversation(parent_thread_id, Some(user_message));
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
@@ -518,5 +556,17 @@ impl ChatWidget {
             }
             _ => self.dispatch_command(cmd),
         }
+    }
+
+    fn ensure_slash_command_allowed_in_side_conversation(&mut self, cmd: SlashCommand) -> bool {
+        if !self.active_side_conversation || cmd.available_in_side_conversation() {
+            return true;
+        }
+        self.add_error_message(format!(
+            "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
+            cmd.command()
+        ));
+        self.bottom_pane.drain_pending_submission_state();
+        false
     }
 }

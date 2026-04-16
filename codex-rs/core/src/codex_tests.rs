@@ -64,6 +64,7 @@ use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::ToolAccessPolicy;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
@@ -1561,6 +1562,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             fork_config,
             rollout_path,
             /*persist_extended_history*/ false,
+            /*tool_access_policy*/ Default::default(),
             /*parent_trace*/ None,
         )
         .await?;
@@ -2224,6 +2226,7 @@ async fn set_rate_limits_retains_previous_credits() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        tool_access_policy: Default::default(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2326,6 +2329,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        tool_access_policy: Default::default(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2678,6 +2682,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        tool_access_policy: Default::default(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -2948,6 +2953,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        tool_access_policy: Default::default(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -3052,6 +3058,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        tool_access_policy: Default::default(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -3269,6 +3276,7 @@ async fn make_session_with_config_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        tool_access_policy: Default::default(),
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -4015,6 +4023,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: SessionSource::Exec,
+        tool_access_policy: Default::default(),
         dynamic_tools,
         persist_extended_history: false,
         inherited_shell_snapshot: None,
@@ -5883,6 +5892,51 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         }
         other => panic!("expected FunctionCallError::Fatal, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn no_external_tools_policy_keeps_builtins_and_hides_dynamic_tools() {
+    let (session, turn_context, _rx) =
+        make_session_and_context_with_dynamic_tools_and_rx(vec![DynamicToolSpec {
+            name: "side_external_tool".to_string(),
+            description: "A dynamic external tool.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            defer_loading: false,
+        }])
+        .await;
+    let mut turn_context =
+        Arc::try_unwrap(turn_context).expect("test should hold the only turn context reference");
+    turn_context.tool_access_policy = ToolAccessPolicy::NoExternalTools;
+    let turn_context = Arc::new(turn_context);
+
+    let router = built_tools(
+        session.as_ref(),
+        turn_context.as_ref(),
+        &[],
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("built tools should succeed");
+    let tool_names: HashSet<String> = router
+        .specs()
+        .into_iter()
+        .map(|spec| spec.name().to_string())
+        .collect();
+
+    assert!(
+        tool_names.contains("exec_command") || tool_names.contains("shell"),
+        "built-in execution tools should remain available: {tool_names:?}"
+    );
+    assert!(
+        !tool_names.contains("side_external_tool"),
+        "dynamic external tools should be hidden: {tool_names:?}"
+    );
 }
 
 async fn sample_rollout(

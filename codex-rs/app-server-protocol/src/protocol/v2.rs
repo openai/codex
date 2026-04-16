@@ -24,6 +24,7 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::config_types::ToolAccessPolicy as CoreToolAccessPolicy;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
@@ -357,6 +358,13 @@ impl From<CoreSandboxMode> for SandboxMode {
         }
     }
 }
+
+v2_enum_from_core!(
+    pub enum ToolAccessPolicy from CoreToolAccessPolicy {
+        Default,
+        NoExternalTools
+    }
+);
 
 v2_enum_from_core!(
     pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
@@ -2919,6 +2927,8 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[ts(optional = nullable)]
+    pub tool_access_policy: Option<ToolAccessPolicy>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// If true, persist additional rollout EventMsg variants required to
@@ -8712,6 +8722,26 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn thread_fork_params_round_trip_tool_access_policy() {
+        let params: ThreadForkParams = serde_json::from_value(json!({
+            "threadId": "thr_123",
+            "ephemeral": true,
+            "toolAccessPolicy": "noExternalTools"
+        }))
+        .expect("params should deserialize");
+
+        assert_eq!(
+            params.tool_access_policy,
+            Some(ToolAccessPolicy::NoExternalTools)
+        );
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("toolAccessPolicy"),
+            Some(&json!("noExternalTools"))
+        );
     }
 
     #[test]

@@ -151,6 +151,7 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
             config,
             path,
             /*persist_extended_history*/ false,
+            /*tool_access_policy*/ Default::default(),
             /*parent_trace*/ None,
         );
     }
@@ -471,6 +472,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
             config,
             source_path,
             /*persist_extended_history*/ false,
+            /*tool_access_policy*/ Default::default(),
             /*parent_trace*/ None,
         )
         .await
@@ -585,6 +587,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             config,
             source_path,
             /*persist_extended_history*/ false,
+            /*tool_access_policy*/ Default::default(),
             /*parent_trace*/ None,
         )
         .await
@@ -665,6 +668,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             config.clone(),
             source_path,
             /*persist_extended_history*/ false,
+            /*tool_access_policy*/ Default::default(),
             /*parent_trace*/ None,
         )
         .await
@@ -704,6 +708,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             config,
             forked_path,
             /*persist_extended_history*/ false,
+            /*tool_access_policy*/ Default::default(),
             /*parent_trace*/ None,
         )
         .await

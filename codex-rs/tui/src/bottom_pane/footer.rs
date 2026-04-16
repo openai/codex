@@ -717,9 +717,18 @@ pub(crate) fn footer_hint_items_width(items: &[(String, String)]) -> u16 {
 fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
     let mut spans = Vec::with_capacity(items.len() * 4);
     for (idx, (key, label)) in items.iter().enumerate() {
+        let is_side = key == "Side";
         spans.push(" ".into());
-        spans.push(key.clone().bold());
-        spans.push(format!(" {label}").into());
+        spans.push(if is_side {
+            key.clone().magenta().bold()
+        } else {
+            key.clone().bold()
+        });
+        spans.push(if is_side {
+            format!(" {label}").magenta().bold()
+        } else {
+            format!(" {label}").into()
+        });
         if idx + 1 != items.len() {
             spans.push("   ".into());
         }

@@ -138,6 +138,7 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -167,12 +168,14 @@ mod app_server_adapter;
 pub(crate) mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod side;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::side::SideThreadState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -1037,6 +1040,7 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
+    side_threads: HashMap<ThreadId, SideThreadState>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     primary_thread_id: Option<ThreadId>,
@@ -1859,6 +1863,7 @@ impl App {
             .agent_navigation
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
         self.chat_widget.set_active_agent_label(label);
+        self.sync_side_thread_ui();
     }
 
     async fn thread_cwd(&self, thread_id: ThreadId) -> Option<AbsolutePathBuf> {
@@ -3041,6 +3046,9 @@ impl App {
             }
         }
         for thread_id in thread_ids {
+            if self.side_threads.contains_key(&thread_id) {
+                continue;
+            }
             if !self
                 .refresh_agent_picker_thread_liveness(app_server, thread_id)
                 .await
@@ -3419,7 +3427,10 @@ impl App {
         self.active_thread_rx = Some(receiver);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        let mut chat_widget = ChatWidget::new_with_app_event(init);
+        let next_fork_banner_parent_label = self.take_next_side_fork_banner_parent_label(thread_id);
+        chat_widget.set_next_fork_banner_parent_label(next_fork_banner_parent_label);
+        self.replace_chat_widget(chat_widget);
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
@@ -3463,6 +3474,7 @@ impl App {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
+        self.side_threads.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -3931,7 +3943,11 @@ impl App {
                     &[("source", "cli_subcommand")],
                 );
                 let forked = app_server
-                    .fork_thread(config.clone(), target_session.thread_id)
+                    .fork_thread(
+                        config.clone(),
+                        target_session.thread_id,
+                        /*tool_access_policy*/ None,
+                    )
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
@@ -4005,6 +4021,7 @@ impl App {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            side_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -4458,7 +4475,14 @@ impl App {
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
-                    match app_server.fork_thread(self.config.clone(), thread_id).await {
+                    match app_server
+                        .fork_thread(
+                            self.config.clone(),
+                            thread_id,
+                            /*tool_access_policy*/ None,
+                        )
+                        .await
+                    {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
                             match self
@@ -5605,7 +5629,16 @@ impl App {
                 self.open_agent_picker(app_server).await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread(tui, app_server, thread_id).await?;
+                self.select_agent_thread_and_discard_side_chain(tui, app_server, thread_id)
+                    .await?;
+            }
+            AppEvent::StartSide {
+                parent_thread_id,
+                user_message,
+            } => {
+                return self
+                    .handle_start_side(tui, app_server, parent_thread_id, user_message)
+                    .await;
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
@@ -6015,7 +6048,7 @@ impl App {
                 self.active_non_primary_shutdown_target(notification)
         {
             self.mark_agent_picker_thread_closed(closed_thread_id);
-            self.select_agent_thread(tui, app_server, primary_thread_id)
+            self.select_agent_thread_and_discard_side_chain(tui, app_server, primary_thread_id)
                 .await?;
             if self.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
@@ -6202,7 +6235,9 @@ impl App {
                 .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Previous)
                 .await
             {
-                let _ = self.select_agent_thread(tui, app_server, thread_id).await;
+                let _ = self
+                    .select_agent_thread_and_discard_side_chain(tui, app_server, thread_id)
+                    .await;
             }
             return;
         }
@@ -6217,15 +6252,22 @@ impl App {
                 .adjacent_thread_id_with_backfill(app_server, AgentNavigationDirection::Next)
                 .await
             {
-                let _ = self.select_agent_thread(tui, app_server, thread_id).await;
+                let _ = self
+                    .select_agent_thread_and_discard_side_chain(tui, app_server, thread_id)
+                    .await;
             }
+            return;
+        }
+        if side_return_shortcut_matches(key_event)
+            && self.maybe_return_from_side(tui, app_server).await
+        {
             return;
         }
 
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('t'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } => {
@@ -6236,7 +6278,7 @@ impl App {
             }
             KeyEvent {
                 code: KeyCode::Char('l'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } => {
@@ -6255,7 +6297,7 @@ impl App {
             }
             KeyEvent {
                 code: KeyCode::Char('g'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                modifiers: KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } => {
@@ -6347,6 +6389,23 @@ impl App {
                 });
             }
         });
+    }
+}
+
+fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
+    match key_event {
+        KeyEvent {
+            code: KeyCode::Esc,
+            kind: KeyEventKind::Press | KeyEventKind::Repeat,
+            ..
+        } => true,
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c') => true,
+        _ => false,
     }
 }
 
@@ -9435,6 +9494,156 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn side_fork_config_is_ephemeral_and_appends_developer_guardrails() {
+        let mut app = make_test_app().await;
+        app.config.developer_instructions = Some("Existing developer policy.".to_string());
+        let original_approval_policy = app.config.permissions.approval_policy.value();
+        let original_sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
+
+        let fork_config = app.side_fork_config();
+
+        assert!(fork_config.ephemeral);
+        assert_eq!(
+            fork_config.permissions.approval_policy.value(),
+            original_approval_policy
+        );
+        assert_eq!(
+            fork_config.permissions.sandbox_policy.get(),
+            &original_sandbox_policy
+        );
+        let developer_instructions = fork_config
+            .developer_instructions
+            .as_deref()
+            .expect("side developer instructions");
+        assert!(developer_instructions.contains("Existing developer policy."));
+        assert!(developer_instructions.contains("You are in a side conversation."));
+        assert!(
+            developer_instructions
+                .contains("inherited fork history is provided only as reference context")
+        );
+        assert!(
+            developer_instructions.contains(
+                "MCPs, app connector tools, and dynamic external tools are not available"
+            )
+        );
+        assert!(developer_instructions.contains("non-mutating inspection"));
+        assert!(developer_instructions.contains("Do not modify files"));
+        assert!(developer_instructions.contains("Do not request escalated permissions"));
+        assert!(app.transcript_cells.is_empty());
+    }
+
+    #[test]
+    fn side_return_shortcuts_match_esc_and_ctrl_c() {
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )));
+    }
+
+    #[tokio::test]
+    async fn side_start_block_message_tracks_open_side_conversation() {
+        let mut app = make_test_app().await;
+        assert_eq!(app.side_start_block_message(), None);
+
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.side_threads.insert(
+            side_thread_id,
+            SideThreadState {
+                parent_thread_id,
+                next_fork_banner_parent_label: None,
+            },
+        );
+
+        assert_eq!(
+            app.side_start_block_message(),
+            Some(
+                "A side conversation is already open. Press Esc to return before starting another."
+            )
+        );
+
+        app.side_threads.remove(&side_thread_id);
+        assert_eq!(app.side_start_block_message(), None);
+    }
+
+    #[tokio::test]
+    async fn side_discard_selection_keeps_current_side_thread() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads.insert(
+            side_thread_id,
+            SideThreadState {
+                parent_thread_id,
+                next_fork_banner_parent_label: None,
+            },
+        );
+
+        assert_eq!(
+            app.side_threads_to_discard_after_switch(side_thread_id),
+            Vec::new()
+        );
+        assert_eq!(
+            app.side_threads_to_discard_after_switch(parent_thread_id),
+            vec![side_thread_id]
+        );
+    }
+
+    #[tokio::test]
+    async fn discard_side_thread_removes_agent_navigation_entry() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+        let mut side_config = app.chat_widget.config_ref().clone();
+        side_config.ephemeral = true;
+        let started = app_server.start_thread(&side_config).await?;
+        let side_thread_id = started.session.thread_id;
+        app.side_threads.insert(
+            side_thread_id,
+            SideThreadState {
+                parent_thread_id: ThreadId::new(),
+                next_fork_banner_parent_label: None,
+            },
+        );
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.discard_side_thread(&mut app_server, side_thread_id)
+            .await;
+
+        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
+        assert!(!app.side_threads.contains_key(&side_thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event() -> Result<()>
     {
         let mut app = make_test_app().await;
@@ -9719,6 +9928,7 @@ guardian_approval = true
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            side_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -9776,6 +9986,7 @@ guardian_approval = true
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
+                side_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
