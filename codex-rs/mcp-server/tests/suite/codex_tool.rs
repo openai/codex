@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
@@ -18,6 +19,7 @@ use rmcp::model::JsonRpcVersion2_0;
 use rmcp::model::RequestId;
 use serde_json::json;
 use tempfile::TempDir;
+use tokio::time::sleep;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
@@ -26,6 +28,7 @@ use mcp_test_support::McpProcess;
 use mcp_test_support::create_apply_patch_sse_response;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_responses_server;
+use mcp_test_support::create_mock_responses_server_without_expected_count;
 use mcp_test_support::create_shell_command_sse_response;
 use mcp_test_support::format_with_current_shell;
 
@@ -84,9 +87,9 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
 
     let McpHandle {
         process: mut mcp_process,
-        server: _server,
+        server,
         dir: _dir,
-    } = create_mcp_process(vec![
+    } = create_mcp_process_without_strict_model_request_count(vec![
         create_shell_command_sse_response(
             shell_command.clone(),
             Some(workdir_for_shell_function_call.path()),
@@ -154,7 +157,76 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     .expect("task_complete_notification timeout")
     .expect("task_complete_notification resp");
 
-    // Verify the original `codex` tool call completes and that the file was created.
+    assert!(
+        created_file.is_file(),
+        "shell command completed but did not create expected side-effect file: {}",
+        created_file.display()
+    );
+
+    let model_requests = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                anyhow::bail!("mock model server request recording is unavailable");
+            };
+            if requests.len() >= 2 {
+                break anyhow::Ok(requests);
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "shell side effect succeeded, but the model server did not receive the continuation \
+             request after command approval"
+        )
+    })??;
+    assert_eq!(
+        2,
+        model_requests.len(),
+        "expected exactly initial model request plus continuation request after shell approval"
+    );
+    let continuation_request = model_requests[1].body_json::<serde_json::Value>()?;
+    let continuation_input = continuation_request["input"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("second model request did not include input items"))?;
+    let shell_output = continuation_input
+        .iter()
+        .find_map(|item| {
+            if item.get("type").and_then(serde_json::Value::as_str) == Some("function_call_output")
+                && item.get("call_id").and_then(serde_json::Value::as_str) == Some("call1234")
+            {
+                item.get("output")
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "second model request did not include shell tool output for call1234: {continuation_request}"
+            )
+        })?;
+    match shell_output {
+        serde_json::Value::String(output) => {
+            anyhow::ensure!(
+                !output.is_empty(),
+                "shell tool output for call1234 was empty: {continuation_request}"
+            );
+        }
+        serde_json::Value::Array(items) => {
+            anyhow::ensure!(
+                !items.is_empty(),
+                "shell tool output for call1234 was empty: {continuation_request}"
+            );
+        }
+        _ => {
+            anyhow::bail!(
+                "shell tool output for call1234 was not a string or content item array: {continuation_request}"
+            );
+        }
+    }
+
+    // Verify the original `codex` tool call completes with the second model response.
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
@@ -179,8 +251,6 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         },
         codex_response
     );
-
-    assert!(created_file.is_file(), "created file should exist");
 
     Ok(())
 }
@@ -483,6 +553,17 @@ pub struct McpHandle {
 
 async fn create_mcp_process(responses: Vec<String>) -> anyhow::Result<McpHandle> {
     let server = create_mock_responses_server(responses).await;
+    create_mcp_process_with_server(server).await
+}
+
+async fn create_mcp_process_without_strict_model_request_count(
+    responses: Vec<String>,
+) -> anyhow::Result<McpHandle> {
+    let server = create_mock_responses_server_without_expected_count(responses).await;
+    create_mcp_process_with_server(server).await
+}
+
+async fn create_mcp_process_with_server(server: MockServer) -> anyhow::Result<McpHandle> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;

@@ -11,20 +11,46 @@ use wiremock::matchers::path;
 /// Create a mock server that will provide the responses, in order, for
 /// requests to the `/v1/responses` endpoint.
 pub async fn create_mock_responses_server(responses: Vec<String>) -> MockServer {
-    let server = MockServer::start().await;
+    create_mock_responses_server_with_expected_count(responses, ExpectedCount::Exact).await
+}
 
+/// Create a mock server that will provide the responses, in order, for
+/// requests to the `/v1/responses` endpoint, without asserting the exact
+/// request count at mock teardown.
+///
+/// Prefer `create_mock_responses_server` unless the test has a more
+/// deterministic request-count assertion.
+pub async fn create_mock_responses_server_without_expected_count(
+    responses: Vec<String>,
+) -> MockServer {
+    create_mock_responses_server_with_expected_count(responses, ExpectedCount::Unchecked).await
+}
+
+enum ExpectedCount {
+    Exact,
+    Unchecked,
+}
+
+async fn create_mock_responses_server_with_expected_count(
+    responses: Vec<String>,
+    expected_count: ExpectedCount,
+) -> MockServer {
+    let server = MockServer::start().await;
     let num_calls = responses.len();
+
     let seq_responder = SeqResponder {
         num_calls: AtomicUsize::new(0),
         responses,
     };
 
-    Mock::given(method("POST"))
+    let mock = Mock::given(method("POST"))
         .and(path("/v1/responses"))
-        .respond_with(seq_responder)
-        .expect(num_calls as u64)
-        .mount(&server)
-        .await;
+        .respond_with(seq_responder);
+    let mock = match expected_count {
+        ExpectedCount::Exact => mock.expect(num_calls as u64),
+        ExpectedCount::Unchecked => mock,
+    };
+    mock.mount(&server).await;
 
     server
 }
