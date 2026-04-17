@@ -1036,6 +1036,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
 
     test.codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "initial prompt".to_string(),
                 text_elements: Vec::new(),
@@ -1053,6 +1054,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     for text in ["accepted queued prompt", "blocked queued prompt"] {
         test.codex
             .submit(Op::UserInput {
+                environments: None,
                 items: vec![UserInput::Text {
                     text: text.to_string(),
                     text_elements: Vec::new(),

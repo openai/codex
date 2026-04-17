@@ -500,6 +500,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     fixture
         .codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "call the rmcp image tool".into(),
                 text_elements: Vec::new(),
