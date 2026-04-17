@@ -2987,11 +2987,7 @@ impl App {
         is_replay_only: bool,
         snapshot: &mut ThreadEventSnapshot,
     ) {
-        let should_refresh = !is_replay_only
-            && snapshot.session.as_ref().is_none_or(|session| {
-                session.model.trim().is_empty() || session.rollout_path.is_none()
-            });
-        if !should_refresh {
+        if !self.should_refresh_snapshot_session(thread_id, is_replay_only, snapshot) {
             return;
         }
 
@@ -3011,6 +3007,19 @@ impl App {
                 );
             }
         }
+    }
+
+    fn should_refresh_snapshot_session(
+        &self,
+        thread_id: ThreadId,
+        is_replay_only: bool,
+        snapshot: &ThreadEventSnapshot,
+    ) -> bool {
+        !is_replay_only
+            && !self.side_threads.contains_key(&thread_id)
+            && snapshot.session.as_ref().is_none_or(|session| {
+                session.model.trim().is_empty() || session.rollout_path.is_none()
+            })
     }
 
     async fn apply_refreshed_snapshot_thread(
@@ -6665,6 +6674,8 @@ mod tests {
     use codex_app_server_protocol::HookScope as AppServerHookScope;
     use codex_app_server_protocol::HookStartedNotification;
     use codex_app_server_protocol::JSONRPCErrorError;
+    use codex_app_server_protocol::McpServerStartupState;
+    use codex_app_server_protocol::McpServerStatusUpdatedNotification;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
@@ -9650,6 +9661,31 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn side_thread_snapshot_does_not_refresh_from_fork_history() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+
+        let snapshot = ThreadEventSnapshot {
+            session: Some(ThreadSessionState {
+                rollout_path: None,
+                ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+            }),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        };
+
+        assert!(!app.should_refresh_snapshot_session(
+            side_thread_id,
+            /*is_replay_only*/ false,
+            &snapshot
+        ));
+    }
+
+    #[tokio::test]
     async fn side_thread_snapshot_skips_session_header_preamble() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         while app_event_rx.try_recv().is_ok() {}
@@ -9684,6 +9720,33 @@ guardian_approval = true
             app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn side_thread_ignores_global_mcp_startup_notifications() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
+        let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+            .await
+            .expect("embedded app server");
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+
+        app.handle_server_notification_event(
+            &app_server,
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                name: "sentry".to_string(),
+                status: McpServerStartupState::Failed,
+                error: Some("sentry is not logged in".to_string()),
+            }),
+        )
+        .await;
+
+        assert!(app_event_rx.try_recv().is_err());
     }
 
     #[tokio::test]

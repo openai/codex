@@ -151,7 +151,7 @@ impl App {
         }
     }
 
-    async fn handle_server_notification_event(
+    pub(super) async fn handle_server_notification_event(
         &mut self,
         _app_server_client: &AppServerSession,
         notification: ServerNotification,
@@ -215,6 +215,12 @@ impl App {
                 return;
             }
             ServerNotificationThreadTarget::Global => {}
+        }
+
+        if self.active_side_parent_thread_id().is_some()
+            && matches!(notification, ServerNotification::McpServerStatusUpdated(_))
+        {
+            return;
         }
 
         self.chat_widget

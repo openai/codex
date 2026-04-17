@@ -180,6 +180,10 @@ impl Session {
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
     ) {
+        if turn_context.tool_access_policy == ToolAccessPolicy::NoExternalTools {
+            return;
+        }
+
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
         let mcp_config = config
