@@ -21,6 +21,7 @@ use crate::setup_error::SetupFailure;
 use crate::setup_error::clear_setup_error_report;
 use crate::setup_error::failure;
 use crate::setup_error::read_setup_error_report;
+use crate::ssh_config_dependencies::ssh_config_dependency_profile_entry_names;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -328,6 +329,7 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         Ok(entries) => entries,
         Err(_) => return vec![user_profile.to_path_buf()],
     };
+    let ssh_dependency_entry_names = ssh_config_dependency_profile_entry_names(user_profile);
 
     entries
         .filter_map(Result::ok)
@@ -337,6 +339,9 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
             !USERPROFILE_READ_ROOT_EXCLUSIONS
                 .iter()
                 .any(|excluded| name.eq_ignore_ascii_case(excluded))
+                && !ssh_dependency_entry_names
+                    .iter()
+                    .any(|excluded| name.eq_ignore_ascii_case(excluded))
         })
         .map(|(_, path)| path)
         .collect()
@@ -1044,6 +1049,33 @@ mod tests {
         let roots = profile_read_roots(user_profile);
         let actual: HashSet<PathBuf> = roots.into_iter().collect();
         let expected: HashSet<PathBuf> = [allowed_dir, allowed_file].into_iter().collect();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn profile_read_roots_excludes_ssh_config_dependency_entries() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path();
+        let allowed_dir = user_profile.join("Documents");
+        let ssh_dir = user_profile.join(".ssh");
+        let key_dir = user_profile.join(".keys");
+        let include_dir = user_profile.join(".included");
+
+        fs::create_dir_all(&allowed_dir).expect("create allowed dir");
+        fs::create_dir_all(&ssh_dir).expect("create .ssh");
+        fs::create_dir_all(&key_dir).expect("create key dir");
+        fs::create_dir_all(&include_dir).expect("create include dir");
+        fs::write(
+            ssh_dir.join("config"),
+            "IdentityFile ~/.keys/id_ed25519\nInclude ~/.included/config\n",
+        )
+        .expect("write ssh config");
+        fs::write(include_dir.join("config"), "User git\n").expect("write included config");
+
+        let roots = profile_read_roots(user_profile);
+        let actual: HashSet<PathBuf> = roots.into_iter().collect();
+        let expected: HashSet<PathBuf> = [allowed_dir].into_iter().collect();
 
         assert_eq!(expected, actual);
     }

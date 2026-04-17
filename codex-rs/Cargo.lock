@@ -3275,6 +3275,7 @@ dependencies = [
  "codex-utils-string",
  "dirs-next",
  "dunce",
+ "glob",
  "pretty_assertions",
  "rand 0.8.5",
  "serde",
