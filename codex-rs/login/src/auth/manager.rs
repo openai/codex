@@ -80,12 +80,14 @@ impl PartialEq for CodexAuth {
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 
-const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
-const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
-const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
+const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please sign in again.";
+const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please sign in again.";
+const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please sign in again.";
 const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
-    "Your access token could not be refreshed. Please log out and sign in again.";
+    "Your access token could not be refreshed. Please sign in again.";
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
+const REFRESH_TOKEN_MISSING_MESSAGE: &str =
+    "Your access token could not be refreshed. Please sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
@@ -688,6 +690,10 @@ fn load_auth(
         AuthCredentialsStoreMode::Ephemeral,
     );
     if let Some(auth_dot_json) = ephemeral_storage.load()? {
+        if managed_chatgpt_auth_is_missing_refresh_token(&auth_dot_json) {
+            tracing::info!("Ignoring managed ChatGPT auth because the refresh token is missing.");
+            return Ok(None);
+        }
         let auth = build_auth(auth_dot_json, AuthCredentialsStoreMode::Ephemeral)?;
         return Ok(Some(auth));
     }
@@ -703,9 +709,24 @@ fn load_auth(
         Some(auth) => auth,
         None => return Ok(None),
     };
+    if managed_chatgpt_auth_is_missing_refresh_token(&auth_dot_json) {
+        tracing::info!("Ignoring managed ChatGPT auth because the refresh token is missing.");
+        return Ok(None);
+    }
 
     let auth = build_auth(auth_dot_json, auth_credentials_store_mode)?;
     Ok(Some(auth))
+}
+
+fn managed_chatgpt_auth_is_missing_refresh_token(auth_dot_json: &AuthDotJson) -> bool {
+    if auth_dot_json.resolved_mode() != ApiAuthMode::Chatgpt {
+        return false;
+    }
+
+    match auth_dot_json.tokens.as_ref() {
+        Some(tokens) => tokens.refresh_token.is_empty(),
+        None => true,
+    }
 }
 
 // Persist refreshed tokens into auth storage and update last_refresh.
@@ -734,11 +755,28 @@ fn persist_tokens(
     Ok(auth_dot_json)
 }
 
+fn clear_refresh_token(storage: &Arc<dyn AuthStorageBackend>) -> std::io::Result<bool> {
+    let Some(mut auth_dot_json) = storage.load()? else {
+        return Ok(false);
+    };
+    let Some(tokens) = auth_dot_json.tokens.as_mut() else {
+        return Ok(false);
+    };
+    if tokens.refresh_token.is_empty() {
+        return Ok(false);
+    }
+
+    tokens.refresh_token.clear();
+    storage.save(&auth_dot_json)?;
+    Ok(true)
+}
+
 // Requests refreshed ChatGPT OAuth tokens from the auth service using a refresh token.
 // The caller is responsible for persisting any returned tokens.
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &CodexHttpClient,
+    endpoint: &str,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
         client_id: CLIENT_ID,
@@ -746,11 +784,9 @@ async fn request_chatgpt_token_refresh(
         refresh_token,
     };
 
-    let endpoint = refresh_token_endpoint();
-
     // Use shared client factory to include standard headers
     let response = client
-        .post(endpoint.as_str())
+        .post(endpoint)
         .header("Content-Type", "application/json")
         .json(&refresh_request)
         .send()
@@ -767,8 +803,8 @@ async fn request_chatgpt_token_refresh(
     } else {
         let body = response.text().await.unwrap_or_default();
         tracing::error!("Failed to refresh token: {status}: {body}");
-        if status == StatusCode::UNAUTHORIZED {
-            let failed = classify_refresh_token_failure(&body);
+        if should_clear_refresh_token_after_refresh_failure(status) {
+            let failed = classify_refresh_token_failure(status, &body);
             Err(RefreshTokenError::Permanent(failed))
         } else {
             let message = try_parse_error_message(&body);
@@ -779,7 +815,11 @@ async fn request_chatgpt_token_refresh(
     }
 }
 
-fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
+fn should_clear_refresh_token_after_refresh_failure(status: StatusCode) -> bool {
+    status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS
+}
+
+fn classify_refresh_token_failure(status: StatusCode, body: &str) -> RefreshTokenFailedError {
     let code = extract_refresh_token_error_code(body);
 
     let normalized_code = code.as_deref().map(str::to_ascii_lowercase);
@@ -792,9 +832,10 @@ fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
 
     if reason == RefreshTokenFailedReason::Other {
         tracing::warn!(
+            status = status.as_u16(),
             backend_code = normalized_code.as_deref(),
             backend_body = body,
-            "Encountered unknown 401 response while refreshing token"
+            "Encountered unknown client error response while refreshing token"
         );
     }
 
@@ -1338,6 +1379,9 @@ impl AuthManager {
             && let Err(err) = self.refresh_token().await
         {
             tracing::error!("Failed to refresh token: {}", err);
+            if matches!(err, RefreshTokenError::Permanent(_)) {
+                return self.auth_cached();
+            }
             return Some(auth);
         }
         self.auth_cached()
@@ -1364,6 +1408,13 @@ impl AuthManager {
         let new_account_id = new_auth.as_ref().and_then(CodexAuth::get_account_id);
 
         if new_account_id.as_deref() != Some(expected_account_id) {
+            if new_auth.is_none() {
+                tracing::info!(
+                    "Reloading auth to unauthenticated because no matching auth is available."
+                );
+                self.set_cached_auth(None);
+                return ReloadOutcome::ReloadedChanged;
+            }
             let found_account_id = new_account_id.as_deref().unwrap_or("unknown");
             tracing::info!(
                 "Skipping auth reload due to account id mismatch (expected: {expected_account_id}, found: {found_account_id})"
@@ -1573,19 +1624,29 @@ impl AuthManager {
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.lock().await;
-        let auth_before_reload = self.auth_cached();
-        if auth_before_reload
-            .as_ref()
-            .is_some_and(CodexAuth::is_api_key_auth)
-        {
+        let Some(auth_before_reload) = self.auth_cached() else {
+            return Ok(());
+        };
+        if auth_before_reload.is_api_key_auth() {
             return Ok(());
         }
-        let expected_account_id = auth_before_reload
-            .as_ref()
-            .and_then(CodexAuth::get_account_id);
+        let expected_account_id = auth_before_reload.get_account_id();
 
         match self.reload_if_account_id_matches(expected_account_id.as_deref()) {
             ReloadOutcome::ReloadedChanged => {
+                let auth_has_empty_refresh_token =
+                    self.auth_cached().as_ref().is_some_and(|auth| match auth {
+                        CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth
+                            .current_token_data()
+                            .is_some_and(|token_data| token_data.refresh_token.is_empty()),
+                        CodexAuth::ApiKey(_) | CodexAuth::ChatgptAuthTokens(_) => false,
+                    });
+                if auth_has_empty_refresh_token {
+                    tracing::info!(
+                        "Continuing token refresh because auth changed to an empty refresh token."
+                    );
+                    return self.refresh_token_from_authority_impl().await;
+                }
                 tracing::info!("Skipping token refresh because auth changed after guarded reload.");
                 Ok(())
             }
@@ -1768,7 +1829,40 @@ impl AuthManager {
         auth: &ChatgptAuth,
         refresh_token: String,
     ) -> Result<(), RefreshTokenError> {
-        let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
+        if refresh_token.is_empty() {
+            self.reload();
+            return Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_MISSING_MESSAGE.to_string(),
+            )));
+        }
+
+        let endpoint = refresh_token_endpoint();
+        let refresh_response = match request_chatgpt_token_refresh(
+            refresh_token,
+            auth.client(),
+            endpoint.as_str(),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error @ RefreshTokenError::Permanent(_)) => {
+                match clear_refresh_token(auth.storage()) {
+                    Ok(true) => {
+                        tracing::warn!("Cleared refresh token after terminal refresh failure");
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to clear refresh token after terminal refresh failure: {err}"
+                        );
+                    }
+                }
+                self.reload();
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
 
         persist_tokens(
             auth.storage(),

@@ -656,7 +656,7 @@ async fn thread_start_surfaces_cloud_requirements_load_errors() -> Result<()> {
             "errorCode": "Auth",
             "action": "relogin",
             "statusCode": 401,
-            "detail": "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.",
+            "detail": "Your access token could not be refreshed because your refresh token was revoked. Please sign in again.",
         }))
     );
 

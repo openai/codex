@@ -310,7 +310,7 @@ async fn get_auth_status_omits_token_after_permanent_refresh_failure() -> Result
     assert_eq!(
         status,
         GetAuthStatusResponse {
-            auth_method: Some(AuthMode::Chatgpt),
+            auth_method: None,
             auth_token: None,
             requires_openai_auth: Some(true),
         }
@@ -394,7 +394,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
     assert_eq!(
         status,
         GetAuthStatusResponse {
-            auth_method: Some(AuthMode::Chatgpt),
+            auth_method: None,
             auth_token: None,
             requires_openai_auth: Some(true),
         }

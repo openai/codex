@@ -3,6 +3,7 @@ use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
 use codex_app_server_protocol::AuthMode;
+use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
@@ -10,6 +11,7 @@ use codex_protocol::auth::PlanType as InternalPlanType;
 use base64::Engine;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
+use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
@@ -18,6 +20,11 @@ use tempfile::TempDir;
 use tempfile::tempdir;
 use tokio::time::Duration;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[tokio::test]
 async fn refresh_without_id_token() {
@@ -48,6 +55,205 @@ async fn refresh_without_id_token() {
     assert_eq!(tokens.id_token.raw_jwt, fake_jwt);
     assert_eq!(tokens.access_token, "new-access-token");
     assert_eq!(tokens.refresh_token, "new-refresh-token");
+}
+
+#[test]
+fn clear_refresh_token_preserves_auth_record() {
+    let codex_home = tempdir().unwrap();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("account-123".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let storage = create_auth_storage(
+        codex_home.path().to_path_buf(),
+        AuthCredentialsStoreMode::File,
+    );
+    let mut expected = storage
+        .load()
+        .expect("auth should load")
+        .expect("auth should exist");
+    expected
+        .tokens
+        .as_mut()
+        .expect("tokens should exist")
+        .refresh_token
+        .clear();
+
+    assert!(
+        super::clear_refresh_token(&storage).expect("refresh token should clear"),
+        "first clear should report a storage change"
+    );
+    let actual = storage
+        .load()
+        .expect("auth should load")
+        .expect("auth should exist");
+    assert_eq!(actual, expected);
+    assert!(
+        !super::clear_refresh_token(&storage).expect("second clear should succeed"),
+        "second clear should be a no-op"
+    );
+}
+
+#[test]
+fn refresh_failure_clear_policy_matches_terminal_client_errors() {
+    assert!(super::should_clear_refresh_token_after_refresh_failure(
+        reqwest::StatusCode::BAD_REQUEST
+    ));
+    assert!(super::should_clear_refresh_token_after_refresh_failure(
+        reqwest::StatusCode::UNAUTHORIZED
+    ));
+    assert!(!super::should_clear_refresh_token_after_refresh_failure(
+        reqwest::StatusCode::TOO_MANY_REQUESTS
+    ));
+    assert!(!super::should_clear_refresh_token_after_refresh_failure(
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    ));
+}
+
+#[tokio::test]
+async fn token_refresh_treats_terminal_client_errors_as_permanent() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "refresh_token_expired"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = CodexHttpClient::new(reqwest::Client::new());
+    let endpoint = format!("{}/oauth/token", server.uri());
+    let result =
+        request_chatgpt_token_refresh("test-refresh-token".to_string(), &client, &endpoint).await;
+    let err = match result {
+        Ok(_) => panic!("terminal client error should fail"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.failed_reason(), Some(RefreshTokenFailedReason::Expired));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn token_refresh_treats_rate_limits_as_transient() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {
+                "message": "slow down"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = CodexHttpClient::new(reqwest::Client::new());
+    let endpoint = format!("{}/oauth/token", server.uri());
+    let result =
+        request_chatgpt_token_refresh("test-refresh-token".to_string(), &client, &endpoint).await;
+    let err = match result {
+        Ok(_) => panic!("rate limit should fail"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.failed_reason(), None);
+    assert!(
+        err.to_string().contains("429"),
+        "transient error should include response status"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(refresh_token_url_override)]
+async fn refresh_token_clears_persisted_refresh_token_after_terminal_client_error() {
+    skip_if_no_network!();
+
+    let codex_home = tempdir().unwrap();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("account-123".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let storage = create_auth_storage(
+        codex_home.path().to_path_buf(),
+        AuthCredentialsStoreMode::File,
+    );
+    let mut auth_dot_json = storage
+        .load()
+        .expect("auth should load")
+        .expect("auth should exist");
+    auth_dot_json
+        .tokens
+        .as_mut()
+        .expect("tokens should exist")
+        .account_id = Some("account-123".to_string());
+    storage.save(&auth_dot_json).expect("auth should save");
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "refresh_token_expired"
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let endpoint = format!("{}/oauth/token", server.uri());
+    let _guard = EnvVarGuard::set(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, &endpoint);
+    let manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    );
+
+    let err = manager
+        .refresh_token()
+        .await
+        .expect_err("terminal client error should fail refresh");
+    assert_eq!(err.failed_reason(), Some(RefreshTokenFailedReason::Expired));
+
+    let stored = storage
+        .load()
+        .expect("auth should load")
+        .expect("auth should exist");
+    assert_eq!(
+        stored.tokens.expect("tokens should exist").refresh_token,
+        ""
+    );
+
+    assert!(
+        manager.auth_cached().is_none(),
+        "manager should clear cached auth after a terminal refresh failure"
+    );
+
+    manager
+        .refresh_token()
+        .await
+        .expect("cleared auth refresh should be a no-op without another server request");
+    server.verify().await;
 }
 
 #[test]
@@ -86,6 +292,76 @@ fn missing_auth_json_returns_none() {
     let auth = CodexAuth::from_auth_storage(dir.path(), AuthCredentialsStoreMode::File)
         .expect("call should succeed");
     assert_eq!(auth, None);
+}
+
+#[test]
+fn managed_chatgpt_auth_with_missing_refresh_token_loads_as_none() {
+    let codex_home = tempdir().unwrap();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("account-123".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let storage = create_auth_storage(
+        codex_home.path().to_path_buf(),
+        AuthCredentialsStoreMode::File,
+    );
+    let mut auth_dot_json = storage
+        .load()
+        .expect("auth should load")
+        .expect("auth should exist");
+    auth_dot_json
+        .tokens
+        .as_mut()
+        .expect("tokens should exist")
+        .refresh_token
+        .clear();
+    storage
+        .save(&auth_dot_json)
+        .expect("auth should save with an empty refresh token");
+
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth");
+    assert_eq!(auth, None);
+}
+
+#[test]
+fn external_chatgpt_auth_tokens_load_without_refresh_token() {
+    let codex_home = tempdir().unwrap();
+    let access_token = fake_jwt_for_auth_file_params(&AuthFileParams {
+        openai_api_key: None,
+        chatgpt_plan_type: Some("pro".to_string()),
+        chatgpt_account_id: Some("account-123".to_string()),
+    })
+    .expect("failed to build access token");
+
+    super::login_with_chatgpt_auth_tokens(
+        codex_home.path(),
+        &access_token,
+        "account-123",
+        Some("pro"),
+    )
+    .expect("external auth tokens should save");
+
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth should be available");
+    let tokens = auth.get_token_data().expect("token data should exist");
+    assert_eq!(auth.api_auth_mode(), ApiAuthMode::ChatgptAuthTokens);
+    assert_eq!(tokens.refresh_token, "");
 }
 
 #[tokio::test]

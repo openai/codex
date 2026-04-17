@@ -542,17 +542,23 @@ async fn refresh_token_returns_permanent_error_for_expired_refresh_token() -> Re
         .context("refresh should fail")?;
     assert_eq!(err.failed_reason(), Some(RefreshTokenFailedReason::Expired));
 
+    let mut expected_stored = initial_auth.clone();
+    expected_stored
+        .tokens
+        .as_mut()
+        .context("tokens should exist")?
+        .refresh_token
+        .clear();
     let stored = ctx.load_auth()?;
-    assert_eq!(stored, initial_auth);
-    let cached_auth = ctx
-        .auth_manager
-        .auth()
-        .await
-        .context("auth should remain cached")?;
-    let cached = cached_auth
-        .get_token_data()
-        .context("token data should remain cached")?;
-    assert_eq!(cached, initial_tokens);
+    assert_eq!(stored, expected_stored);
+    assert!(
+        ctx.auth_manager.auth_cached().is_none(),
+        "auth should be cleared after a terminal refresh failure"
+    );
+    assert!(
+        ctx.auth_manager.auth().await.is_none(),
+        "terminal refresh failure should be observed as logged out"
+    );
 
     server.verify().await;
     Ok(())
@@ -598,28 +604,24 @@ async fn refresh_token_does_not_retry_after_permanent_failure() -> Result<()> {
         Some(RefreshTokenFailedReason::Exhausted)
     );
 
-    let second_err = ctx
-        .auth_manager
+    ctx.auth_manager
         .refresh_token()
         .await
-        .err()
-        .context("second refresh should fail without retrying")?;
-    assert_eq!(
-        second_err.failed_reason(),
-        Some(RefreshTokenFailedReason::Exhausted)
-    );
+        .context("second refresh should be a no-op without retrying")?;
 
+    let mut expected_stored = initial_auth.clone();
+    expected_stored
+        .tokens
+        .as_mut()
+        .context("tokens should exist")?
+        .refresh_token
+        .clear();
     let stored = ctx.load_auth()?;
-    assert_eq!(stored, initial_auth);
-    let cached_auth = ctx
-        .auth_manager
-        .auth()
-        .await
-        .context("auth should remain cached")?;
-    let cached = cached_auth
-        .get_token_data()
-        .context("token data should remain cached")?;
-    assert_eq!(cached, initial_tokens);
+    assert_eq!(stored, expected_stored);
+    assert!(
+        ctx.auth_manager.auth_cached().is_none(),
+        "auth should remain cleared after the no-op refresh"
+    );
 
     server.verify().await;
     Ok(())
@@ -627,7 +629,7 @@ async fn refresh_token_does_not_retry_after_permanent_failure() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
-async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<()> {
+async fn new_login_reloads_auth_after_permanent_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -664,6 +666,10 @@ async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<
         first_err.failed_reason(),
         Some(RefreshTokenFailedReason::Exhausted)
     );
+    assert!(
+        ctx.auth_manager.auth_cached().is_none(),
+        "auth should be cleared after the terminal refresh failure"
+    );
 
     let fresh_refresh = Utc::now() - Duration::hours(1);
     let disk_tokens = build_tokens("disk-access-token", "disk-refresh-token");
@@ -680,10 +686,10 @@ async fn refresh_token_reloads_changed_auth_after_permanent_failure() -> Result<
         AuthCredentialsStoreMode::File,
     )?;
 
-    ctx.auth_manager
-        .refresh_token()
-        .await
-        .context("refresh should reload changed auth without retrying")?;
+    assert!(
+        ctx.auth_manager.reload(),
+        "explicit login reload should publish the new auth state"
+    );
 
     let stored = ctx.load_auth()?;
     assert_eq!(stored, disk_auth);
