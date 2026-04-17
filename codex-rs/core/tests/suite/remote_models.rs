@@ -117,7 +117,7 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_clamp_config_context_window_to_max_context_window() -> Result<()> {
+async fn remote_models_config_context_window_override_wins_over_max_context_window() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -125,9 +125,9 @@ async fn remote_models_clamp_config_context_window_to_max_context_window() -> Re
     let requested_model = "gpt-5.4-test";
     let mut remote_model =
         test_remote_model("gpt-5.4", ModelVisibility::List, /*priority*/ 1_000);
-    remote_model.context_window = Some(272_000);
-    remote_model.max_context_window = Some(1_000_000);
-    remote_model.effective_context_window_percent = 95;
+    remote_model.context_window = Some(273_000);
+    remote_model.max_context_window = Some(400_000);
+    remote_model.effective_context_window_percent = 100;
     mount_models_once(
         &server,
         ModelsResponse {
@@ -147,7 +147,7 @@ async fn remote_models_clamp_config_context_window_to_max_context_window() -> Re
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model = Some(requested_model.to_string());
-            config.model_context_window = Some(2_000_000);
+            config.model_context_window = Some(500_000);
         })
         .build(&server)
         .await?;
@@ -176,7 +176,7 @@ async fn remote_models_clamp_config_context_window_to_max_context_window() -> Re
         matches!(
             event,
             EventMsg::TurnStarted(started)
-                if started.model_context_window == Some(950_000)
+                if started.model_context_window == Some(500_000)
         )
     })
     .await;
@@ -184,7 +184,79 @@ async fn remote_models_clamp_config_context_window_to_max_context_window() -> Re
         unreachable!("wait_for_event returned unexpected event");
     };
 
-    assert_eq!(turn_started.model_context_window, Some(950_000));
+    assert_eq!(turn_started.model_context_window, Some(500_000));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_use_context_window_when_config_override_is_absent() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let requested_model = "gpt-5.4-test";
+    let mut remote_model =
+        test_remote_model("gpt-5.4", ModelVisibility::List, /*priority*/ 1_000);
+    remote_model.context_window = Some(273_000);
+    remote_model.max_context_window = Some(400_000);
+    remote_model.effective_context_window_percent = 100;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex {
+        codex, cwd, config, ..
+    } = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some(requested_model.to_string());
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check context window".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: requested_model.to_string(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let turn_started_event = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::TurnStarted(started)
+                if started.model_context_window == Some(273_000)
+        )
+    })
+    .await;
+    let EventMsg::TurnStarted(turn_started) = turn_started_event else {
+        unreachable!("wait_for_event returned unexpected event");
+    };
+
+    assert_eq!(turn_started.model_context_window, Some(273_000));
 
     Ok(())
 }
