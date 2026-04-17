@@ -1,12 +1,15 @@
 //! Launch MCP stdio servers and return the transport rmcp should use.
 //!
-//! This module owns the "where does the server process run?" boundary for
-//! stdio MCP servers. In this PR there is only the local launcher, which keeps
-//! the existing behavior: the orchestrator starts the configured command and
-//! rmcp talks to the child process through local stdin/stdout pipes.
+//! This module owns the "where does the server process run?" decision:
 //!
-//! Later stack entries add an executor-backed launcher without changing
-//! `RmcpClient`'s MCP lifecycle code.
+//! - [`LocalStdioServerLauncher`] starts the configured command as a child of
+//!   the orchestrator process.
+//! - [`ExecutorStdioServerLauncher`] starts the configured command through the
+//!   executor process API.
+//!
+//! Both paths return [`StdioServerTransport`], so `RmcpClient` can hand the
+//! resulting byte stream to rmcp without knowing where the process lives. The
+//! executor-specific byte adaptation lives in `executor_process_transport`.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -14,6 +17,7 @@ use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 #[cfg(unix)]
 use std::thread::sleep;
 #[cfg(unix)]
@@ -21,6 +25,12 @@ use std::thread::spawn;
 #[cfg(unix)]
 use std::time::Duration;
 
+use anyhow::Result;
+use anyhow::anyhow;
+use codex_config::types::ShellEnvironmentPolicyInherit;
+use codex_exec_server::ExecBackend;
+use codex_exec_server::ExecEnvPolicy;
+use codex_exec_server::ExecParams;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_process_group;
 #[cfg(unix)]
@@ -38,8 +48,10 @@ use tokio::process::Command;
 use tracing::info;
 use tracing::warn;
 
+use crate::executor_process_transport::ExecutorProcessTransport;
 use crate::program_resolver;
 use crate::utils::create_env_for_mcp_server;
+use crate::utils::create_env_overlay_for_remote_mcp_server;
 
 // General purpose public code.
 
@@ -74,11 +86,16 @@ pub struct StdioServerCommand {
 /// directly to `rmcp::service::serve_client`.
 pub struct StdioServerTransport {
     inner: StdioServerTransportInner,
+    // Local child processes can leave subprocesses behind, so the local
+    // variant keeps a process-group guard with the transport. Executor-backed
+    // processes are owned and cleaned up by the executor, so that variant uses
+    // `None`.
     _process_group_guard: Option<ProcessGroupGuard>,
 }
 
 enum StdioServerTransportInner {
     Local(TokioChildProcess),
+    Executor(ExecutorProcessTransport),
 }
 
 impl Transport<RoleClient> for StdioServerTransport {
@@ -88,20 +105,29 @@ impl Transport<RoleClient> for StdioServerTransport {
         &mut self,
         item: TxJsonRpcMessage<RoleClient>,
     ) -> impl Future<Output = std::result::Result<(), Self::Error>> + Send + 'static {
+        // Both variants already implement rmcp's transport contract. This
+        // wrapper keeps process placement private while leaving rmcp's send
+        // semantics unchanged.
         match &mut self.inner {
             StdioServerTransportInner::Local(transport) => transport.send(item).boxed(),
+            StdioServerTransportInner::Executor(transport) => transport.send(item).boxed(),
         }
     }
 
     fn receive(&mut self) -> impl Future<Output = Option<RxJsonRpcMessage<RoleClient>>> + Send {
+        // rmcp reads from the same transport shape for both placements. The
+        // executor variant turns pushed process-output events back into the
+        // line-delimited JSON stream expected by rmcp.
         match &mut self.inner {
             StdioServerTransportInner::Local(transport) => transport.receive().boxed(),
+            StdioServerTransportInner::Executor(transport) => transport.receive().boxed(),
         }
     }
 
     async fn close(&mut self) -> std::result::Result<(), Self::Error> {
         match &mut self.inner {
             StdioServerTransportInner::Local(transport) => transport.close().await,
+            StdioServerTransportInner::Executor(transport) => transport.close().await,
         }
     }
 }
@@ -263,6 +289,139 @@ impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {
         if cfg!(unix) {
             self.maybe_terminate_process_group();
+        }
+    }
+}
+
+// Remote public implementation.
+
+/// Starts MCP stdio servers through the executor process API.
+///
+/// MCP framing still runs in the orchestrator. The executor only owns the
+/// child process and transports raw stdin/stdout/stderr bytes, so it does not
+/// need to know about MCP methods such as `initialize` or `tools/list`.
+#[derive(Clone)]
+pub struct ExecutorStdioServerLauncher {
+    exec_backend: Arc<dyn ExecBackend>,
+    default_cwd: PathBuf,
+}
+
+impl ExecutorStdioServerLauncher {
+    /// Creates a stdio server launcher backed by the executor process API.
+    ///
+    /// `default_cwd` is used only when the MCP server config omits `cwd`.
+    /// Executor `process/start` requires an explicit working directory, unlike
+    /// local `tokio::process::Command`, which can inherit the orchestrator cwd.
+    pub fn new(exec_backend: Arc<dyn ExecBackend>, default_cwd: PathBuf) -> Self {
+        Self {
+            exec_backend,
+            default_cwd,
+        }
+    }
+}
+
+impl StdioServerLauncher for ExecutorStdioServerLauncher {
+    fn launch(
+        &self,
+        command: StdioServerCommand,
+    ) -> BoxFuture<'static, io::Result<StdioServerTransport>> {
+        let exec_backend = Arc::clone(&self.exec_backend);
+        let default_cwd = self.default_cwd.clone();
+        async move { Self::launch_server(command, exec_backend, default_cwd).await }.boxed()
+    }
+}
+
+// Remote private implementation.
+
+impl private::Sealed for ExecutorStdioServerLauncher {}
+
+impl ExecutorStdioServerLauncher {
+    async fn launch_server(
+        command: StdioServerCommand,
+        exec_backend: Arc<dyn ExecBackend>,
+        default_cwd: PathBuf,
+    ) -> io::Result<StdioServerTransport> {
+        let StdioServerCommand {
+            program,
+            args,
+            env,
+            env_vars,
+            cwd,
+        } = command;
+        let program_name = program.to_string_lossy().into_owned();
+        let envs = create_env_overlay_for_remote_mcp_server(env, &env_vars);
+        // The executor protocol carries argv/env as UTF-8 strings. Local stdio can
+        // accept arbitrary OsString values because it calls the OS directly; remote
+        // stdio must reject non-Unicode command, argument, or environment data
+        // before sending an executor request.
+        let argv = Self::process_api_argv(&program, &args).map_err(io::Error::other)?;
+        let env = Self::process_api_env(envs).map_err(io::Error::other)?;
+        let process_id = ExecutorProcessTransport::next_process_id();
+        // Start the MCP server process on the executor with raw pipes. `tty=false`
+        // keeps stdout as a clean protocol stream, while `pipe_stdin=true` lets
+        // rmcp write JSON-RPC requests after the process starts.
+        let started = exec_backend
+            .start(ExecParams {
+                process_id,
+                argv,
+                cwd: cwd.unwrap_or(default_cwd),
+                env_policy: Some(Self::remote_env_policy()),
+                env,
+                tty: false,
+                pipe_stdin: true,
+                arg0: None,
+            })
+            .await
+            .map_err(io::Error::other)?;
+
+        Ok(StdioServerTransport {
+            inner: StdioServerTransportInner::Executor(ExecutorProcessTransport::new(
+                started.process,
+                program_name,
+            )),
+            _process_group_guard: None,
+        })
+    }
+
+    fn process_api_argv(program: &OsString, args: &[OsString]) -> Result<Vec<String>> {
+        let mut argv = Vec::with_capacity(args.len() + 1);
+        argv.push(Self::os_string_to_process_api_string(
+            program.clone(),
+            "command",
+        )?);
+        for arg in args {
+            argv.push(Self::os_string_to_process_api_string(
+                arg.clone(),
+                "argument",
+            )?);
+        }
+        Ok(argv)
+    }
+
+    fn process_api_env(env: HashMap<OsString, OsString>) -> Result<HashMap<String, String>> {
+        env.into_iter()
+            .map(|(key, value)| {
+                Ok((
+                    Self::os_string_to_process_api_string(key, "environment variable name")?,
+                    Self::os_string_to_process_api_string(value, "environment variable value")?,
+                ))
+            })
+            .collect()
+    }
+
+    fn os_string_to_process_api_string(value: OsString, label: &str) -> Result<String> {
+        value
+            .into_string()
+            .map_err(|_| anyhow!("{label} must be valid Unicode for remote MCP stdio"))
+    }
+
+    fn remote_env_policy() -> ExecEnvPolicy {
+        ExecEnvPolicy {
+            inherit: ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
         }
     }
 }

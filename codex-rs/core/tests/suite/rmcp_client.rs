@@ -1,9 +1,14 @@
+#![allow(clippy::expect_used)]
+
+use anyhow::Context as _;
+use anyhow::ensure;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
+use std::process::Command as StdCommand;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -34,6 +39,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::assert_regex_match;
+use core_test_support::remote_env_env_var;
 use core_test_support::responses;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::mount_models_once;
@@ -86,6 +92,73 @@ enum McpCallEvent {
     End(String),
 }
 
+const REMOTE_MCP_ENVIRONMENT: &str = "remote";
+
+fn remote_aware_experimental_environment() -> Option<String> {
+    // These tests run locally in normal CI and against the Docker-backed
+    // executor in full-ci. Match that shared test environment instead of
+    // parameterizing each stdio MCP test with its own local/remote cases.
+    std::env::var_os(remote_env_env_var()).map(|_| REMOTE_MCP_ENVIRONMENT.to_string())
+}
+
+/// Returns the stdio MCP test server command path for the active test placement.
+///
+/// Local test runs can execute the host-built test binary directly. Remote-aware
+/// runs start MCP stdio through the executor inside Docker, so the host path
+/// would be meaningless to the process that actually launches the server. When
+/// the remote test environment is active, copy the binary into the executor
+/// container and return that in-container path instead.
+fn remote_aware_stdio_server_bin() -> anyhow::Result<String> {
+    let bin = stdio_server_bin()?;
+    let Some(container_name) = std::env::var_os(remote_env_env_var()) else {
+        return Ok(bin);
+    };
+    let container_name = container_name
+        .into_string()
+        .map_err(|value| anyhow::anyhow!("remote env container name must be utf-8: {value:?}"))?;
+
+    // Keep the Docker path rewrite scoped to tests that use `build_remote_aware`.
+    // Other MCP tests still start their stdio server from the orchestrator test
+    // process, even when the full-ci remote env is present.
+    //
+    // Remote-aware MCP tests run the executor inside Docker. The stdio test
+    // server is built on the host, so hand the executor a copied in-container
+    // path instead of the host build artifact path.
+    // Several remote-aware MCP tests can run in parallel; give each copied
+    // binary its own path so one test cannot replace another test's executable.
+    let unique_suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let remote_path = format!(
+        "/tmp/codex-remote-env/test_stdio_server-{}-{unique_suffix}",
+        std::process::id()
+    );
+    let container_target = format!("{container_name}:{remote_path}");
+    let copy_output = StdCommand::new("docker")
+        .arg("cp")
+        .arg(&bin)
+        .arg(&container_target)
+        .output()
+        .with_context(|| format!("copy {bin} to remote MCP test env"))?;
+    ensure!(
+        copy_output.status.success(),
+        "docker cp test_stdio_server failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&copy_output.stdout).trim(),
+        String::from_utf8_lossy(&copy_output.stderr).trim()
+    );
+
+    let chmod_output = StdCommand::new("docker")
+        .args(["exec", &container_name, "chmod", "+x", remote_path.as_str()])
+        .output()
+        .context("mark remote test_stdio_server executable")?;
+    ensure!(
+        chmod_output.status.success(),
+        "docker chmod test_stdio_server failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&chmod_output.stdout).trim(),
+        String::from_utf8_lossy(&chmod_output.stderr).trim()
+    );
+
+    Ok(remote_path)
+}
+
 async fn wait_for_mcp_tool(fixture: &TestCodex, tool_name: &str) -> anyhow::Result<()> {
     let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -115,6 +188,7 @@ async fn wait_for_mcp_tool(fixture: &TestCodex, tool_name: &str) -> anyhow::Resu
 
 #[derive(Default)]
 struct TestMcpServerOptions {
+    experimental_environment: Option<String>,
     supports_parallel_tool_calls: bool,
     tool_timeout_sec: Option<Duration>,
 }
@@ -144,7 +218,7 @@ fn insert_mcp_server(
         server_name.to_string(),
         McpServerConfig {
             transport,
-            experimental_environment: None,
+            experimental_environment: options.experimental_environment,
             enabled: true,
             required: false,
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
@@ -199,7 +273,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
     .await;
 
     let expected_env_value = "propagated-env";
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
         .with_config(move |config| {
@@ -214,10 +288,13 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
                     )])),
                     Vec::new(),
                 ),
-                TestMcpServerOptions::default(),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
             );
         })
-        .build(&server)
+        .build_remote_aware(&server)
         .await?;
     let session_model = fixture.session_configured.model.clone();
 
@@ -343,17 +420,20 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
     let fixture = test_codex()
         .with_config(move |config| {
             insert_mcp_server(
                 config,
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
-                TestMcpServerOptions::default(),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
             );
         })
-        .build(&server)
+        .build_remote_aware(&server)
         .await?;
 
     let tools_ready_deadline = Instant::now() + Duration::from_secs(30);
@@ -415,7 +495,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
     );
     assert_eq!(
         sandbox_meta.get("sandboxCwd").and_then(Value::as_str),
-        fixture.cwd.path().to_str()
+        fixture.config.cwd.as_path().to_str()
     );
     assert_eq!(sandbox_meta.get("useLegacyLandlock"), Some(&json!(false)));
 
@@ -455,7 +535,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
         .with_config(move |config| {
@@ -464,12 +544,13 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                     ..Default::default()
                 },
             );
         })
-        .build(&server)
+        .build_remote_aware(&server)
         .await?;
     let session_model = fixture.session_configured.model.clone();
 
@@ -586,7 +667,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
         .with_config(move |config| {
@@ -595,12 +676,13 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
                 TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
                     supports_parallel_tool_calls: true,
                     tool_timeout_sec: Some(Duration::from_secs(2)),
                 },
             );
         })
-        .build(&server)
+        .build_remote_aware(&server)
         .await?;
     let session_model = fixture.session_configured.model.clone();
 
@@ -676,7 +758,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
     .await;
 
     // Build the stdio rmcp server and pass the image as data URL so it can construct ImageContent.
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
         .with_config(move |config| {
@@ -691,10 +773,13 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
                     )])),
                     Vec::new(),
                 ),
-                TestMcpServerOptions::default(),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
             );
         })
-        .build(&server)
+        .build_remote_aware(&server)
         .await?;
     let session_model = fixture.session_configured.model.clone();
 
@@ -829,7 +914,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
         .with_model("gpt-5.3-codex")
@@ -838,10 +923,13 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
                 config,
                 server_name,
                 stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
-                TestMcpServerOptions::default(),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
             );
         })
-        .build(&server)
+        .build_remote_aware(&server)
         .await?;
     let session_model = fixture.session_configured.model.clone();
 
@@ -1051,7 +1139,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
     )
     .await;
 
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -1067,10 +1155,13 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                     )])),
                     Vec::new(),
                 ),
-                TestMcpServerOptions::default(),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
             );
         })
-        .build(&server)
+        .build_remote_aware(&server)
         .await?;
 
     fixture
@@ -1166,7 +1257,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 
     let expected_env_value = "propagated-env-from-whitelist";
     let _guard = EnvVarGuard::set("MCP_TEST_VALUE", OsStr::new(expected_env_value));
-    let rmcp_test_server_bin = stdio_server_bin()?;
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
 
     let fixture = test_codex()
         .with_config(move |config| {
@@ -1178,10 +1269,13 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                     /*env*/ None,
                     vec!["MCP_TEST_VALUE".to_string()],
                 ),
-                TestMcpServerOptions::default(),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
             );
         })
-        .build(&server)
+        .build_remote_aware(&server)
         .await?;
     let session_model = fixture.session_configured.model.clone();
 
