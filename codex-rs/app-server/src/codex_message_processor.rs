@@ -9911,6 +9911,11 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
+                    std::path::Path::new("/tmp"),
+                ),
             cwd: test_path_buf("/tmp").abs(),
             ephemeral: false,
             reasoning_effort: None,
