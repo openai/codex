@@ -7896,7 +7896,7 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(composer.current_text(), "!git");
 
-        composer.textarea.set_cursor(0);
+        composer.textarea.set_cursor(/*pos*/ 0);
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         assert_eq!(composer.current_text(), "first");
