@@ -16,6 +16,7 @@ use crate::config_loader::version_for_toml;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_exec_server::ExecutorPathRef;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
@@ -538,13 +539,9 @@ personality = true
     .await?;
 
     let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
+    let requirements_file = ExecutorPathRef::new(LOCAL_FS.as_ref(), requirements_file);
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
-    load_requirements_toml(
-        LOCAL_FS.as_ref(),
-        &mut config_requirements_toml,
-        &requirements_file,
-    )
-    .await?;
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
 
     assert_eq!(
         config_requirements_toml
@@ -706,12 +703,11 @@ allowed_approval_policies = ["on-request"]
             guardian_policy_config: None,
         },
     );
-    load_requirements_toml(
+    let requirements_file = ExecutorPathRef::new(
         LOCAL_FS.as_ref(),
-        &mut config_requirements_toml,
-        &AbsolutePathBuf::try_from(requirements_file)?,
-    )
-    .await?;
+        AbsolutePathBuf::try_from(requirements_file)?,
+    );
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
 
     assert_eq!(
         config_requirements_toml

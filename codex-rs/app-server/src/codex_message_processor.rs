@@ -221,8 +221,9 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::config_loader::ConfigLoadFileSystems;
 use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::load_config_layers_state;
+use codex_core::config_loader::load_config_layers_state_with_file_systems;
 use codex_core::config_loader::project_trust_key;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
@@ -251,6 +252,7 @@ use codex_core_plugins::loader::load_plugin_mcp_servers;
 use codex_core_plugins::manifest::PluginManifestInterface;
 use codex_core_plugins::marketplace::MarketplaceError;
 use codex_core_plugins::marketplace::MarketplacePluginSource;
+use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -621,9 +623,25 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
-    async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
+    async fn thread_filesystem_or_local(
+        thread_manager: &ThreadManager,
+    ) -> Arc<dyn ExecutorFileSystem> {
+        match thread_manager.environment_manager().current().await {
+            Ok(Some(environment)) => environment.get_filesystem(),
+            Ok(None) => Arc::clone(&LOCAL_FS),
+            Err(err) => {
+                warn!("failed to get current environment filesystem: {err}");
+                Arc::clone(&LOCAL_FS)
+            }
+        }
+    }
+
+    async fn instruction_sources_from_config(
+        config: &Config,
+        fs: Arc<dyn ExecutorFileSystem>,
+    ) -> Vec<AbsolutePathBuf> {
         codex_core::AgentsMdManager::new(config)
-            .instruction_sources(LOCAL_FS.as_ref())
+            .instruction_sources(fs.as_ref())
             .await
     }
 
@@ -2417,6 +2435,8 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let thread_fs =
+            Self::thread_filesystem_or_local(&listener_task_context.thread_manager).await;
 
         // The user may have requested WorkspaceWrite or DangerFullAccess via
         // the command line, though in the process of deriving the Config, it
@@ -2441,7 +2461,7 @@ impl CodexMessageProcessor {
                         | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
                 ))
         {
-            let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
+            let trust_target = resolve_root_git_project_for_trust(thread_fs.as_ref(), &config.cwd)
                 .await
                 .unwrap_or_else(|| config.cwd.clone());
             let cli_overrides_with_trust;
@@ -2500,7 +2520,8 @@ impl CodexMessageProcessor {
             };
         }
 
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let instruction_sources =
+            Self::instruction_sources_from_config(&config, thread_fs.clone()).await;
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
@@ -4092,7 +4113,9 @@ impl CodexMessageProcessor {
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let instruction_sources_fs = Self::thread_filesystem_or_local(&self.thread_manager).await;
+        let instruction_sources =
+            Self::instruction_sources_from_config(&config, instruction_sources_fs).await;
         let response_history = thread_history.clone();
 
         match self
@@ -4357,8 +4380,13 @@ impl CodexMessageProcessor {
             }
             let mut config_for_instruction_sources = self.config.as_ref().clone();
             config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
-            let instruction_sources =
-                Self::instruction_sources_from_config(&config_for_instruction_sources).await;
+            let instruction_sources_fs =
+                Self::thread_filesystem_or_local(&self.thread_manager).await;
+            let instruction_sources = Self::instruction_sources_from_config(
+                &config_for_instruction_sources,
+                instruction_sources_fs,
+            )
+            .await;
             let thread_summary = match load_thread_summary_for_rollout(
                 &self.config,
                 existing_thread_id,
@@ -4672,7 +4700,9 @@ impl CodexMessageProcessor {
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
+        let instruction_sources_fs = Self::thread_filesystem_or_local(&self.thread_manager).await;
+        let instruction_sources =
+            Self::instruction_sources_from_config(&config, instruction_sources_fs).await;
 
         let NewThread {
             thread_id,
@@ -6116,30 +6146,36 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let fs = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => Some(environment.get_filesystem()),
-            Ok(None) => None,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to create environment: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
+        let (fs, remote_project_fs) =
+            match self.thread_manager.environment_manager().current().await {
+                Ok(Some(environment)) => (environment.get_filesystem(), environment.is_remote()),
+                Ok(None) => (Arc::clone(&LOCAL_FS), false),
+                Err(err) => {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("failed to create environment: {err}"),
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                }
+            };
         let cli_overrides = self.current_cli_overrides();
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
-            let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
+            let cwd_abs = if remote_project_fs {
+                AbsolutePathBuf::from_absolute_path_checked(cwd.as_path())
+            } else {
+                AbsolutePathBuf::relative_to_current_dir(cwd.as_path())
+            };
+            let cwd_abs = match cwd_abs {
                 Ok(path) => path,
                 Err(err) => {
                     let error_path = cwd.clone();
@@ -6154,8 +6190,8 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
-            let config_layer_stack = match load_config_layers_state(
-                LOCAL_FS.as_ref(),
+            let config_layer_stack = match load_config_layers_state_with_file_systems(
+                ConfigLoadFileSystems::same(fs.as_ref()),
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
                 &cli_overrides,
@@ -6195,7 +6231,7 @@ impl CodexMessageProcessor {
                     &skills_input,
                     force_reload,
                     extra_roots,
-                    fs.clone(),
+                    Some(Arc::clone(&fs)),
                 )
                 .await;
             let errors = errors_to_info(&outcome.errors);

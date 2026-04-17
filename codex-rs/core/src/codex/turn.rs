@@ -243,6 +243,11 @@ pub(crate) async fn run_turn(
     } = build_skill_injections(
         &mentioned_skills,
         skills_outcome,
+        turn_context
+            .environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem())
+            .unwrap_or_else(|| Arc::clone(&codex_exec_server::LOCAL_FS)),
         Some(&session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),

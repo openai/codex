@@ -16,8 +16,9 @@ use crate::codex::SteerInputError;
 use crate::codex::spawn_review_thread;
 use crate::config::Config;
 use crate::config_loader::CloudRequirementsLoader;
+use crate::config_loader::ConfigLoadFileSystems;
 use crate::config_loader::LoaderOverrides;
-use crate::config_loader::load_config_layers_state;
+use crate::config_loader::load_config_layers_state_with_file_systems;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
@@ -501,17 +502,23 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
 
     let skills_manager = &sess.services.skills_manager;
     let plugins_manager = &sess.services.plugins_manager;
-    let fs = sess
+    let (fs, remote_project_fs) = sess
         .services
         .environment
         .as_ref()
-        .map(|environment| environment.get_filesystem());
+        .map(|environment| (environment.get_filesystem(), environment.is_remote()))
+        .unwrap_or_else(|| (Arc::clone(&LOCAL_FS), false));
     let config = sess.get_config().await;
     let codex_home = sess.codex_home().await;
     let mut skills = Vec::new();
     let empty_cli_overrides: &[(String, toml::Value)] = &[];
     for cwd in cwds {
-        let cwd_abs = match AbsolutePathBuf::relative_to_current_dir(cwd.as_path()) {
+        let cwd_abs = if remote_project_fs {
+            AbsolutePathBuf::from_absolute_path_checked(cwd.as_path())
+        } else {
+            AbsolutePathBuf::relative_to_current_dir(cwd.as_path())
+        };
+        let cwd_abs = match cwd_abs {
             Ok(path) => path,
             Err(err) => {
                 let error_path = cwd.clone();
@@ -526,8 +533,8 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
                 continue;
             }
         };
-        let config_layer_stack = match load_config_layers_state(
-            LOCAL_FS.as_ref(),
+        let config_layer_stack = match load_config_layers_state_with_file_systems(
+            ConfigLoadFileSystems::same(fs.as_ref()),
             &codex_home,
             Some(cwd_abs.clone()),
             empty_cli_overrides,
@@ -563,7 +570,7 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
             config.bundled_skills_enabled(),
         );
         let outcome = skills_manager
-            .skills_for_cwd(&skills_input, force_reload, fs.clone())
+            .skills_for_cwd(&skills_input, force_reload, Some(Arc::clone(&fs)))
             .await;
         let errors = super::errors_to_info(&outcome.errors);
         let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);

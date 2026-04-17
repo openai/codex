@@ -23,9 +23,9 @@ use crate::config_loader::project_root_markers_from_config;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorPathRef;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use dunce::canonicalize as normalize_path;
 use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -126,7 +126,8 @@ impl<'a> AgentsMdManager<'a> {
         &self,
         fs: &dyn ExecutorFileSystem,
     ) -> Option<String> {
-        let agents_md_docs = self.read_agents_md(fs).await;
+        let cwd = self.executor_cwd(fs);
+        let agents_md_docs = self.read_agents_md(&cwd).await;
 
         let mut output = String::new();
 
@@ -173,8 +174,11 @@ impl<'a> AgentsMdManager<'a> {
         let mut paths = Self::load_global_instructions(Some(&self.config.codex_home))
             .map(|loaded| vec![loaded.path])
             .unwrap_or_default();
-        match self.agents_md_paths(fs).await {
-            Ok(agents_md_paths) => paths.extend(agents_md_paths),
+        let cwd = self.executor_cwd(fs);
+        match self.agents_md_paths(&cwd).await {
+            Ok(agents_md_paths) => {
+                paths.extend(agents_md_paths.into_iter().map(|path| path.path().clone()));
+            }
             Err(err) => {
                 tracing::warn!(error = %err, "failed to discover AGENTS.md docs for instruction sources");
             }
@@ -188,14 +192,14 @@ impl<'a> AgentsMdManager<'a> {
     /// concatenation of all discovered docs. If no documentation file is found
     /// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
     /// `Err` so callers can decide how to handle them.
-    async fn read_agents_md(&self, fs: &dyn ExecutorFileSystem) -> io::Result<Option<String>> {
+    async fn read_agents_md(&self, cwd: &ExecutorPathRef<'_>) -> io::Result<Option<String>> {
         let max_total = self.config.project_doc_max_bytes;
 
         if max_total == 0 {
             return Ok(None);
         }
 
-        let paths = self.agents_md_paths(fs).await?;
+        let paths = self.agents_md_paths(cwd).await?;
         if paths.is_empty() {
             return Ok(None);
         }
@@ -208,14 +212,14 @@ impl<'a> AgentsMdManager<'a> {
                 break;
             }
 
-            match fs.get_metadata(&p, /*sandbox*/ None).await {
+            match p.unsandboxed().get_metadata().await {
                 Ok(metadata) if !metadata.is_file => continue,
                 Ok(_) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err),
             }
 
-            let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
+            let mut data = match p.unsandboxed().read_file().await {
                 Ok(data) => data,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err),
@@ -252,17 +256,12 @@ impl<'a> AgentsMdManager<'a> {
     /// contents. The list is ordered from project root to the current working
     /// directory (inclusive). Symlinks are allowed. When `project_doc_max_bytes`
     /// is zero, returns an empty list.
-    async fn agents_md_paths(
+    async fn agents_md_paths<'fs>(
         &self,
-        fs: &dyn ExecutorFileSystem,
-    ) -> io::Result<Vec<AbsolutePathBuf>> {
+        cwd: &ExecutorPathRef<'fs>,
+    ) -> io::Result<Vec<ExecutorPathRef<'fs>>> {
         if self.config.project_doc_max_bytes == 0 {
             return Ok(Vec::new());
-        }
-
-        let mut dir = self.config.cwd.clone();
-        if let Ok(canon) = normalize_path(&dir) {
-            dir = AbsolutePathBuf::try_from(canon)?;
         }
 
         let mut merged = TomlValue::Table(toml::map::Map::new());
@@ -285,11 +284,10 @@ impl<'a> AgentsMdManager<'a> {
         };
         let mut project_root = None;
         if !project_root_markers.is_empty() {
-            for ancestor in dir.ancestors() {
+            for ancestor in cwd.ancestors() {
                 for marker in &project_root_markers {
                     let marker_path = ancestor.join(marker);
-                    let marker_exists = match fs.get_metadata(&marker_path, /*sandbox*/ None).await
-                    {
+                    let marker_exists = match marker_path.unsandboxed().get_metadata().await {
                         Ok(_) => true,
                         Err(err) if err.kind() == io::ErrorKind::NotFound => false,
                         Err(err) => return Err(err),
@@ -305,12 +303,12 @@ impl<'a> AgentsMdManager<'a> {
             }
         }
 
-        let search_dirs: Vec<AbsolutePathBuf> = if let Some(root) = project_root {
+        let search_dirs: Vec<ExecutorPathRef<'fs>> = if let Some(root) = project_root {
             let mut dirs = Vec::new();
-            let mut cursor = dir.clone();
+            let mut cursor = cwd.clone();
             loop {
                 dirs.push(cursor.clone());
-                if cursor == root {
+                if cursor.path() == root.path() {
                     break;
                 }
                 let Some(parent) = cursor.parent() else {
@@ -321,15 +319,15 @@ impl<'a> AgentsMdManager<'a> {
             dirs.reverse();
             dirs
         } else {
-            vec![dir]
+            vec![cwd.clone()]
         };
 
-        let mut found: Vec<AbsolutePathBuf> = Vec::new();
+        let mut found: Vec<ExecutorPathRef<'fs>> = Vec::new();
         let candidate_filenames = self.candidate_filenames();
         for d in search_dirs {
             for name in &candidate_filenames {
                 let candidate = d.join(name);
-                match fs.get_metadata(&candidate, /*sandbox*/ None).await {
+                match candidate.unsandboxed().get_metadata().await {
                     Ok(md) if md.is_file => {
                         found.push(candidate);
                         break;
@@ -342,6 +340,10 @@ impl<'a> AgentsMdManager<'a> {
         }
 
         Ok(found)
+    }
+
+    fn executor_cwd<'fs>(&self, fs: &'fs dyn ExecutorFileSystem) -> ExecutorPathRef<'fs> {
+        ExecutorPathRef::new(fs, self.config.cwd.clone())
     }
 
     fn candidate_filenames(&self) -> Vec<&str> {
