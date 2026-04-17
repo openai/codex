@@ -5698,8 +5698,7 @@ impl CodexMessageProcessor {
             let environment = self
                 .thread_manager
                 .environment_manager()
-                .default_environment()
-                .unwrap_or_else(|| Arc::new(codex_exec_server::Environment::default()));
+                .default_environment();
             // Status listing has no turn cwd. This fallback is used only
             // by executor-backed stdio MCPs whose config omits `cwd`.
             McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
@@ -5856,8 +5855,7 @@ impl CodexMessageProcessor {
             let environment = self
                 .thread_manager
                 .environment_manager()
-                .default_environment()
-                .unwrap_or_else(|| Arc::new(codex_exec_server::Environment::default()));
+                .default_environment();
             // Resource reads without a thread have no turn cwd. This fallback
             // is used only by executor-backed stdio MCPs whose config omits `cwd`.
             McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
@@ -6451,7 +6449,8 @@ impl CodexMessageProcessor {
             .thread_manager
             .environment_manager()
             .default_environment()
-            .map(|environment| environment.get_filesystem());
+            .get_filesystem();
+        let fs = Some(fs);
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
