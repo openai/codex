@@ -7795,39 +7795,41 @@ impl CodexMessageProcessor {
         // Record turn interrupts so we can reply when TurnAborted arrives. Startup
         // interrupts do not have a turn and are acknowledged after submission.
         if !is_startup_interrupt {
-            let active_turn = {
-                let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-                let thread_state = thread_state.lock().await;
-                thread_state.active_turn_snapshot()
-            };
-            if let Some(active_turn) = active_turn {
-                if active_turn.id != turn_id {
-                    let actual_turn_id = active_turn.id;
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("expected active turn id {turn_id} but found {actual_turn_id}",),
-                    )
-                    .await;
-                    return;
+            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
+            let is_running = matches!(thread.agent_status().await, AgentStatus::Running);
+            let interrupt_outcome = {
+                let mut thread_state = thread_state.lock().await;
+                if let Some(active_turn) = thread_state.active_turn_snapshot() {
+                    if active_turn.id != turn_id {
+                        Err(format!(
+                            "expected active turn id {turn_id} but found {}",
+                            active_turn.id
+                        ))
+                    } else {
+                        thread_state
+                            .pending_interrupts
+                            .push((request_id.clone(), ApiVersion::V2));
+                        Ok(())
+                    }
+                } else if thread_state.last_terminal_turn_id.as_deref() == Some(turn_id.as_str()) {
+                    Err("no active turn to interrupt".to_string())
+                } else if is_running {
+                    thread_state
+                        .pending_interrupts
+                        .push((request_id.clone(), ApiVersion::V2));
+                    Ok(())
+                } else {
+                    Err("no active turn to interrupt".to_string())
                 }
-            } else if !matches!(thread.agent_status().await, AgentStatus::Running) {
-                self.send_invalid_request_error(
-                    request_id,
-                    "no active turn to interrupt".to_string(),
-                )
-                .await;
+            };
+            if let Err(message) = interrupt_outcome {
+                self.send_invalid_request_error(request_id, message).await;
                 return;
             }
 
             self.outgoing
                 .record_request_turn_id(&request_id, &turn_id)
                 .await;
-
-            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-            let mut thread_state = thread_state.lock().await;
-            thread_state
-                .pending_interrupts
-                .push((request_id.clone(), ApiVersion::V2));
         }
 
         // Submit the interrupt. Turn interrupts respond upon TurnAborted; startup
@@ -8086,7 +8088,7 @@ impl CodexMessageProcessor {
                         // opt-in stays synchronized with the conversation.
                         let raw_events_enabled = {
                             let mut thread_state = thread_state.lock().await;
-                            thread_state.track_current_turn_event(&event.msg);
+                            thread_state.track_current_turn_event(&event.id, &event.msg);
                             thread_state.experimental_raw_events
                         };
                         let subscribed_connection_ids = thread_state_manager
@@ -10866,14 +10868,15 @@ mod tests {
             let state = manager.thread_state(thread_id).await;
             let mut state = state.lock().await;
             state.cancel_tx = Some(cancel_tx);
-            state.track_current_turn_event(&EventMsg::TurnStarted(
-                codex_protocol::protocol::TurnStartedEvent {
+            state.track_current_turn_event(
+                "turn-1",
+                &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
                     started_at: None,
                     model_context_window: None,
                     collaboration_mode_kind: Default::default(),
-                },
-            ));
+                }),
+            );
         }
 
         manager.remove_thread_state(thread_id).await;
