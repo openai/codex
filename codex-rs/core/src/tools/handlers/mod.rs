@@ -238,12 +238,12 @@ mod tests {
 
     fn file_system_permissions(path: &std::path::Path) -> PermissionProfile {
         PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: None,
-                write: Some(vec![
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                None,
+                Some(vec![
                     AbsolutePathBuf::from_absolute_path(path).expect("absolute path"),
                 ]),
-            }),
+            )),
             ..Default::default()
         }
     }

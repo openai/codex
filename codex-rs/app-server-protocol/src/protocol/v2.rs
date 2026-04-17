@@ -1150,22 +1150,46 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 pub struct AdditionalFileSystemPermissions {
     pub read: Option<Vec<AbsolutePathBuf>>,
     pub write: Option<Vec<AbsolutePathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub entries: Option<Vec<FileSystemSandboxEntry>>,
 }
 
 impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
     fn from(value: CoreFileSystemPermissions) -> Self {
-        Self {
-            read: value.read,
-            write: value.write,
+        if let Some((read, write)) = value.legacy_read_write_roots() {
+            Self {
+                read,
+                write,
+                entries: None,
+            }
+        } else {
+            Self {
+                read: None,
+                write: None,
+                entries: Some(
+                    value
+                        .entries
+                        .into_iter()
+                        .map(FileSystemSandboxEntry::from)
+                        .collect(),
+                ),
+            }
         }
     }
 }
 
 impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
     fn from(value: AdditionalFileSystemPermissions) -> Self {
-        Self {
-            read: value.read,
-            write: value.write,
+        if let Some(entries) = value.entries {
+            Self {
+                entries: entries
+                    .into_iter()
+                    .map(CoreFileSystemSandboxEntry::from)
+                    .collect(),
+            }
+        } else {
+            CoreFileSystemPermissions::from_read_write_roots(value.read, value.write)
         }
     }
 }
@@ -6751,6 +6775,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    entries: None,
                 }),
             }
         );
@@ -6761,16 +6786,16 @@ mod tests {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(CoreFileSystemPermissions {
-                    read: Some(vec![
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
-                    write: Some(vec![
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
-                }),
+                )),
             }
         );
     }
@@ -6801,6 +6826,53 @@ mod tests {
         assert!(
             err.to_string().contains("unknown field `macos`"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn additional_file_system_permissions_preserves_canonical_entries() {
+        let core_permissions = CoreFileSystemPermissions {
+            entries: vec![
+                CoreFileSystemSandboxEntry {
+                    path: CoreFileSystemPath::Special {
+                        value: CoreFileSystemSpecialPath::Root,
+                    },
+                    access: CoreFileSystemAccessMode::Write,
+                },
+                CoreFileSystemSandboxEntry {
+                    path: CoreFileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: CoreFileSystemAccessMode::None,
+                },
+            ],
+        };
+
+        let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+        assert_eq!(
+            permissions,
+            AdditionalFileSystemPermissions {
+                read: None,
+                write: None,
+                entries: Some(vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: "**/*.env".to_string(),
+                        },
+                        access: FileSystemAccessMode::None,
+                    },
+                ]),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
         );
     }
 
@@ -6844,6 +6916,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    entries: None,
                 }),
             }
         );
@@ -6854,16 +6927,16 @@ mod tests {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(CoreFileSystemPermissions {
-                    read: Some(vec![
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
-                    write: Some(vec![
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
-                }),
+                )),
             }
         );
     }

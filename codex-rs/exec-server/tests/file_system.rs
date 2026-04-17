@@ -475,10 +475,10 @@ async fn file_system_sandboxed_write_allows_additional_write_root(use_remote: bo
     let mut sandbox = read_only_sandbox(readable_dir);
     sandbox.additional_permissions = Some(PermissionProfile {
         network: None,
-        file_system: Some(FileSystemPermissions {
-            read: None,
-            write: Some(vec![absolute_path(writable_dir)]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            None,
+            Some(vec![absolute_path(writable_dir)]),
+        )),
     });
 
     file_system
