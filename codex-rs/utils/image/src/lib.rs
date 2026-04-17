@@ -18,7 +18,7 @@ use image::imageops::FilterType;
 /// Maximum width used when resizing images before uploading.
 pub const MAX_WIDTH: u32 = 2048;
 /// Maximum height used when resizing images before uploading.
-pub const MAX_HEIGHT: u32 = 768;
+pub const MAX_HEIGHT: u32 = 2048;
 
 pub mod error;
 
@@ -263,6 +263,23 @@ mod tests {
                 .expect("read resized bytes back into image");
             assert_eq!(loaded.dimensions(), (processed.width, processed.height));
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn downscales_tall_image_to_fit_square_bounds() {
+        let image = ImageBuffer::from_pixel(1024, 4096, Rgba([200u8, 10, 10, 255]));
+        let original_bytes = image_bytes(&image, ImageFormat::Png);
+
+        let processed = load_for_prompt_bytes(
+            Path::new("in-memory-image"),
+            original_bytes,
+            PromptImageMode::ResizeToFit,
+        )
+        .expect("process image");
+
+        assert_eq!(processed.width, 512);
+        assert_eq!(processed.height, MAX_HEIGHT);
+        assert_eq!(processed.mime, "image/png");
     }
 
     #[tokio::test(flavor = "multi_thread")]

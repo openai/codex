@@ -18,6 +18,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use codex_utils_image::MAX_HEIGHT;
+use codex_utils_image::MAX_WIDTH;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -212,8 +214,8 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (width, height) = resized.dimensions();
-    assert!(width <= 2048);
-    assert!(height <= 768);
+    assert!(width <= MAX_WIDTH);
+    assert!(height <= MAX_HEIGHT);
     assert!(width < original_width);
     assert!(height < original_height);
 
@@ -347,8 +349,8 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= 2048);
-    assert!(resized_height <= 768);
+    assert!(resized_width <= MAX_WIDTH);
+    assert!(resized_height <= MAX_HEIGHT);
     assert!(resized_width < original_width);
     assert!(resized_height < original_height);
 
@@ -637,8 +639,8 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (width, height) = resized.dimensions();
-    assert!(width <= 2048);
-    assert!(height <= 768);
+    assert!(width <= MAX_WIDTH);
+    assert!(height <= MAX_HEIGHT);
     assert!(width < original_width);
     assert!(height < original_height);
 
@@ -740,8 +742,8 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= 2048);
-    assert!(resized_height <= 768);
+    assert!(resized_width <= MAX_WIDTH);
+    assert!(resized_height <= MAX_HEIGHT);
     assert!(resized_width < original_width);
     assert!(resized_height < original_height);
 
@@ -841,8 +843,8 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= 2048);
-    assert!(resized_height <= 768);
+    assert!(resized_width <= MAX_WIDTH);
+    assert!(resized_height <= MAX_HEIGHT);
     assert!(resized_width < original_width);
     assert!(resized_height < original_height);
 
