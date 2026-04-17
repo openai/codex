@@ -1,6 +1,4 @@
 use super::*;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::Constrained;
@@ -15,8 +13,12 @@ use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::guardian::approval_request::guardian_request_target_item_id;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_config::config_toml::ConfigToml;
+use codex_exec_server::LOCAL_FS;
+use codex_model_provider::create_model_provider;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -70,7 +72,7 @@ async fn guardian_test_session_and_turn(
 async fn guardian_test_session_and_turn_with_base_url(
     base_url: &str,
 ) -> (Arc<Session>, Arc<TurnContext>) {
-    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.conversation_id = fixed_guardian_parent_session_id();
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
@@ -83,7 +85,7 @@ async fn guardian_test_session_and_turn_with_base_url(
     ));
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
-    turn.provider = config.model_provider.clone();
+    turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
     turn.user_instructions = None;
 
     (Arc::new(session), Arc::new(turn))
@@ -755,7 +757,7 @@ fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
 
 #[tokio::test]
 async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
-    let (session, turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
 
@@ -807,7 +809,7 @@ fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
 
 #[tokio::test]
 async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
-    let (_session, mut turn) = crate::codex::make_session_and_context().await;
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::User;
     turn.config = Arc::new(config.clone());
@@ -944,7 +946,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     )
     .await;
 
-    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.conversation_id = fixed_guardian_parent_session_id();
     let temp_cwd = TempDir::new()?;
     let mut config = (*turn.config).clone();
@@ -958,7 +960,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     ));
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
-    turn.provider = config.model_provider.clone();
+    turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;
@@ -1011,7 +1013,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 
 #[tokio::test]
 async fn build_guardian_prompt_items_includes_parent_session_id() -> anyhow::Result<()> {
-    let (session, _) = crate::codex::make_session_and_context().await;
+    let (session, _) = crate::session::tests::make_session_and_context().await;
     let prompt = build_guardian_prompt_items(
         &session,
         /*retry_reason*/ None,
@@ -1314,7 +1316,8 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     )
     .await;
 
-    let (mut session, mut turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let (mut session, mut turn, rx) =
+        crate::session::tests::make_session_and_context_with_rx().await;
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     config.user_instructions = None;
@@ -1330,7 +1333,8 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         .models_manager = models_manager;
     let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
     turn_mut.config = Arc::clone(&config);
-    turn_mut.provider = config.model_provider.clone();
+    turn_mut.provider =
+        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
     turn_mut.user_instructions = None;
 
     seed_guardian_parent_history(&session, &turn).await;
@@ -1810,6 +1814,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
     )
     .expect("config layer stack");
     let parent_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
         ConfigToml::default(),
         ConfigOverrides {
             cwd: Some(workspace.path().to_path_buf()),
@@ -1846,6 +1851,7 @@ async fn guardian_review_session_config_uses_default_guardian_policy_without_req
         ConfigLayerStack::new(Vec::new(), Default::default(), Default::default())
             .expect("config layer stack");
     let parent_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
         ConfigToml::default(),
         ConfigOverrides {
             cwd: Some(workspace.path().to_path_buf()),

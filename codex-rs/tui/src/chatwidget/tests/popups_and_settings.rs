@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::AppInfo;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -442,6 +443,160 @@ async fn plugins_popup_search_filters_visible_rows_snapshot() {
 }
 
 #[tokio::test]
+async fn plugins_popup_installed_tab_filters_rows_and_clears_search() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ true,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-slack",
+                "slack",
+                Some("Slack"),
+                Some("Team chat."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "sla");
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Installed plugins.") && popup.contains("Showing 1 installed plugins."),
+        "expected Installed tab header, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("Calendar") && !popup.contains("Slack"),
+        "expected Installed tab to show only installed plugins, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("sla"),
+        "expected tab switch to clear search query, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_openai_curated_tab_omits_marketplace_in_rows() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(vec![plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+            plugins_test_repo_marketplace(vec![plugins_test_summary(
+                "plugin-repo",
+                "repo",
+                Some("Repo Plugin"),
+                Some("Repo-only plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ]),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("OpenAI Curated marketplace."),
+        "expected OpenAI Curated tab header, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("Calendar") && !popup.contains("Repo Plugin"),
+        "expected OpenAI Curated tab to show only official marketplace plugins, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("ChatGPT Marketplace ·"),
+        "expected marketplace-specific rows to omit marketplace labels, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_refresh_preserves_duplicate_marketplace_tab_by_path() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let response = plugins_test_response(vec![
+        PluginMarketplaceEntry {
+            name: "duplicate".to_string(),
+            path: plugins_test_absolute_path("marketplaces/home/marketplace.json"),
+            interface: Some(MarketplaceInterface {
+                display_name: Some("Duplicate Marketplace".to_string()),
+            }),
+            plugins: vec![plugins_test_summary(
+                "plugin-home",
+                "home",
+                Some("Home Plugin"),
+                Some("Home marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )],
+        },
+        PluginMarketplaceEntry {
+            name: "duplicate".to_string(),
+            path: plugins_test_absolute_path("marketplaces/repo/marketplace.json"),
+            interface: Some(MarketplaceInterface {
+                display_name: Some("Duplicate Marketplace".to_string()),
+            }),
+            plugins: vec![plugins_test_summary(
+                "plugin-repo",
+                "repo",
+                Some("Repo Plugin"),
+                Some("Repo marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )],
+        },
+    ]);
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.on_plugins_loaded(cwd.clone(), Ok(response.clone()));
+    chat.add_plugins_output();
+
+    for _ in 0..4 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    chat.on_plugins_loaded(cwd, Ok(response));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Duplicate Marketplace (2/2)."),
+        "expected refresh to preserve the second duplicate marketplace tab, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("Repo Plugin") && !popup.contains("Home Plugin"),
+        "expected second duplicate marketplace rows after refresh, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
@@ -511,7 +666,7 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: notion_id.to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -545,7 +700,7 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: notion_id.to_string(),
                     name: "Notion".to_string(),
                     description: Some("Workspace docs".to_string()),
@@ -560,7 +715,7 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
                     is_enabled: true,
                     plugin_display_names: Vec::new(),
                 },
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: linear_id.to_string(),
                     name: "Linear".to_string(),
                     description: Some("Project tracking".to_string()),
@@ -604,7 +759,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     let linear_id = "unit_test_apps_refresh_failure_connector_2";
 
     let full_connectors = vec![
-        codex_chatgpt::connectors::AppInfo {
+        AppInfo {
             id: notion_id.to_string(),
             name: "Notion".to_string(),
             description: Some("Workspace docs".to_string()),
@@ -619,7 +774,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
             is_enabled: true,
             plugin_display_names: Vec::new(),
         },
-        codex_chatgpt::connectors::AppInfo {
+        AppInfo {
             id: linear_id.to_string(),
             name: "Linear".to_string(),
             description: Some("Project tracking".to_string()),
@@ -644,7 +799,7 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: notion_id.to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -693,7 +848,7 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: "notion".to_string(),
                     name: "Notion".to_string(),
                     description: Some("Workspace docs".to_string()),
@@ -708,7 +863,7 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
                     is_enabled: true,
                     plugin_display_names: Vec::new(),
                 },
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: "slack".to_string(),
                     name: "Slack".to_string(),
                     description: Some("Team chat".to_string()),
@@ -739,7 +894,7 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: "airtable".to_string(),
                     name: "Airtable".to_string(),
                     description: Some("Spreadsheets".to_string()),
@@ -754,7 +909,7 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
                     is_enabled: true,
                     plugin_display_names: Vec::new(),
                 },
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: "notion".to_string(),
                     name: "Notion".to_string(),
                     description: Some("Workspace docs".to_string()),
@@ -769,7 +924,7 @@ async fn apps_popup_preserves_selected_app_across_refresh() {
                     is_enabled: true,
                     plugin_display_names: Vec::new(),
                 },
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: "slack".to_string(),
                     name: "Slack".to_string(),
                     description: Some("Team chat".to_string()),
@@ -812,7 +967,7 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
     chat.connectors_prefetch_in_flight = true;
     chat.connectors_force_refetch_pending = true;
 
-    let full_connectors = vec![codex_chatgpt::connectors::AppInfo {
+    let full_connectors = vec![AppInfo {
         id: "unit_test_apps_refresh_failure_pending_connector".to_string(),
         name: "Notion".to_string(),
         description: Some("Workspace docs".to_string()),
@@ -855,7 +1010,7 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
     chat.bottom_pane.set_connectors_enabled(/*enabled*/ true);
 
     let full_connectors = vec![
-        codex_chatgpt::connectors::AppInfo {
+        AppInfo {
             id: "unit_test_connector_1".to_string(),
             name: "Notion".to_string(),
             description: Some("Workspace docs".to_string()),
@@ -870,7 +1025,7 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
             is_enabled: true,
             plugin_display_names: Vec::new(),
         },
-        codex_chatgpt::connectors::AppInfo {
+        AppInfo {
             id: "unit_test_connector_2".to_string(),
             name: "Linear".to_string(),
             description: Some("Project tracking".to_string()),
@@ -897,7 +1052,7 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
             connectors: vec![
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: "unit_test_connector_1".to_string(),
                     name: "Notion".to_string(),
                     description: Some("Workspace docs".to_string()),
@@ -912,7 +1067,7 @@ async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
                     is_enabled: true,
                     plugin_display_names: Vec::new(),
                 },
-                codex_chatgpt::connectors::AppInfo {
+                AppInfo {
                     id: "connector_openai_hidden".to_string(),
                     name: "Hidden OpenAI".to_string(),
                     description: Some("Should be filtered".to_string()),
@@ -960,7 +1115,7 @@ async fn apps_refresh_failure_without_full_snapshot_falls_back_to_installed_apps
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: "unit_test_apps_refresh_failure_fallback_connector".to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -1019,7 +1174,7 @@ async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: "connector_1".to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -1073,7 +1228,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: "connector_1".to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -1139,7 +1294,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: "connector_1".to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -1203,7 +1358,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: "connector_1".to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -1252,7 +1407,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: "connector_1".to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -1274,7 +1429,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: "connector_1".to_string(),
                 name: "Notion".to_string(),
                 description: Some("Workspace docs".to_string()),
@@ -1323,7 +1478,7 @@ async fn apps_popup_for_not_installed_app_uses_install_only_selected_description
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
-            connectors: vec![codex_chatgpt::connectors::AppInfo {
+            connectors: vec![AppInfo {
                 id: "connector_2".to_string(),
                 name: "Linear".to_string(),
                 description: Some("Project tracking".to_string()),
@@ -1464,11 +1619,11 @@ async fn experimental_popup_includes_guardian_approval() {
     let normalized_popup = popup.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
         popup.contains(guardian_name),
-        "expected guardian approvals entry in experimental popup, got:\n{popup}"
+        "expected auto-review entry in experimental popup, got:\n{popup}"
     );
     assert!(
         normalized_popup.contains(guardian_description),
-        "expected guardian approvals description in experimental popup, got:\n{popup}"
+        "expected auto-review description in experimental popup, got:\n{popup}"
     );
 }
 

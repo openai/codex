@@ -32,7 +32,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tracing::warn;
 
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
@@ -150,6 +152,14 @@ pub fn refresh_curated_plugin_cache(
         }
         let source_path = match plugin.source {
             MarketplacePluginSource::Local { path } => path,
+            MarketplacePluginSource::Git { .. } => {
+                warn!(
+                    plugin = plugin_name,
+                    marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
+                    "skipping remote curated plugin source during cache refresh"
+                );
+                continue;
+            }
         };
         plugin_sources.insert(plugin_name, source_path);
     }
@@ -227,7 +237,7 @@ fn refresh_non_curated_plugin_cache_with_mode(
     let store = PluginStore::new(codex_home.to_path_buf());
     let marketplace_outcome = list_marketplaces(additional_roots)
         .map_err(|err| format!("failed to discover marketplaces for cache refresh: {err}"))?;
-    let mut plugin_sources = HashMap::<String, (AbsolutePathBuf, String)>::new();
+    let mut plugin_sources = HashMap::<String, MarketplacePluginSource>::new();
 
     for marketplace in marketplace_outcome.marketplaces {
         if marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -256,19 +266,14 @@ fn refresh_non_curated_plugin_cache_with_mode(
                 continue;
             }
 
-            let source_path = match plugin.source {
-                MarketplacePluginSource::Local { path } => path,
-            };
-            let plugin_version = plugin_version_for_source(source_path.as_path())
-                .map_err(|err| format!("failed to read plugin version for {plugin_key}: {err}"))?;
-            plugin_sources.insert(plugin_key, (source_path, plugin_version));
+            plugin_sources.insert(plugin_key, plugin.source);
         }
     }
 
     let mut cache_refreshed = false;
     for plugin_id in configured_non_curated_plugin_ids {
         let plugin_key = plugin_id.as_key();
-        let Some((source_path, plugin_version)) = plugin_sources.get(&plugin_key).cloned() else {
+        let Some(source) = plugin_sources.get(&plugin_key).cloned() else {
             warn!(
                 plugin = plugin_id.plugin_name,
                 marketplace = plugin_id.marketplace_name,
@@ -276,6 +281,13 @@ fn refresh_non_curated_plugin_cache_with_mode(
             );
             continue;
         };
+        let materialized =
+            materialize_marketplace_plugin_source(codex_home, &source).map_err(|err| {
+                format!("failed to materialize plugin source for {plugin_key}: {err}")
+            })?;
+        let source_path = materialized.path.clone();
+        let plugin_version = plugin_version_for_source(source_path.as_path())
+            .map_err(|err| format!("failed to read plugin version for {plugin_key}: {err}"))?;
 
         if mode == NonCuratedCacheRefreshMode::IfVersionChanged
             && store.active_plugin_version(&plugin_id).as_deref() == Some(plugin_version.as_str())
@@ -462,7 +474,7 @@ async fn load_plugin(
     }
 
     let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
-        loaded_plugin.error = Some("missing or invalid .codex-plugin/plugin.json".to_string());
+        loaded_plugin.error = Some("missing or invalid plugin.json".to_string());
         return loaded_plugin;
     };
 
@@ -835,4 +847,187 @@ fn normalize_plugin_mcp_server_value(
 #[derive(Debug, Default)]
 struct PluginMcpDiscovery {
     mcp_servers: HashMap<String, McpServerConfig>,
+}
+
+#[derive(Debug)]
+pub struct MaterializedMarketplacePluginSource {
+    pub path: AbsolutePathBuf,
+    _tempdir: Option<TempDir>,
+}
+
+pub fn materialize_marketplace_plugin_source(
+    codex_home: &Path,
+    source: &MarketplacePluginSource,
+) -> Result<MaterializedMarketplacePluginSource, String> {
+    match source {
+        MarketplacePluginSource::Local { path } => Ok(MaterializedMarketplacePluginSource {
+            path: path.clone(),
+            _tempdir: None,
+        }),
+        MarketplacePluginSource::Git {
+            url,
+            path,
+            ref_name,
+            sha,
+        } => {
+            let staging_root = codex_home.join("plugins/.marketplace-plugin-source-staging");
+            fs::create_dir_all(&staging_root).map_err(|err| {
+                format!(
+                    "failed to create marketplace plugin source staging directory {}: {err}",
+                    staging_root.display()
+                )
+            })?;
+            let tempdir = tempfile::Builder::new()
+                .prefix("marketplace-plugin-source-")
+                .tempdir_in(&staging_root)
+                .map_err(|err| {
+                    format!(
+                        "failed to create marketplace plugin source staging directory in {}: {err}",
+                        staging_root.display()
+                    )
+                })?;
+            clone_git_plugin_source(
+                url,
+                ref_name.as_deref(),
+                sha.as_deref(),
+                path.as_deref(),
+                tempdir.path(),
+            )?;
+            let path = if let Some(path) = path {
+                AbsolutePathBuf::try_from(tempdir.path().join(path)).map_err(|err| {
+                    format!("failed to resolve materialized plugin source path: {err}")
+                })?
+            } else {
+                AbsolutePathBuf::try_from(tempdir.path().to_path_buf()).map_err(|err| {
+                    format!("failed to resolve materialized plugin source path: {err}")
+                })?
+            };
+            Ok(MaterializedMarketplacePluginSource {
+                path,
+                _tempdir: Some(tempdir),
+            })
+        }
+    }
+}
+
+fn clone_git_plugin_source(
+    url: &str,
+    ref_name: Option<&str>,
+    sha: Option<&str>,
+    sparse_checkout_path: Option<&str>,
+    destination: &Path,
+) -> Result<(), String> {
+    if let Some(sparse_checkout_path) = sparse_checkout_path {
+        run_git(
+            &[
+                "clone",
+                "--filter=blob:none",
+                "--sparse",
+                "--no-checkout",
+                url,
+                destination.to_string_lossy().as_ref(),
+            ],
+            /*cwd*/ None,
+        )?;
+        run_git(
+            &[
+                "sparse-checkout",
+                "set",
+                "--no-cone",
+                "--",
+                sparse_checkout_path,
+            ],
+            Some(destination),
+        )?;
+    } else {
+        run_git(
+            &["clone", url, destination.to_string_lossy().as_ref()],
+            /*cwd*/ None,
+        )?;
+    }
+    if let Some(target) = sha.or(ref_name) {
+        run_git(&["checkout", target], Some(destination))?;
+    } else if sparse_checkout_path.is_some() {
+        run_git(&["checkout"], Some(destination))?;
+    }
+    Ok(())
+}
+
+fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), String> {
+    let mut command = Command::new("git");
+    command.args(args);
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+
+    let output = command
+        .output()
+        .map_err(|err| format!("failed to run git {}: {err}", args.join(" ")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "git {} failed with status {}\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        output.status,
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn materialize_git_subdir_uses_sparse_checkout() {
+        let codex_home = tempfile::tempdir().expect("create codex home");
+        let repo = tempfile::tempdir().expect("create git repo");
+        let plugin_dir = repo.path().join("plugins/toolkit");
+        fs::create_dir_all(&plugin_dir).expect("create plugin directory");
+        fs::create_dir_all(repo.path().join("plugins/other")).expect("create other plugin");
+        fs::write(plugin_dir.join("marker.txt"), "toolkit").expect("write plugin marker");
+        fs::write(repo.path().join("plugins/other/marker.txt"), "other")
+            .expect("write other marker");
+        fs::write(repo.path().join("root.txt"), "root").expect("write root marker");
+
+        run_git(&["init"], Some(repo.path())).expect("init git repo");
+        run_git(
+            &["config", "user.email", "test@example.com"],
+            Some(repo.path()),
+        )
+        .expect("configure git email");
+        run_git(&["config", "user.name", "Test User"], Some(repo.path()))
+            .expect("configure git name");
+        run_git(&["add", "."], Some(repo.path())).expect("stage git repo");
+        run_git(&["commit", "-m", "init"], Some(repo.path())).expect("commit git repo");
+
+        let materialized = materialize_marketplace_plugin_source(
+            codex_home.path(),
+            &MarketplacePluginSource::Git {
+                url: repo.path().display().to_string(),
+                path: Some("plugins/toolkit".to_string()),
+                ref_name: None,
+                sha: None,
+            },
+        )
+        .expect("materialize git source");
+
+        assert_eq!(
+            plugin_dir.file_name(),
+            materialized.path.as_path().file_name()
+        );
+        assert!(materialized.path.as_path().join("marker.txt").is_file());
+        let checkout_root = materialized
+            .path
+            .as_path()
+            .parent()
+            .and_then(Path::parent)
+            .expect("materialized path should be nested under checkout root");
+        assert!(!checkout_root.join("root.txt").exists());
+        assert!(!checkout_root.join("plugins/other/marker.txt").exists());
+    }
 }

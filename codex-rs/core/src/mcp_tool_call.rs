@@ -12,8 +12,6 @@ use tracing::error;
 
 use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
@@ -30,6 +28,8 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -541,11 +541,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
-    if !turn_context
-        .config
-        .memories
-        .no_memories_if_mcp_or_web_search
-    {
+    if !turn_context.config.memories.disable_on_external_context {
         return;
     }
     state_db::mark_thread_memory_mode_polluted(
@@ -676,9 +672,14 @@ fn custom_mcp_tool_approval_mode(
         .and_then(|value| {
             HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
         })
-        .and_then(|servers| servers.get(server).cloned())
-        .and_then(|server| server.tools.get(tool_name).cloned())
-        .and_then(|tool| tool.approval_mode)
+        .and_then(|servers| {
+            let server_config = servers.get(server)?;
+            server_config
+                .tools
+                .get(tool_name)
+                .and_then(|tool| tool.approval_mode)
+                .or(server_config.default_tools_approval_mode)
+        })
         .unwrap_or_default()
 }
 

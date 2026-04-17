@@ -4,7 +4,7 @@ use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use codex_protocol::error::CodexErr;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;

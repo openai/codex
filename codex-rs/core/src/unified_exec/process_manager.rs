@@ -26,6 +26,7 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
@@ -50,6 +51,8 @@ use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_config::types::ShellEnvironmentPolicy;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
@@ -748,6 +751,7 @@ impl UnifiedExecProcessManager {
             .await;
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
+            hook_command: request.hook_command.clone(),
             process_id: request.process_id,
             cwd,
             env,
@@ -778,7 +782,19 @@ impl UnifiedExecProcessManager {
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))
-            .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))
+            .map_err(|err| match err {
+                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
+                    let output = *output;
+                    let message = if output.aggregated_output.text.is_empty() {
+                        let exit_code = output.exit_code;
+                        format!("Process exited with code {exit_code}")
+                    } else {
+                        output.aggregated_output.text.clone()
+                    };
+                    UnifiedExecError::sandbox_denied(message, output)
+                }
+                other => UnifiedExecError::create_process(format!("{other:?}")),
+            })
     }
 
     pub(super) async fn collect_output_until_deadline(

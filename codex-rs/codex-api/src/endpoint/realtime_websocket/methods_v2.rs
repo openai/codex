@@ -84,6 +84,7 @@ pub(super) fn session_update_session(
                         r#type: TurnDetectionType::ServerVad,
                         interrupt_response: true,
                         create_response: true,
+                        silence_duration_ms: 500,
                     }),
                 },
                 output: Some(SessionAudioOutput {

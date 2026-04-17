@@ -225,6 +225,7 @@ async fn register_test_call(service: &NetworkApprovalService, registration_id: &
                 justification: None,
                 tty: None,
             },
+            "curl https://example.com".to_string(),
         )
         .await;
 }
@@ -248,6 +249,7 @@ async fn active_call_preserves_triggering_command_context() {
             "registration-1".to_string(),
             "turn-1".to_string(),
             expected.clone(),
+            "curl https://example.com".to_string(),
         )
         .await;
 
@@ -257,6 +259,7 @@ async fn active_call_preserves_triggering_command_context() {
         .expect("single active call should resolve");
 
     assert_eq!(&call.trigger, &expected);
+    assert_eq!(call.command, "curl https://example.com");
 }
 
 #[tokio::test]
