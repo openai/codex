@@ -903,6 +903,7 @@ enum DisplayCondition {
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
     WhenUnderWSL,
+    WhenNativeWindows,
     WhenCollaborationModesEnabled,
 }
 
@@ -913,6 +914,7 @@ impl DisplayCondition {
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
             DisplayCondition::WhenUnderWSL => state.is_wsl,
+            DisplayCondition::WhenNativeWindows => cfg!(target_os = "windows") && !state.is_wsl,
             DisplayCondition::WhenCollaborationModesEnabled => state.collaboration_modes_enabled,
         }
     }
@@ -1005,12 +1007,17 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
     },
     ShortcutDescriptor {
         id: ShortcutId::PasteImage,
-        // Show Ctrl+Alt+V when running under WSL (terminals often intercept plain
-        // Ctrl+V); otherwise fall back to Ctrl+V.
+        // Show Ctrl+Alt+V when running under WSL, Alt+V on native Windows, and
+        // Ctrl+V elsewhere. Windows terminals often intercept plain Ctrl+V
+        // before the TUI sees it.
         bindings: &[
             ShortcutBinding {
                 key: key_hint::ctrl_alt(KeyCode::Char('v')),
                 condition: DisplayCondition::WhenUnderWSL,
+            },
+            ShortcutBinding {
+                key: key_hint::alt(KeyCode::Char('v')),
+                condition: DisplayCondition::WhenNativeWindows,
             },
             ShortcutBinding {
                 key: key_hint::ctrl(KeyCode::Char('v')),
@@ -1735,7 +1742,7 @@ mod tests {
     }
 
     #[test]
-    fn paste_image_shortcut_prefers_ctrl_alt_v_under_wsl() {
+    fn paste_image_shortcut_uses_platform_specific_binding() {
         let descriptor = SHORTCUTS
             .iter()
             .find(|descriptor| descriptor.id == ShortcutId::PasteImage)
@@ -1754,6 +1761,8 @@ mod tests {
 
         let expected_key = if is_wsl {
             key_hint::ctrl_alt(KeyCode::Char('v'))
+        } else if cfg!(target_os = "windows") {
+            key_hint::alt(KeyCode::Char('v'))
         } else {
             key_hint::ctrl(KeyCode::Char('v'))
         };
