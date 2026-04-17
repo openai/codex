@@ -336,6 +336,7 @@ fn spawn_rollout_page_loader(
                 PAGE_SIZE,
                 cursor,
                 request.sort_key,
+                codex_rollout::SortDirection::Desc,
                 INTERACTIVE_SESSION_SOURCES.as_slice(),
                 default_provider.as_ref().map(std::slice::from_ref),
                 default_provider.as_deref().unwrap_or_default(),
@@ -1179,6 +1180,7 @@ fn thread_list_params(
             ThreadSortKey::CreatedAt => AppServerThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => AppServerThreadSortKey::UpdatedAt,
         }),
+        sort_direction: None,
         model_providers: match provider_filter {
             ProviderFilter::Any => None,
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
@@ -2420,9 +2422,7 @@ mod tests {
                 make_item("/tmp/a.jsonl", "2025-01-03T00:00:00Z", "third"),
                 make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "second"),
             ],
-            Some(cursor_from_str(
-                "2025-01-02T00-00-00|00000000-0000-0000-0000-000000000000",
-            )),
+            Some(cursor_from_str("2025-01-02T00:00:00Z")),
             /*num_scanned_files*/ 2,
             /*reached_scan_cap*/ false,
         ));
@@ -2432,9 +2432,7 @@ mod tests {
                 make_item("/tmp/a.jsonl", "2025-01-03T00:00:00Z", "duplicate"),
                 make_item("/tmp/c.jsonl", "2025-01-01T00:00:00Z", "first"),
             ],
-            Some(cursor_from_str(
-                "2025-01-01T00-00-00|00000000-0000-0000-0000-000000000001",
-            )),
+            Some(cursor_from_str("2025-01-01T00:00:00Z")),
             /*num_scanned_files*/ 2,
             /*reached_scan_cap*/ false,
         ));
@@ -2488,9 +2486,7 @@ mod tests {
                 make_item("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "one"),
                 make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "two"),
             ],
-            Some(cursor_from_str(
-                "2025-01-03T00-00-00|00000000-0000-0000-0000-000000000000",
-            )),
+            Some(cursor_from_str("2025-01-03T00:00:00Z")),
             /*num_scanned_files*/ 2,
             /*reached_scan_cap*/ false,
         ));
@@ -2806,9 +2802,7 @@ mod tests {
                 "2025-01-01T00:00:00Z",
                 "alpha",
             )],
-            Some(cursor_from_str(
-                "2025-01-02T00-00-00|00000000-0000-0000-0000-000000000000",
-            )),
+            Some(cursor_from_str("2025-01-02T00:00:00Z")),
             /*num_scanned_files*/ 1,
             /*reached_scan_cap*/ false,
         ));
@@ -2827,9 +2821,7 @@ mod tests {
                 search_token: first_request.search_token,
                 page: Ok(page(
                     vec![make_item("/tmp/beta.jsonl", "2025-01-02T00:00:00Z", "beta")],
-                    Some(cursor_from_str(
-                        "2025-01-03T00-00-00|00000000-0000-0000-0000-000000000001",
-                    )),
+                    Some(cursor_from_str("2025-01-03T00:00:00Z")),
                     /*num_scanned_files*/ 5,
                     /*reached_scan_cap*/ false,
                 )),
@@ -2855,9 +2847,7 @@ mod tests {
                         "2025-01-03T00:00:00Z",
                         "target log",
                     )],
-                    Some(cursor_from_str(
-                        "2025-01-04T00-00-00|00000000-0000-0000-0000-000000000002",
-                    )),
+                    Some(cursor_from_str("2025-01-04T00:00:00Z")),
                     /*num_scanned_files*/ 7,
                     /*reached_scan_cap*/ false,
                 )),

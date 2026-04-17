@@ -1409,6 +1409,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "async-channel",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -1842,6 +1843,7 @@ dependencies = [
 name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
+ "async-channel",
  "async-trait",
  "codex-protocol",
  "deno_core_icudata",
