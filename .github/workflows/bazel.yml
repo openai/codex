@@ -271,7 +271,6 @@ jobs:
               test \
               --jobs=8 \
               --nouse_target_platform_for_tests \
-              --strategy=TestRunner=local \
               --test_verbose_timeout_warnings \
               "${bazel_common_args[@]}" \
               -- \
