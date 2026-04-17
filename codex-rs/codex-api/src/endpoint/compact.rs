@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::CompactionInput;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
@@ -12,12 +12,12 @@ use serde::Deserialize;
 use serde_json::to_value;
 use std::sync::Arc;
 
-pub struct CompactClient<T: HttpTransport, A: AuthProvider> {
-    session: EndpointSession<T, A>,
+pub struct CompactClient<T: HttpTransport> {
+    session: EndpointSession<T>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
-    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> CompactClient<T> {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
         }
@@ -86,18 +86,8 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Default)]
-    struct DummyAuth;
-
-    impl AuthProvider for DummyAuth {
-        fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
-    }
-
     #[test]
     fn path_is_responses_compact() {
-        assert_eq!(
-            CompactClient::<DummyTransport, DummyAuth>::path(),
-            "responses/compact"
-        );
+        assert_eq!(CompactClient::<DummyTransport>::path(), "responses/compact");
     }
 }

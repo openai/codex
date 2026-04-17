@@ -166,32 +166,29 @@ mod handlers;
 mod mcp;
 mod review;
 mod rollout_reconstruction;
-mod session;
-mod turn;
-mod turn_context;
+#[allow(clippy::module_inception)]
+pub(crate) mod session;
+pub(crate) mod turn;
+pub(crate) mod turn_context;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
 use self::review::spawn_review_thread;
-pub(crate) use self::session::AppServerClientMetadata;
-pub(crate) use self::session::Session;
-pub(crate) use self::session::SessionConfiguration;
-pub(crate) use self::session::SessionSettingsUpdate;
+use self::session::AppServerClientMetadata;
+use self::session::Session;
+use self::session::SessionConfiguration;
+use self::session::SessionSettingsUpdate;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
-pub(crate) use self::turn::build_prompt;
-pub(crate) use self::turn::built_tools;
 #[cfg(test)]
 use self::turn::collect_explicit_app_ids_from_skill_items;
 #[cfg(test)]
 use self::turn::explicitly_enabled_connectors_missing_from_tools;
 #[cfg(test)]
 use self::turn::filter_connectors_for_input;
-pub(crate) use self::turn::get_last_assistant_message_from_turn;
 use self::turn::realtime_text_for_event;
-pub(crate) use self::turn::run_turn;
-pub(crate) use self::turn_context::TurnContext;
-pub(crate) use self::turn_context::TurnSkillsContext;
+use self::turn_context::TurnContext;
+use self::turn_context::TurnSkillsContext;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -1390,37 +1387,44 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let mut state = self.state.lock().await;
-
-        match state.session_configuration.apply(&updates) {
-            Ok(updated) => {
-                let previous_cwd = state.session_configuration.cwd.clone();
-                let sandbox_policy_changed =
-                    state.session_configuration.sandbox_policy != updated.sandbox_policy;
-                let next_cwd = updated.cwd.clone();
-                let codex_home = updated.codex_home.clone();
-                let session_source = updated.session_source.clone();
-                state.session_configuration = updated;
-                drop(state);
-
-                self.maybe_refresh_shell_snapshot_for_cwd(
-                    &previous_cwd,
-                    &next_cwd,
-                    &codex_home,
-                    &session_source,
-                );
-                if sandbox_policy_changed {
-                    self.refresh_managed_network_proxy_for_current_sandbox_policy()
-                        .await;
+        let (previous_cwd, sandbox_policy_changed, next_cwd, codex_home, session_source) = {
+            let mut state = self.state.lock().await;
+            let updated = match state.session_configuration.apply(&updates) {
+                Ok(updated) => updated,
+                Err(err) => {
+                    warn!("rejected session settings update: {err}");
+                    return Err(err);
                 }
+            };
 
-                Ok(())
-            }
-            Err(err) => {
-                warn!("rejected session settings update: {err}");
-                Err(err)
-            }
+            let previous_cwd = state.session_configuration.cwd.clone();
+            let sandbox_policy_changed =
+                state.session_configuration.sandbox_policy != updated.sandbox_policy;
+            let next_cwd = updated.cwd.clone();
+            let codex_home = updated.codex_home.clone();
+            let session_source = updated.session_source.clone();
+            state.session_configuration = updated;
+            (
+                previous_cwd,
+                sandbox_policy_changed,
+                next_cwd,
+                codex_home,
+                session_source,
+            )
+        };
+
+        self.maybe_refresh_shell_snapshot_for_cwd(
+            &previous_cwd,
+            &next_cwd,
+            &codex_home,
+            &session_source,
+        );
+        if sandbox_policy_changed {
+            self.refresh_managed_network_proxy_for_current_sandbox_policy()
+                .await;
         }
+
+        Ok(())
     }
 
     pub(crate) async fn set_session_startup_prewarm(
@@ -3094,15 +3098,6 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 }
 
 use crate::memories::prompts::build_memory_tool_developer_instructions;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_dynamic_tools_and_rx;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_rx;
-#[cfg(test)]
-pub(crate) use tests::make_session_configuration_for_tests;
 
 #[cfg(test)]
-#[path = "codex_tests.rs"]
-mod tests;
+pub(crate) mod tests;

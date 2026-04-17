@@ -1,4 +1,6 @@
 use super::*;
+use codex_model_provider::SharedModelProvider;
+use codex_model_provider::create_model_provider;
 
 pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
     matches!(
@@ -32,7 +34,7 @@ pub(crate) struct TurnContext {
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
-    pub(crate) provider: ModelProviderInfo,
+    pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
@@ -354,8 +356,8 @@ impl Session {
         let session_source = session_configuration.session_source.clone();
         let image_generation_tool_auth_allowed =
             image_generation_tool_auth_allowed(auth_manager.as_deref());
-        let auth_manager_for_context = auth_manager;
-        let provider_for_context = provider;
+        let auth_manager_for_context = auth_manager.clone();
+        let provider_for_context = create_model_provider(provider, auth_manager);
         let session_telemetry_for_context = session_telemetry;
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -444,13 +446,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (
-            session_configuration,
-            sandbox_policy_changed,
-            previous_cwd,
-            codex_home,
-            session_source,
-        ) = {
+        let update_result = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
@@ -460,26 +456,36 @@ impl Session {
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
                     state.session_configuration = next.clone();
-                    (
+                    Ok((
                         next,
                         sandbox_policy_changed,
                         previous_cwd,
                         codex_home,
                         session_source,
-                    )
+                    ))
                 }
-                Err(err) => {
-                    drop(state);
-                    self.send_event_raw(Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: err.to_string(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
-                    })
-                    .await;
-                    return Err(err);
-                }
+                Err(err) => Err(err),
+            }
+        };
+
+        let (
+            session_configuration,
+            sandbox_policy_changed,
+            previous_cwd,
+            codex_home,
+            session_source,
+        ) = match update_result {
+            Ok(update) => update,
+            Err(err) => {
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(err);
             }
         };
 

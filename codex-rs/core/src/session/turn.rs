@@ -4,9 +4,6 @@ use crate::build_skill_injections;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
-use crate::codex::PreviousTurnSettings;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::collect_env_var_dependencies;
 use crate::collect_explicit_skill_mentions;
 use crate::compact::InitialContextInjection;
@@ -36,6 +33,9 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::resolve_skill_dependencies_for_turn;
+use crate::session::PreviousTurnSettings;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -853,7 +853,7 @@ async fn run_auto_compact(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
-    if should_use_remote_compact_task(&turn_context.provider) {
+    if should_use_remote_compact_task(turn_context.provider.info()) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
@@ -1134,7 +1134,7 @@ async fn run_sampling_request(
         }
 
         // Use the configured provider-specific stream retry budget.
-        let max_retries = turn_context.provider.stream_max_retries();
+        let max_retries = turn_context.provider.info().stream_max_retries();
         if retries >= max_retries
             && client_session.try_switch_fallback_transport(
                 &turn_context.session_telemetry,
