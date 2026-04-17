@@ -10,10 +10,11 @@ use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::render_explicit_plugin_instructions;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
+use codex_tools::ToolName;
 
 pub(crate) fn build_plugin_injections(
     mentioned_plugins: &[PluginCapabilitySummary],
-    mcp_tools: &HashMap<String, ToolInfo>,
+    mcp_tools: &HashMap<ToolName, ToolInfo>,
     available_connectors: &[connectors::AppInfo],
 ) -> Vec<ResponseItem> {
     if mentioned_plugins.is_empty() {

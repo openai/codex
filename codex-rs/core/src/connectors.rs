@@ -16,6 +16,7 @@ use codex_connectors::DirectoryListResponse;
 use codex_login::token_data::TokenData;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::DiscoverableTool;
+use codex_tools::ToolName;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -160,7 +161,7 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
 pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
     config: &Config,
     auth: Option<&CodexAuth>,
-    mcp_tools: &HashMap<String, ToolInfo>,
+    mcp_tools: &HashMap<ToolName, ToolInfo>,
 ) {
     if !config.features.enabled(Feature::Apps) {
         return;
@@ -480,7 +481,7 @@ async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(
-    mcp_tools: &HashMap<String, ToolInfo>,
+    mcp_tools: &HashMap<ToolName, ToolInfo>,
 ) -> Vec<AppInfo> {
     // ToolInfo already carries plugin provenance, so app-level plugin sources
     // can be derived here instead of requiring a separate enrichment pass.

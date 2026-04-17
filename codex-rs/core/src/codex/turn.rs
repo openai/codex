@@ -1232,7 +1232,7 @@ pub(crate) async fn built_tools(
         let exposed_tool_names = mcp_tools
             .iter()
             .chain(deferred_mcp_tools.iter())
-            .flat_map(|tools| tools.keys().map(String::as_str))
+            .flat_map(|tools| tools.keys().map(ToolName::display))
             .collect::<HashSet<_>>();
         collect_unavailable_called_tools(input, &exposed_tool_names)
     } else {
