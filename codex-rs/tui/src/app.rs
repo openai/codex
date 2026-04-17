@@ -4718,18 +4718,18 @@ impl App {
                     plugin_display_name,
                     result,
                 );
-                if install_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                if install_succeeded
+                    && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                    && should_refresh_plugin_detail
                 {
-                    if should_refresh_plugin_detail {
-                        self.fetch_plugin_detail(
-                            app_server,
-                            cwd,
-                            PluginReadParams {
-                                marketplace_path,
-                                plugin_name,
-                            },
-                        );
-                    }
+                    self.fetch_plugin_detail(
+                        app_server,
+                        cwd,
+                        PluginReadParams {
+                            marketplace_path,
+                            plugin_name,
+                        },
+                    );
                 }
             }
             AppEvent::FetchMcpInventory => {
