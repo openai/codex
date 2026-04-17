@@ -367,12 +367,12 @@ async fn send_message_to_connection(
     };
     if connection_state.can_disconnect() {
         if connection_state.overflow_depth.load(Ordering::Acquire) > 0 {
-            queue_overflow_message(connections, connection_id, queued_message)
+            queue_overflow_message(connections, connection_id, queued_message).await
         } else {
             match writer.try_send(queued_message) {
                 Ok(()) => false,
                 Err(mpsc::error::TrySendError::Full(queued_message)) => {
-                    queue_overflow_message(connections, connection_id, queued_message)
+                    queue_overflow_message(connections, connection_id, queued_message).await
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
                     disconnect_connection(connections, connection_id)
@@ -386,7 +386,7 @@ async fn send_message_to_connection(
     }
 }
 
-fn queue_overflow_message(
+async fn queue_overflow_message(
     connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
     connection_id: ConnectionId,
     queued_message: QueuedOutgoingMessage,
@@ -408,12 +408,28 @@ fn queue_overflow_message(
     overflow_depth.fetch_add(1, Ordering::AcqRel);
     match overflow_writer.try_send(queued_message) {
         Ok(()) => false,
-        Err(mpsc::error::TrySendError::Full(_)) => {
-            overflow_depth.fetch_sub(1, Ordering::AcqRel);
-            warn!(
-                "disconnecting slow connection after outbound overflow queue filled: {connection_id:?}"
-            );
-            disconnect_connection(connections, connection_id)
+        Err(mpsc::error::TrySendError::Full(queued_message)) => {
+            // Both bounded queues are full now. Give the overflow worker the
+            // same grace window to make room before deciding this connection is
+            // slow enough to disconnect.
+            match overflow_writer
+                .send_timeout(queued_message, OUTBOUND_QUEUE_FULL_GRACE)
+                .await
+            {
+                Ok(()) => false,
+                Err(mpsc::error::SendTimeoutError::Timeout(_)) => {
+                    overflow_depth.fetch_sub(1, Ordering::AcqRel);
+                    warn!(
+                        "disconnecting slow connection after outbound overflow queue remained full for {:?}: {connection_id:?}",
+                        OUTBOUND_QUEUE_FULL_GRACE
+                    );
+                    disconnect_connection(connections, connection_id)
+                }
+                Err(mpsc::error::SendTimeoutError::Closed(_)) => {
+                    overflow_depth.fetch_sub(1, Ordering::AcqRel);
+                    disconnect_connection(connections, connection_id)
+                }
+            }
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
             overflow_depth.fetch_sub(1, Ordering::AcqRel);
@@ -1131,7 +1147,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disconnectable_connection_disconnects_when_overflow_queue_fills() {
+    async fn disconnectable_connection_applies_grace_when_overflow_queue_fills() {
         let connection_id = ConnectionId(13);
         let (writer_tx, mut writer_rx) = mpsc::channel(1);
         let disconnect_token = CancellationToken::new();
@@ -1164,6 +1180,24 @@ mod tests {
             ),
         );
 
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "overflow-active".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
+                write_complete_tx: None,
+            },
+        )
+        .await;
+        tokio::task::yield_now().await;
+
         for index in 0..CHANNEL_CAPACITY {
             route_outgoing_envelope(
                 &mut connections,
@@ -1186,22 +1220,41 @@ mod tests {
         assert!(connections.contains_key(&connection_id));
         assert!(!disconnect_token.is_cancelled());
 
-        route_outgoing_envelope(
-            &mut connections,
-            OutgoingEnvelope::ToConnection {
-                connection_id,
-                message: OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
-                    ConfigWarningNotification {
-                        summary: "too-many".to_string(),
-                        details: None,
-                        path: None,
-                        range: None,
-                    },
-                )),
-                write_complete_tx: None,
-            },
+        let mut route_task = tokio::spawn(async move {
+            route_outgoing_envelope(
+                &mut connections,
+                OutgoingEnvelope::ToConnection {
+                    connection_id,
+                    message: OutgoingMessage::AppServerNotification(
+                        ServerNotification::ConfigWarning(ConfigWarningNotification {
+                            summary: "too-many".to_string(),
+                            details: None,
+                            path: None,
+                            range: None,
+                        }),
+                    ),
+                    write_complete_tx: None,
+                },
+            )
+            .await;
+            connections
+        });
+
+        assert!(
+            timeout(Duration::from_millis(50), &mut route_task)
+                .await
+                .is_err(),
+            "saturated overflow queue should be given a grace window before disconnecting"
+        );
+        assert!(!disconnect_token.is_cancelled());
+
+        let connections = timeout(
+            OUTBOUND_QUEUE_FULL_GRACE + Duration::from_millis(100),
+            route_task,
         )
-        .await;
+        .await
+        .expect("saturated overflow queue should eventually disconnect")
+        .expect("routing task should not panic");
 
         assert!(!connections.contains_key(&connection_id));
         assert!(disconnect_token.is_cancelled());
