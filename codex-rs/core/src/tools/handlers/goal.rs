@@ -4,10 +4,10 @@
 //! providing an objective replaces the goal and resets accounting, while
 //! omitting the objective updates the existing goal and preserves usage.
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::goals::SetGoalRequest;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;

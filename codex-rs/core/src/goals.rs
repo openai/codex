@@ -7,8 +7,8 @@
 //! emits goal-update events.
 
 use crate::StateDbHandle;
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use anyhow::Context;
 use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
