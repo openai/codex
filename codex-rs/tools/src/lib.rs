@@ -109,7 +109,6 @@ pub use tool_discovery::ToolSearchResultSource;
 pub use tool_discovery::ToolSearchSource;
 pub use tool_discovery::ToolSearchSourceInfo;
 pub use tool_discovery::ToolSuggestEntry;
-pub use tool_discovery::collect_tool_search_output_tools;
 pub use tool_discovery::collect_tool_search_source_infos;
 pub use tool_discovery::collect_tool_suggest_entries;
 pub use tool_discovery::create_tool_search_tool;

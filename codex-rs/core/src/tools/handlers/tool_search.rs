@@ -94,25 +94,31 @@ impl ToolSearchHandler {
         limit: usize,
         use_default_limit: bool,
     ) -> Result<Vec<ToolSearchOutputTool>, FunctionCallError> {
-        let result_ids = self.search_result_ids(query, limit, use_default_limit);
-        self.search_output_tools(result_ids)
+        let results = self.search_result_entries(query, limit, use_default_limit);
+        self.search_output_tools(results)
     }
 
-    fn search_result_ids(&self, query: &str, limit: usize, use_default_limit: bool) -> Vec<usize> {
+    fn search_result_entries(
+        &self,
+        query: &str,
+        limit: usize,
+        use_default_limit: bool,
+    ) -> Vec<&ToolSearchEntry> {
         let mut results = self
             .search_engine
             .search(query, limit)
             .into_iter()
             .map(|result| result.document.id)
+            .filter_map(|id| self.entries.get(id))
             .collect::<Vec<_>>();
         if !use_default_limit {
             return results;
         }
 
-        if results.iter().any(|&id| {
-            self.entries
-                .get(id)
-                .and_then(|entry| entry.limit_bucket.as_deref())
+        if results.iter().any(|entry| {
+            entry
+                .limit_bucket
+                .as_deref()
                 .is_some_and(|bucket| bucket == COMPUTER_USE_MCP_SERVER_NAME)
         }) {
             results = self
@@ -120,21 +126,19 @@ impl ToolSearchHandler {
                 .search(query, COMPUTER_USE_TOOL_SEARCH_LIMIT)
                 .into_iter()
                 .map(|result| result.document.id)
+                .filter_map(|id| self.entries.get(id))
                 .collect();
         }
-        limit_results_by_bucket(&self.entries, results)
+        limit_results_by_bucket(results)
     }
 
-    fn search_output_tools(
+    fn search_output_tools<'a>(
         &self,
-        result_ids: impl IntoIterator<Item = usize>,
+        results: impl IntoIterator<Item = &'a ToolSearchEntry>,
     ) -> Result<Vec<ToolSearchOutputTool>, FunctionCallError> {
         let mut tools = Vec::new();
         // Preserve search order: group namespace children, emit standalone tools directly.
-        for result_id in result_ids {
-            let Some(entry) = self.entries.get(result_id) else {
-                continue;
-            };
+        for entry in results {
             match &entry.output {
                 ToolSearchOutputTool::Function(tool) => {
                     tools.push(ToolSearchOutputTool::Function(tool.clone()));
@@ -162,22 +166,19 @@ impl ToolSearchHandler {
     }
 }
 
-fn limit_results_by_bucket(entries: &[ToolSearchEntry], results: Vec<usize>) -> Vec<usize> {
+fn limit_results_by_bucket(results: Vec<&ToolSearchEntry>) -> Vec<&ToolSearchEntry> {
     results
         .into_iter()
-        .scan(HashMap::<&str, usize>::new(), |counts, result_id| {
-            let Some(bucket) = entries
-                .get(result_id)
-                .and_then(|entry| entry.limit_bucket.as_deref())
-            else {
-                return Some(Some(result_id));
+        .scan(HashMap::<&str, usize>::new(), |counts, result| {
+            let Some(bucket) = result.limit_bucket.as_deref() else {
+                return Some(Some(result));
             };
             let count = counts.entry(bucket).or_default();
             if *count >= default_limit_for_bucket(bucket) {
                 Some(None)
             } else {
                 *count += 1;
-                Some(Some(result_id))
+                Some(Some(result))
             }
         })
         .flatten()
@@ -233,9 +234,14 @@ mod tests {
             ])),
             &dynamic_tools,
         );
+        let results = [
+            &handler.entries[0],
+            &handler.entries[2],
+            &handler.entries[1],
+        ];
 
         let tools = handler
-            .search_output_tools([0, 2, 1])
+            .search_output_tools(results)
             .expect("mixed search output should serialize");
 
         assert_eq!(
@@ -300,7 +306,7 @@ mod tests {
         );
         let handler = handler_from_tools(Some(&tools), &[]);
 
-        let results = handler.search_result_ids(
+        let results = handler.search_result_entries(
             "computer use",
             TOOL_SEARCH_DEFAULT_LIMIT,
             /*use_default_limit*/ true,
@@ -310,11 +316,10 @@ mod tests {
         assert!(
             results
                 .iter()
-                .all(|&id| handler.entries[id].limit_bucket.as_deref()
-                    == Some(COMPUTER_USE_MCP_SERVER_NAME))
+                .all(|entry| entry.limit_bucket.as_deref() == Some(COMPUTER_USE_MCP_SERVER_NAME))
         );
 
-        let explicit_results = handler.search_result_ids(
+        let explicit_results = handler.search_result_entries(
             "computer use",
             /*limit*/ 100,
             /*use_default_limit*/ false,
@@ -337,7 +342,7 @@ mod tests {
         ));
         let handler = handler_from_tools(Some(&tools), &[]);
 
-        let results = handler.search_result_ids(
+        let results = handler.search_result_entries(
             "calendar",
             TOOL_SEARCH_DEFAULT_LIMIT,
             /*use_default_limit*/ true,
@@ -347,10 +352,10 @@ mod tests {
         assert!(
             results
                 .iter()
-                .all(|&id| handler.entries[id].limit_bucket.as_deref() == Some("other-server"))
+                .all(|entry| entry.limit_bucket.as_deref() == Some("other-server"))
         );
 
-        let explicit_results = handler.search_result_ids(
+        let explicit_results = handler.search_result_entries(
             "calendar", /*limit*/ 100, /*use_default_limit*/ false,
         );
 
@@ -371,20 +376,17 @@ mod tests {
         ));
         let handler = handler_from_tools(Some(&tools), &[]);
 
-        let results = handler.search_result_ids(
+        let results = handler.search_result_entries(
             "computer use",
             TOOL_SEARCH_DEFAULT_LIMIT,
             /*use_default_limit*/ true,
         );
 
         assert!(
-            count_results_for_server(&handler, &results, COMPUTER_USE_MCP_SERVER_NAME)
+            count_results_for_server(&results, COMPUTER_USE_MCP_SERVER_NAME)
                 <= COMPUTER_USE_TOOL_SEARCH_LIMIT
         );
-        assert!(
-            count_results_for_server(&handler, &results, "other-server")
-                <= TOOL_SEARCH_DEFAULT_LIMIT
-        );
+        assert!(count_results_for_server(&results, "other-server") <= TOOL_SEARCH_DEFAULT_LIMIT);
     }
 
     fn numbered_tools(
@@ -431,14 +433,10 @@ mod tests {
         }
     }
 
-    fn count_results_for_server(
-        handler: &ToolSearchHandler,
-        results: &[usize],
-        server_name: &str,
-    ) -> usize {
+    fn count_results_for_server(results: &[&ToolSearchEntry], server_name: &str) -> usize {
         results
             .iter()
-            .filter(|&&id| handler.entries[id].limit_bucket.as_deref() == Some(server_name))
+            .filter(|entry| entry.limit_bucket.as_deref() == Some(server_name))
             .count()
     }
 

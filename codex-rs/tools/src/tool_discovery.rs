@@ -203,42 +203,6 @@ pub fn create_tool_search_tool(
     }
 }
 
-pub fn collect_tool_search_output_tools<'a>(
-    tool_sources: impl IntoIterator<Item = ToolSearchResultSource<'a>>,
-) -> Result<Vec<ToolSearchOutputTool>, serde_json::Error> {
-    let mut grouped: Vec<(&'a str, Vec<ToolSearchResultSource<'a>>)> = Vec::new();
-    for tool in tool_sources {
-        if let Some((_, tools)) = grouped
-            .iter_mut()
-            .find(|(tool_namespace, _)| *tool_namespace == tool.tool_namespace)
-        {
-            tools.push(tool);
-        } else {
-            grouped.push((tool.tool_namespace, vec![tool]));
-        }
-    }
-
-    let mut results = Vec::with_capacity(grouped.len());
-    for (tool_namespace, tools) in grouped {
-        let Some(first_tool) = tools.first() else {
-            continue;
-        };
-
-        let tools = tools
-            .iter()
-            .map(|tool| tool_search_result_source_to_namespace_tool(*tool))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        results.push(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
-            name: tool_namespace.to_string(),
-            description: tool_search_result_source_namespace_description(*first_tool),
-            tools,
-        }));
-    }
-
-    Ok(results)
-}
-
 pub fn tool_search_result_source_to_output_tool(
     source: ToolSearchResultSource<'_>,
 ) -> Result<ToolSearchOutputTool, serde_json::Error> {
