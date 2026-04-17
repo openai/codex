@@ -10,8 +10,8 @@
 //! Model-visible schema masking is owned by `codex-mcp` alongside MCP tool
 //! inventory, so this module only handles the execution-time argument rewrite.
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
@@ -142,7 +142,7 @@ async fn build_uploaded_local_argument_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::make_session_and_context;
+    use crate::session::tests::make_session_and_context;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;

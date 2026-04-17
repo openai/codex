@@ -120,7 +120,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
-#[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
 
 struct InstructionsTestCase {
@@ -870,7 +869,7 @@ async fn user_shell_commands_do_not_inherit_managed_network_proxy() -> anyhow::R
 #[tokio::test]
 async fn get_base_instructions_no_user_content() {
     let prompt_with_apply_patch_instructions =
-        include_str!("../prompt_with_apply_patch_instructions.md");
+        include_str!("../../prompt_with_apply_patch_instructions.md");
     let models_response = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model_info_for_slug = |slug: &str, config: &Config| {
