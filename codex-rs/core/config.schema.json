@@ -335,6 +335,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "apply_patch_streaming_events": {
+              "type": "boolean"
+            },
             "apps": {
               "type": "boolean"
             },
@@ -495,6 +498,9 @@
               "type": "boolean"
             },
             "tool_search": {
+              "type": "boolean"
+            },
+            "tool_search_always_defer_mcp_tools": {
               "type": "boolean"
             },
             "tool_suggest": {
@@ -686,6 +692,14 @@
       ]
     },
     "FilesystemPermissionsToml": {
+      "properties": {
+        "glob_scan_max_depth": {
+          "description": "Optional maximum depth for expanding unreadable glob patterns on platforms that snapshot glob matches before sandbox startup.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
       "type": "object"
     },
     "ForcedLoginMethod": {
@@ -862,6 +876,10 @@
           "description": "Model used for memory consolidation.",
           "type": "string"
         },
+        "disable_on_external_context": {
+          "description": "When `true`, external context sources mark the thread `memory_mode` as `\"polluted\"`.",
+          "type": "boolean"
+        },
         "extract_model": {
           "description": "Model used for thread summarisation.",
           "type": "string"
@@ -898,10 +916,6 @@
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",
           "type": "integer"
-        },
-        "no_memories_if_mcp_or_web_search": {
-          "description": "When `true`, web searches and MCP tool calls mark the thread `memory_mode` as `\"polluted\"`.",
-          "type": "boolean"
         },
         "use_memories": {
           "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
@@ -2244,6 +2258,9 @@
         "apply_patch_freeform": {
           "type": "boolean"
         },
+        "apply_patch_streaming_events": {
+          "type": "boolean"
+        },
         "apps": {
           "type": "boolean"
         },
@@ -2404,6 +2421,9 @@
           "type": "boolean"
         },
         "tool_search": {
+          "type": "boolean"
+        },
+        "tool_search_always_defer_mcp_tools": {
           "type": "boolean"
         },
         "tool_suggest": {

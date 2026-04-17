@@ -44,6 +44,7 @@ use codex_config::types::SkillsConfig;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiNotificationSettings;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -220,7 +221,7 @@ persistence = "none"
 
     let memories = r#"
 [memories]
-no_memories_if_mcp_or_web_search = true
+disable_on_external_context = true
 generate_memories = false
 use_memories = false
 max_raw_memories_for_consolidation = 512
@@ -235,7 +236,7 @@ consolidation_model = "gpt-5"
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
     assert_eq!(
         Some(MemoriesToml {
-            no_memories_if_mcp_or_web_search: Some(true),
+            disable_on_external_context: Some(true),
             generate_memories: Some(false),
             use_memories: Some(false),
             max_raw_memories_for_consolidation: Some(512),
@@ -259,7 +260,7 @@ consolidation_model = "gpt-5"
     assert_eq!(
         config.memories,
         MemoriesConfig {
-            no_memories_if_mcp_or_web_search: true,
+            disable_on_external_context: true,
             generate_memories: false,
             use_memories: false,
             max_raw_memories_for_consolidation: 512,
@@ -270,6 +271,18 @@ consolidation_model = "gpt-5"
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5".to_string()),
         }
+    );
+
+    let legacy_memories_cfg =
+        toml::from_str::<ConfigToml>("[memories]\nno_memories_if_mcp_or_web_search = true\n")
+            .expect("legacy memories TOML should deserialize");
+    assert!(
+        MemoriesConfig::from(
+            legacy_memories_cfg
+                .memories
+                .expect("legacy memories config")
+        )
+        .disable_on_external_context
     );
 }
 
@@ -428,6 +441,7 @@ allow_upstream_proxy = false
                 "workspace".to_string(),
                 PermissionProfileToml {
                     filesystem: Some(FilesystemPermissionsToml {
+                        glob_scan_max_depth: None,
                         entries: BTreeMap::from([
                             (
                                 ":minimal".to_string(),
@@ -482,6 +496,7 @@ async fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> 
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
@@ -531,6 +546,7 @@ async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
@@ -576,6 +592,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 "workspace".to_string(),
                 PermissionProfileToml {
                     filesystem: Some(FilesystemPermissionsToml {
+                        glob_scan_max_depth: None,
                         entries: BTreeMap::from([
                             (
                                 ":minimal".to_string(),
@@ -671,6 +688,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: Some(2),
                             entries: BTreeMap::from([(
                                 ":project_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
@@ -693,6 +711,13 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
     )
     .await?;
 
+    assert_eq!(
+        config
+            .permissions
+            .file_system_sandbox_policy
+            .glob_scan_max_depth,
+        Some(2)
+    );
     let expected_pattern = AbsolutePathBuf::resolve_path_against_base("**/*.env", cwd.path())
         .to_string_lossy()
         .into_owned();
@@ -738,6 +763,7 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
@@ -781,6 +807,7 @@ async fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io:
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 external_write_path.to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
@@ -824,6 +851,7 @@ async fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> s
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([(
@@ -883,6 +911,7 @@ async fn load_workspace_permission_profile(
 async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         filesystem: Some(FilesystemPermissionsToml {
+            glob_scan_max_depth: None,
             entries: BTreeMap::from([(
                 ":future_special_path".to_string(),
                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
@@ -929,6 +958,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
 -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         filesystem: Some(FilesystemPermissionsToml {
+            glob_scan_max_depth: None,
             entries: BTreeMap::from([(
                 ":future_special_path".to_string(),
                 FilesystemPermissionToml::Scoped(BTreeMap::from([(
@@ -996,6 +1026,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
 async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result<()> {
     let config = load_workspace_permission_profile(PermissionProfileToml {
         filesystem: Some(FilesystemPermissionsToml {
+            glob_scan_max_depth: None,
             entries: BTreeMap::new(),
         }),
         network: None,
@@ -1030,6 +1061,7 @@ async fn permissions_profiles_reject_project_root_parent_traversal() -> std::io:
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":project_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([(
@@ -1075,6 +1107,7 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
                     "workspace".to_string(),
                     PermissionProfileToml {
                         filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
@@ -1174,7 +1207,7 @@ network_access = false  # This should be ignored.
             sandbox_mode_override,
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
-            &PathBuf::from("/tmp/test"),
+            /*active_project*/ None,
             /*sandbox_policy_constraint*/ None,
         )
         .await;
@@ -1195,7 +1228,7 @@ network_access = true  # This should be ignored.
             sandbox_mode_override,
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
-            &PathBuf::from("/tmp/test"),
+            /*active_project*/ None,
             /*sandbox_policy_constraint*/ None,
         )
         .await;
@@ -1212,6 +1245,9 @@ writable_roots = [
 ]
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
+
+[projects."/tmp/test"]
+trust_level = "trusted"
 "#,
         serde_json::json!(writable_root)
     );
@@ -1224,7 +1260,7 @@ exclude_slash_tmp = true
             sandbox_mode_override,
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
-            &PathBuf::from("/tmp/test"),
+            /*active_project*/ None,
             /*sandbox_policy_constraint*/ None,
         )
         .await;
@@ -1253,9 +1289,6 @@ writable_roots = [
 ]
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
-
-[projects."/tmp/test"]
-trust_level = "trusted"
 "#,
         serde_json::json!(writable_root)
     );
@@ -1268,7 +1301,7 @@ trust_level = "trusted"
             sandbox_mode_override,
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
-            &PathBuf::from("/tmp/test"),
+            /*active_project*/ None,
             /*sandbox_policy_constraint*/ None,
         )
         .await;
@@ -2065,6 +2098,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
 
     let cwd = codex_home.path().abs();
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home.path(),
         Some(cwd),
         &Vec::new(),
@@ -2198,6 +2232,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
 
     let cwd = codex_home.path().abs();
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home.path(),
         Some(cwd),
         &[("model".to_string(), TomlValue::String("cli".to_string()))],
@@ -3466,6 +3501,7 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
     .map_err(std::io::Error::other)?;
 
     let config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
         ConfigToml::default(),
         ConfigOverrides {
             cwd: Some(codex_home.path().to_path_buf()),
@@ -3498,6 +3534,7 @@ async fn load_config_ignores_empty_requirements_guardian_policy_config() -> std:
     .map_err(std::io::Error::other)?;
 
     let config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
         ConfigToml::default(),
         ConfigOverrides {
             cwd: Some(codex_home.path().to_path_buf()),
@@ -5285,6 +5322,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         rules: None,
         enforce_residency: None,
         network: None,
+        permissions: None,
         guardian_policy_config: None,
     };
     let requirement_source = crate::config_loader::RequirementSource::Unknown;
@@ -5314,6 +5352,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
             .expect("config layer stack");
 
     let config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
         fixture.cfg.clone(),
         ConfigOverrides {
             cwd: Some(fixture.cwd_path()),
@@ -5521,13 +5560,16 @@ trust_level = "untrusted"
 
     let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
         .expect("TOML deserialization should succeed");
+    let active_project = ProjectConfig {
+        trust_level: Some(TrustLevel::Untrusted),
+    };
 
     let resolution = cfg
         .derive_sandbox_policy(
             /*sandbox_mode_override*/ None,
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
-            &PathBuf::from("/tmp/test"),
+            Some(&active_project),
             /*sandbox_policy_constraint*/ None,
         )
         .await;
@@ -5563,6 +5605,9 @@ async fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defau
         )])),
         ..Default::default()
     };
+    let active_project = ProjectConfig {
+        trust_level: Some(TrustLevel::Trusted),
+    };
     let constrained = Constrained::new(SandboxPolicy::DangerFullAccess, |candidate| {
         if matches!(candidate, SandboxPolicy::DangerFullAccess) {
             Ok(())
@@ -5581,7 +5626,7 @@ async fn derive_sandbox_policy_falls_back_to_constraint_value_for_implicit_defau
             /*sandbox_mode_override*/ None,
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
-            &project_path,
+            Some(&active_project),
             Some(&constrained),
         )
         .await;
@@ -5605,6 +5650,9 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
         )])),
         ..Default::default()
     };
+    let active_project = ProjectConfig {
+        trust_level: Some(TrustLevel::Trusted),
+    };
     let constrained = Constrained::new(SandboxPolicy::new_workspace_write_policy(), |candidate| {
         if matches!(candidate, SandboxPolicy::WorkspaceWrite { .. }) {
             Ok(())
@@ -5623,7 +5671,7 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
             /*sandbox_mode_override*/ None,
             /*profile_sandbox_mode*/ None,
             WindowsSandboxLevel::Disabled,
-            &project_path,
+            Some(&active_project),
             Some(&constrained),
         )
         .await;
@@ -5918,6 +5966,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         rules: None,
         enforce_residency: None,
         network: None,
+        permissions: None,
         guardian_policy_config: None,
     };
 

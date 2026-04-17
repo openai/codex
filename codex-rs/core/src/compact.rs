@@ -5,10 +5,10 @@ use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
 #[cfg(test)]
-use crate::codex::PreviousTurnSettings;
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::codex::get_last_assistant_message_from_turn;
+use crate::session::PreviousTurnSettings;
+use crate::session::session::Session;
+use crate::session::turn::get_last_assistant_message_from_turn;
+use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
@@ -19,7 +19,6 @@ use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
 use codex_features::Feature;
-use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -37,6 +36,8 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::truncate_text;
 use futures::prelude::*;
 use tracing::error;
+
+use codex_model_provider_info::ModelProviderInfo;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
@@ -178,7 +179,7 @@ async fn run_compact_task_inner_impl(
 
     let mut truncated_count = 0usize;
 
-    let max_retries = turn_context.provider.stream_max_retries();
+    let max_retries = turn_context.provider.info().stream_max_retries();
     let mut retries = 0;
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket incremental

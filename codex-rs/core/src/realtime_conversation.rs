@@ -1,7 +1,7 @@
 use crate::client::ModelClient;
-use crate::codex::Session;
 use crate::realtime_context::build_realtime_startup_context;
 use crate::realtime_prompt::prepare_realtime_backend_prompt;
+use crate::session::session::Session;
 use anyhow::Context;
 use async_channel::Receiver;
 use async_channel::RecvError;
@@ -63,7 +63,7 @@ const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
-const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
+const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
 pub(crate) const REALTIME_USER_TEXT_PREFIX: &str = "[USER] ";
 pub(crate) const REALTIME_BACKEND_TEXT_PREFIX: &str = "[BACKEND] ";

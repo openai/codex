@@ -86,17 +86,21 @@ jobs:
             --print-failed-test-logs
             --use-node-test-env
           )
+          bazel_test_args=(
+            test
+            --test_tag_filters=-argument-comment-lint
+            --test_verbose_timeout_warnings
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
+          )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             bazel_wrapper_args+=(--windows-msvc-host-platform)
+            bazel_test_args+=(--jobs=8)
           fi
 
           ./.github/scripts/run-bazel-ci.sh \
             "${bazel_wrapper_args[@]}" \
             -- \
-            test \
-            --test_tag_filters=-argument-comment-lint \
-            --test_verbose_timeout_warnings \
-            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            "${bazel_test_args[@]}" \
             -- \
             "${bazel_targets[@]}"
 
@@ -157,10 +161,14 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
             --build_metadata=TAG_job=clippy
           )
+          bazel_wrapper_args=()
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            # Some explicit targets pulled in through //codex-rs/... are
-            # intentionally incompatible with `//:local_windows`, but the lint
-            # aspect still traverses their compatible Rust deps.
+            # Keep this aligned with the Windows Bazel test job. With the
+            # default `//:local_windows` host platform, Windows `rust_test`
+            # targets such as `//codex-rs/core:core-all-test` can be skipped
+            # by `--skip_incompatible_explicit_targets`, which hides clippy
+            # diagnostics from integration-test modules.
+            bazel_wrapper_args+=(--windows-msvc-host-platform)
             bazel_clippy_args+=(--skip_incompatible_explicit_targets)
           fi
 
@@ -171,6 +179,8 @@ jobs:
           done <<< "${bazel_target_lines}"
 
           ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            "${bazel_wrapper_args[@]}" \
             -- \
             build \
             "${bazel_clippy_args[@]}" \

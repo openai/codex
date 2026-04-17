@@ -351,6 +351,8 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
     )?;
 
     let server = MockServer::start().await;
+    // App-server startup may proactively read stale auth before this test sends
+    // getAuthStatus; require the refresh path without depending on that race.
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
@@ -358,7 +360,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
                 "code": "refresh_token_reused"
             }
         })))
-        .expect(2)
+        .expect(1..=2)
         .mount(&server)
         .await;
 
@@ -418,6 +420,8 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
     )?;
 
     let server = MockServer::start().await;
+    // App-server startup may proactively read stale auth before this test sends
+    // getAuthStatus; require the refresh path without depending on that race.
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
@@ -425,7 +429,7 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
                 "code": "refresh_token_reused"
             }
         })))
-        .expect(2)
+        .expect(1..=2)
         .mount(&server)
         .await;
 

@@ -389,7 +389,7 @@
       ]
     },
     "AutoReviewDecisionSource": {
-      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
+      "description": "[UNSTABLE] Source that produced a terminal approval auto-review decision.",
       "enum": [
         "agent"
       ],
@@ -984,6 +984,9 @@
       ],
       "type": "object"
     },
+    "ExternalAgentConfigImportCompletedNotification": {
+      "type": "object"
+    },
     "FileChangeOutputDeltaNotification": {
       "properties": {
         "delta": {
@@ -1152,7 +1155,7 @@
       "type": "object"
     },
     "GuardianApprovalReview": {
-      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary approval auto-review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
       "properties": {
         "rationale": {
           "type": [
@@ -1360,7 +1363,7 @@
       ]
     },
     "GuardianApprovalReviewStatus": {
-      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "description": "[UNSTABLE] Lifecycle state for an approval auto-review.",
       "enum": [
         "inProgress",
         "approved",
@@ -1378,7 +1381,7 @@
       "type": "string"
     },
     "GuardianRiskLevel": {
-      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "description": "[UNSTABLE] Risk level assigned by approval auto-review.",
       "enum": [
         "low",
         "medium",
@@ -1388,7 +1391,7 @@
       "type": "string"
     },
     "GuardianUserAuthorization": {
-      "description": "[UNSTABLE] Authorization level assigned by guardian approval review.",
+      "description": "[UNSTABLE] Authorization level assigned by approval auto-review.",
       "enum": [
         "unknown",
         "low",
@@ -1421,6 +1424,7 @@
     "HookEventName": {
       "enum": [
         "preToolUse",
+        "permissionRequest",
         "postToolUse",
         "sessionStart",
         "userPromptSubmit",
@@ -1634,7 +1638,7 @@
       "type": "object"
     },
     "ItemGuardianApprovalReviewCompletedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary notification payload for approval auto-review. This shape is expected to change soon.",
       "properties": {
         "action": {
           "$ref": "#/definitions/GuardianApprovalReviewAction"
@@ -1674,7 +1678,7 @@
       "type": "object"
     },
     "ItemGuardianApprovalReviewStartedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary notification payload for approval auto-review. This shape is expected to change soon.",
       "properties": {
         "action": {
           "$ref": "#/definitions/GuardianApprovalReviewAction"
@@ -4790,6 +4794,26 @@
         "params"
       ],
       "title": "App/list/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "externalAgentConfig/import/completed"
+          ],
+          "title": "ExternalAgentConfig/import/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExternalAgentConfigImportCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "ExternalAgentConfig/import/completedNotification",
       "type": "object"
     },
     {

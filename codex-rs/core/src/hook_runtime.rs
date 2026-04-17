@@ -1,8 +1,12 @@
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_hooks::PermissionRequestDecision;
+use codex_hooks::PermissionRequestOutcome;
+use codex_hooks::PermissionRequestRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -10,6 +14,8 @@ use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
+use codex_otel::HOOK_RUN_DURATION_METRIC;
+use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -17,14 +23,18 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
+use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -145,6 +155,39 @@ pub(crate) async fn run_pre_tool_use_hooks(
     emit_hook_completed_events(sess, turn_context, hook_events).await;
 
     if should_block { block_reason } else { None }
+}
+
+// PermissionRequest hooks share the same preview/start/completed event flow as
+// other hook types, but they return an optional decision instead of mutating
+// tool input or post-run state.
+pub(crate) async fn run_permission_request_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    run_id_suffix: &str,
+    payload: PermissionRequestPayload,
+) -> Option<PermissionRequestDecision> {
+    let request = PermissionRequestRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name: payload.tool_name,
+        run_id_suffix: run_id_suffix.to_string(),
+        command: payload.command,
+        description: payload.description,
+    };
+    let preview_runs = sess.hooks().preview_permission_request(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let PermissionRequestOutcome {
+        hook_events,
+        decision,
+    } = sess.hooks().run_permission_request(request).await;
+    emit_hook_completed_events(sess, turn_context, hook_events).await;
+
+    decision
 }
 
 pub(crate) async fn run_post_tool_use_hooks(
@@ -324,9 +367,26 @@ pub(crate) async fn emit_hook_completed_events(
     completed_events: Vec<HookCompletedEvent>,
 ) {
     for completed in completed_events {
+        emit_hook_completed_metrics(turn_context, &completed);
         track_hook_completed_analytics(sess, turn_context, &completed);
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
+    }
+}
+
+fn emit_hook_completed_metrics(turn_context: &TurnContext, completed: &HookCompletedEvent) {
+    let tags = hook_run_metric_tags(&completed.run);
+    turn_context
+        .session_telemetry
+        .counter(HOOK_RUN_METRIC, /*inc*/ 1, &tags);
+    if let Some(duration_ms) = completed.run.duration_ms
+        && let Ok(duration_ms) = u64::try_from(duration_ms)
+    {
+        turn_context.session_telemetry.record_duration(
+            HOOK_RUN_DURATION_METRIC,
+            Duration::from_millis(duration_ms),
+            &tags,
+        );
     }
 }
 
@@ -364,6 +424,40 @@ fn hook_run_analytics_payload(
     )
 }
 
+fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 3] {
+    let hook_name = match run.event_name {
+        HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PermissionRequest => "PermissionRequest",
+        HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::SessionStart => "SessionStart",
+        HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::Stop => "Stop",
+    };
+    let hook_source = match run.source {
+        HookSource::System => "system",
+        HookSource::User => "user",
+        HookSource::Project => "project",
+        HookSource::Mdm => "mdm",
+        HookSource::SessionFlags => "session_flags",
+        HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
+        HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
+        HookSource::Unknown => "unknown",
+    };
+    let status = match run.status {
+        HookRunStatus::Running => "running",
+        HookRunStatus::Completed => "completed",
+        HookRunStatus::Failed => "failed",
+        HookRunStatus::Blocked => "blocked",
+        HookRunStatus::Stopped => "stopped",
+    };
+
+    [
+        ("hook_name", hook_name),
+        ("source", hook_source),
+        ("status", status),
+    ]
+}
+
 fn hook_permission_mode(turn_context: &TurnContext) -> String {
     match turn_context.approval_policy.value() {
         AskForApproval::Never => "bypassPermissions",
@@ -388,7 +482,8 @@ mod tests {
 
     use super::additional_context_messages;
     use super::hook_run_analytics_payload;
-    use crate::codex::make_session_and_context;
+    use super::hook_run_metric_tags;
+    use crate::session::tests::make_session_and_context;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookRunSummary;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -461,6 +556,34 @@ mod tests {
         assert_eq!(tracking.turn_id, turn_context.sub_id);
         assert_eq!(hook.hook_source, HookSource::Unknown);
         assert_eq!(hook.status, HookRunStatus::Failed);
+    }
+
+    #[test]
+    fn hook_run_metric_tags_match_analytics_shape() {
+        let run = sample_hook_run(HookRunStatus::Blocked, HookSource::Project);
+
+        assert_eq!(
+            hook_run_metric_tags(&run),
+            [
+                ("hook_name", "Stop"),
+                ("source", "project"),
+                ("status", "blocked"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hook_run_metric_tags_include_expanded_hook_sources() {
+        let run = sample_hook_run(HookRunStatus::Completed, HookSource::LegacyManagedConfigMdm);
+
+        assert_eq!(
+            hook_run_metric_tags(&run),
+            [
+                ("hook_name", "Stop"),
+                ("source", "legacy_managed_config_mdm"),
+                ("status", "completed"),
+            ]
+        );
     }
 
     fn sample_hook_run(status: HookRunStatus, source: HookSource) -> HookRunSummary {

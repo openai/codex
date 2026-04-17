@@ -47,6 +47,8 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -55,6 +57,7 @@ use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
 use codex_features::PrefixCompactionConfigToml;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -698,6 +701,7 @@ impl ConfigBuilder {
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack = load_config_layers_state(
+            LOCAL_FS.as_ref(),
             &codex_home,
             Some(cwd),
             &cli_overrides,
@@ -727,6 +731,7 @@ impl ConfigBuilder {
             }
         };
         Config::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
             config_toml,
             harness_overrides,
             codex_home,
@@ -821,6 +826,7 @@ impl Config {
         let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)?;
         let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
         Self::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
             config_toml,
             ConfigOverrides::default(),
             codex_home,
@@ -858,6 +864,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home,
         cwd.cloned(),
         &cli_overrides,
@@ -1028,6 +1035,7 @@ pub async fn load_global_mcp_servers(
     // MCP servers defined in in-repo .codex/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home,
         cwd,
         &cli_overrides,
@@ -1251,6 +1259,37 @@ fn resolve_permission_config_syntax(
     })
 }
 
+fn apply_managed_filesystem_constraints(
+    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+    filesystem_constraints: &crate::config_loader::FilesystemConstraints,
+) {
+    for deny_read in &filesystem_constraints.deny_read {
+        let deny_entry = if deny_read.contains_glob() {
+            codex_protocol::permissions::FileSystemSandboxEntry {
+                path: codex_protocol::permissions::FileSystemPath::GlobPattern {
+                    pattern: deny_read.as_str().to_string(),
+                },
+                access: codex_protocol::permissions::FileSystemAccessMode::None,
+            }
+        } else {
+            let Ok(path) = AbsolutePathBuf::try_from(deny_read.as_str()) else {
+                continue;
+            };
+            codex_protocol::permissions::FileSystemSandboxEntry {
+                path: codex_protocol::permissions::FileSystemPath::Path { path },
+                access: codex_protocol::permissions::FileSystemAccessMode::None,
+            }
+        };
+        if !file_system_sandbox_policy
+            .entries
+            .iter()
+            .any(|existing| existing == &deny_entry)
+        {
+            file_system_sandbox_policy.entries.push(deny_entry);
+        }
+    }
+}
+
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -1452,10 +1491,18 @@ impl Config {
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack).await
+        Self::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
+            cfg,
+            overrides,
+            codex_home,
+            config_layer_stack,
+        )
+        .await
     }
 
     pub(crate) async fn load_config_with_layer_stack(
+        fs: &dyn ExecutorFileSystem,
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: AbsolutePathBuf,
@@ -1477,6 +1524,7 @@ impl Config {
             exec_policy: _,
             enforce_residency,
             network: network_requirements,
+            filesystem: filesystem_requirements,
         } = config_layer_stack.requirements().clone();
 
         let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
@@ -1577,9 +1625,12 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
+        let repo_root = resolve_root_git_project_for_trust(fs, &resolved_cwd).await;
         let active_project = cfg
-            .get_active_project(resolved_cwd.as_path())
-            .await
+            .get_active_project(
+                resolved_cwd.as_path(),
+                repo_root.as_ref().map(AbsolutePathBuf::as_path),
+            )
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
@@ -1675,7 +1726,7 @@ impl Config {
                     sandbox_mode,
                     config_profile.sandbox_mode,
                     windows_sandbox_level,
-                    resolved_cwd.as_path(),
+                    Some(&active_project),
                     Some(&constrained_sandbox_policy),
                 )
                 .await;
@@ -1745,7 +1796,8 @@ impl Config {
         let prefix_compaction = resolve_prefix_compaction_config(&cfg, &config_profile);
 
         let agent_roles =
-            agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
+            agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
+                .await?;
 
         let openai_base_url = cfg
             .openai_base_url
@@ -1894,8 +1946,12 @@ impl Config {
             .model_instructions_file
             .as_ref()
             .or(cfg.model_instructions_file.as_ref());
-        let file_base_instructions =
-            Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
+        let file_base_instructions = Self::try_read_non_empty_file(
+            fs,
+            model_instructions_path,
+            "model instructions file",
+        )
+        .await?;
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let include_permissions_instructions = config_profile
@@ -1926,9 +1982,11 @@ impl Config {
             .as_ref()
             .or(cfg.experimental_compact_prompt_file.as_ref());
         let file_compact_prompt = Self::try_read_non_empty_file(
+            fs,
             experimental_compact_prompt_path,
             "experimental compact prompt file",
-        )?;
+        )
+        .await?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
@@ -1977,6 +2035,34 @@ impl Config {
             &mut constrained_approval_policy,
             &mut startup_warnings,
         )?;
+        if let Some(Sourced {
+            value: filesystem_requirements,
+            source: filesystem_requirements_source,
+        }) = filesystem_requirements.as_ref()
+            && !filesystem_requirements.deny_read.is_empty()
+        {
+            let requirement_source = filesystem_requirements_source.clone();
+            constrained_sandbox_policy
+                .value
+                .add_validator(move |policy| match policy {
+                    SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => Ok(()),
+                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "sandbox_mode",
+                            candidate: policy.to_string(),
+                            allowed: "[read-only, workspace-write]".to_string(),
+                            requirement_source: requirement_source.clone(),
+                        })
+                    }
+                })
+                .map_err(std::io::Error::from)?;
+
+            if cfg!(target_os = "windows") {
+                startup_warnings.push(format!(
+                    "managed filesystem deny_read from {filesystem_requirements_source} is only enforced for direct file tools on Windows; shell subprocess reads are not sandboxed"
+                ));
+            }
+        }
         apply_requirement_constrained_value(
             "approvals_reviewer",
             approvals_reviewer,
@@ -2030,7 +2116,7 @@ impl Config {
             main_execve_wrapper_exe.as_ref(),
         );
         let effective_sandbox_policy = constrained_sandbox_policy.value.get().clone();
-        let effective_file_system_sandbox_policy =
+        let mut effective_file_system_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
                 file_system_sandbox_policy
             } else {
@@ -2040,6 +2126,16 @@ impl Config {
                     &file_system_sandbox_policy,
                 )
             };
+        if let Some(Sourced {
+            value: filesystem_requirements,
+            ..
+        }) = filesystem_requirements.as_ref()
+        {
+            apply_managed_filesystem_constraints(
+                &mut effective_file_system_sandbox_policy,
+                filesystem_requirements,
+            );
+        }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_network_sandbox_policy =
@@ -2252,7 +2348,8 @@ impl Config {
     /// If `path` is `Some`, attempts to read the file at the given path and
     /// returns its contents as a trimmed `String`. If the file is empty, or
     /// is `Some` but cannot be read, returns an `Err`.
-    fn try_read_non_empty_file(
+    async fn try_read_non_empty_file(
+        fs: &dyn ExecutorFileSystem,
         path: Option<&AbsolutePathBuf>,
         context: &str,
     ) -> std::io::Result<Option<String>> {
@@ -2260,12 +2357,15 @@ impl Config {
             return Ok(None);
         };
 
-        let contents = std::fs::read_to_string(path).map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("failed to read {context} {}: {e}", path.display()),
-            )
-        })?;
+        let contents = fs
+            .read_file_text(path, /*sandbox*/ None)
+            .await
+            .map_err(|e| {
+                std::io::Error::new(
+                    e.kind(),
+                    format!("failed to read {context} {}: {e}", path.display()),
+                )
+            })?;
 
         let s = contents.trim().to_string();
         if s.is_empty() {

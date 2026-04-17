@@ -1,5 +1,5 @@
-use crate::codex::TurnContext;
 use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
+use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TurnContextItem;

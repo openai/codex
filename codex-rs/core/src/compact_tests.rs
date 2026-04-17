@@ -8,7 +8,7 @@ async fn process_compacted_history_with_test_session(
     compacted_history: Vec<ResponseItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
 ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
-    let (session, turn_context) = crate::codex::make_session_and_context().await;
+    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
     session
         .set_previous_turn_settings(previous_turn_settings.cloned())
         .await;
