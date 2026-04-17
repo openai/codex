@@ -314,7 +314,7 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
             .enable(Feature::MemoryTool)
             .expect("test config should allow feature update");
         config.memories.max_raw_memories_for_consolidation = 1;
-        config.memories.no_memories_if_mcp_or_web_search = true;
+        config.memories.disable_on_external_context = true;
     });
     let initial = initial_builder.build(&server).await?;
     mount_sse_once(
@@ -386,7 +386,7 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
             .enable(Feature::MemoryTool)
             .expect("test config should allow feature update");
         config.memories.max_raw_memories_for_consolidation = 1;
-        config.memories.no_memories_if_mcp_or_web_search = true;
+        config.memories.disable_on_external_context = true;
     });
     let resumed = resumed_builder
         .resume(&server, home.clone(), rollout_path.clone())

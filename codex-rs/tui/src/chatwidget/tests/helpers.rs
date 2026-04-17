@@ -209,6 +209,7 @@ pub(super) async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_agent_markdown: None,
+        latest_proposed_plan_markdown: None,
         saw_copy_source_this_turn: false,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),
@@ -1070,6 +1071,7 @@ pub(super) async fn assert_hook_events_snapshot(
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
         codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
+        codex_protocol::protocol::HookEventName::PermissionRequest => "PermissionRequest",
         codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",

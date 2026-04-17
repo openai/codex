@@ -8,9 +8,9 @@ use tokio::time::Sleep;
 
 use super::UnifiedExecContext;
 use super::process::UnifiedExecProcess;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;

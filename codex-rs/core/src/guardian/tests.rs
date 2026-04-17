@@ -1,6 +1,4 @@
 use super::*;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::Constrained;
@@ -14,6 +12,8 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_config::config_toml::ConfigToml;
 use codex_exec_server::LOCAL_FS;
@@ -71,7 +71,7 @@ async fn guardian_test_session_and_turn(
 async fn guardian_test_session_and_turn_with_base_url(
     base_url: &str,
 ) -> (Arc<Session>, Arc<TurnContext>) {
-    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.conversation_id = fixed_guardian_parent_session_id();
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
@@ -687,7 +687,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
 
 #[tokio::test]
 async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
-    let (session, turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
 
@@ -739,7 +739,7 @@ fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
 
 #[tokio::test]
 async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
-    let (_session, mut turn) = crate::codex::make_session_and_context().await;
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::User;
     turn.config = Arc::new(config.clone());
@@ -876,7 +876,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     )
     .await;
 
-    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.conversation_id = fixed_guardian_parent_session_id();
     let temp_cwd = TempDir::new()?;
     let mut config = (*turn.config).clone();
@@ -943,7 +943,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 
 #[tokio::test]
 async fn build_guardian_prompt_items_includes_parent_session_id() -> anyhow::Result<()> {
-    let (session, _) = crate::codex::make_session_and_context().await;
+    let (session, _) = crate::session::tests::make_session_and_context().await;
     let prompt = build_guardian_prompt_items(
         &session,
         /*retry_reason*/ None,
@@ -1246,7 +1246,8 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     )
     .await;
 
-    let (mut session, mut turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let (mut session, mut turn, rx) =
+        crate::session::tests::make_session_and_context_with_rx().await;
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     config.user_instructions = None;

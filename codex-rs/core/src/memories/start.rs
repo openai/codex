@@ -1,7 +1,7 @@
-use crate::codex::Session;
 use crate::config::Config;
 use crate::memories::phase1;
 use crate::memories::phase2;
+use crate::session::session::Session;
 use codex_features::Feature;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;

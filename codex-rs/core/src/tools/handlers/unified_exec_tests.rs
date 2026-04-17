@@ -13,7 +13,7 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;

@@ -49,6 +49,7 @@ pub use marketplace_add::MarketplaceAddError;
 pub use marketplace_add::MarketplaceAddOutcome;
 pub use marketplace_add::MarketplaceAddRequest;
 pub use marketplace_add::add_marketplace;
+pub(crate) use marketplace_add::is_local_marketplace_source;
 pub(crate) use marketplace_add::parse_marketplace_source;
 pub(crate) use render::render_explicit_plugin_instructions;
 pub(crate) use render::render_plugins_section;

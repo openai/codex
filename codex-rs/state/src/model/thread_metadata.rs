@@ -9,7 +9,6 @@ use codex_protocol::protocol::SessionSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 /// The sort key to use when listing threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,13 +19,18 @@ pub enum SortKey {
     UpdatedAt,
 }
 
+/// Sort direction to use when listing threads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
 /// A pagination anchor used for keyset pagination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
     /// The timestamp component of the anchor.
     pub ts: DateTime<Utc>,
-    /// The UUID component of the anchor.
-    pub id: Uuid,
 }
 
 /// A single page of thread metadata results.
@@ -414,12 +418,11 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
 }
 
 pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
-    let id = Uuid::parse_str(&item.id.to_string()).ok()?;
     let ts = match sort_key {
         SortKey::CreatedAt => item.created_at,
         SortKey::UpdatedAt => item.updated_at,
     };
-    Some(Anchor { ts, id })
+    Some(Anchor { ts })
 }
 
 pub(crate) fn datetime_to_epoch_millis(dt: DateTime<Utc>) -> i64 {
