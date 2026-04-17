@@ -1,6 +1,7 @@
 use clap::Parser;
 use std::ffi::CString;
 use std::fmt;
+use std::fs;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::FromRawFd;
@@ -443,7 +444,7 @@ fn run_bwrap_with_proc_fallback(
         options,
     );
     apply_inner_command_argv0(&mut bwrap_args.args);
-    exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    run_or_exec_bwrap(bwrap_args);
 }
 
 fn bwrap_network_mode(
@@ -480,6 +481,7 @@ fn build_bwrap_argv(
     crate::bwrap::BwrapArgs {
         args: argv,
         preserved_files: bwrap_args.preserved_files,
+        synthetic_mount_targets: bwrap_args.synthetic_mount_targets,
     }
 }
 
@@ -568,6 +570,78 @@ fn resolve_true_command() -> String {
     "true".to_string()
 }
 
+fn run_or_exec_bwrap(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
+    if bwrap_args.synthetic_mount_targets.is_empty() {
+        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    }
+    run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args);
+}
+
+fn run_bwrap_in_child_with_synthetic_mount_cleanup(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
+    let synthetic_mount_targets = bwrap_args.synthetic_mount_targets.clone();
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("failed to fork for bubblewrap: {err}");
+    }
+
+    if pid == 0 {
+        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    }
+
+    let mut status: libc::c_int = 0;
+    let wait_res = unsafe { libc::waitpid(pid, &mut status as *mut libc::c_int, 0) };
+    if wait_res < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("waitpid failed for bubblewrap child: {err}");
+    }
+
+    cleanup_synthetic_mount_targets(&synthetic_mount_targets);
+    exit_with_wait_status(status);
+}
+
+fn cleanup_synthetic_mount_targets(targets: &[crate::bwrap::SyntheticMountTarget]) {
+    for target in targets.iter().rev() {
+        let path = target.path();
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => panic!(
+                "failed to inspect synthetic bubblewrap mount target {}: {err}",
+                path.display()
+            ),
+        };
+        if !target.should_remove_after_bwrap(&metadata) {
+            continue;
+        }
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => panic!(
+                "failed to remove synthetic bubblewrap mount target {}: {err}",
+                path.display()
+            ),
+        }
+    }
+}
+
+fn exit_with_wait_status(status: libc::c_int) -> ! {
+    if libc::WIFEXITED(status) {
+        std::process::exit(libc::WEXITSTATUS(status));
+    }
+
+    if libc::WIFSIGNALED(status) {
+        let signal = libc::WTERMSIG(status);
+        unsafe {
+            libc::signal(signal, libc::SIG_DFL);
+            libc::kill(libc::getpid(), signal);
+        }
+        std::process::exit(128 + signal);
+    }
+
+    std::process::exit(1);
+}
+
 /// Run a short-lived bubblewrap preflight in a child process and capture stderr.
 ///
 /// Strategy:
@@ -581,6 +655,7 @@ fn resolve_true_command() -> String {
 ///   command, and reads are bounded to a fixed max size.
 fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> String {
     const MAX_PREFLIGHT_STDERR_BYTES: u64 = 64 * 1024;
+    let synthetic_mount_targets = bwrap_args.synthetic_mount_targets.clone();
 
     let mut pipe_fds = [0; 2];
     let pipe_res = unsafe { libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC) };
@@ -628,6 +703,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         let err = std::io::Error::last_os_error();
         panic!("waitpid failed for bubblewrap child: {err}");
     }
+    cleanup_synthetic_mount_targets(&synthetic_mount_targets);
 
     String::from_utf8_lossy(&stderr_bytes).into_owned()
 }

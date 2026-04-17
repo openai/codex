@@ -256,6 +256,29 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
 }
 
 #[test]
+fn cleanup_synthetic_mount_targets_removes_only_empty_files() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let empty_file = temp_dir.path().join(".agents");
+    let non_empty_file = temp_dir.path().join(".codex");
+    let missing_file = temp_dir.path().join(".missing");
+    std::fs::write(&empty_file, "").expect("write empty file");
+    std::fs::write(&non_empty_file, "keep").expect("write nonempty file");
+
+    cleanup_synthetic_mount_targets(&[
+        crate::bwrap::SyntheticMountTarget::missing(&empty_file),
+        crate::bwrap::SyntheticMountTarget::missing(&non_empty_file),
+        crate::bwrap::SyntheticMountTarget::missing(&missing_file),
+    ]);
+
+    assert!(!empty_file.exists());
+    assert_eq!(
+        std::fs::read_to_string(&non_empty_file).expect("read nonempty file"),
+        "keep"
+    );
+    assert!(!missing_file.exists());
+}
+
+#[test]
 fn managed_proxy_inner_command_includes_route_spec() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let args = build_inner_seccomp_command(InnerSeccompCommandArgs {

@@ -15,9 +15,11 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::fs::File;
+use std::fs::Metadata;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -101,6 +103,61 @@ impl BwrapNetworkMode {
 pub(crate) struct BwrapArgs {
     pub args: Vec<String>,
     pub preserved_files: Vec<File>,
+    pub synthetic_mount_targets: Vec<SyntheticMountTarget>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+impl FileIdentity {
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SyntheticMountTarget {
+    path: PathBuf,
+    // If an empty preserved path was already present, remember its inode so
+    // cleanup does not delete a real pre-existing file.
+    pre_existing_file: Option<FileIdentity>,
+}
+
+impl SyntheticMountTarget {
+    pub(crate) fn missing(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            pre_existing_file: None,
+        }
+    }
+
+    fn existing_empty_file(path: &Path, metadata: &Metadata) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            pre_existing_file: Some(FileIdentity::from_metadata(metadata)),
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn should_remove_after_bwrap(&self, metadata: &Metadata) -> bool {
+        if !metadata.file_type().is_file() || metadata.len() != 0 {
+            return false;
+        }
+
+        match self.pre_existing_file {
+            Some(pre_existing_file) => pre_existing_file != FileIdentity::from_metadata(metadata),
+            None => true,
+        }
+    }
 }
 
 /// Wrap a command with bubblewrap so the filesystem is read-only by default,
@@ -126,6 +183,7 @@ pub(crate) fn create_bwrap_command_args(
             Ok(BwrapArgs {
                 args: command,
                 preserved_files: Vec::new(),
+                synthetic_mount_targets: Vec::new(),
             })
         } else {
             Ok(create_bwrap_flags_full_filesystem(command, options))
@@ -165,6 +223,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
     BwrapArgs {
         args,
         preserved_files: Vec::new(),
+        synthetic_mount_targets: Vec::new(),
     }
 }
 
@@ -179,6 +238,7 @@ fn create_bwrap_flags(
     let BwrapArgs {
         args: filesystem_args,
         preserved_files,
+        synthetic_mount_targets,
     } = create_filesystem_args(
         file_system_sandbox_policy,
         sandbox_policy_cwd,
@@ -216,6 +276,7 @@ fn create_bwrap_flags(
     Ok(BwrapArgs {
         args,
         preserved_files,
+        synthetic_mount_targets,
     })
 }
 
@@ -348,6 +409,7 @@ fn create_filesystem_args(
         args
     };
     let mut preserved_files = Vec::new();
+    let mut synthetic_mount_targets = Vec::new();
     let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
     for writable_root in &writable_roots {
         let root = writable_root.root.as_path();
@@ -381,6 +443,7 @@ fn create_filesystem_args(
         append_unreadable_root_args(
             &mut args,
             &mut preserved_files,
+            &mut synthetic_mount_targets,
             unreadable_root,
             &allowed_write_paths,
         )?;
@@ -416,7 +479,13 @@ fn create_filesystem_args(
         }
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
-            append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths)?;
+            append_read_only_subpath_args(
+                &mut args,
+                &mut preserved_files,
+                &mut synthetic_mount_targets,
+                &subpath,
+                &allowed_write_paths,
+            )?;
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -432,6 +501,7 @@ fn create_filesystem_args(
             append_unreadable_root_args(
                 &mut args,
                 &mut preserved_files,
+                &mut synthetic_mount_targets,
                 &unreadable_root,
                 &allowed_write_paths,
             )?;
@@ -453,6 +523,7 @@ fn create_filesystem_args(
         append_unreadable_root_args(
             &mut args,
             &mut preserved_files,
+            &mut synthetic_mount_targets,
             &unreadable_root,
             &allowed_write_paths,
         )?;
@@ -461,6 +532,7 @@ fn create_filesystem_args(
     Ok(BwrapArgs {
         args,
         preserved_files,
+        synthetic_mount_targets,
     })
 }
 
@@ -787,6 +859,8 @@ fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Pa
 
 fn append_read_only_subpath_args(
     args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    synthetic_mount_targets: &mut Vec<SyntheticMountTarget>,
     subpath: &Path,
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
@@ -804,13 +878,32 @@ fn append_read_only_subpath_args(
         )));
     }
 
+    if let Some(metadata) = transient_empty_preserved_file_metadata(subpath)
+        && is_within_allowed_write_paths(subpath, allowed_write_paths)
+    {
+        // Another concurrent bwrap setup can leave a zero-byte mount target at
+        // a missing preserved path. Treat it like the missing case instead of
+        // binding that transient host path as the stable source.
+        append_existing_empty_file_bind_data_args(
+            args,
+            preserved_files,
+            synthetic_mount_targets,
+            subpath,
+            &metadata,
+        )?;
+        return Ok(());
+    }
+
     if !subpath.exists() {
         if let Some(first_missing_component) = find_first_non_existent_component(subpath)
             && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
         {
-            args.push("--ro-bind".to_string());
-            args.push("/dev/null".to_string());
-            args.push(path_to_string(&first_missing_component));
+            append_missing_empty_file_bind_data_args(
+                args,
+                preserved_files,
+                synthetic_mount_targets,
+                &first_missing_component,
+            )?;
         }
         return Ok(());
     }
@@ -823,9 +916,48 @@ fn append_read_only_subpath_args(
     Ok(())
 }
 
+fn append_empty_file_bind_data_args(
+    args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    path: &Path,
+) -> Result<()> {
+    if preserved_files.is_empty() {
+        preserved_files.push(File::open("/dev/null")?);
+    }
+    let null_fd = preserved_files[0].as_raw_fd().to_string();
+    args.push("--ro-bind-data".to_string());
+    args.push(null_fd);
+    args.push(path_to_string(path));
+    Ok(())
+}
+
+fn append_missing_empty_file_bind_data_args(
+    args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    synthetic_mount_targets: &mut Vec<SyntheticMountTarget>,
+    path: &Path,
+) -> Result<()> {
+    append_empty_file_bind_data_args(args, preserved_files, path)?;
+    synthetic_mount_targets.push(SyntheticMountTarget::missing(path));
+    Ok(())
+}
+
+fn append_existing_empty_file_bind_data_args(
+    args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    synthetic_mount_targets: &mut Vec<SyntheticMountTarget>,
+    path: &Path,
+    metadata: &Metadata,
+) -> Result<()> {
+    append_empty_file_bind_data_args(args, preserved_files, path)?;
+    synthetic_mount_targets.push(SyntheticMountTarget::existing_empty_file(path, metadata));
+    Ok(())
+}
+
 fn append_unreadable_root_args(
     args: &mut Vec<String>,
     preserved_files: &mut Vec<File>,
+    synthetic_mount_targets: &mut Vec<SyntheticMountTarget>,
     unreadable_root: &Path,
     allowed_write_paths: &[PathBuf],
 ) -> Result<()> {
@@ -850,9 +982,12 @@ fn append_unreadable_root_args(
         if let Some(first_missing_component) = find_first_non_existent_component(unreadable_root)
             && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
         {
-            args.push("--ro-bind".to_string());
-            args.push("/dev/null".to_string());
-            args.push(path_to_string(&first_missing_component));
+            append_missing_empty_file_bind_data_args(
+                args,
+                preserved_files,
+                synthetic_mount_targets,
+                &first_missing_component,
+            )?;
         }
         return Ok(());
     }
@@ -901,16 +1036,9 @@ fn append_existing_unreadable_path_args(
         return Ok(());
     }
 
-    if preserved_files.is_empty() {
-        preserved_files.push(File::open("/dev/null")?);
-    }
-    let null_fd = preserved_files[0].as_raw_fd().to_string();
     args.push("--perms".to_string());
     args.push("000".to_string());
-    args.push("--ro-bind-data".to_string());
-    args.push(null_fd);
-    args.push(path_to_string(unreadable_root));
-    Ok(())
+    append_empty_file_bind_data_args(args, preserved_files, unreadable_root)
 }
 
 /// Returns true when `path` is under any allowed writable root.
@@ -918,6 +1046,24 @@ fn is_within_allowed_write_paths(path: &Path, allowed_write_paths: &[PathBuf]) -
     allowed_write_paths
         .iter()
         .any(|root| path.starts_with(root))
+}
+
+fn transient_empty_preserved_file_metadata(path: &Path) -> Option<Metadata> {
+    if !has_preserved_path_name(path) {
+        return None;
+    }
+
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_file() && metadata.len() == 0 {
+        Some(metadata)
+    } else {
+        None
+    }
+}
+
+fn has_preserved_path_name(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name == ".git" || name == ".agents" || name == ".codex")
 }
 
 fn first_writable_symlink_component_in_path(
@@ -1359,6 +1505,80 @@ mod tests {
     }
 
     #[test]
+    fn missing_read_only_subpath_uses_empty_file_bind_data() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let blocked = workspace.join("blocked");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let workspace_root =
+            AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
+        let blocked_root = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: workspace_root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: blocked_root },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+
+        assert_empty_file_bound_without_perms(&args.args, &blocked);
+        assert_eq!(args.preserved_files.len(), 1);
+        assert_eq!(synthetic_mount_target_paths(&args), vec![blocked.clone()]);
+        assert!(
+            !blocked.exists(),
+            "missing path mask should not materialize host-side preserved paths at arg construction time",
+        );
+    }
+
+    #[test]
+    fn transient_empty_preserved_file_uses_empty_file_bind_data() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let workspace = temp_dir.path().join("workspace");
+        let dot_git = workspace.join(".git");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        File::create(&dot_git).expect("create empty .git file");
+
+        let workspace_root =
+            AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: workspace_root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let args =
+            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let dot_git_str = path_to_string(&dot_git);
+
+        assert_empty_file_bound_without_perms(&args.args, &dot_git);
+        assert_eq!(synthetic_mount_target_paths(&args), vec![dot_git.clone()]);
+        assert!(
+            !args
+                .args
+                .windows(3)
+                .any(|window| window == ["--ro-bind", dot_git_str.as_str(), dot_git_str.as_str()]),
+            "transient empty preserved file should not be treated as a stable bind source",
+        );
+        let metadata = std::fs::symlink_metadata(&dot_git).expect("stat .git");
+        assert!(
+            !args.synthetic_mount_targets[0].should_remove_after_bwrap(&metadata),
+            "pre-existing empty preserved files must not be cleaned up as synthetic targets",
+        );
+    }
+
+    #[test]
     fn ignores_missing_writable_roots() {
         let temp_dir = TempDir::new().expect("temp dir");
         let existing_root = temp_dir.path().join("existing");
@@ -1411,6 +1631,16 @@ mod tests {
             NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
         )
         .expect("bwrap fs args");
+        assert_eq!(args.preserved_files.len(), 1);
+        assert_eq!(
+            synthetic_mount_target_paths(&args),
+            vec![
+                PathBuf::from("/.git"),
+                PathBuf::from("/.agents"),
+                PathBuf::from("/.codex"),
+            ]
+        );
+        let null_fd = args.preserved_files[0].as_raw_fd().to_string();
         assert_eq!(
             args.args,
             vec![
@@ -1425,11 +1655,17 @@ mod tests {
                 "--bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
-                // Mask the default protected .codex subpath under that writable
+                // Mask the default preserved .codex subpath under that writable
                 // root. Because the root is `/` in this test, the carveout path
-                // appears as `/.codex`.
-                "--ro-bind".to_string(),
-                "/dev/null".to_string(),
+                // appears as `/.codex`, `/.agents`, and `/.git`.
+                "--ro-bind-data".to_string(),
+                null_fd.clone(),
+                "/.git".to_string(),
+                "--ro-bind-data".to_string(),
+                null_fd.clone(),
+                "/.agents".to_string(),
+                "--ro-bind-data".to_string(),
+                null_fd,
                 "/.codex".to_string(),
                 // Rebind /dev after the root bind so device nodes remain
                 // writable/usable inside the writable root.
@@ -1899,6 +2135,7 @@ mod tests {
         let blocked_file_str = path_to_string(blocked_file.as_path());
 
         assert_eq!(args.preserved_files.len(), 1);
+        assert!(args.synthetic_mount_targets.is_empty());
         assert!(args.args.windows(5).any(|window| {
             window[0] == "--perms"
                 && window[1] == "000"
@@ -2001,5 +2238,32 @@ mod tests {
             }),
             "expected file mask for {path}: {args:#?}"
         );
+    }
+
+    /// Assert that `path` is backed by an fd-supplied empty file without
+    /// changing the next mount operation's permissions.
+    fn assert_empty_file_bound_without_perms(args: &[String], path: &Path) {
+        let path = path_to_string(path);
+        assert!(
+            args.windows(3)
+                .any(|window| { window[0] == "--ro-bind-data" && window[2] == path }),
+            "expected empty file bind for {path}: {args:#?}"
+        );
+        assert!(
+            !args.windows(5).any(|window| {
+                window[0] == "--perms"
+                    && window[1] == "000"
+                    && window[2] == "--ro-bind-data"
+                    && window[4] == path
+            }),
+            "missing path bind should not set explicit file perms for {path}: {args:#?}"
+        );
+    }
+
+    fn synthetic_mount_target_paths(args: &BwrapArgs) -> Vec<PathBuf> {
+        args.synthetic_mount_targets
+            .iter()
+            .map(|target| target.path().to_path_buf())
+            .collect()
     }
 }
