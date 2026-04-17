@@ -4693,6 +4693,7 @@ impl CodexMessageProcessor {
                     } else {
                         None
                     },
+                    continue_goal_if_idle: self.config.features.enabled(Feature::GoalMode),
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -4705,9 +4706,6 @@ impl CodexMessageProcessor {
                 };
                 self.outgoing.send_error(request_id, err).await;
                 return true;
-            }
-            if self.config.features.enabled(Feature::GoalMode) {
-                existing_thread.continue_active_goal_if_idle().await;
             }
             return true;
         }
@@ -8861,6 +8859,9 @@ async fn handle_pending_thread_resume_request(
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
+    if pending.continue_goal_if_idle {
+        conversation.continue_active_goal_if_idle().await;
+    }
 }
 
 enum ThreadTurnSource<'a> {
