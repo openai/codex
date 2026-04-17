@@ -327,10 +327,8 @@ use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
 use codex_thread_store::SortDirection as StoreSortDirection;
-use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
 use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
-use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
 use codex_thread_store::UpdateThreadMetadataParams as StoreUpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -367,6 +365,7 @@ use codex_app_server_protocol::ServerRequest;
 mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
+mod thread_store_adapter;
 mod token_usage_replay;
 
 use crate::filters::compute_source_filters;
@@ -374,6 +373,7 @@ use crate::filters::source_kind_matches;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use thread_store_adapter::ThreadStoreAdapter;
 use token_usage_replay::latest_token_usage_turn_id_for_thread_path;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_path;
@@ -463,7 +463,7 @@ pub(crate) struct CodexMessageProcessor {
     analytics_events_client: AnalyticsEventsClient,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
-    thread_store: LocalThreadStore,
+    thread_store_adapter: ThreadStoreAdapter,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
@@ -714,7 +714,11 @@ impl CodexMessageProcessor {
             outgoing: outgoing.clone(),
             analytics_events_client,
             arg0_paths,
-            thread_store: LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(&config)),
+            thread_store_adapter: ThreadStoreAdapter::new(
+                LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(&config)),
+                config.model_provider_id.clone(),
+                config.cwd.clone(),
+            ),
             config,
             cli_overrides,
             runtime_feature_enablement,
@@ -2750,7 +2754,7 @@ impl CodexMessageProcessor {
 
         let thread_id_str = thread_id.to_string();
         if let Err(err) = self
-            .thread_store
+            .thread_store_adapter
             .read_thread(StoreReadThreadParams {
                 thread_id,
                 include_archived: false,
@@ -2766,7 +2770,7 @@ impl CodexMessageProcessor {
         self.prepare_thread_for_archive(thread_id).await;
 
         match self
-            .thread_store
+            .thread_store_adapter
             .archive_thread(StoreArchiveThreadParams { thread_id })
             .await
         {
@@ -2897,7 +2901,7 @@ impl CodexMessageProcessor {
         }
 
         if let Err(err) = self
-            .thread_store
+            .thread_store_adapter
             .update_thread_metadata(StoreUpdateThreadMetadataParams {
                 thread_id,
                 patch: StoreThreadMetadataPatch {
@@ -2967,7 +2971,7 @@ impl CodexMessageProcessor {
         }
 
         if let Err(err) = self
-            .thread_store
+            .thread_store_adapter
             .update_thread_metadata(StoreUpdateThreadMetadataParams {
                 thread_id,
                 patch: StoreThreadMetadataPatch {
@@ -3352,21 +3356,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        let fallback_provider = self.config.model_provider_id.clone();
         let result = self
-            .thread_store
+            .thread_store_adapter
             .unarchive_thread(StoreArchiveThreadParams { thread_id })
             .await
-            .map_err(|err| thread_store_archive_error("unarchive", err))
-            .and_then(|stored_thread| {
-                summary_from_stored_thread(stored_thread, fallback_provider.as_str())
-                    .map(|summary| summary_to_thread(summary, &self.config.cwd))
-                    .ok_or_else(|| JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to read unarchived thread {thread_id}"),
-                        data: None,
-                    })
-            });
+            .map_err(|err| thread_store_archive_error("unarchive", err));
 
         match result {
             Ok(mut thread) => {
@@ -3803,9 +3797,8 @@ impl CodexMessageProcessor {
         thread_id: ThreadId,
         include_turns: bool,
     ) -> Result<Option<Thread>, ThreadReadViewError> {
-        let fallback_provider = self.config.model_provider_id.as_str();
         match self
-            .thread_store
+            .thread_store_adapter
             .read_thread(StoreReadThreadParams {
                 thread_id,
                 include_archived: true,
@@ -3813,14 +3806,7 @@ impl CodexMessageProcessor {
             })
             .await
         {
-            Ok(stored_thread) => {
-                let (mut thread, history) =
-                    thread_from_stored_thread(stored_thread, fallback_provider, &self.config.cwd);
-                if include_turns && let Some(history) = history {
-                    thread.turns = build_turns_from_rollout_items(&history.items);
-                }
-                Ok(Some(thread))
-            }
+            Ok(thread) => Ok(Some(thread)),
             Err(ThreadStoreError::InvalidRequest { message })
                 if message == format!("no rollout found for thread id {thread_id}") =>
             {
@@ -5100,7 +5086,6 @@ impl CodexMessageProcessor {
             }
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
-        let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
         let store_sort_direction = match sort_direction {
@@ -5111,8 +5096,8 @@ impl CodexMessageProcessor {
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
             let page = self
-                .thread_store
-                .list_threads(StoreListThreadsParams {
+                .thread_store_adapter
+                .list_thread_summaries(StoreListThreadsParams {
                     page_size,
                     cursor: cursor_obj.clone(),
                     sort_key,
@@ -5125,17 +5110,8 @@ impl CodexMessageProcessor {
                 .await
                 .map_err(thread_store_list_error)?;
 
-            let mut candidate_summaries = Vec::with_capacity(page.items.len());
-            for it in page.items {
-                let Some(summary) = summary_from_stored_thread(it, fallback_provider.as_str())
-                else {
-                    continue;
-                };
-                candidate_summaries.push(summary);
-            }
-
-            let mut filtered = Vec::with_capacity(candidate_summaries.len());
-            for summary in candidate_summaries {
+            let mut filtered = Vec::with_capacity(page.items.len());
+            for summary in page.items {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
@@ -9380,56 +9356,6 @@ fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCEr
     }
 }
 
-fn thread_from_stored_thread(
-    thread: StoredThread,
-    fallback_provider: &str,
-    fallback_cwd: &AbsolutePathBuf,
-) -> (Thread, Option<codex_thread_store::StoredThreadHistory>) {
-    let path = thread.rollout_path;
-    let git_info = thread.git_info.map(|info| ApiGitInfo {
-        sha: info.commit_hash.map(|sha| sha.0),
-        branch: info.branch,
-        origin_url: info.repository_url,
-    });
-    let cwd = AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(
-        thread.cwd,
-    ))
-    .unwrap_or_else(|err| {
-        warn!("failed to normalize thread cwd while reading stored thread: {err}");
-        fallback_cwd.clone()
-    });
-    let source = with_thread_spawn_agent_metadata(
-        thread.source,
-        thread.agent_nickname.clone(),
-        thread.agent_role.clone(),
-    );
-    let history = thread.history;
-    let thread = Thread {
-        id: thread.thread_id.to_string(),
-        forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
-        preview: thread.first_user_message.unwrap_or(thread.preview),
-        ephemeral: false,
-        model_provider: if thread.model_provider.is_empty() {
-            fallback_provider.to_string()
-        } else {
-            thread.model_provider
-        },
-        created_at: thread.created_at.timestamp(),
-        updated_at: thread.updated_at.timestamp(),
-        status: ThreadStatus::NotLoaded,
-        path,
-        cwd,
-        cli_version: thread.cli_version,
-        agent_nickname: source.get_nickname(),
-        agent_role: source.get_agent_role(),
-        source: source.into(),
-        git_info,
-        name: thread.name,
-        turns: Vec::new(),
-    };
-    (thread, history)
-}
-
 fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
     match err {
         ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
@@ -9443,49 +9369,6 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
             data: None,
         },
     }
-}
-
-fn summary_from_stored_thread(
-    thread: StoredThread,
-    fallback_provider: &str,
-) -> Option<ConversationSummary> {
-    let path = thread.rollout_path?;
-    let source = with_thread_spawn_agent_metadata(
-        thread.source,
-        thread.agent_nickname.clone(),
-        thread.agent_role.clone(),
-    );
-    let git_info = thread.git_info.map(|git| ConversationGitInfo {
-        sha: git.commit_hash.map(|sha| sha.0),
-        branch: git.branch,
-        origin_url: git.repository_url,
-    });
-    Some(ConversationSummary {
-        conversation_id: thread.thread_id,
-        path,
-        preview: thread.first_user_message.unwrap_or(thread.preview),
-        // Preserve millisecond precision from the thread store so thread/list cursors
-        // round-trip the same ordering key used by pagination queries.
-        timestamp: Some(
-            thread
-                .created_at
-                .to_rfc3339_opts(SecondsFormat::Millis, true),
-        ),
-        updated_at: Some(
-            thread
-                .updated_at
-                .to_rfc3339_opts(SecondsFormat::Millis, true),
-        ),
-        model_provider: if thread.model_provider.is_empty() {
-            fallback_provider.to_string()
-        } else {
-            thread.model_provider
-        },
-        cwd: thread.cwd,
-        cli_version: thread.cli_version,
-        source,
-        git_info,
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -10076,11 +9959,8 @@ mod tests {
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ReasoningEffort;
-    use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
-    use codex_thread_store::StoredThread;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -10128,53 +10008,6 @@ mod tests {
             defer_loading: false,
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
-    }
-
-    #[test]
-    fn summary_from_stored_thread_preserves_millisecond_precision() {
-        let created_at =
-            DateTime::parse_from_rfc3339("2025-01-02T03:04:05.678Z").expect("valid timestamp");
-        let updated_at =
-            DateTime::parse_from_rfc3339("2025-01-02T03:04:06.789Z").expect("valid timestamp");
-        let thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread");
-        let stored_thread = StoredThread {
-            thread_id,
-            rollout_path: Some(PathBuf::from("/tmp/thread.jsonl")),
-            forked_from_id: None,
-            preview: "preview".to_string(),
-            name: None,
-            model_provider: "openai".to_string(),
-            model: None,
-            reasoning_effort: None,
-            created_at: created_at.with_timezone(&Utc),
-            updated_at: updated_at.with_timezone(&Utc),
-            archived_at: None,
-            cwd: PathBuf::from("/tmp"),
-            cli_version: "0.0.0".to_string(),
-            source: SessionSource::Cli,
-            agent_nickname: None,
-            agent_role: None,
-            agent_path: None,
-            git_info: None,
-            approval_mode: AskForApproval::OnRequest,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            token_usage: None,
-            first_user_message: Some("first user message".to_string()),
-            history: None,
-        };
-
-        let summary =
-            summary_from_stored_thread(stored_thread, "fallback").expect("summary should exist");
-
-        assert_eq!(
-            summary.timestamp.as_deref(),
-            Some("2025-01-02T03:04:05.678Z")
-        );
-        assert_eq!(
-            summary.updated_at.as_deref(),
-            Some("2025-01-02T03:04:06.789Z")
-        );
     }
 
     #[test]
