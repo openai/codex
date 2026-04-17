@@ -47,6 +47,12 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 
+// macOS and Windows CI can spend tens of seconds starting the app-server test
+// binary under Bazel before it accepts JSON-RPC or reports its websocket bind
+// address.
+#[cfg(any(target_os = "macos", windows))]
+pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(any(target_os = "macos", windows)))]
 pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(super) type WsClient = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -399,7 +405,7 @@ pub(super) async fn spawn_websocket_server_with_args(
         .take()
         .context("failed to capture websocket app-server stderr")?;
     let mut stderr_reader = BufReader::new(stderr).lines();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
     let bind_addr = loop {
         let line = timeout(
             deadline.saturating_duration_since(Instant::now()),
@@ -457,7 +463,7 @@ pub(super) async fn connect_websocket_with_bearer(
 ) -> Result<WsClient> {
     let url = format!("ws://{}", connectable_bind_addr(bind_addr));
     let request = websocket_request(url.as_str(), bearer_token, /*origin*/ None)?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
     loop {
         match connect_async(request.clone()).await {
             Ok((stream, _response)) => return Ok(stream),
@@ -524,7 +530,7 @@ async fn run_websocket_server_to_completion_with_args(
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
         .env("RUST_LOG", "debug");
-    timeout(Duration::from_secs(10), cmd.output())
+    timeout(DEFAULT_READ_TIMEOUT, cmd.output())
         .await
         .context("timed out waiting for websocket app-server to exit")?
         .context("failed to run websocket app-server")
@@ -536,7 +542,7 @@ async fn http_get(
     path: &str,
 ) -> Result<reqwest::Response> {
     let connectable_bind_addr = connectable_bind_addr(bind_addr);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
     loop {
         match client
             .get(format!("http://{connectable_bind_addr}{path}"))

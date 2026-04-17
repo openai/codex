@@ -10,13 +10,13 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -138,6 +138,9 @@ pub(crate) enum AppEvent {
     /// escape hatch that skips shutdown and may drop in-flight work (e.g.,
     /// background tasks, rollout flush, or child process cleanup).
     Exit(ExitMode),
+
+    /// Request app-server account logout, then exit after it succeeds.
+    Logout,
 
     /// Request to exit the application due to a fatal error.
     #[allow(dead_code)]

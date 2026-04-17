@@ -97,6 +97,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_context_size: None,
             search_content_types: None,
         },
+        create_image_generation_tool("png"),
         create_view_image_tool(ViewImageToolOptions {
             can_request_original_image_detail: config.can_request_original_image_detail,
         }),
@@ -1334,7 +1335,7 @@ fn search_tool_description_lists_each_mcp_source_once() {
 }
 
 #[test]
-fn search_tool_requires_model_capability_and_feature_flag() {
+fn search_tool_requires_model_capability_and_enabled_feature() {
     let model_info = search_capable_model_info();
     let deferred_mcp_tools = Some(vec![deferred_mcp_tool(
         "_create_event",
@@ -1367,10 +1368,12 @@ fn search_tool_requires_model_capability_and_feature_flag() {
     );
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
+    let mut features_without_tool_search = Features::with_defaults();
+    features_without_tool_search.disable(Feature::ToolSearch);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
         available_models: &available_models,
-        features: &features,
+        features: &features_without_tool_search,
         image_generation_tool_auth_allowed: true,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1385,8 +1388,6 @@ fn search_tool_requires_model_capability_and_feature_flag() {
     );
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
 
-    let mut features = Features::with_defaults();
-    features.enable(Feature::ToolSearch);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
         available_models: &available_models,

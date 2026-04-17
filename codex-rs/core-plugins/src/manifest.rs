@@ -1,5 +1,5 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
+use codex_utils_plugins::find_plugin_manifest_path;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
@@ -30,12 +30,12 @@ struct RawPluginManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PluginManifest {
-    pub(crate) name: String,
-    pub(crate) version: Option<String>,
-    pub(crate) description: Option<String>,
-    pub(crate) paths: PluginManifestPaths,
-    pub(crate) interface: Option<PluginManifestInterface>,
+pub struct PluginManifest {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub paths: PluginManifestPaths,
+    pub interface: Option<PluginManifestInterface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,11 +114,8 @@ enum RawPluginManifestDefaultPromptEntry {
     Invalid(JsonValue),
 }
 
-pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
-    let manifest_path = plugin_root.join(PLUGIN_MANIFEST_PATH);
-    if !manifest_path.is_file() {
-        return None;
-    }
+pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
+    let manifest_path = find_plugin_manifest_path(plugin_root)?;
     let contents = fs::read_to_string(&manifest_path).ok()?;
     match serde_json::from_str::<RawPluginManifest>(&contents) {
         Ok(manifest) => {
@@ -319,11 +316,14 @@ fn resolve_default_prompt_str(plugin_root: &Path, field: &str, prompt: &str) -> 
 }
 
 fn warn_invalid_default_prompt(plugin_root: &Path, field: &str, message: &str) {
-    let manifest_path = plugin_root.join(PLUGIN_MANIFEST_PATH);
-    tracing::warn!(
-        path = %manifest_path.display(),
-        "ignoring {field}: {message}"
-    );
+    if let Some(manifest_path) = find_plugin_manifest_path(plugin_root) {
+        tracing::warn!(
+            path = %manifest_path.display(),
+            "ignoring {field}: {message}"
+        );
+    } else {
+        tracing::warn!("ignoring {field}: {message}");
+    }
 }
 
 fn json_value_type(value: &JsonValue) -> &'static str {
@@ -390,6 +390,8 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
+    const ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH: &str = ".claude-plugin/plugin.json";
+
     fn write_manifest(plugin_root: &Path, version: Option<&str>, interface: &str) {
         fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
         let version = version
@@ -406,6 +408,13 @@ mod tests {
             ),
         )
         .expect("write manifest");
+    }
+
+    fn write_alternate_plugin_manifest(plugin_root: &Path, contents: &str) {
+        let manifest_path = plugin_root.join(ALTERNATE_PLUGIN_MANIFEST_RELATIVE_PATH);
+        fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+            .expect("create manifest dir");
+        fs::write(manifest_path, contents).expect("write manifest");
     }
 
     fn load_manifest(plugin_root: &Path) -> PluginManifest {
@@ -505,5 +514,32 @@ mod tests {
         let manifest = load_manifest(&plugin_root);
 
         assert_eq!(manifest.version, Some("1.2.3-beta+7".to_string()));
+    }
+
+    #[test]
+    fn plugin_manifest_uses_alternate_discoverable_path() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_alternate_plugin_manifest(
+            &plugin_root,
+            r#"{
+  "name": "demo-plugin",
+  "version": " 2.0.0 ",
+  "interface": {
+    "displayName": "Fallback Plugin"
+  }
+}"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+
+        assert_eq!(manifest.version, Some("2.0.0".to_string()));
+        assert_eq!(
+            manifest
+                .interface
+                .as_ref()
+                .and_then(|interface| interface.display_name.as_deref()),
+            Some("Fallback Plugin")
+        );
     }
 }

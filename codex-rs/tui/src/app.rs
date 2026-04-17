@@ -325,8 +325,12 @@ fn session_summary(
     token_usage: TokenUsage,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| FinalOutput::from(token_usage).to_string());
+    let (thread_id, thread_name) = resumable_thread(thread_id, thread_name, rollout_path)
+        .map(|thread| (Some(thread.thread_id), thread.thread_name))
+        .unwrap_or((None, None));
     let resume_command =
         crate::legacy_core::util::resume_command(thread_name.as_deref(), thread_id);
 
@@ -338,6 +342,29 @@ fn session_summary(
         usage_line,
         resume_command,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResumableThread {
+    thread_id: ThreadId,
+    thread_name: Option<String>,
+}
+
+fn resumable_thread(
+    thread_id: Option<ThreadId>,
+    thread_name: Option<String>,
+    rollout_path: Option<&Path>,
+) -> Option<ResumableThread> {
+    let thread_id = thread_id?;
+    let rollout_path = rollout_path?;
+    rollout_path_is_resumable(rollout_path).then_some(ResumableThread {
+        thread_id,
+        thread_name,
+    })
+}
+
+fn rollout_path_is_resumable(rollout_path: &Path) -> bool {
+    std::fs::metadata(rollout_path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
@@ -2378,10 +2405,11 @@ impl App {
     ) -> Result<bool> {
         match op.view() {
             AppCommandView::Interrupt => {
-                let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await else {
-                    return Ok(true);
-                };
-                app_server.turn_interrupt(thread_id, turn_id).await?;
+                if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
+                    app_server.turn_interrupt(thread_id, turn_id).await?;
+                } else {
+                    app_server.startup_interrupt(thread_id).await?;
+                }
                 Ok(true)
             }
             AppCommandView::UserTurn {
@@ -2486,14 +2514,16 @@ impl App {
                 Ok(true)
             }
             AppCommandView::ListSkills { cwds, force_reload } => {
-                let response = app_server
-                    .skills_list(codex_app_server_protocol::SkillsListParams {
-                        cwds: cwds.to_vec(),
-                        force_reload,
-                        per_cwd_extra_user_roots: None,
-                    })
-                    .await?;
-                self.handle_skills_list_response(response);
+                self.handle_skills_list_result(
+                    app_server
+                        .skills_list(codex_app_server_protocol::SkillsListParams {
+                            cwds: cwds.to_vec(),
+                            force_reload,
+                            per_cwd_extra_user_roots: None,
+                        })
+                        .await,
+                    "failed to refresh skills",
+                );
                 Ok(true)
             }
             AppCommandView::Compact => {
@@ -2564,6 +2594,19 @@ impl App {
             }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
             _ => Ok(false),
+        }
+    }
+
+    fn handle_skills_list_result(
+        &mut self,
+        result: Result<SkillsListResponse>,
+        failure_message: &str,
+    ) {
+        match result {
+            Ok(response) => self.handle_skills_list_response(response),
+            Err(err) => {
+                tracing::warn!("{failure_message}: {err:#}");
+            }
         }
     }
 
@@ -3447,6 +3490,7 @@ impl App {
             self.chat_widget.token_usage(),
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
+            self.chat_widget.rollout_path().as_deref(),
         );
         self.shutdown_current_thread(app_server).await;
         let tracked_thread_ids: Vec<ThreadId> =
@@ -3973,17 +4017,16 @@ impl App {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
         }
-        match app_server
-            .skills_list(codex_app_server_protocol::SkillsListParams {
-                cwds: vec![app.config.cwd.to_path_buf()],
-                force_reload: true,
-                per_cwd_extra_user_roots: None,
-            })
-            .await
-        {
-            Ok(response) => app.handle_skills_list_response(response),
-            Err(err) => tracing::warn!("failed to load skills on startup: {err:#}"),
-        }
+        app.handle_skills_list_result(
+            app_server
+                .skills_list(codex_app_server_protocol::SkillsListParams {
+                    cwds: vec![app.config.cwd.to_path_buf()],
+                    force_reload: true,
+                    per_cwd_extra_user_roots: None,
+                })
+                .await,
+            "failed to load skills on startup",
+        );
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -4125,10 +4168,15 @@ impl App {
                 return Err(err);
             }
         };
+        let resumable_thread = resumable_thread(
+            app.chat_widget.thread_id(),
+            app.chat_widget.thread_name(),
+            app.chat_widget.rollout_path().as_deref(),
+        );
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            thread_id: app.chat_widget.thread_id(),
-            thread_name: app.chat_widget.thread_name(),
+            thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
+            thread_name: resumable_thread.and_then(|thread| thread.thread_name),
             update_action: app.pending_update_action,
             exit_reason,
         })
@@ -4248,6 +4296,7 @@ impl App {
             self.chat_widget.token_usage(),
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
+            self.chat_widget.rollout_path().as_deref(),
         );
         match app_server
             .resume_thread(resume_config.clone(), target_session.thread_id)
@@ -4402,6 +4451,7 @@ impl App {
                     self.chat_widget.token_usage(),
                     self.chat_widget.thread_id(),
                     self.chat_widget.thread_name(),
+                    self.chat_widget.rollout_path().as_deref(),
                 );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
@@ -4509,6 +4559,18 @@ impl App {
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }
+            AppEvent::Logout => match app_server.logout_account().await {
+                Ok(()) => {
+                    return Ok(self
+                        .handle_exit_mode(app_server, ExitMode::ShutdownFirst)
+                        .await);
+                }
+                Err(err) => {
+                    tracing::error!("failed to logout: {err}");
+                    self.chat_widget
+                        .add_error_message(format!("Logout failed: {err}"));
+                }
+            },
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
@@ -8224,6 +8286,8 @@ mod tests {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
+        // Seed the previous setting so this test exercises the thread-mode update path.
+        app.config.memories.generate_memories = true;
 
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
         let started = app_server.start_thread(&app.config).await?;
@@ -9187,6 +9251,7 @@ guardian_approval = true
             approval_policy: primary_session.approval_policy,
             sandbox_policy: primary_session.sandbox_policy.clone(),
             network: None,
+            file_system_sandbox_policy: None,
             model: "gpt-agent".to_string(),
             personality: None,
             collaboration_mode: None,
@@ -9839,6 +9904,7 @@ guardian_approval = true
                 execution_mode: AppServerHookExecutionMode::Sync,
                 scope: AppServerHookScope::Turn,
                 source_path: test_path_buf("/tmp/hooks.json").abs(),
+                source: codex_app_server_protocol::HookSource::User,
                 display_order: 0,
                 status: AppServerHookRunStatus::Running,
                 status_message: Some("checking go-workflow input policy".to_string()),
@@ -9861,6 +9927,7 @@ guardian_approval = true
                 execution_mode: AppServerHookExecutionMode::Sync,
                 scope: AppServerHookScope::Turn,
                 source_path: test_path_buf("/tmp/hooks.json").abs(),
+                source: codex_app_server_protocol::HookSource::User,
                 display_order: 0,
                 status: AppServerHookRunStatus::Stopped,
                 status_message: Some("checking go-workflow input policy".to_string()),
@@ -11410,11 +11477,18 @@ guardian_approval = true
     #[tokio::test]
     async fn interrupt_without_active_turn_is_treated_as_handled() {
         let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
         let mut app_server =
             crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
                 .await
                 .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
         let op = AppCommand::interrupt();
 
         let handled = app
@@ -11486,14 +11560,33 @@ guardian_approval = true
             session_summary(
                 TokenUsage::default(),
                 /*thread_id*/ None,
-                /*thread_name*/ None
+                /*thread_name*/ None,
+                /*rollout_path*/ None,
             )
             .is_none()
         );
     }
 
     #[tokio::test]
-    async fn session_summary_includes_resume_hint() {
+    async fn session_summary_skips_resume_hint_until_rollout_exists() {
+        let usage = TokenUsage::default();
+        let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let temp_dir = tempdir().expect("temp dir");
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+
+        assert!(
+            session_summary(
+                usage,
+                Some(conversation),
+                /*thread_name*/ None,
+                Some(&rollout_path),
+            )
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn session_summary_includes_resume_hint_for_persisted_rollout() {
         let usage = TokenUsage {
             input_tokens: 10,
             output_tokens: 2,
@@ -11501,9 +11594,17 @@ guardian_approval = true
             ..Default::default()
         };
         let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let temp_dir = tempdir().expect("temp dir");
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        std::fs::write(&rollout_path, "{}\n").expect("write rollout");
 
-        let summary =
-            session_summary(usage, Some(conversation), /*thread_name*/ None).expect("summary");
+        let summary = session_summary(
+            usage,
+            Some(conversation),
+            /*thread_name*/ None,
+            Some(&rollout_path),
+        )
+        .expect("summary");
         assert_eq!(
             summary.usage_line,
             Some("Token usage: total=12 input=10 output=2".to_string())
@@ -11523,9 +11624,17 @@ guardian_approval = true
             ..Default::default()
         };
         let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let temp_dir = tempdir().expect("temp dir");
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        std::fs::write(&rollout_path, "{}\n").expect("write rollout");
 
-        let summary = session_summary(usage, Some(conversation), Some("my-session".to_string()))
-            .expect("summary");
+        let summary = session_summary(
+            usage,
+            Some(conversation),
+            Some("my-session".to_string()),
+            Some(&rollout_path),
+        )
+        .expect("summary");
         assert_eq!(
             summary.resume_command,
             Some("codex resume my-session".to_string())

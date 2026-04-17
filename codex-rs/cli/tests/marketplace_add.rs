@@ -48,7 +48,7 @@ async fn marketplace_add_local_directory_source() -> Result<()> {
 
     codex_command(codex_home.path())?
         .current_dir(source_parent)
-        .args(["marketplace", "add", source_arg.as_str()])
+        .args(["plugin", "marketplace", "add", source_arg.as_str()])
         .assert()
         .success();
 
@@ -78,11 +78,40 @@ async fn marketplace_add_rejects_local_manifest_file_source() -> Result<()> {
     let manifest_path = source.path().join(".agents/plugins/marketplace.json");
 
     codex_command(codex_home.path())?
-        .args(["marketplace", "add", manifest_path.to_str().unwrap()])
+        .args([
+            "plugin",
+            "marketplace",
+            "add",
+            manifest_path.to_str().unwrap(),
+        ])
         .assert()
         .failure()
         .stderr(contains(
             "local marketplace source must be a directory, not a file",
+        ));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_add_rejects_sparse_for_local_directory_source() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "local ref")?;
+
+    codex_command(codex_home.path())?
+        .args([
+            "plugin",
+            "marketplace",
+            "add",
+            "--sparse",
+            ".agents",
+            source.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "--sparse is only supported for git marketplace sources",
         ));
 
     Ok(())

@@ -49,6 +49,7 @@ use crate::mcp_cmd::McpCli;
 use crate::responses_cmd::ResponsesCommand;
 use crate::responses_cmd::run_responses_command;
 
+use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -110,8 +111,8 @@ enum Subcommand {
     /// Manage external MCP servers for Codex.
     Mcp(McpCli),
 
-    /// Manage plugin marketplaces for Codex.
-    Marketplace(MarketplaceCli),
+    /// Manage Codex plugins.
+    Plugin(PluginCli),
 
     /// Start Codex as an MCP server (stdio).
     McpServer,
@@ -167,6 +168,21 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+}
+
+#[derive(Debug, Parser)]
+struct PluginCli {
+    #[clap(flatten)]
+    pub config_overrides: CliConfigOverrides,
+
+    #[command(subcommand)]
+    subcommand: PluginSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum PluginSubcommand {
+    /// Manage plugin marketplaces for Codex.
+    Marketplace(MarketplaceCli),
 }
 
 #[derive(Debug, Parser)]
@@ -725,17 +741,23 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run().await?;
         }
-        Some(Subcommand::Marketplace(mut marketplace_cli)) => {
+        Some(Subcommand::Plugin(plugin_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
-                "marketplace",
+                "plugin",
             )?;
-            prepend_config_flags(
-                &mut marketplace_cli.config_overrides,
-                root_config_overrides.clone(),
-            );
-            marketplace_cli.run().await?;
+            let PluginCli {
+                mut config_overrides,
+                subcommand,
+            } = plugin_cli;
+            prepend_config_flags(&mut config_overrides, root_config_overrides.clone());
+            match subcommand {
+                PluginSubcommand::Marketplace(mut marketplace_cli) => {
+                    prepend_config_flags(&mut marketplace_cli.config_overrides, config_overrides);
+                    marketplace_cli.run().await?;
+                }
+            }
         }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {
@@ -1282,27 +1304,17 @@ async fn run_debug_clear_memories_command(
         cleared_state_db = true;
     }
 
-    let memory_root = config.codex_home.join("memories");
-    let removed_memory_root = match tokio::fs::remove_dir_all(&memory_root).await {
-        Ok(()) => true,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-        Err(err) => return Err(err.into()),
-    };
+    clear_memory_roots_contents(&config.codex_home).await?;
 
     let mut message = if cleared_state_db {
         format!("Cleared memory state from {}.", state_path.display())
     } else {
         format!("No state db found at {}.", state_path.display())
     };
-
-    if removed_memory_root {
-        message.push_str(&format!(" Removed {}.", memory_root.display()));
-    } else {
-        message.push_str(&format!(
-            " No memory directory found at {}.",
-            memory_root.display()
-        ));
-    }
+    message.push_str(&format!(
+        " Cleared memory directories under {}.",
+        config.codex_home.display()
+    ));
 
     println!("{message}");
 
@@ -1697,6 +1709,35 @@ mod tests {
 
         let cli = MultitoolCli::try_parse_from(["codex", "responses"]).expect("parse");
         assert!(matches!(cli.subcommand, Some(Subcommand::Responses(_))));
+    }
+
+    #[test]
+    fn plugin_marketplace_add_parses_under_plugin() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "plugin", "marketplace", "add", "owner/repo"])
+                .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_marketplace_upgrade_parses_under_plugin() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "plugin", "marketplace", "upgrade", "debug"])
+                .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn marketplace_no_longer_parses_at_top_level() {
+        let add_result =
+            MultitoolCli::try_parse_from(["codex", "marketplace", "add", "owner/repo"]);
+        assert!(add_result.is_err());
+
+        let upgrade_result =
+            MultitoolCli::try_parse_from(["codex", "marketplace", "upgrade", "debug"]);
+        assert!(upgrade_result.is_err());
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {

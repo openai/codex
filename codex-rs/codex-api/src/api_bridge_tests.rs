@@ -130,35 +130,3 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
     );
     assert_eq!(err.identity_error_code.as_deref(), Some("token_expired"));
 }
-
-#[test]
-fn core_auth_provider_reports_when_auth_header_will_attach() {
-    let auth = CoreAuthProvider {
-        token: Some("access-token".to_string()),
-        account_id: None,
-    };
-
-    assert!(auth.auth_header_attached());
-    assert_eq!(auth.auth_header_name(), Some("authorization"));
-}
-
-#[test]
-fn core_auth_provider_adds_auth_headers() {
-    let auth = CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123"));
-    let mut headers = HeaderMap::new();
-
-    crate::AuthProvider::add_auth_headers(&auth, &mut headers);
-
-    assert_eq!(
-        headers
-            .get(http::header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok()),
-        Some("Bearer access-token")
-    );
-    assert_eq!(
-        headers
-            .get("ChatGPT-Account-ID")
-            .and_then(|value| value.to_str().ok()),
-        Some("workspace-123")
-    );
-}

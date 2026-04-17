@@ -578,11 +578,11 @@ pub(crate) fn build_network_policy_decider(
 pub(crate) async fn begin_network_approval(
     session: &Session,
     turn_id: &str,
-    has_managed_network_requirements: bool,
+    managed_network_active: bool,
     spec: Option<NetworkApprovalSpec>,
 ) -> Option<ActiveNetworkApproval> {
     let spec = spec?;
-    if !has_managed_network_requirements || spec.network.is_none() {
+    if !managed_network_active || spec.network.is_none() {
         return None;
     }
 

@@ -11,11 +11,15 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 async fn get_user_instructions(config: &Config) -> Option<String> {
-    super::get_user_instructions_with_fs(config, LOCAL_FS.as_ref()).await
+    AgentsMdManager::new(config)
+        .user_instructions_with_fs(LOCAL_FS.as_ref())
+        .await
 }
 
-async fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf>> {
-    super::discover_project_doc_paths(config, LOCAL_FS.as_ref()).await
+async fn agents_md_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    AgentsMdManager::new(config)
+        .agents_md_paths(LOCAL_FS.as_ref())
+        .await
 }
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
@@ -101,7 +105,9 @@ async fn no_environment_returns_none() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
 
-    let res = super::get_user_instructions(&config, /*environment*/ None).await;
+    let res = AgentsMdManager::new(&config)
+        .user_instructions(/*environment*/ None)
+        .await;
 
     assert_eq!(res, None);
 }
@@ -187,10 +193,9 @@ async fn zero_byte_limit_disables_discovery() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "something").unwrap();
 
-    let discovery =
-        discover_project_doc_paths(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await)
-            .await
-            .expect("discover paths");
+    let discovery = agents_md_paths(&make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await)
+        .await
+        .expect("discover paths");
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
@@ -228,10 +233,10 @@ async fn js_repl_tools_only_instructions_are_feature_gated() {
     assert_eq!(res, expected);
 }
 
-/// When both system instructions *and* a project doc are present the two
+/// When both system instructions and AGENTS.md docs are present the two
 /// should be concatenated with the separator.
 #[tokio::test]
-async fn merges_existing_instructions_with_project_doc() {
+async fn merges_existing_instructions_with_agents_md() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "proj doc").unwrap();
 
@@ -241,12 +246,12 @@ async fn merges_existing_instructions_with_project_doc() {
         .await
         .expect("should produce a combined instruction string");
 
-    let expected = format!("{INSTRUCTIONS}{PROJECT_DOC_SEPARATOR}{}", "proj doc");
+    let expected = format!("{INSTRUCTIONS}{AGENTS_MD_SEPARATOR}{}", "proj doc");
 
     assert_eq!(res, expected);
 }
 
-/// If there are existing system instructions but the project doc is
+/// If there are existing system instructions but AGENTS.md docs are
 /// missing we expect the original instructions to be returned unchanged.
 #[tokio::test]
 async fn keeps_existing_instructions_when_doc_missing() {
@@ -307,9 +312,7 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
     .await;
     cfg.cwd = nested.abs();
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     let expected_parent = AbsolutePathBuf::try_from(
         dunce::canonicalize(root.path().join("AGENTS.md")).expect("canonical parent doc path"),
     )
@@ -326,12 +329,33 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
     assert_eq!(res, "parent doc\n\nchild doc");
 }
 
+#[tokio::test]
+async fn instruction_sources_include_global_before_agents_md_docs() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+
+    let cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
+    let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
+    fs::create_dir_all(&cfg.codex_home).unwrap();
+    fs::write(&global_agents, "global doc").unwrap();
+
+    let sources = AgentsMdManager::new(&cfg)
+        .instruction_sources(LOCAL_FS.as_ref())
+        .await;
+    let project_agents = AbsolutePathBuf::try_from(
+        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical project doc path"),
+    )
+    .expect("absolute project doc path");
+
+    assert_eq!(sources, vec![global_agents, project_agents]);
+}
+
 /// AGENTS.override.md is preferred over AGENTS.md when both are present.
 #[tokio::test]
 async fn agents_local_md_preferred() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "versioned").unwrap();
-    fs::write(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME), "local").unwrap();
+    fs::write(tmp.path().join(DEFAULT_AGENTS_MD_FILENAME), "versioned").unwrap();
+    fs::write(tmp.path().join(LOCAL_AGENTS_MD_FILENAME), "local").unwrap();
 
     let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
 
@@ -341,13 +365,11 @@ async fn agents_local_md_preferred() {
 
     assert_eq!(res, "local");
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert_eq!(
         discovery[0].file_name().unwrap().to_string_lossy(),
-        LOCAL_PROJECT_DOC_FILENAME
+        LOCAL_AGENTS_MD_FILENAME
     );
 }
 
@@ -393,16 +415,14 @@ async fn agents_md_preferred_over_fallbacks() {
 
     assert_eq!(res, "primary");
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert!(
         discovery[0]
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .eq(DEFAULT_PROJECT_DOC_FILENAME)
+            .eq(DEFAULT_AGENTS_MD_FILENAME)
     );
 }
 
@@ -416,9 +436,7 @@ async fn agents_md_directory_is_ignored() {
     let res = get_user_instructions(&cfg).await;
     assert_eq!(res, None);
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
@@ -441,17 +459,15 @@ async fn agents_md_special_file_is_ignored() {
     let res = get_user_instructions(&cfg).await;
     assert_eq!(res, None);
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery, Vec::<AbsolutePathBuf>::new());
 }
 
 #[tokio::test]
 async fn override_directory_falls_back_to_agents_md_file() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    fs::create_dir(tmp.path().join(LOCAL_PROJECT_DOC_FILENAME)).unwrap();
-    fs::write(tmp.path().join(DEFAULT_PROJECT_DOC_FILENAME), "primary").unwrap();
+    fs::create_dir(tmp.path().join(LOCAL_AGENTS_MD_FILENAME)).unwrap();
+    fs::write(tmp.path().join(DEFAULT_AGENTS_MD_FILENAME), "primary").unwrap();
 
     let cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
 
@@ -460,21 +476,19 @@ async fn override_directory_falls_back_to_agents_md_file() {
         .expect("AGENTS.md should be used when override is a directory");
     assert_eq!(res, "primary");
 
-    let discovery = discover_project_doc_paths(&cfg)
-        .await
-        .expect("discover paths");
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
     assert_eq!(discovery.len(), 1);
     assert_eq!(
         discovery[0]
             .file_name()
             .expect("file name")
             .to_string_lossy(),
-        DEFAULT_PROJECT_DOC_FILENAME
+        DEFAULT_AGENTS_MD_FILENAME
     );
 }
 
 #[tokio::test]
-async fn skills_are_not_appended_to_project_doc() {
+async fn skills_are_not_appended_to_agents_md() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
 
@@ -504,7 +518,7 @@ async fn apps_feature_does_not_emit_user_instructions_by_itself() {
 }
 
 #[tokio::test]
-async fn apps_feature_does_not_append_to_project_doc_user_instructions() {
+async fn apps_feature_does_not_append_to_agents_md_user_instructions() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "base doc").unwrap();
 

@@ -1,0 +1,24 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-model-provider"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_model_provider"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+codex-api = { workspace = true }
+codex-login = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-protocol = { workspace = true }
+http = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

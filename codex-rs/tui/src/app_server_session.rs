@@ -18,6 +18,7 @@ use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
@@ -476,6 +477,10 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn startup_interrupt(&mut self, thread_id: ThreadId) -> Result<()> {
+        self.turn_interrupt(thread_id, String::new()).await
+    }
+
     pub(crate) async fn turn_steer(
         &mut self,
         thread_id: ThreadId,
@@ -546,6 +551,19 @@ impl AppServerSession {
             })
             .await
             .wrap_err("memory/reset failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn logout_account(&mut self) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: LogoutAccountResponse = self
+            .client
+            .request_typed(ClientRequest::LogoutAccount {
+                request_id,
+                params: None,
+            })
+            .await
+            .wrap_err("account/logout failed in TUI")?;
         Ok(())
     }
 

@@ -941,6 +941,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1446,6 +1455,7 @@ dependencies = [
  "codex-cloud-requirements",
  "codex-config",
  "codex-core",
+ "codex-core-plugins",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",
@@ -1530,7 +1540,6 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-experimental-api-macros",
- "codex-git-utils",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-absolute-path",
@@ -1648,6 +1657,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-app-server-protocol",
  "codex-config",
  "codex-connectors",
  "codex-core",
@@ -1687,6 +1697,7 @@ dependencies = [
  "codex-login",
  "codex-mcp",
  "codex-mcp-server",
+ "codex-model-provider",
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
@@ -1855,12 +1866,11 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-execpolicy",
  "codex-features",
- "codex-git-utils",
  "codex-model-provider-info",
  "codex-network-proxy",
  "codex-protocol",
  "codex-utils-absolute-path",
- "dunce",
+ "codex-utils-path",
  "futures",
  "multimap",
  "pretty_assertions",
@@ -1913,6 +1923,7 @@ dependencies = [
  "codex-code-mode",
  "codex-config",
  "codex-connectors",
+ "codex-core-plugins",
  "codex-core-skills",
  "codex-exec-server",
  "codex-execpolicy",
@@ -1923,6 +1934,7 @@ dependencies = [
  "codex-instructions",
  "codex-login",
  "codex-mcp",
+ "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
  "codex-network-proxy",
@@ -1957,6 +1969,7 @@ dependencies = [
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
+ "crypto_box",
  "csv",
  "ctor 0.6.3",
  "dirs",
@@ -1987,6 +2000,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha1",
+ "sha2",
  "shlex",
  "similar",
  "tempfile",
@@ -2011,6 +2025,34 @@ dependencies = [
  "wiremock",
  "zip 2.4.2",
  "zstd 0.13.3",
+]
+
+[[package]]
+name = "codex-core-plugins"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "codex-app-server-protocol",
+ "codex-config",
+ "codex-core-skills",
+ "codex-exec-server",
+ "codex-git-utils",
+ "codex-login",
+ "codex-plugin",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-plugins",
+ "dirs",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -2222,6 +2264,8 @@ name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
+ "codex-exec-server",
+ "codex-protocol",
  "codex-utils-absolute-path",
  "futures",
  "once_cell",
@@ -2292,6 +2336,7 @@ dependencies = [
  "codex-protocol",
  "codex-sandboxing",
  "codex-utils-absolute-path",
+ "globset",
  "landlock",
  "libc",
  "pkg-config",
@@ -2326,7 +2371,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "codex-api",
  "codex-app-server-protocol",
  "codex-client",
  "codex-config",
@@ -2423,6 +2467,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-model-provider"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-api",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-protocol",
+ "http 1.4.0",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "codex-model-provider-info"
 version = "0.0.0"
 dependencies = [
@@ -2451,6 +2508,7 @@ dependencies = [
  "codex-config",
  "codex-feedback",
  "codex-login",
+ "codex-model-provider",
  "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",
@@ -2578,13 +2636,13 @@ dependencies = [
  "chrono",
  "codex-async-utils",
  "codex-execpolicy",
- "codex-git-utils",
  "codex-network-proxy",
  "codex-utils-absolute-path",
  "codex-utils-image",
  "codex-utils-string",
  "codex-utils-template",
  "encoding_rs",
+ "globset",
  "http 1.4.0",
  "icu_decimal",
  "icu_locale_core",
@@ -2717,6 +2775,7 @@ dependencies = [
  "dunce",
  "libc",
  "pretty_assertions",
+ "regex-lite",
  "serde_json",
  "tempfile",
  "tokio",
@@ -2857,11 +2916,16 @@ dependencies = [
  "codex-rollout",
  "codex-state",
  "pretty_assertions",
+ "prost 0.14.3",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "uuid",
 ]
 
@@ -2900,6 +2964,7 @@ dependencies = [
  "codex-cli",
  "codex-cloud-requirements",
  "codex-config",
+ "codex-connectors",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",
@@ -3618,7 +3683,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array",
+ "rand_core 0.6.4",
  "typenum",
+]
+
+[[package]]
+name = "crypto_box"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16182b4f39a82ec8a6851155cc4c0cda3065bb1db33651726a29e1951de0f009"
+dependencies = [
+ "aead",
+ "blake2",
+ "crypto_secretbox",
+ "curve25519-dalek",
+ "salsa20",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "crypto_secretbox"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9d6cf87adf719ddf43a805e92c6870a531aedda35ff640442cbaf8674e141e1"
+dependencies = [
+ "aead",
+ "cipher",
+ "generic-array",
+ "poly1305",
+ "salsa20",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -4910,6 +5006,7 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+ "zeroize",
 ]
 
 [[package]]
@@ -7532,7 +7629,7 @@ dependencies = [
  "heck 0.4.1",
  "itertools 0.11.0",
  "prost 0.12.6",
- "prost-types",
+ "prost-types 0.12.6",
 ]
 
 [[package]]
@@ -7546,7 +7643,7 @@ dependencies = [
  "pbjson",
  "pbjson-build",
  "prost 0.12.6",
- "prost-build",
+ "prost-build 0.12.6",
  "serde",
 ]
 
@@ -7970,7 +8067,26 @@ dependencies = [
  "petgraph 0.6.5",
  "prettyplease",
  "prost 0.12.6",
- "prost-types",
+ "prost-types 0.12.6",
+ "regex",
+ "syn 2.0.114",
+ "tempfile",
+]
+
+[[package]]
+name = "prost-build"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
+dependencies = [
+ "heck 0.5.0",
+ "itertools 0.14.0",
+ "log",
+ "multimap",
+ "petgraph 0.8.3",
+ "prettyplease",
+ "prost 0.14.3",
+ "prost-types 0.14.3",
  "regex",
  "syn 2.0.114",
  "tempfile",
@@ -8009,6 +8125,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9091c90b0a32608e984ff2fa4091273cbdd755d54935c51d520887f4a1dbd5b0"
 dependencies = [
  "prost 0.12.6",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8991c4cbdb8bc5b11f0b074ffe286c30e523de90fee5ba8132f1399f23cb3dd7"
+dependencies = [
+ "prost 0.14.3",
 ]
 
 [[package]]
@@ -10919,8 +11044,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a286e33f82f8a1ee2df63f4fa35c0becf4a85a0cb03091a15fd7bf0b402dc94a"
 dependencies = [
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "bytes",
+ "h2",
  "http 1.4.0",
  "http-body",
  "http-body-util",
@@ -10930,6 +11057,7 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "rustls-native-certs",
+ "socket2 0.6.2",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -10941,6 +11069,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tonic-build"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27aac809edf60b741e2d7db6367214d078856b8a5bff0087e94ff330fb97b6fc"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "tonic-prost"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10949,6 +11089,22 @@ dependencies = [
  "bytes",
  "prost 0.14.3",
  "tonic",
+]
+
+[[package]]
+name = "tonic-prost-build"
+version = "0.14.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4556786613791cfef4ed134aa670b61a85cfcacf71543ef33e8d801abae988f"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "prost-build 0.14.3",
+ "prost-types 0.14.3",
+ "quote",
+ "syn 2.0.114",
+ "tempfile",
+ "tonic-build",
 ]
 
 [[package]]
