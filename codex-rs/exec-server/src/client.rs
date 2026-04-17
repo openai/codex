@@ -175,7 +175,7 @@ pub struct ExecServerClient {
     inner: Arc<Inner>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
     websocket_url: String,
     client: Arc<OnceCell<ExecServerClient>>,

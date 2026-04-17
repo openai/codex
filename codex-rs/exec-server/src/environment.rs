@@ -246,8 +246,8 @@ mod tests {
         assert!(environment.remote_exec_server_client.is_none());
     }
 
-    #[test]
-    fn environment_manager_normalizes_empty_url() {
+    #[tokio::test]
+    async fn environment_manager_normalizes_empty_url() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some(String::new()),
             local_runtime_paths: None,
@@ -276,8 +276,8 @@ mod tests {
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
     }
 
-    #[test]
-    fn environment_manager_reports_remote_url() {
+    #[tokio::test]
+    async fn environment_manager_reports_remote_url() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
             local_runtime_paths: None,
