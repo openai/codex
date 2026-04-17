@@ -30,6 +30,48 @@ use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use schemars::JsonSchema;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionSuggestion {
+    #[serde(rename = "type")]
+    pub suggestion_type: PermissionSuggestionType,
+    pub rules: Vec<PermissionSuggestionRule>,
+    pub behavior: PermissionSuggestionBehavior,
+    pub destination: PermissionSuggestionDestination,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionSuggestionType {
+    AddRules,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionSuggestionBehavior {
+    Allow,
+    Deny,
+    Ask,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+pub enum PermissionSuggestionDestination {
+    #[serde(rename = "session")]
+    Session,
+    #[serde(rename = "projectSettings")]
+    ProjectSettings,
+    #[serde(rename = "userSettings")]
+    UserSettings,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PermissionSuggestionRule {
+    PrefixRule { command: Vec<String> },
+}
 
 #[derive(Debug, Clone)]
 pub struct PermissionRequestRequest {
@@ -43,6 +85,7 @@ pub struct PermissionRequestRequest {
     pub run_id_suffix: String,
     pub command: String,
     pub description: Option<String>,
+    pub permission_suggestions: Vec<PermissionSuggestion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +222,8 @@ fn build_command_input(request: &PermissionRequestRequest) -> PermissionRequestC
             command: request.command.clone(),
             description: request.description.clone(),
         },
+        permission_suggestions: (!request.permission_suggestions.is_empty())
+            .then_some(request.permission_suggestions.clone()),
     }
 }
 

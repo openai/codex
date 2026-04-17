@@ -389,6 +389,7 @@ impl NetworkApprovalService {
                 tool_name: "Bash".to_string(),
                 command,
                 description: Some(format!("network-access {target}")),
+                permission_suggestions: Vec::new(),
             },
         )
         .await

@@ -12,6 +12,8 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::events::permission_request::PermissionSuggestion;
+
 const GENERATED_DIR: &str = "generated";
 const POST_TOOL_USE_INPUT_FIXTURE: &str = "post-tool-use.command.input.schema.json";
 const POST_TOOL_USE_OUTPUT_FIXTURE: &str = "post-tool-use.command.output.schema.json";
@@ -263,6 +265,8 @@ pub(crate) struct PermissionRequestCommandInput {
     #[schemars(schema_with = "permission_request_tool_name_schema")]
     pub tool_name: String,
     pub tool_input: PermissionRequestToolInput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_suggestions: Option<Vec<PermissionSuggestion>>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

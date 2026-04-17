@@ -503,6 +503,7 @@ fn read_permission_request_hook_inputs(home: &Path) -> Result<Vec<serde_json::Va
         .collect()
 }
 
+#[cfg(not(target_os = "linux"))]
 fn assert_permission_request_hook_input(
     hook_input: &Value,
     command: &str,
@@ -523,6 +524,7 @@ fn assert_permission_request_hook_input(
     assert!(hook_input.get("protocol").is_none());
 }
 
+#[cfg(not(target_os = "linux"))]
 fn assert_single_permission_request_hook_input(
     home: &Path,
     command: &str,
@@ -532,6 +534,13 @@ fn assert_single_permission_request_hook_input(
     assert_eq!(hook_inputs.len(), 1);
     assert_permission_request_hook_input(&hook_inputs[0], command, description);
     Ok(hook_inputs)
+}
+
+fn assert_permission_request_hook_suggestions(hook_input: &Value, expected: Value) {
+    assert_eq!(
+        hook_input["permission_suggestions"], expected,
+        "permission request hook should include expected suggestions"
+    );
 }
 
 fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -1203,11 +1212,26 @@ async fn permission_request_hook_allows_shell_command_without_user_approval() ->
         "approved command should remove marker file"
     );
 
-    let hook_inputs = assert_single_permission_request_hook_input(
-        test.codex_home_path(),
-        &command,
-        /*description*/ None,
-    )?;
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0]["tool_input"]["description"], Value::Null);
+    assert_permission_request_hook_suggestions(
+        &hook_inputs[0],
+        serde_json::json!([
+            {
+                "type": "addRules",
+                "rules": [{
+                    "type": "prefixRule",
+                    "command": ["rm", "-f", marker.display().to_string()],
+                }],
+                "behavior": "allow",
+                "destination": "userSettings",
+            }
+        ]),
+    );
     assert!(
         hook_inputs[0].get("tool_use_id").is_none(),
         "PermissionRequest input should not include a tool_use_id",
@@ -1293,11 +1317,26 @@ async fn permission_request_hook_sees_raw_exec_command_input() -> Result<()> {
         "approved exec command should remove marker file"
     );
 
-    assert_single_permission_request_hook_input(
-        test.codex_home_path(),
-        &command,
-        Some(justification),
-    )?;
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(hook_inputs[0]["tool_input"]["description"], justification);
+    assert_permission_request_hook_suggestions(
+        &hook_inputs[0],
+        serde_json::json!([
+            {
+                "type": "addRules",
+                "rules": [{
+                    "type": "prefixRule",
+                    "command": ["rm", "-f", marker.display().to_string()],
+                }],
+                "behavior": "allow",
+                "destination": "userSettings",
+            }
+        ]),
+    );
 
     Ok(())
 }
@@ -1442,11 +1481,180 @@ allow_local_binding = true
         "expected the network approval hook to bypass the approval prompt"
     );
 
-    assert_single_permission_request_hook_input(
-        test.codex_home_path(),
-        command,
-        Some("network-access http://codex-network-test.invalid:80"),
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["description"],
+        "network-access http://codex-network-test.invalid:80"
+    );
+    assert!(hook_inputs[0].get("permission_suggestions").is_none());
+
+    test.codex.submit(Op::Shutdown {}).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permission_request_hook_sees_exec_command_network_retry_suggestions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = true
+"#,
     )?;
+    let call_id = "permissionrequest-exec-network-approval";
+    let command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=2).read().decode(errors='replace'))""#;
+    let args = serde_json::json!({
+        "cmd": command,
+        "login": true,
+        "sandbox_permissions": "require_escalated",
+    });
+    let _responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message(
+                    "msg-1",
+                    "permission request hook allowed exec network access",
+                ),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let approval_policy = AskForApproval::OnFailure;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: Default::default(),
+        network_access: true,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let test = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_pre_build_hook(|home| {
+            if let Err(error) = install_allow_permission_request_hook(home) {
+                panic!("failed to write permission request hook test fixture: {error}");
+            }
+        })
+        .with_config(move |config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+            let layers = config
+                .config_layer_stack
+                .get_layers(
+                    ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                    /*include_disabled*/ true,
+                )
+                .into_iter()
+                .cloned()
+                .collect();
+            let mut requirements = config.config_layer_stack.requirements().clone();
+            requirements.network = Some(Sourced::new(
+                NetworkConstraints {
+                    enabled: Some(true),
+                    allow_local_binding: Some(true),
+                    ..Default::default()
+                },
+                RequirementSource::CloudRequirements,
+            ));
+            let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+            requirements_toml.network = Some(NetworkRequirementsToml {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            });
+            config.config_layer_stack =
+                ConfigLayerStack::new(layers, requirements, requirements_toml)
+                    .expect("rebuild config layer stack with network requirements");
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn_with_policies(
+        "run the exec command after network hook approval",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if test
+                .codex_home_path()
+                .join("permission_request_hook_log.jsonl")
+                .exists()
+            {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("expected exec network approval hook to run");
+
+    assert!(
+        timeout(
+            Duration::from_secs(2),
+            wait_for_event(&test.codex, |event| matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_)
+            ))
+        )
+        .await
+        .is_err(),
+        "expected the exec network approval hook to bypass the approval prompt"
+    );
+
+    let hook_inputs = read_permission_request_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PermissionRequest");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["description"],
+        "Network access to \"codex-network-test.invalid\" is blocked by policy."
+    );
+    assert!(hook_inputs[0].get("permission_suggestions").is_none());
 
     test.codex.submit(Op::Shutdown {}).await?;
     wait_for_event(&test.codex, |event| {

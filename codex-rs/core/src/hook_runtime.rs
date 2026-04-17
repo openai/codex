@@ -177,6 +177,7 @@ pub(crate) async fn run_permission_request_hooks(
         run_id_suffix: run_id_suffix.to_string(),
         command: payload.command,
         description: payload.description,
+        permission_suggestions: payload.permission_suggestions,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;

@@ -10,14 +10,21 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use codex_hooks::PermissionSuggestion;
+use codex_hooks::PermissionSuggestionBehavior;
+use codex_hooks::PermissionSuggestionDestination;
+use codex_hooks::PermissionSuggestionRule;
+use codex_hooks::PermissionSuggestionType;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::error::CodexErr;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ReviewDecision;
 #[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
@@ -136,6 +143,52 @@ pub(crate) struct PermissionRequestPayload {
     pub tool_name: String,
     pub command: String,
     pub description: Option<String>,
+    pub permission_suggestions: Vec<PermissionSuggestion>,
+}
+
+pub(crate) fn exec_policy_permission_suggestions(
+    proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
+    destinations: &[PermissionSuggestionDestination],
+) -> Vec<PermissionSuggestion> {
+    proposed_execpolicy_amendment
+        .into_iter()
+        .flat_map(|amendment| {
+            destinations
+                .iter()
+                .cloned()
+                .map(move |destination| PermissionSuggestion {
+                    suggestion_type: PermissionSuggestionType::AddRules,
+                    rules: vec![PermissionSuggestionRule::PrefixRule {
+                        command: amendment.command.clone(),
+                    }],
+                    behavior: PermissionSuggestionBehavior::Allow,
+                    destination,
+                })
+        })
+        .collect()
+}
+
+pub(crate) fn approval_permission_suggestions(
+    network_approval_context: Option<&NetworkApprovalContext>,
+    proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
+    additional_permissions: Option<&PermissionProfile>,
+    destinations: &[PermissionSuggestionDestination],
+) -> Vec<PermissionSuggestion> {
+    let available_decisions = ExecApprovalRequestEvent::default_available_decisions(
+        network_approval_context,
+        proposed_execpolicy_amendment,
+        /*proposed_network_policy_amendments*/ None,
+        additional_permissions,
+    );
+    let allows_execpolicy_amendment = available_decisions
+        .iter()
+        .any(|decision| matches!(decision, ReviewDecision::ApprovedExecpolicyAmendment { .. }));
+
+    if allows_execpolicy_amendment {
+        exec_policy_permission_suggestions(proposed_execpolicy_amendment, destinations)
+    } else {
+        Vec::new()
+    }
 }
 
 // Specifies what tool orchestrator should do with a given tool call.
@@ -282,7 +335,11 @@ pub(crate) trait Approvable<Req> {
 
     /// Return hook input for approval-time policy hooks when this runtime wants
     /// hook evaluation to run before guardian or user approval.
-    fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
+    fn permission_request_payload(
+        &self,
+        _req: &Req,
+        _approval_ctx: &ApprovalCtx<'_>,
+    ) -> Option<PermissionRequestPayload> {
         None
     }
 
