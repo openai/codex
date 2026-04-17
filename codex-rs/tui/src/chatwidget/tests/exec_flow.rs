@@ -1028,73 +1028,7 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
 }
 
 #[tokio::test]
-async fn enter_during_standalone_user_shell_command_queues_follow_up() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    chat.bottom_pane
-        .set_composer_text("!sleep 10".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "sleep 10"),
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-
-    chat.handle_server_notification(
-        ServerNotification::TurnStarted(TurnStartedNotification {
-            thread_id: "thread-1".to_string(),
-            turn: AppServerTurn {
-                id: "shell-turn".to_string(),
-                items: Vec::new(),
-                status: AppServerTurnStatus::InProgress,
-                error: None,
-                started_at: Some(0),
-                completed_at: None,
-                duration_ms: None,
-            },
-        }),
-        /*replay_kind*/ None,
-    );
-
-    chat.bottom_pane
-        .set_composer_text("hi".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_eq!(chat.queued_user_message_texts(), vec!["hi"]);
-    assert!(chat.pending_steers.is_empty());
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-
-    chat.handle_server_notification(
-        ServerNotification::TurnCompleted(TurnCompletedNotification {
-            thread_id: "thread-1".to_string(),
-            turn: AppServerTurn {
-                id: "shell-turn".to_string(),
-                items: Vec::new(),
-                status: AppServerTurnStatus::Completed,
-                error: None,
-                started_at: None,
-                completed_at: Some(0),
-                duration_ms: None,
-            },
-        }),
-        /*replay_kind*/ None,
-    );
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "hi".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued follow-up submit, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn enter_before_standalone_user_shell_turn_started_queues_follow_up() {
+async fn enter_while_standalone_user_shell_command_is_pending_or_running_queues_follow_up() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
 
@@ -1108,15 +1042,15 @@ async fn enter_before_standalone_user_shell_turn_started_queues_follow_up() {
     }
 
     chat.bottom_pane
-        .set_composer_text("hi".to_string(), Vec::new(), Vec::new());
+        .set_composer_text("before start".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.queued_user_message_texts(), vec!["hi"]);
+    assert_eq!(chat.queued_user_message_texts(), vec!["before start"]);
     assert!(chat.pending_steers.is_empty());
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
     chat.maybe_send_next_queued_input();
-    assert_eq!(chat.queued_user_message_texts(), vec!["hi"]);
+    assert_eq!(chat.queued_user_message_texts(), vec!["before start"]);
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
     chat.handle_server_notification(
@@ -1135,6 +1069,17 @@ async fn enter_before_standalone_user_shell_turn_started_queues_follow_up() {
         /*replay_kind*/ None,
     );
 
+    chat.bottom_pane
+        .set_composer_text("while running".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["before start", "while running"]
+    );
+    assert!(chat.pending_steers.is_empty());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
     chat.handle_server_notification(
         ServerNotification::TurnCompleted(TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
@@ -1155,106 +1100,13 @@ async fn enter_before_standalone_user_shell_turn_started_queues_follow_up() {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
-                text: "hi".to_string(),
+                text: "before start".to_string(),
                 text_elements: Vec::new(),
             }]
         ),
         other => panic!("expected queued follow-up submit, got {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn bang_after_user_turn_submit_before_turn_started_does_not_mark_standalone() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    chat.bottom_pane
-        .set_composer_text("start work".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    match op_rx.try_recv() {
-        Ok(Op::UserTurn { items, .. }) => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "start work".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected UserTurn op, got {other:?}"),
-    }
-    match op_rx.try_recv() {
-        Ok(Op::AddToHistory { text }) => assert_eq!(text, "start work"),
-        other => panic!("expected AddToHistory op, got {other:?}"),
-    }
-
-    chat.bottom_pane
-        .set_composer_text("!sleep 10".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "sleep 10"),
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-    assert!(!chat.pending_standalone_user_shell_command);
-}
-
-#[tokio::test]
-async fn bang_during_mcp_startup_marks_standalone_shell_command() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.mcp_startup_status = Some(HashMap::from([(
-        "server".to_string(),
-        McpStartupStatus::Starting,
-    )]));
-    chat.update_task_running_state();
-
-    chat.bottom_pane
-        .set_composer_text("!sleep 10".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    match op_rx.try_recv() {
-        Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "sleep 10"),
-        other => panic!("expected RunUserShellCommand op, got {other:?}"),
-    }
-    assert!(chat.pending_turn_start_after_submit);
-    assert!(chat.pending_standalone_user_shell_command);
-}
-
-#[tokio::test]
-async fn completion_without_seen_shell_start_clears_pending_marker() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.pending_standalone_user_shell_command = true;
-    chat.queued_user_messages
-        .push_back(UserMessage::from("follow up".to_string()));
-
-    chat.handle_server_notification(
-        ServerNotification::TurnCompleted(TurnCompletedNotification {
-            thread_id: "thread-1".to_string(),
-            turn: AppServerTurn {
-                id: "shell-turn".to_string(),
-                items: Vec::new(),
-                status: AppServerTurnStatus::Completed,
-                error: None,
-                started_at: None,
-                completed_at: Some(0),
-                duration_ms: None,
-            },
-        }),
-        /*replay_kind*/ None,
-    );
-
-    assert!(!chat.pending_standalone_user_shell_command);
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "follow up".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued follow-up submit, got {other:?}"),
-    }
+    assert_eq!(chat.queued_user_message_texts(), vec!["while running"]);
 }
 
 #[tokio::test]

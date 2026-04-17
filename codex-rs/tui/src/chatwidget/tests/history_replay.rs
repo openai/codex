@@ -800,41 +800,28 @@ async fn replayed_in_progress_turn_marks_task_running() {
 }
 
 #[tokio::test]
-async fn replayed_in_progress_turn_consumes_pending_standalone_shell_marker() {
+async fn replayed_completed_user_shell_turn_clears_pending_standalone_shell_submission() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.pending_standalone_user_shell_command = true;
+    chat.turn_submission_state = TurnSubmissionState::AwaitingTurnStart {
+        kind: TurnSubmissionKind::StandaloneUserShell,
+        preceding_turn_id: Some("baseline-turn".to_string()),
+    };
 
     chat.replay_thread_turns(
         vec![AppServerTurn {
-            id: "shell-turn".to_string(),
-            items: Vec::new(),
-            status: AppServerTurnStatus::InProgress,
-            error: None,
-            started_at: None,
-            completed_at: None,
-            duration_ms: None,
-        }],
-        ReplayKind::ResumeInitialMessages,
-    );
-
-    assert!(!chat.pending_standalone_user_shell_command);
-    assert_eq!(
-        chat.standalone_user_shell_turn_id.as_deref(),
-        Some("shell-turn")
-    );
-    assert!(chat.bottom_pane.is_task_running());
-}
-
-#[tokio::test]
-async fn replayed_completed_turn_preserves_pending_shell_submit_markers() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.pending_turn_start_after_submit = true;
-    chat.pending_standalone_user_shell_command = true;
-
-    chat.replay_thread_turns(
-        vec![AppServerTurn {
-            id: "old-turn".to_string(),
-            items: Vec::new(),
+            id: "old-shell-turn".to_string(),
+            items: vec![AppServerThreadItem::CommandExecution {
+                id: "old-cmd".to_string(),
+                command: "echo hi".to_string(),
+                cwd: test_path_buf("/tmp").abs(),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::Completed,
+                command_actions: Vec::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            }],
             status: AppServerTurnStatus::Completed,
             error: None,
             started_at: None,
@@ -844,113 +831,50 @@ async fn replayed_completed_turn_preserves_pending_shell_submit_markers() {
         ReplayKind::ThreadSnapshot,
     );
 
-    assert!(chat.pending_turn_start_after_submit);
-    assert!(chat.pending_standalone_user_shell_command);
-    assert!(chat.standalone_user_shell_turn_id.is_none());
-}
-
-#[tokio::test]
-async fn replayed_buffered_shell_turn_completion_clears_pending_shell_marker() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.pending_turn_start_after_submit = true;
-    chat.pending_standalone_user_shell_command = true;
-
-    chat.handle_server_notification(
-        ServerNotification::TurnStarted(TurnStartedNotification {
-            thread_id: "thread-1".to_string(),
-            turn: AppServerTurn {
-                id: "shell-turn".to_string(),
-                items: Vec::new(),
-                status: AppServerTurnStatus::InProgress,
-                error: None,
-                started_at: Some(0),
-                completed_at: None,
-                duration_ms: None,
-            },
-        }),
-        Some(ReplayKind::ThreadSnapshot),
-    );
-
-    assert!(!chat.pending_turn_start_after_submit);
-    assert!(!chat.pending_standalone_user_shell_command);
     assert_eq!(
-        chat.standalone_user_shell_turn_id.as_deref(),
-        Some("shell-turn")
+        chat.turn_submission_state,
+        TurnSubmissionState::AwaitingTurnStart {
+            kind: TurnSubmissionKind::StandaloneUserShell,
+            preceding_turn_id: Some("baseline-turn".to_string()),
+        }
     );
 
-    chat.handle_server_notification(
-        ServerNotification::TurnCompleted(TurnCompletedNotification {
-            thread_id: "thread-1".to_string(),
-            turn: AppServerTurn {
-                id: "shell-turn".to_string(),
+    chat.replay_thread_turns(
+        vec![
+            AppServerTurn {
+                id: "baseline-turn".to_string(),
                 items: Vec::new(),
                 status: AppServerTurnStatus::Completed,
                 error: None,
-                started_at: Some(0),
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
+            },
+            AppServerTurn {
+                id: "shell-turn".to_string(),
+                items: vec![AppServerThreadItem::CommandExecution {
+                    id: "cmd-1".to_string(),
+                    command: "echo hi".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                    process_id: None,
+                    source: AppServerCommandExecutionSource::UserShell,
+                    status: AppServerCommandExecutionStatus::Completed,
+                    command_actions: Vec::new(),
+                    aggregated_output: None,
+                    exit_code: None,
+                    duration_ms: None,
+                }],
+                status: AppServerTurnStatus::Completed,
+                error: None,
+                started_at: None,
                 completed_at: Some(1),
-                duration_ms: Some(1),
+                duration_ms: None,
             },
-        }),
-        Some(ReplayKind::ThreadSnapshot),
-    );
-
-    assert!(chat.standalone_user_shell_turn_id.is_none());
-    assert!(!chat.pending_standalone_user_shell_command);
-}
-
-#[tokio::test]
-async fn replayed_non_retry_error_preserves_pending_shell_submit_markers() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.pending_turn_start_after_submit = true;
-    chat.pending_standalone_user_shell_command = true;
-
-    chat.handle_server_notification(
-        ServerNotification::Error(ErrorNotification {
-            error: AppServerTurnError {
-                message: "permission denied".to_string(),
-                codex_error_info: None,
-                additional_details: None,
-            },
-            will_retry: false,
-            thread_id: "thread-1".to_string(),
-            turn_id: "old-turn".to_string(),
-        }),
-        Some(ReplayKind::ThreadSnapshot),
-    );
-
-    assert!(drain_insert_history(&mut rx).is_empty());
-    assert!(chat.pending_turn_start_after_submit);
-    assert!(chat.pending_standalone_user_shell_command);
-    assert!(chat.standalone_user_shell_turn_id.is_none());
-}
-
-#[tokio::test]
-async fn replayed_failed_completed_turn_preserves_pending_shell_submit_markers() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.pending_turn_start_after_submit = true;
-    chat.pending_standalone_user_shell_command = true;
-
-    chat.replay_thread_turns(
-        vec![AppServerTurn {
-            id: "old-turn".to_string(),
-            items: Vec::new(),
-            status: AppServerTurnStatus::Failed,
-            error: Some(AppServerTurnError {
-                message: "permission denied".to_string(),
-                codex_error_info: None,
-                additional_details: None,
-            }),
-            started_at: None,
-            completed_at: Some(0),
-            duration_ms: None,
-        }],
+        ],
         ReplayKind::ThreadSnapshot,
     );
 
-    assert!(drain_insert_history(&mut rx).is_empty());
-    assert!(chat.pending_turn_start_after_submit);
-    assert!(chat.pending_standalone_user_shell_command);
-    assert!(chat.standalone_user_shell_turn_id.is_none());
+    assert_eq!(chat.turn_submission_state, TurnSubmissionState::Idle);
 }
 
 #[tokio::test]
