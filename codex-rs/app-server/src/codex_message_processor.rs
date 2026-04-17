@@ -2986,6 +2986,52 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let rollout_path = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => match thread.rollout_path() {
+                Some(path) => path,
+                None => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("ephemeral thread does not support goals: {thread_id}"),
+                    )
+                    .await;
+                    return;
+                }
+            },
+            Err(_) => {
+                match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
+                    .await
+                {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("thread not found: {thread_id}"),
+                        )
+                        .await;
+                        return;
+                    }
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to locate thread id {thread_id}: {err}"),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            }
+        };
+        reconcile_rollout(
+            Some(&state_db),
+            rollout_path.as_path(),
+            self.config.model_provider_id.as_str(),
+            /*builder*/ None,
+            &[],
+            /*archived_only*/ None,
+            /*new_thread_memory_mode*/ None,
+        )
+        .await;
         let status = params.status.map(thread_goal_status_to_state);
 
         let goal = if let Some(objective) = params.objective {
