@@ -1,12 +1,16 @@
 use crate::HarnessError;
 use codex_app_server_protocol::ApprovalsReviewer;
+use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::SandboxPolicy as AppSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppSessionSource;
 use codex_app_server_protocol::Thread as AppThread;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -788,7 +792,7 @@ async fn run_thread_listener(
                 break;
             }
         };
-        emit_raw_core_event(&event_handler, event.clone());
+        let raw_event = event.clone();
         match event.msg {
             EventMsg::TurnStarted(turn) => {
                 let turn_snapshot = {
@@ -797,14 +801,12 @@ async fn run_thread_listener(
                         active_flags: Vec::new(),
                     };
                     state.thread.updated_at = now_seconds();
-                    let turn_snapshot = AppTurn {
-                        id: turn.turn_id.clone(),
-                        items: Vec::new(),
-                        status: TurnStatus::InProgress,
-                        error: None,
-                    };
-                    upsert_turn(&mut state.thread.turns, turn_snapshot.clone());
-                    turn_snapshot
+                    let turn = ensure_turn(
+                        &mut state.thread.turns,
+                        &turn.turn_id,
+                        TurnStatus::InProgress,
+                    );
+                    turn.clone()
                 };
                 let _ = emit_notification(
                     &event_handler,
@@ -814,18 +816,98 @@ async fn run_thread_listener(
                     }),
                 );
             }
+            EventMsg::ItemStarted(item_started) => {
+                let notification = {
+                    let mut state = thread_state.borrow_mut();
+                    state.thread.status = ThreadStatus::Active {
+                        active_flags: Vec::new(),
+                    };
+                    state.thread.updated_at = now_seconds();
+                    let item: ThreadItem = item_started.item.into();
+                    let turn = ensure_turn(
+                        &mut state.thread.turns,
+                        &item_started.turn_id,
+                        TurnStatus::InProgress,
+                    );
+                    upsert_turn_item(&mut turn.items, item.clone());
+                    ItemStartedNotification {
+                        thread_id: thread_id.clone(),
+                        turn_id: item_started.turn_id,
+                        item,
+                    }
+                };
+                let _ = emit_notification(
+                    &event_handler,
+                    ServerNotification::ItemStarted(notification),
+                );
+            }
+            EventMsg::ItemCompleted(item_completed) => {
+                let notification = {
+                    let mut state = thread_state.borrow_mut();
+                    let item: ThreadItem = item_completed.item.into();
+                    let turn = ensure_turn(
+                        &mut state.thread.turns,
+                        &item_completed.turn_id,
+                        TurnStatus::InProgress,
+                    );
+                    upsert_turn_item(&mut turn.items, item.clone());
+                    ItemCompletedNotification {
+                        thread_id: thread_id.clone(),
+                        turn_id: item_completed.turn_id,
+                        item,
+                    }
+                };
+                let _ = emit_notification(
+                    &event_handler,
+                    ServerNotification::ItemCompleted(notification),
+                );
+            }
+            EventMsg::AgentMessageContentDelta(delta) => {
+                let notification = {
+                    let mut state = thread_state.borrow_mut();
+                    let turn = ensure_turn(
+                        &mut state.thread.turns,
+                        &delta.turn_id,
+                        TurnStatus::InProgress,
+                    );
+                    append_agent_message_delta(turn, &delta.item_id, &delta.delta);
+                    AgentMessageDeltaNotification {
+                        thread_id: thread_id.clone(),
+                        turn_id: delta.turn_id,
+                        item_id: delta.item_id,
+                        delta: delta.delta,
+                    }
+                };
+                let _ = emit_notification(
+                    &event_handler,
+                    ServerNotification::AgentMessageDelta(notification),
+                );
+            }
+            EventMsg::AgentMessageDelta(_) | EventMsg::AgentMessage(_) => {}
             EventMsg::TurnComplete(turn) => {
                 let turn_snapshot = {
                     let mut state = thread_state.borrow_mut();
                     state.thread.status = ThreadStatus::Idle;
                     state.thread.updated_at = now_seconds();
-                    let turn_snapshot = AppTurn {
-                        id: turn.turn_id.clone(),
-                        items: Vec::new(),
-                        status: TurnStatus::Completed,
-                        error: None,
+                    let turn_snapshot = {
+                        let turn_state = ensure_turn(
+                            &mut state.thread.turns,
+                            &turn.turn_id,
+                            TurnStatus::Completed,
+                        );
+                        let has_agent_message_item = turn_state
+                            .items
+                            .iter()
+                            .any(|item| matches!(item, ThreadItem::AgentMessage { .. }));
+                        if let Some(text) = turn.last_agent_message.filter(|_| !has_agent_message_item)
+                        {
+                            let item_id = synthetic_agent_item_id(&turn.turn_id);
+                            set_agent_message_item(turn_state, &item_id, text, None, None);
+                        }
+                        turn_state.status = TurnStatus::Completed;
+                        turn_state.error = None;
+                        turn_state.clone()
                     };
-                    upsert_turn(&mut state.thread.turns, turn_snapshot.clone());
                     turn_snapshot
                 };
                 let _ = emit_notification(
@@ -842,14 +924,13 @@ async fn run_thread_listener(
                         let mut state = thread_state.borrow_mut();
                         state.thread.status = ThreadStatus::Idle;
                         state.thread.updated_at = now_seconds();
-                        let turn_snapshot = AppTurn {
-                            id: turn_id.clone(),
-                            items: Vec::new(),
-                            status: TurnStatus::Interrupted,
-                            error: None,
-                        };
-                        upsert_turn(&mut state.thread.turns, turn_snapshot.clone());
-                        turn_snapshot
+                        let turn = ensure_turn(
+                            &mut state.thread.turns,
+                            &turn_id,
+                            TurnStatus::Interrupted,
+                        );
+                        turn.status = TurnStatus::Interrupted;
+                        turn.clone()
                     };
                     let _ = emit_notification(
                         &event_handler,
@@ -860,7 +941,9 @@ async fn run_thread_listener(
                     );
                 }
             }
-            _ => {}
+            _ => {
+                emit_raw_core_event(&event_handler, raw_event);
+            }
         }
     }
 }
@@ -871,6 +954,91 @@ fn upsert_turn(turns: &mut Vec<AppTurn>, turn: AppTurn) {
     } else {
         turns.push(turn);
     }
+}
+
+fn ensure_turn<'a>(
+    turns: &'a mut Vec<AppTurn>,
+    turn_id: &str,
+    status: TurnStatus,
+) -> &'a mut AppTurn {
+    if let Some(index) = turns.iter().position(|turn| turn.id == turn_id) {
+        let turn = &mut turns[index];
+        let clear_error = !matches!(status, TurnStatus::Failed);
+        turn.status = status;
+        if clear_error {
+            turn.error = None;
+        }
+        return turn;
+    }
+
+    turns.push(AppTurn {
+        id: turn_id.to_string(),
+        items: Vec::new(),
+        status,
+        error: None,
+    });
+    turns.last_mut().expect("turn inserted")
+}
+
+fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) {
+    if let Some(existing) = items.iter_mut().find(|existing| existing.id() == item.id()) {
+        *existing = item;
+    } else {
+        items.push(item);
+    }
+}
+
+fn synthetic_agent_item_id(turn_id: &str) -> String {
+    format!("{turn_id}-item")
+}
+
+fn resolve_turn_id(thread: &AppThread, fallback_turn_id: &str) -> String {
+    thread
+        .turns
+        .iter()
+        .rev()
+        .find(|turn| matches!(turn.status, TurnStatus::InProgress))
+        .map(|turn| turn.id.clone())
+        .unwrap_or_else(|| fallback_turn_id.to_string())
+}
+
+fn append_agent_message_delta(turn: &mut AppTurn, item_id: &str, delta: &str) {
+    if delta.is_empty() {
+        return;
+    }
+
+    if let Some(ThreadItem::AgentMessage { text, .. }) = turn
+        .items
+        .iter_mut()
+        .find(|item| item.id() == item_id)
+    {
+        text.push_str(delta);
+        return;
+    }
+
+    turn.items.push(ThreadItem::AgentMessage {
+        id: item_id.to_string(),
+        text: delta.to_string(),
+        phase: None,
+        memory_citation: None,
+    });
+}
+
+fn set_agent_message_item(
+    turn: &mut AppTurn,
+    item_id: &str,
+    text: String,
+    phase: Option<codex_protocol::models::MessagePhase>,
+    memory_citation: Option<codex_app_server_protocol::MemoryCitation>,
+) -> ThreadItem {
+    let item = ThreadItem::AgentMessage {
+        id: item_id.to_string(),
+        text,
+        phase,
+        memory_citation,
+    };
+    upsert_turn_item(&mut turn.items, item.clone());
+    item
 }
 
 fn first_text_preview(input: &[codex_app_server_protocol::UserInput]) -> Option<String> {
