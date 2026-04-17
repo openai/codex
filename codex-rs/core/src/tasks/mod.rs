@@ -15,6 +15,7 @@ use tokio::sync::Notify;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
+use tracing::debug;
 use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
@@ -64,6 +65,11 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+
+enum InitialResponseItems {
+    IncludeNextTurnQueue,
+    Direct(Vec<ResponseInputItem>),
+}
 
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
@@ -245,6 +251,22 @@ impl Session {
         input: Vec<UserInput>,
         task: T,
     ) {
+        self.start_task_with_initial_response_items(
+            turn_context,
+            input,
+            task,
+            InitialResponseItems::IncludeNextTurnQueue,
+        )
+        .await;
+    }
+
+    async fn start_task_with_initial_response_items<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<UserInput>,
+        task: T,
+        initial_response_items: InitialResponseItems,
+    ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -269,7 +291,12 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let queued_response_items = self.take_queued_response_items_for_next_turn().await;
+        let queued_response_items = match initial_response_items {
+            InitialResponseItems::IncludeNextTurnQueue => {
+                self.take_queued_response_items_for_next_turn().await
+            }
+            InitialResponseItems::Direct(items) => items,
+        };
         let mailbox_items = self.get_pending_input().await;
         {
             let mut turn_state = turn_state.lock().await;
@@ -283,8 +310,14 @@ impl Session {
         }
 
         let mut active = self.active_turn.lock().await;
-        let turn = active.get_or_insert_with(ActiveTurn::default);
-        debug_assert!(turn.tasks.is_empty());
+        let Some(turn) = active.as_mut() else {
+            debug!("skipping task start because the turn was interrupted during startup");
+            return;
+        };
+        if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.tasks.is_empty() {
+            debug!("skipping task start because another turn replaced the startup turn");
+            return;
+        }
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         let ctx = Arc::clone(&turn_context);
@@ -366,12 +399,42 @@ impl Session {
 
     pub(crate) async fn maybe_start_turn_for_pending_work_or_goal_continuation(self: &Arc<Self>) {
         self.maybe_start_turn_for_pending_work().await;
-        if self.has_active_turn().await {
+        let _continuation_guard = self.goal_continuation_lock.lock().await;
+        if self.has_active_turn().await
+            || self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await
+        {
             return;
         }
+        let Some(items) = self.goal_continuation_items_if_active().await else {
+            return;
+        };
+        if self.has_active_turn().await
+            || self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await
+        {
+            return;
+        }
+        {
+            let mut active_turn = self.active_turn.lock().await;
+            if active_turn.is_some() {
+                return;
+            }
+            *active_turn = Some(ActiveTurn::default());
+        }
 
-        self.queue_goal_continuation_if_active().await;
-        self.maybe_start_turn_for_pending_work().await;
+        let turn_context = self
+            .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
+            .await;
+        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        self.start_task_with_initial_response_items(
+            turn_context,
+            Vec::new(),
+            RegularTask::new(),
+            InitialResponseItems::Direct(items),
+        )
+        .await;
     }
 
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle

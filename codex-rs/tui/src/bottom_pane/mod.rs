@@ -30,6 +30,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
+use bottom_pane_view::ViewCompletion;
 use codex_features::Features;
 use codex_file_search::FileMatch;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -92,6 +93,7 @@ pub(crate) use footer::GoalStatusIndicator;
 #[cfg(test)]
 pub(crate) use footer::goal_status_indicator_line;
 pub(crate) use list_selection_view::ColumnWidthMode;
+pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
@@ -117,6 +119,7 @@ mod pending_thread_approvals;
 pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
+mod selection_tabs;
 mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
@@ -393,8 +396,25 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    fn pop_active_view(&mut self) {
+    fn pop_active_view_with_completion(&mut self, completion: Option<ViewCompletion>) {
         if self.view_stack.pop().is_some() {
+            match completion {
+                Some(ViewCompletion::Accepted) => {
+                    while self
+                        .view_stack
+                        .last()
+                        .is_some_and(|view| view.dismiss_after_child_accept())
+                    {
+                        self.view_stack.pop();
+                    }
+                }
+                Some(ViewCompletion::Cancelled) => {
+                    if let Some(view) = self.view_stack.last_mut() {
+                        view.clear_dismiss_after_child_accept();
+                    }
+                }
+                None => {}
+            }
             self.on_view_stack_depth_decreased();
         }
     }
@@ -416,7 +436,7 @@ impl BottomPane {
             // We need three pieces of information after routing the key:
             // whether Esc completed the view, whether the view finished for any
             // reason, and whether a paste-burst timer should be scheduled.
-            let (ctrl_c_completed, view_complete, view_in_paste_burst) = {
+            let (ctrl_c_completed, view_complete, completion, view_in_paste_burst) = {
                 let last_index = self.view_stack.len() - 1;
                 let view = &mut self.view_stack[last_index];
                 let prefer_esc =
@@ -426,22 +446,27 @@ impl BottomPane {
                     && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
                     && view.is_complete();
                 if ctrl_c_completed {
-                    (true, true, false)
+                    (true, true, view.completion(), false)
                 } else {
                     view.handle_key_event(key_event);
-                    (false, view.is_complete(), view.is_in_paste_burst())
+                    (
+                        false,
+                        view.is_complete(),
+                        view.completion(),
+                        view.is_in_paste_burst(),
+                    )
                 }
             };
 
             if ctrl_c_completed {
-                self.pop_active_view();
+                self.pop_active_view_with_completion(completion);
                 if let Some(next_view) = self.view_stack.last()
                     && next_view.is_in_paste_burst()
                 {
                     self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
                 }
             } else if view_complete {
-                self.pop_active_view();
+                self.pop_active_view_with_completion(completion);
             } else if view_in_paste_burst {
                 self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
@@ -494,9 +519,10 @@ impl BottomPane {
         if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();
             let view_complete = view.is_complete();
+            let completion = view.completion();
             if matches!(event, CancellationEvent::Handled) {
                 if view_complete {
-                    self.pop_active_view();
+                    self.pop_active_view_with_completion(completion);
                 }
                 self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
                 self.request_redraw();
@@ -839,6 +865,14 @@ impl BottomPane {
             .last()
             .filter(|view| view.view_id() == Some(view_id))
             .and_then(|view| view.selected_index())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn active_tab_id_for_active_view(&self, view_id: &'static str) -> Option<&str> {
+        self.view_stack
+            .last()
+            .filter(|view| view.view_id() == Some(view_id))
+            .and_then(|view| view.active_tab_id())
     }
 
     /// Update the pending-input preview shown above the composer.

@@ -16,13 +16,13 @@ chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-async-utils = { workspace = true }
 codex-execpolicy = { workspace = true }
-codex-git-utils = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-image = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-template = { workspace = true }
 encoding_rs = { workspace = true }
+globset = { workspace = true }
 icu_decimal = { workspace = true }
 icu_locale_core = { workspace = true }
 icu_provider = { workspace = true, features = ["sync"] }

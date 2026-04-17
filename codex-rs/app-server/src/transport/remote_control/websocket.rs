@@ -933,6 +933,13 @@ mod tests {
     use tokio::time::timeout;
     use tokio_tungstenite::accept_async;
 
+    // Windows Bazel CI can take longer than a few seconds for the websocket
+    // client connection attempt to reach the local test listener.
+    #[cfg(windows)]
+    const TEST_HTTP_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
+    #[cfg(not(windows))]
+    const TEST_HTTP_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
+
     async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime> {
         StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string())
             .await
@@ -1489,7 +1496,7 @@ mod tests {
     }
 
     async fn accept_http_request(listener: &TcpListener) -> (TcpStream, String) {
-        let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
+        let (stream, _) = timeout(TEST_HTTP_ACCEPT_TIMEOUT, listener.accept())
             .await
             .expect("HTTP request should arrive in time")
             .expect("listener accept should succeed");

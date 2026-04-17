@@ -238,6 +238,7 @@ async fn remove_legacy_db_files(
             return;
         }
     };
+    let mut legacy_paths = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
         if !entry
             .file_type()
@@ -253,7 +254,14 @@ async fn remove_legacy_db_files(
             continue;
         }
 
-        let legacy_path = entry.path();
+        legacy_paths.push(entry.path());
+    }
+
+    // On Windows, SQLite can keep the main database file undeletable until the
+    // matching `-wal` / `-shm` sidecars are removed. Remove the longest
+    // sidecar-style paths first so the main file is attempted last.
+    legacy_paths.sort_by_key(|path| std::cmp::Reverse(path.as_os_str().len()));
+    for legacy_path in legacy_paths {
         if let Err(err) = tokio::fs::remove_file(&legacy_path).await {
             warn!(
                 "failed to remove legacy {db_label} db file {}: {err}",

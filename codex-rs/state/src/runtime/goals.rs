@@ -226,6 +226,14 @@ WHERE thread_id = ?
                 "status IN ('active', 'paused', 'budget_limited')"
             }
         };
+        let budget_limit_status_filter = match mode {
+            ThreadGoalAccountingMode::ActiveOnly | ThreadGoalAccountingMode::ActiveOrComplete => {
+                "status = 'active'"
+            }
+            ThreadGoalAccountingMode::ActiveOrStopped => {
+                "status IN ('active', 'paused', 'budget_limited')"
+            }
+        };
         let query = format!(
             r#"
 UPDATE thread_goals
@@ -233,7 +241,7 @@ SET
     time_used_seconds = time_used_seconds + ?,
     tokens_used = tokens_used + ?,
     status = CASE
-        WHEN status = 'active' AND token_budget IS NOT NULL AND tokens_used + ? >= token_budget
+        WHEN {budget_limit_status_filter} AND token_budget IS NOT NULL AND tokens_used + ? >= token_budget
             THEN ?
         ELSE status
     END,
@@ -507,6 +515,48 @@ mod tests {
         assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
         assert_eq!(20, goal.tokens_used);
         assert_eq!(10, goal.time_used_seconds);
+    }
+
+    #[tokio::test]
+    async fn stopped_usage_accounting_promotes_paused_goal_over_budget() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+        runtime
+            .replace_thread_goal(
+                thread_id,
+                "stop before overrun",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(20),
+            )
+            .await
+            .expect("goal replacement should succeed");
+        runtime
+            .update_thread_goal(
+                thread_id,
+                crate::ThreadGoalUpdate {
+                    status: Some(crate::ThreadGoalStatus::Paused),
+                    token_budget: None,
+                },
+            )
+            .await
+            .expect("goal update should succeed");
+
+        let outcome = runtime
+            .account_thread_goal_usage(
+                thread_id,
+                /*time_delta_seconds*/ 3,
+                /*token_delta*/ 25,
+                ThreadGoalAccountingMode::ActiveOrStopped,
+            )
+            .await
+            .expect("usage accounting should succeed");
+        let ThreadGoalAccountingOutcome::Updated(goal) = outcome else {
+            panic!("stopped goal should account final usage");
+        };
+        assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
+        assert_eq!(25, goal.tokens_used);
+        assert_eq!(3, goal.time_used_seconds);
     }
 
     #[tokio::test]
