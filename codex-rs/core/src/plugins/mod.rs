@@ -11,6 +11,8 @@ mod startup_sync;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
+pub use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
 pub use codex_plugin::AppConnectorId;
 pub use codex_plugin::EffectiveSkillRoots;
 pub use codex_plugin::PluginCapabilitySummary;
@@ -22,6 +24,7 @@ pub use codex_plugin::validate_plugin_segment;
 pub type LoadedPlugin = codex_plugin::LoadedPlugin<McpServerConfig>;
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<McpServerConfig>;
 
+pub(crate) use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
 pub(crate) use injection::build_plugin_injections;
 pub use installed_marketplaces::INSTALLED_MARKETPLACES_DIR;
@@ -29,6 +32,7 @@ pub use installed_marketplaces::marketplace_install_root;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;
 pub use manager::ConfiguredMarketplacePlugin;
+pub use manager::OPENAI_BUNDLED_MARKETPLACE_NAME;
 pub use manager::OPENAI_CURATED_MARKETPLACE_NAME;
 pub use manager::PluginDetail;
 pub use manager::PluginInstallError;
@@ -40,10 +44,12 @@ pub use manager::PluginRemoteSyncError;
 pub use manager::PluginUninstallError;
 pub use manager::PluginsManager;
 pub use manager::RemotePluginSyncResult;
+pub(crate) use manager::configured_plugins_from_stack;
 pub use marketplace_add::MarketplaceAddError;
 pub use marketplace_add::MarketplaceAddOutcome;
 pub use marketplace_add::MarketplaceAddRequest;
 pub use marketplace_add::add_marketplace;
+pub(crate) use marketplace_add::parse_marketplace_source;
 pub(crate) use render::render_explicit_plugin_instructions;
 pub(crate) use render::render_plugins_section;
 pub(crate) use startup_sync::curated_plugins_repo_path;

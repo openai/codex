@@ -110,6 +110,10 @@ pub fn build_tool_registry_plan(
                 &enabled_tools,
                 &namespace_descriptions,
                 config.code_mode_only_enabled,
+                config.search_tool
+                    && params
+                        .deferred_mcp_tools
+                        .is_some_and(|tools| !tools.is_empty()),
             ),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,

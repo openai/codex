@@ -418,7 +418,7 @@ fn make_mcp_tool(
 ) -> ToolInfo {
     let tool_namespace = if server_name == CODEX_APPS_MCP_SERVER_NAME {
         connector_name
-            .map(crate::connectors::sanitize_name)
+            .map(codex_connectors::metadata::sanitize_name)
             .map(|connector_name| format!("mcp__{server_name}__{connector_name}"))
             .unwrap_or_else(|| server_name.to_string())
     } else {
@@ -767,6 +767,117 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
 
     let turn_context = session.new_default_turn().await;
     assert!(turn_context.network.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn danger_full_access_tool_attempts_do_not_enforce_managed_network() -> anyhow::Result<()> {
+    #[derive(Default)]
+    struct ProbeToolRuntime {
+        enforce_managed_network: Vec<bool>,
+    }
+
+    impl crate::tools::sandboxing::Approvable<()> for ProbeToolRuntime {
+        type ApprovalKey = String;
+
+        fn approval_keys(&self, _req: &()) -> Vec<Self::ApprovalKey> {
+            vec!["probe".to_string()]
+        }
+
+        fn start_approval_async<'a>(
+            &'a mut self,
+            _req: &'a (),
+            _ctx: crate::tools::sandboxing::ApprovalCtx<'a>,
+        ) -> futures::future::BoxFuture<'a, ReviewDecision> {
+            Box::pin(async { ReviewDecision::Approved })
+        }
+    }
+
+    impl crate::tools::sandboxing::Sandboxable for ProbeToolRuntime {
+        fn sandbox_preference(&self) -> codex_sandboxing::SandboxablePreference {
+            codex_sandboxing::SandboxablePreference::Auto
+        }
+    }
+
+    impl crate::tools::sandboxing::ToolRuntime<(), ()> for ProbeToolRuntime {
+        async fn run(
+            &mut self,
+            _req: &(),
+            attempt: &crate::tools::sandboxing::SandboxAttempt<'_>,
+            _ctx: &crate::tools::sandboxing::ToolCtx,
+        ) -> Result<(), crate::tools::sandboxing::ToolError> {
+            self.enforce_managed_network
+                .push(attempt.enforce_managed_network);
+            Ok(())
+        }
+    }
+
+    let network_spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        Some(NetworkConstraints {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        &SandboxPolicy::DangerFullAccess,
+    )?;
+
+    let session = make_session_with_config(move |config| {
+        config.permissions.sandbox_policy =
+            codex_config::Constrained::allow_any(SandboxPolicy::DangerFullAccess);
+        config.permissions.network = Some(network_spec);
+
+        let layers = config
+            .config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut requirements = config.config_layer_stack.requirements().clone();
+        requirements.network = Some(Sourced::new(
+            NetworkConstraints {
+                enabled: Some(true),
+                ..Default::default()
+            },
+            RequirementSource::CloudRequirements,
+        ));
+        let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+        requirements_toml.network = Some(crate::config_loader::NetworkRequirementsToml {
+            enabled: Some(true),
+            ..Default::default()
+        });
+        config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+            .expect("rebuild config layer stack with network requirements");
+    })
+    .await?;
+
+    let turn = session.new_default_turn().await;
+    assert!(turn.network.is_none());
+
+    let mut orchestrator = crate::tools::orchestrator::ToolOrchestrator::new();
+    let mut tool = ProbeToolRuntime::default();
+    let tool_ctx = crate::tools::sandboxing::ToolCtx {
+        session: Arc::clone(&session),
+        turn: Arc::clone(&turn),
+        call_id: "probe-call".to_string(),
+        tool_name: "probe".to_string(),
+    };
+
+    orchestrator
+        .run(
+            &mut tool,
+            &(),
+            &tool_ctx,
+            turn.as_ref(),
+            AskForApproval::Never,
+        )
+        .await
+        .expect("probe runtime should succeed");
+
+    assert_eq!(tool.enforce_managed_network, vec![false]);
+
     Ok(())
 }
 
@@ -1533,6 +1644,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         approval_policy: turn_context.approval_policy.value(),
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
+        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
@@ -4138,7 +4250,7 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn fail_agent_identity_registration_emits_error_and_shutdown() {
+async fn fail_agent_identity_registration_emits_error_without_shutdown() {
     let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
 
     session
@@ -4156,21 +4268,14 @@ async fn fail_agent_identity_registration_emits_error_and_shutdown() {
         }) => {
             assert_eq!(
                 message,
-                "Agent identity registration failed. Codex cannot continue while `features.use_agent_identity` is enabled: registration exploded".to_string()
+                "Agent identity registration failed while `features.use_agent_identity` is enabled: registration exploded".to_string()
             );
             assert_eq!(codex_error_info, Some(CodexErrorInfo::Other));
         }
         other => panic!("expected error event, got {other:?}"),
     }
 
-    let shutdown_event = timeout(Duration::from_secs(1), rx_event.recv())
-        .await
-        .expect("shutdown event should arrive")
-        .expect("shutdown event should be readable");
-    match shutdown_event.msg {
-        EventMsg::ShutdownComplete => {}
-        other => panic!("expected shutdown event, got {other:?}"),
-    }
+    assert!(rx_event.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -4671,6 +4776,47 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
     );
 }
 
+fn file_system_policy_with_unreadable_glob(turn_context: &TurnContext) -> FileSystemSandboxPolicy {
+    let mut policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        turn_context.sandbox_policy.get(),
+        &turn_context.cwd,
+    );
+    policy.entries.push(FileSystemSandboxEntry {
+        path: FileSystemPath::GlobPattern {
+            pattern: format!("{}/**/*.env", turn_context.cwd.as_path().display()),
+        },
+        access: FileSystemAccessMode::None,
+    });
+    policy
+}
+
+#[tokio::test]
+async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    turn_context.file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+        turn_context.sandbox_policy.get(),
+        &turn_context.cwd,
+    );
+
+    let item = turn_context.to_turn_context_item();
+
+    assert_eq!(item.file_system_sandbox_policy, None);
+}
+
+#[tokio::test]
+async fn turn_context_item_stores_split_file_system_sandbox_policy_when_different() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+    let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
+    turn_context.file_system_sandbox_policy = file_system_sandbox_policy.clone();
+
+    let item = turn_context.to_turn_context_item();
+
+    assert_eq!(
+        item.file_system_sandbox_policy,
+        Some(file_system_sandbox_policy)
+    );
+}
+
 #[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_injects_full_context_when_baseline_missing()
  {
@@ -4806,6 +4952,56 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
             .expect("serialize persisted turn context item"),
         serde_json::to_value(Some(turn_context.to_turn_context_item()))
             .expect("serialize expected turn context item")
+    );
+}
+
+#[tokio::test]
+async fn record_context_updates_and_set_reference_context_item_persists_split_file_system_policy_to_rollout()
+ {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let file_system_sandbox_policy = file_system_policy_with_unreadable_glob(&turn_context);
+    turn_context.file_system_sandbox_policy = file_system_sandbox_policy.clone();
+    let config = session.get_config().await;
+    let recorder = RolloutRecorder::new(
+        config.as_ref(),
+        RolloutRecorderParams::new(
+            ThreadId::default(),
+            /*forked_from_id*/ None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        /*state_db_ctx*/ None,
+        /*state_builder*/ None,
+    )
+    .await
+    .expect("create rollout recorder");
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    {
+        let mut rollout = session.services.rollout.lock().await;
+        *rollout = Some(recorder);
+    }
+
+    session
+        .record_context_updates_and_set_reference_context_item(&turn_context)
+        .await;
+    session.ensure_rollout_materialized().await;
+    session.flush_rollout().await.expect("rollout should flush");
+
+    let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
+        .await
+        .expect("read rollout history")
+    else {
+        panic!("expected resumed rollout history");
+    };
+    let persisted_file_system_sandbox_policy = resumed.history.iter().find_map(|item| match item {
+        RolloutItem::TurnContext(ctx) => ctx.file_system_sandbox_policy.clone(),
+        _ => None,
+    });
+    assert_eq!(
+        persisted_file_system_sandbox_policy,
+        Some(file_system_sandbox_policy)
     );
 }
 

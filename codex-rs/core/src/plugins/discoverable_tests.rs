@@ -1,6 +1,7 @@
 use super::*;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::test_support::load_plugins_config;
+use crate::plugins::test_support::write_curated_plugin;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
@@ -38,6 +39,115 @@ async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plug
             app_connector_ids: vec!["connector_calendar".to_string()],
         }]
     );
+}
+
+#[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_deduplicates_allowlisted_configured_plugin() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let plugin_id = TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST
+        .iter()
+        .copied()
+        .find(|plugin_id| {
+            plugin_id
+                .rsplit_once('@')
+                .is_some_and(|(_plugin_name, marketplace_name)| {
+                    marketplace_name == OPENAI_BUNDLED_MARKETPLACE_NAME
+                })
+        })
+        .expect("allowlist should include a bundled plugin");
+    let (plugin_name, marketplace_name) = plugin_id
+        .rsplit_once('@')
+        .expect("plugin id should include a marketplace");
+    let marketplace_root = codex_home
+        .path()
+        .join(format!(".tmp/marketplaces/{marketplace_name}"));
+    write_file(
+        &marketplace_root.join(".agents/plugins/marketplace.json"),
+        &format!(
+            r#"{{
+  "name": "{marketplace_name}",
+  "plugins": [
+    {{"name": "{plugin_name}", "source": {{"source": "local", "path": "./plugins/{plugin_name}"}}}}
+  ]
+}}
+"#
+        ),
+    );
+    write_curated_plugin(&marketplace_root, plugin_name);
+    write_file(
+        &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        &format!(
+            r#"[features]
+plugins = true
+
+[marketplaces.{marketplace_name}]
+source_type = "git"
+source = "/tmp/{marketplace_name}"
+
+[tool_suggest]
+discoverables = [{{ type = "plugin", id = "{plugin_id}" }}]
+"#
+        ),
+    );
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
+
+    assert_eq!(discoverable_plugins.len(), 1);
+    assert_eq!(discoverable_plugins[0].id, plugin_id);
+}
+
+#[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_ignores_missing_allowlisted_plugin() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+    let marketplace_name = TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST
+        .iter()
+        .copied()
+        .filter_map(|plugin_id| plugin_id.rsplit_once('@'))
+        .find(|(_plugin_name, marketplace_name)| {
+            *marketplace_name == OPENAI_BUNDLED_MARKETPLACE_NAME
+        })
+        .map(|(_plugin_name, marketplace_name)| marketplace_name)
+        .expect("allowlist should include a bundled plugin");
+    let marketplace_root = codex_home
+        .path()
+        .join(format!(".tmp/marketplaces/{marketplace_name}"));
+    write_file(
+        &marketplace_root.join(".agents/plugins/marketplace.json"),
+        &format!(
+            r#"{{
+  "name": "{marketplace_name}",
+  "plugins": [
+    {{"name": "sample", "source": {{"source": "local", "path": "./plugins/sample"}}}}
+  ]
+}}
+"#
+        ),
+    );
+    write_file(
+        &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        &format!(
+            r#"[features]
+plugins = true
+
+[marketplaces.{marketplace_name}]
+source_type = "git"
+source = "/tmp/{marketplace_name}"
+"#
+        ),
+    );
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .await
+        .unwrap();
+
+    assert_eq!(discoverable_plugins.len(), 1);
+    assert_eq!(discoverable_plugins[0].id, "slack@openai-curated");
 }
 
 #[tokio::test]

@@ -59,6 +59,7 @@ struct RetainedOutputChunk {
 struct RunningProcess {
     session: ExecCommandSession,
     tty: bool,
+    pipe_stdin: bool,
     output: VecDeque<RetainedOutputChunk>,
     retained_bytes: usize,
     next_seq: u64,
@@ -165,6 +166,15 @@ impl LocalProcess {
                 TerminalSize::default(),
             )
             .await
+        } else if params.pipe_stdin {
+            codex_utils_pty::spawn_pipe_process(
+                program,
+                args,
+                params.cwd.as_path(),
+                &env,
+                &params.arg0,
+            )
+            .await
         } else {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
@@ -195,6 +205,7 @@ impl LocalProcess {
                 ProcessEntry::Running(Box::new(RunningProcess {
                     session: spawned.session,
                     tty: params.tty,
+                    pipe_stdin: params.pipe_stdin,
                     output: VecDeque::new(),
                     retained_bytes: 0,
                     next_seq: 1,
@@ -339,7 +350,7 @@ impl LocalProcess {
                     status: WriteStatus::Starting,
                 });
             };
-            if !process.tty {
+            if !process.tty && !process.pipe_stdin {
                 return Ok(WriteResponse {
                     status: WriteStatus::StdinClosed,
                 });
@@ -667,6 +678,7 @@ mod tests {
             env_policy: None,
             env,
             tty: false,
+            pipe_stdin: false,
             arg0: None,
         }
     }
