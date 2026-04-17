@@ -275,7 +275,6 @@ jobs:
               "${bazel_wrapper_args[@]}" \
               -- \
               test \
-              --nobuild \
               --test_verbose_timeout_warnings \
               "${bazel_common_args[@]}" \
               -- \
