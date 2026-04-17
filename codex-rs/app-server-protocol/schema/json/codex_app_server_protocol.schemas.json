@@ -7,6 +7,15 @@
     },
     "AdditionalFileSystemPermissions": {
       "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/v2/FileSystemSandboxEntry"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "read": {
           "items": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
