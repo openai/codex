@@ -1115,6 +1115,10 @@ async fn enter_before_standalone_user_shell_turn_started_queues_follow_up() {
     assert!(chat.pending_steers.is_empty());
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
+    chat.maybe_send_next_queued_input();
+    assert_eq!(chat.queued_user_message_texts(), vec!["hi"]);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
     chat.handle_server_notification(
         ServerNotification::TurnStarted(TurnStartedNotification {
             thread_id: "thread-1".to_string(),
@@ -1157,6 +1161,41 @@ async fn enter_before_standalone_user_shell_turn_started_queues_follow_up() {
         ),
         other => panic!("expected queued follow-up submit, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn bang_after_user_turn_submit_before_turn_started_does_not_mark_standalone() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane
+        .set_composer_text("start work".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match op_rx.try_recv() {
+        Ok(Op::UserTurn { items, .. }) => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "start work".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected UserTurn op, got {other:?}"),
+    }
+    match op_rx.try_recv() {
+        Ok(Op::AddToHistory { text }) => assert_eq!(text, "start work"),
+        other => panic!("expected AddToHistory op, got {other:?}"),
+    }
+
+    chat.bottom_pane
+        .set_composer_text("!sleep 10".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "sleep 10"),
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
+    }
+    assert!(!chat.pending_standalone_user_shell_command);
 }
 
 #[tokio::test]

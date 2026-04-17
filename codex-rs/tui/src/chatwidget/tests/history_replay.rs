@@ -800,6 +800,32 @@ async fn replayed_in_progress_turn_marks_task_running() {
 }
 
 #[tokio::test]
+async fn replayed_in_progress_turn_consumes_pending_standalone_shell_marker() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.pending_standalone_user_shell_command = true;
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "shell-turn".to_string(),
+            items: Vec::new(),
+            status: AppServerTurnStatus::InProgress,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    assert!(!chat.pending_standalone_user_shell_command);
+    assert_eq!(
+        chat.standalone_user_shell_turn_id.as_deref(),
+        Some("shell-turn")
+    );
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_status_header("Idle".to_string());

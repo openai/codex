@@ -887,6 +887,8 @@ pub(crate) struct ChatWidget {
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message item.
     pending_steers: VecDeque<PendingSteer>,
+    // Set after submitting a new turn before the matching TurnStarted arrives.
+    pending_turn_start_after_submit: bool,
     // Set after submitting a standalone `!` command while no model turn is
     // running. The following TurnStarted is the user shell turn.
     pending_standalone_user_shell_command: bool,
@@ -1076,6 +1078,7 @@ pub(crate) struct ThreadInputState {
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
     agent_turn_running: bool,
+    pending_turn_start_after_submit: bool,
     pending_standalone_user_shell_command: bool,
     standalone_user_shell_turn_id: Option<String>,
 }
@@ -2360,6 +2363,7 @@ impl ChatWidget {
     }
 
     fn note_turn_started(&mut self, turn_id: &str) {
+        self.pending_turn_start_after_submit = false;
         if self.pending_standalone_user_shell_command {
             self.pending_standalone_user_shell_command = false;
             self.standalone_user_shell_turn_id = Some(turn_id.to_string());
@@ -2377,7 +2381,7 @@ impl ChatWidget {
         }
     }
 
-    fn is_standalone_user_shell_turn_pending_or_running(&self) -> bool {
+    fn should_hold_user_input_for_standalone_shell_turn(&self) -> bool {
         self.pending_standalone_user_shell_command
             || (self.standalone_user_shell_turn_id.is_some() && self.bottom_pane.is_task_running())
     }
@@ -3291,6 +3295,7 @@ impl ChatWidget {
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
+            pending_turn_start_after_submit: self.pending_turn_start_after_submit,
             pending_standalone_user_shell_command: self.pending_standalone_user_shell_command,
             standalone_user_shell_turn_id: self.standalone_user_shell_turn_id.clone(),
         })
@@ -3302,6 +3307,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.pending_turn_start_after_submit = input_state.pending_turn_start_after_submit;
             self.pending_standalone_user_shell_command =
                 input_state.pending_standalone_user_shell_command;
             self.standalone_user_shell_turn_id = input_state.standalone_user_shell_turn_id;
@@ -3348,6 +3354,7 @@ impl ChatWidget {
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
             self.agent_turn_running = false;
+            self.pending_turn_start_after_submit = false;
             self.pending_standalone_user_shell_command = false;
             self.standalone_user_shell_turn_id = None;
             self.pending_steers.clear();
@@ -4963,6 +4970,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            pending_turn_start_after_submit: false,
             pending_standalone_user_shell_command: false,
             standalone_user_shell_turn_id: None,
             submit_pending_steers_after_interrupt: false,
@@ -5177,7 +5185,7 @@ impl ChatWidget {
                     }
                     let should_submit_now = self.is_session_configured()
                         && !self.is_plan_streaming_in_tui()
-                        && !self.is_standalone_user_shell_turn_pending_or_running();
+                        && !self.should_hold_user_input_for_standalone_shell_turn();
                     if should_submit_now {
                         // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -5400,7 +5408,7 @@ impl ChatWidget {
     fn queue_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured()
             || self.bottom_pane.is_task_running()
-            || self.is_standalone_user_shell_turn_pending_or_running()
+            || self.should_hold_user_input_for_standalone_shell_turn()
         {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
@@ -5454,10 +5462,13 @@ impl ChatWidget {
                 )));
                 return;
             }
-            let starts_standalone_user_shell_turn = !self.bottom_pane.is_task_running();
+            let starts_standalone_user_shell_turn = !self.bottom_pane.is_task_running()
+                && !self.pending_turn_start_after_submit
+                && !self.should_hold_user_input_for_standalone_shell_turn();
             if self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()))
                 && starts_standalone_user_shell_turn
             {
+                self.pending_turn_start_after_submit = true;
                 self.pending_standalone_user_shell_command = true;
             }
             return;
@@ -5635,6 +5646,9 @@ impl ChatWidget {
         if !self.submit_op(op) {
             return;
         }
+        if render_in_history {
+            self.pending_turn_start_after_submit = true;
+        }
 
         // Persist the text to cross-session message history. Mentions are
         // encoded into placeholder syntax so recall can reconstruct the
@@ -5743,6 +5757,9 @@ impl ChatWidget {
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
                 self.last_non_retry_error = None;
+                if self.pending_standalone_user_shell_command {
+                    self.note_turn_started(&turn_id);
+                }
                 self.on_task_started();
             }
             for item in items {
@@ -6175,7 +6192,9 @@ impl ChatWidget {
             }
             ServerNotification::TurnStarted(notification) => {
                 let turn_id = notification.turn.id;
-                self.note_turn_started(&turn_id);
+                if replay_kind.is_none() {
+                    self.note_turn_started(&turn_id);
+                }
                 self.last_turn_id = Some(turn_id);
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
@@ -6434,6 +6453,7 @@ impl ChatWidget {
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        self.pending_turn_start_after_submit = false;
         self.clear_standalone_user_shell_turn(Some(&notification.turn.id));
         match notification.turn.status {
             TurnStatus::Completed => {
@@ -6748,7 +6768,9 @@ impl ChatWidget {
             EventMsg::TurnStarted(event) => {
                 let turn_id = event.turn_id;
                 let model_context_window = event.model_context_window;
-                self.note_turn_started(&turn_id);
+                if !from_replay {
+                    self.note_turn_started(&turn_id);
+                }
                 self.last_turn_id = Some(turn_id);
                 if !is_resume_initial_replay {
                     self.apply_turn_started_context_window(model_context_window);
@@ -6760,6 +6782,7 @@ impl ChatWidget {
                 last_agent_message,
                 ..
             }) => {
+                self.pending_turn_start_after_submit = false;
                 self.clear_standalone_user_shell_turn(Some(&turn_id));
                 self.on_task_complete(last_agent_message, from_replay);
             }
@@ -6797,6 +6820,7 @@ impl ChatWidget {
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => {
+                self.pending_turn_start_after_submit = false;
                 self.clear_standalone_user_shell_turn(ev.turn_id.as_deref());
                 match ev.reason {
                     TurnAbortReason::Interrupted => {
@@ -7149,6 +7173,9 @@ impl ChatWidget {
             return;
         }
         if self.bottom_pane.is_task_running() {
+            return;
+        }
+        if self.should_hold_user_input_for_standalone_shell_turn() {
             return;
         }
         if let Some(user_message) = self.pop_next_queued_user_message() {
