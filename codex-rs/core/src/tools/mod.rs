@@ -11,6 +11,7 @@ pub(crate) mod router;
 pub(crate) mod runtimes;
 pub(crate) mod sandboxing;
 pub(crate) mod spec;
+pub(crate) mod tool_search_entry;
 
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_utils_output_truncation::TruncationPolicy;
