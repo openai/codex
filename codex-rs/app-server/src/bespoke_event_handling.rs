@@ -217,6 +217,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnComplete(turn_complete_event) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
+            respond_to_pending_interrupts(&thread_state, &outgoing, None).await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
@@ -1777,26 +1778,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnAborted(turn_aborted_event) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
-            let pending = {
-                let mut state = thread_state.lock().await;
-                std::mem::take(&mut state.pending_interrupts)
-            };
-            if !pending.is_empty() {
-                for (rid, ver) in pending {
-                    match ver {
-                        ApiVersion::V1 => {
-                            let response = InterruptConversationResponse {
-                                abort_reason: turn_aborted_event.reason.clone(),
-                            };
-                            outgoing.send_response(rid, response).await;
-                        }
-                        ApiVersion::V2 => {
-                            let response = TurnInterruptResponse {};
-                            outgoing.send_response(rid, response).await;
-                        }
-                    }
-                }
-            }
+            respond_to_pending_interrupts(
+                &thread_state,
+                &outgoing,
+                Some(turn_aborted_event.reason.clone()),
+            )
+            .await;
 
             thread_watch_manager
                 .note_turn_interrupted(&conversation_id.to_string())
@@ -2267,6 +2254,33 @@ async fn handle_thread_rollback_failed(
                 },
             )
             .await;
+    }
+}
+
+async fn respond_to_pending_interrupts(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    abort_reason: Option<codex_protocol::protocol::TurnAbortReason>,
+) {
+    let pending = {
+        let mut state = thread_state.lock().await;
+        std::mem::take(&mut state.pending_interrupts)
+    };
+
+    for (rid, ver) in pending {
+        match ver {
+            ApiVersion::V1 => {
+                let response = InterruptConversationResponse {
+                    abort_reason: abort_reason
+                        .clone()
+                        .expect("v1 interrupts only resolve from TurnAborted"),
+                };
+                outgoing.send_response(rid, response).await;
+            }
+            ApiVersion::V2 => {
+                outgoing.send_response(rid, TurnInterruptResponse {}).await;
+            }
+        }
     }
 }
 

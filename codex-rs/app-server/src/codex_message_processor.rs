@@ -7783,11 +7783,6 @@ impl CodexMessageProcessor {
     async fn turn_interrupt(&self, request_id: ConnectionRequestId, params: TurnInterruptParams) {
         let TurnInterruptParams { thread_id, turn_id } = params;
         let is_startup_interrupt = turn_id.is_empty();
-        if !is_startup_interrupt {
-            self.outgoing
-                .record_request_turn_id(&request_id, &turn_id)
-                .await;
-        }
 
         let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
@@ -7800,6 +7795,34 @@ impl CodexMessageProcessor {
         // Record turn interrupts so we can reply when TurnAborted arrives. Startup
         // interrupts do not have a turn and are acknowledged after submission.
         if !is_startup_interrupt {
+            let active_turn = {
+                let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
+                let thread_state = thread_state.lock().await;
+                thread_state.active_turn_snapshot()
+            };
+            if let Some(active_turn) = active_turn {
+                if active_turn.id != turn_id {
+                    let actual_turn_id = active_turn.id;
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("expected active turn id {turn_id} but found {actual_turn_id}",),
+                    )
+                    .await;
+                    return;
+                }
+            } else if !matches!(thread.agent_status().await, AgentStatus::Running) {
+                self.send_invalid_request_error(
+                    request_id,
+                    "no active turn to interrupt".to_string(),
+                )
+                .await;
+                return;
+            }
+
+            self.outgoing
+                .record_request_turn_id(&request_id, &turn_id)
+                .await;
+
             let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
             let mut thread_state = thread_state.lock().await;
             thread_state
