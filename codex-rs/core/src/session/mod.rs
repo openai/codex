@@ -513,7 +513,7 @@ impl Codex {
         }
 
         let user_instructions = AgentsMdManager::new(&config)
-            .user_instructions(Some(environment.as_ref()))
+            .user_instructions(environment.as_deref())
             .await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
