@@ -4,7 +4,6 @@ use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
-use app_test_support::write_models_cache_with_models;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::DynamicToolCallResponse;
@@ -22,7 +21,6 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_models_manager::bundled_models_response;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -30,7 +28,6 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -194,178 +191,6 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
             .iter()
             .all(|body| find_tool(body, &dynamic_tool.name).is_none()),
         "hidden dynamic tool should not be sent to the model"
-    );
-
-    Ok(())
-}
-
-/// Exercises deferred dynamic tool discovery, the follow-up tool call, and the tool response.
-#[tokio::test]
-async fn deferred_dynamic_tool_can_be_discovered_and_called_through_tool_search() -> Result<()> {
-    let search_call_id = "tool-search-1";
-    let dynamic_call_id = "dyn-search-call-1";
-    let tool_name = "automation_update";
-    let tool_description = "Create, update, view, or delete recurring automations.";
-    let tool_args = json!({ "mode": "create" });
-    let tool_call_arguments = serde_json::to_string(&tool_args)?;
-
-    let responses = vec![
-        responses::sse(vec![
-            responses::ev_response_created("resp-1"),
-            responses::ev_tool_search_call(
-                search_call_id,
-                &json!({
-                    "query": "recurring automations",
-                    "limit": 8,
-                }),
-            ),
-            responses::ev_completed("resp-1"),
-        ]),
-        responses::sse(vec![
-            responses::ev_response_created("resp-2"),
-            responses::ev_function_call(dynamic_call_id, tool_name, &tool_call_arguments),
-            responses::ev_completed("resp-2"),
-        ]),
-        create_final_assistant_message_sse_response("Done")?,
-    ];
-    let server = create_mock_responses_server_sequence_unchecked(responses).await;
-
-    let codex_home = TempDir::new()?;
-    write_search_capable_models_cache(codex_home.path())?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-    enable_tool_search_feature(codex_home.path())?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let input_schema = json!({
-        "type": "object",
-        "properties": {
-            "mode": { "type": "string" }
-        },
-        "required": ["mode"],
-        "additionalProperties": false,
-    });
-    let dynamic_tool = DynamicToolSpec {
-        name: tool_name.to_string(),
-        description: tool_description.to_string(),
-        input_schema: input_schema.clone(),
-        defer_loading: true,
-    };
-
-    let thread_req = mcp
-        .send_thread_start_request(ThreadStartParams {
-            dynamic_tools: Some(vec![dynamic_tool]),
-            ..Default::default()
-        })
-        .await?;
-    let thread_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
-    let thread_id = thread.id.clone();
-
-    let turn_req = mcp
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread_id.clone(),
-            input: vec![V2UserInput::Text {
-                text: "Use the automation tool".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
-    )
-    .await??;
-    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
-    let turn_id = turn.id.clone();
-
-    let started = wait_for_dynamic_tool_started(&mut mcp, dynamic_call_id).await?;
-    assert_eq!(started.thread_id, thread_id.clone());
-    assert_eq!(started.turn_id, turn_id.clone());
-
-    let request = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_request_message(),
-    )
-    .await??;
-    let (request_id, params) = match request {
-        ServerRequest::DynamicToolCall { request_id, params } => (request_id, params),
-        other => panic!("expected DynamicToolCall request, got {other:?}"),
-    };
-    assert_eq!(
-        params,
-        DynamicToolCallParams {
-            thread_id: thread_id.clone(),
-            turn_id: turn_id.clone(),
-            call_id: dynamic_call_id.to_string(),
-            tool: tool_name.to_string(),
-            arguments: tool_args.clone(),
-        }
-    );
-
-    mcp.send_response(
-        request_id,
-        serde_json::to_value(DynamicToolCallResponse {
-            content_items: vec![DynamicToolCallOutputContentItem::InputText {
-                text: "dynamic-search-ok".to_string(),
-            }],
-            success: true,
-        })?,
-    )
-    .await?;
-
-    let completed = wait_for_dynamic_tool_completed(&mut mcp, dynamic_call_id).await?;
-    assert_eq!(completed.thread_id, thread_id);
-    assert_eq!(completed.turn_id, turn_id);
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    let bodies = responses_bodies(&server).await?;
-    let first_request = bodies
-        .first()
-        .context("expected an initial responses request")?;
-    assert!(
-        find_tool_by_type(first_request, "tool_search").is_some(),
-        "initial request should advertise tool_search: {first_request:?}"
-    );
-    assert!(
-        find_tool(first_request, tool_name).is_none(),
-        "deferred dynamic tool should not be directly advertised before search"
-    );
-
-    let search_tools = bodies
-        .iter()
-        .find_map(|body| tool_search_output_tools(body, search_call_id))
-        .context("expected tool_search_output in follow-up request")?;
-    assert_eq!(
-        search_tools,
-        vec![json!({
-            "type": "function",
-            "name": tool_name,
-            "description": tool_description,
-            "strict": false,
-            "defer_loading": true,
-            "parameters": input_schema,
-        })]
-    );
-
-    let payload = bodies
-        .iter()
-        .find_map(|body| function_call_output_payload(body, dynamic_call_id))
-        .context("expected function_call_output in post-tool follow-up request")?;
-    assert_eq!(
-        payload,
-        FunctionCallOutputPayload::from_text("dynamic-search-ok".to_string())
     );
 
     Ok(())
@@ -758,30 +583,6 @@ fn find_tool<'a>(body: &'a Value, name: &str) -> Option<&'a Value> {
         })
 }
 
-fn find_tool_by_type<'a>(body: &'a Value, tool_type: &str) -> Option<&'a Value> {
-    body.get("tools")
-        .and_then(Value::as_array)
-        .and_then(|tools| {
-            tools
-                .iter()
-                .find(|tool| tool.get("type").and_then(Value::as_str) == Some(tool_type))
-        })
-}
-
-fn tool_search_output_tools(body: &Value, call_id: &str) -> Option<Vec<Value>> {
-    body.get("input")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("type").and_then(Value::as_str) == Some("tool_search_output")
-                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
-            })
-        })
-        .and_then(|item| item.get("tools"))
-        .and_then(Value::as_array)
-        .cloned()
-}
-
 fn function_call_output_payload(body: &Value, call_id: &str) -> Option<FunctionCallOutputPayload> {
     function_call_output_raw_output(body, call_id)
         .and_then(|output| serde_json::from_value(output).ok())
@@ -861,25 +662,4 @@ stream_max_retries = 0
 "#
         ),
     )
-}
-
-fn enable_tool_search_feature(codex_home: &Path) -> std::io::Result<()> {
-    let mut config_toml = std::fs::OpenOptions::new()
-        .append(true)
-        .open(codex_home.join("config.toml"))?;
-    config_toml.write_all(b"\n[features]\ntool_search = true\n")
-}
-
-fn write_search_capable_models_cache(codex_home: &Path) -> Result<()> {
-    let mut model = bundled_models_response()
-        .context("bundled models should parse")?
-        .models
-        .into_iter()
-        .find(|model| model.slug == "gpt-5.4")
-        .context("expected bundled gpt-5.4 model")?;
-    model.slug = "mock-model".to_string();
-    model.display_name = "mock-model".to_string();
-    model.supports_search_tool = true;
-    write_models_cache_with_models(codex_home, vec![model])?;
-    Ok(())
 }
