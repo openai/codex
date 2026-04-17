@@ -235,24 +235,7 @@ impl ChatWidget {
                 self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
-                let codex_home = self.config.codex_home.clone();
-                let auth_credentials_store_mode = self.config.cli_auth_credentials_store_mode;
-                let app_event_tx = self.app_event_tx.clone();
-                tokio::spawn(async move {
-                    match codex_login::logout_with_revoke(&codex_home, auth_credentials_store_mode)
-                        .await
-                    {
-                        Ok(_) => {
-                            app_event_tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
-                        }
-                        Err(e) => {
-                            tracing::error!("failed to logout: {e}");
-                            app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_error_event(format!("Logout failed: {e}")),
-                            )));
-                        }
-                    }
-                });
+                self.app_event_tx.send(AppEvent::Logout);
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));

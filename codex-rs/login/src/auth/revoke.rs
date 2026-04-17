@@ -1,3 +1,9 @@
+//! Best-effort OAuth token revocation used during logout.
+//!
+//! Managed ChatGPT auth stores OAuth tokens locally. Logout attempts to revoke the
+//! refresh token, falling back to the access token when no refresh token is
+//! available, and callers still remove local auth if the revoke request fails.
+
 use serde::Serialize;
 use std::time::Duration;
 

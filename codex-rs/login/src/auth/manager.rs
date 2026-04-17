@@ -490,18 +490,13 @@ pub async fn logout_with_revoke(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    match storage.load() {
-        Ok(auth_dot_json) => {
-            if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
-                tracing::warn!("failed to revoke auth tokens during logout: {err}");
-            }
-        }
-        Err(err) => {
-            tracing::warn!("failed to load auth before token revoke during logout: {err}");
-        }
-    }
-    logout_all_stores(codex_home, auth_credentials_store_mode)
+    AuthManager::new(
+        codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        auth_credentials_store_mode,
+    )
+    .logout_with_revoke()
+    .await
 }
 
 /// Writes an `auth.json` that contains only the API key.
@@ -1659,7 +1654,13 @@ impl AuthManager {
     }
 
     pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
-        let result = logout_with_revoke(&self.codex_home, self.auth_credentials_store_mode).await?;
+        let auth_dot_json = self
+            .auth_cached()
+            .and_then(|auth| auth.get_current_auth_json());
+        if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
+            tracing::warn!("failed to revoke auth tokens during logout: {err}");
+        }
+        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
         // Always reload to clear any cached auth (even if file absent).
         self.reload();
         Ok(result)
