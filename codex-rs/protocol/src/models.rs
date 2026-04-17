@@ -374,7 +374,7 @@ const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("prompts/permissions/approval_policy/on_request.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
     include_str!("prompts/permissions/approval_policy/on_request_rule_request_permission.md");
-const GUARDIAN_SUBAGENT_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `guardian_subagent`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
+const AUTO_REVIEW_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with `require_escalated` will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
@@ -447,7 +447,7 @@ impl DeveloperInstructions {
         let text = if approvals_reviewer == ApprovalsReviewer::GuardianSubagent
             && approval_policy != AskForApproval::Never
         {
-            format!("{text}\n\n{GUARDIAN_SUBAGENT_APPROVAL_SUFFIX}")
+            format!("{text}\n\n{AUTO_REVIEW_APPROVAL_SUFFIX}")
         } else {
             text
         };
@@ -1889,7 +1889,8 @@ mod tests {
         )
         .into_text();
 
-        assert!(text.contains("`approvals_reviewer` is `guardian_subagent`"));
+        assert!(text.contains("`approvals_reviewer` is `auto_review`"));
+        assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
         assert!(text.contains("materially safer alternative"));
     }
 
@@ -1904,6 +1905,7 @@ mod tests {
         )
         .into_text();
 
+        assert!(!text.contains("`approvals_reviewer` is `auto_review`"));
         assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
     }
 
