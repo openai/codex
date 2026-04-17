@@ -264,18 +264,11 @@ jobs:
 
             ./.github/scripts/run-bazel-ci.sh \
               --ci-config=ci-windows-cross-build \
-              -- \
-              build \
-              --build_tests_only \
-              "${bazel_common_args[@]}" \
-              -- \
-              "${bazel_windows_smoke_targets[@]}"
-
-            ./.github/scripts/run-bazel-ci.sh \
               "${bazel_wrapper_args[@]}" \
               -- \
               test \
               --jobs=8 \
+              --strategy=TestRunner=local \
               --test_verbose_timeout_warnings \
               "${bazel_common_args[@]}" \
               -- \
