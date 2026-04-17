@@ -134,6 +134,7 @@ mod tests {
         let codex_home = TempDir::new().unwrap();
         let update = MarketplaceConfigUpdate {
             last_updated: "2026-04-13T00:00:00Z",
+            last_revision: None,
             source_type: "git",
             source: "https://github.com/owner/repo.git",
             ref_name: Some("main"),
