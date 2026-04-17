@@ -106,6 +106,7 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     }
 }
 
@@ -233,6 +234,7 @@ pub(super) async fn make_chatwidget_manual(
         connectors_partial_snapshot: None,
         plugin_install_apps_needing_auth: Vec::new(),
         plugin_install_auth_flow: None,
+        plugins_active_tab_id: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
         plugins_cache: PluginsCacheState::default(),
