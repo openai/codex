@@ -2518,23 +2518,18 @@ impl ChatWidget {
     }
 
     fn queue_unacknowledged_pending_steers_for_turn(&mut self, turn_id: &str) -> bool {
-        if self
-            .pending_steers
-            .front()
-            .is_none_or(|pending| pending.turn_id.as_deref() != Some(turn_id))
-        {
-            return false;
-        }
-
         let mut queued = false;
-        while self
-            .pending_steers
-            .front()
-            .is_some_and(|pending| pending.turn_id.as_deref() == Some(turn_id))
-        {
-            if let Some(pending) = self.pending_steers.pop_front() {
+        let pending_steers = std::mem::take(&mut self.pending_steers);
+        for pending in pending_steers {
+            if pending
+                .turn_id
+                .as_deref()
+                .is_none_or(|pending_turn_id| pending_turn_id == turn_id)
+            {
                 self.rejected_steers_queue.push_back(pending.user_message);
                 queued = true;
+            } else {
+                self.pending_steers.push_back(pending);
             }
         }
         queued
@@ -6185,12 +6180,8 @@ impl ChatWidget {
             }
             ServerNotification::TurnStarted(notification) => {
                 let turn_id = notification.turn.id;
-                if from_replay {
-                    if self.restored_active_turn_id.is_none() {
-                        self.restored_active_turn_id = Some(turn_id.clone());
-                    } else if !self.replayed_turn_matches_restored_active_turn(&turn_id) {
-                        return;
-                    }
+                if from_replay && self.replayed_turn_is_stale_for_restored_input(&turn_id) {
+                    return;
                 }
                 self.last_turn_id = Some(turn_id);
                 self.last_non_retry_error = None;

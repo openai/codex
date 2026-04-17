@@ -512,6 +512,53 @@ async fn replayed_completion_does_not_retry_pending_steer() {
 }
 
 #[tokio::test]
+async fn replayed_completion_retries_matching_pending_steers_without_front_match() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.restored_active_turn_id = Some("active-turn".to_string());
+
+    let mut other_turn = pending_steer("other turn");
+    other_turn.turn_id = Some("other-turn".to_string());
+    let mut active_turn = pending_steer("active turn");
+    active_turn.turn_id = Some("active-turn".to_string());
+    chat.pending_steers.push_back(other_turn);
+    chat.pending_steers
+        .push_back(pending_steer("ownerless turn"));
+    chat.pending_steers.push_back(active_turn);
+
+    chat.handle_turn_completed_notification(
+        TurnCompletedNotification {
+            thread_id: chat.thread_id.map(|id| id.to_string()).unwrap_or_default(),
+            turn: AppServerTurn {
+                id: "active-turn".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        },
+        Some(ReplayKind::ThreadSnapshot),
+    );
+
+    let mut expected_remaining = pending_steer("other turn");
+    expected_remaining.turn_id = Some("other-turn".to_string());
+    assert_eq!(chat.pending_steers, VecDeque::from([expected_remaining]));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "ownerless turn\nactive turn".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued pending steers to submit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn replayed_in_progress_turn_is_captured_as_active_turn() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
