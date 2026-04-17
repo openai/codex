@@ -1180,28 +1180,10 @@ fn append_text_with_rebased_elements(
     }));
 }
 
-// When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
-// its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
-// the combined local_image_paths order matches the labels, even if placeholders were moved
-// in the text (e.g., [Image #2] appearing before [Image #1]).
-fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
-    let UserMessage {
-        text,
-        text_elements,
-        local_images,
-        remote_image_urls,
-        mention_bindings,
-    } = message;
-    if local_images.is_empty() {
-        return UserMessage {
-            text,
-            text_elements,
-            local_images,
-            remote_image_urls,
-            mention_bindings,
-        };
-    }
-
+fn build_placeholder_mapping(
+    local_images: Vec<LocalImageAttachment>,
+    next_label: &mut usize,
+) -> (HashMap<String, String>, Vec<LocalImageAttachment>) {
     let mut mapping: HashMap<String, String> = HashMap::new();
     let mut remapped_images = Vec::new();
     for attachment in local_images {
@@ -1212,6 +1194,17 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
             placeholder: new_placeholder,
             path: attachment.path,
         });
+    }
+    (mapping, remapped_images)
+}
+
+fn remap_placeholders_in_text(
+    text: String,
+    text_elements: Vec<TextElement>,
+    mapping: &HashMap<String, String>,
+) -> (String, Vec<TextElement>) {
+    if mapping.is_empty() {
+        return (text, text_elements);
     }
 
     let mut elements = text_elements;
@@ -1249,16 +1242,93 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         rebuilt.push_str(segment);
     }
 
-    UserMessage {
-        text: rebuilt,
-        local_images: remapped_images,
+    (rebuilt, rebuilt_elements)
+}
+
+// When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
+// its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
+// the combined local_image_paths order matches the labels, even if placeholders were moved
+// in the text (e.g., [Image #2] appearing before [Image #1]). Apply the same remapping to
+// history overrides so restored drafts and rendered transcript entries agree.
+fn remap_placeholders_for_message_and_history_record(
+    message: UserMessage,
+    history_record: UserMessageHistoryRecord,
+    next_label: &mut usize,
+) -> (UserMessage, UserMessageHistoryRecord) {
+    let UserMessage {
+        text,
+        text_elements,
+        local_images,
         remote_image_urls,
-        text_elements: rebuilt_elements,
         mention_bindings,
-    }
+    } = message;
+    let (mapping, remapped_images) = build_placeholder_mapping(local_images, next_label);
+    let (text, text_elements) = remap_placeholders_in_text(text, text_elements, &mapping);
+    let history_record = match history_record {
+        UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
+            let (text, text_elements) =
+                remap_placeholders_in_text(history.text, history.text_elements, &mapping);
+            UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+                text,
+                text_elements,
+            })
+        }
+        record => record,
+    };
+
+    (
+        UserMessage {
+            text,
+            local_images: remapped_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        },
+        history_record,
+    )
+}
+
+#[cfg(test)]
+fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
+    remap_placeholders_for_message_and_history_record(
+        message,
+        UserMessageHistoryRecord::UserMessageText,
+        next_label,
+    )
+    .0
+}
+
+fn remap_user_messages_with_history_records(
+    messages: Vec<(UserMessage, UserMessageHistoryRecord)>,
+) -> Vec<(UserMessage, UserMessageHistoryRecord)> {
+    let total_remote_images = messages
+        .iter()
+        .map(|(message, _)| message.remote_image_urls.len())
+        .sum::<usize>();
+    let mut next_image_label = total_remote_images + 1;
+    messages
+        .into_iter()
+        .map(|(message, history_record)| {
+            remap_placeholders_for_message_and_history_record(
+                message,
+                history_record,
+                &mut next_image_label,
+            )
+        })
+        .collect()
 }
 
 fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
+    let messages = remap_user_messages_with_history_records(
+        messages
+            .into_iter()
+            .map(|message| (message, UserMessageHistoryRecord::UserMessageText))
+            .collect(),
+    );
+    merge_remapped_user_messages(messages.into_iter().map(|(message, _)| message))
+}
+
+fn merge_remapped_user_messages(messages: impl IntoIterator<Item = UserMessage>) -> UserMessage {
     let mut combined = UserMessage {
         text: String::new(),
         text_elements: Vec::new(),
@@ -1266,11 +1336,6 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
         remote_image_urls: Vec::new(),
         mention_bindings: Vec::new(),
     };
-    let total_remote_images = messages
-        .iter()
-        .map(|message| message.remote_image_urls.len())
-        .sum::<usize>();
-    let mut next_image_label = total_remote_images + 1;
 
     for (idx, message) in messages.into_iter().enumerate() {
         if idx > 0 {
@@ -1282,7 +1347,7 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
             local_images,
             remote_image_urls,
             mention_bindings,
-        } = remap_placeholders_for_message(message, &mut next_image_label);
+        } = message;
         append_text_with_rebased_elements(
             &mut combined.text,
             &mut combined.text_elements,
@@ -1347,6 +1412,7 @@ fn user_message_event_for_display(
 fn merge_user_messages_with_history_record(
     messages: Vec<(UserMessage, UserMessageHistoryRecord)>,
 ) -> (UserMessage, UserMessageHistoryRecord) {
+    let messages = remap_user_messages_with_history_records(messages);
     let history_record = if messages
         .iter()
         .all(|(_, record)| *record == UserMessageHistoryRecord::UserMessageText)
@@ -1385,11 +1451,10 @@ fn merge_user_messages_with_history_record(
             text_elements: history_text_elements,
         })
     };
-    let messages = messages
-        .into_iter()
-        .map(|(message, _)| message)
-        .collect::<Vec<_>>();
-    (merge_user_messages(messages), history_record)
+    (
+        merge_remapped_user_messages(messages.into_iter().map(|(message, _)| message)),
+        history_record,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

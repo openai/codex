@@ -617,6 +617,79 @@ fn merged_history_record_preserves_raw_text_and_rebased_elements() {
     );
 }
 
+#[test]
+fn merged_history_record_remaps_override_image_placeholders() {
+    let first_placeholder = "[Image #1]";
+    let second_placeholder = "[Image #1]";
+    let first = UserMessage {
+        text: format!("first {first_placeholder}"),
+        local_images: vec![LocalImageAttachment {
+            placeholder: first_placeholder.to_string(),
+            path: PathBuf::from("/tmp/first.png"),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: vec![TextElement::new(
+            (6..16).into(),
+            Some(first_placeholder.to_string()),
+        )],
+        mention_bindings: Vec::new(),
+    };
+    let second = UserMessage {
+        text: format!("internal {second_placeholder}"),
+        local_images: vec![LocalImageAttachment {
+            placeholder: second_placeholder.to_string(),
+            path: PathBuf::from("/tmp/second.png"),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: vec![TextElement::new(
+            (9..19).into(),
+            Some(second_placeholder.to_string()),
+        )],
+        mention_bindings: Vec::new(),
+    };
+
+    let (message, history_record) = merge_user_messages_with_history_record(vec![
+        (first, UserMessageHistoryRecord::UserMessageText),
+        (
+            second,
+            UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+                text: format!("goal {second_placeholder}"),
+                text_elements: vec![TextElement::new(
+                    (5..15).into(),
+                    Some(second_placeholder.to_string()),
+                )],
+            }),
+        ),
+    ]);
+
+    assert_eq!(message.text, "first [Image #1]\ninternal [Image #2]");
+    assert_eq!(
+        message.text_elements,
+        vec![
+            TextElement::new((6..16).into(), Some("[Image #1]".to_string())),
+            TextElement::new((26..36).into(), Some("[Image #2]".to_string())),
+        ]
+    );
+    assert_eq!(
+        message
+            .local_images
+            .iter()
+            .map(|image| image.placeholder.as_str())
+            .collect::<Vec<_>>(),
+        vec!["[Image #1]", "[Image #2]"]
+    );
+    assert_eq!(
+        history_record,
+        UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+            text: "first [Image #1]\ngoal [Image #2]".to_string(),
+            text_elements: vec![
+                TextElement::new((6..16).into(), Some("[Image #1]".to_string())),
+                TextElement::new((22..32).into(), Some("[Image #2]".to_string())),
+            ],
+        })
+    );
+}
+
 #[tokio::test]
 async fn interrupted_merged_message_history_encodes_mentions_once() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
