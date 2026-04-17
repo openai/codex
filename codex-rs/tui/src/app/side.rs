@@ -165,6 +165,15 @@ impl App {
             self.chat_widget.add_error_message(message);
             return false;
         }
+        self.discard_side_thread_local(thread_id).await;
+        true
+    }
+
+    pub(super) async fn discard_closed_side_thread(&mut self, thread_id: ThreadId) {
+        self.discard_side_thread_local(thread_id).await;
+    }
+
+    async fn discard_side_thread_local(&mut self, thread_id: ThreadId) {
         self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
         self.side_threads.remove(&thread_id);
@@ -175,7 +184,6 @@ impl App {
             self.refresh_pending_thread_approvals().await;
         }
         self.sync_active_agent_label();
-        true
     }
 
     async fn interrupt_side_thread(

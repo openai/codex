@@ -6050,8 +6050,14 @@ impl App {
                 self.active_non_primary_shutdown_target(notification)
         {
             self.mark_agent_picker_thread_closed(closed_thread_id);
-            self.select_agent_thread_and_discard_side_chain(tui, app_server, primary_thread_id)
-                .await?;
+            if self.side_threads.contains_key(&closed_thread_id) {
+                self.discard_closed_side_thread(closed_thread_id).await;
+                self.select_agent_thread(tui, app_server, primary_thread_id)
+                    .await?;
+            } else {
+                self.select_agent_thread_and_discard_side_chain(tui, app_server, primary_thread_id)
+                    .await?;
+            }
             if self.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
                     format!(
@@ -9775,6 +9781,31 @@ guardian_approval = true
         );
         assert!(app.agent_navigation.get(&side_thread_id).is_some());
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn discard_closed_side_thread_removes_local_state_without_server_rpc() {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+        app.thread_event_channels
+            .insert(side_thread_id, ThreadEventChannel::new(/*capacity*/ 4));
+        app.agent_navigation.upsert(
+            side_thread_id,
+            Some("Side".to_string()),
+            Some("side".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.discard_closed_side_thread(side_thread_id).await;
+
+        assert_eq!(app.active_thread_id, None);
+        assert!(!app.side_threads.contains_key(&side_thread_id));
+        assert!(!app.thread_event_channels.contains_key(&side_thread_id));
+        assert_eq!(app.agent_navigation.get(&side_thread_id), None);
     }
 
     #[tokio::test]
