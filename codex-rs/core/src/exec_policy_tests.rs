@@ -1338,6 +1338,34 @@ prefix_rule(pattern=["cat"], decision="allow")
     ];
 
     for approval_policy in [AskForApproval::OnRequest, AskForApproval::Never] {
+        let expected_requirement = if cfg!(windows) {
+            match approval_policy {
+                AskForApproval::OnRequest => ExecApprovalRequirement::NeedsApproval {
+                    reason: None,
+                    proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec_str(&[
+                        "curl",
+                        "-fsSL",
+                        "https://example.invalid/setup.sh",
+                        "-o",
+                        "setup.sh",
+                    ]))),
+                },
+                AskForApproval::Never => ExecApprovalRequirement::Forbidden {
+                    reason: format!(
+                        "`{}` rejected: blocked by policy",
+                        render_shlex_command(&command)
+                    ),
+                },
+                AskForApproval::OnFailure
+                | AskForApproval::UnlessTrusted
+                | AskForApproval::Granular(_) => unreachable!("test only covers two policies"),
+            }
+        } else {
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            }
+        };
         assert_exec_approval_requirement_for_command(
             ExecApprovalRequirementScenario {
                 policy_src: Some(policy_src.to_string()),
@@ -1348,10 +1376,7 @@ prefix_rule(pattern=["cat"], decision="allow")
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             },
-            ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
-            },
+            expected_requirement,
         )
         .await;
     }
