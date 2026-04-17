@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use assert_cmd::prelude::*;
+use anyhow::Context as _;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -87,7 +87,7 @@ async fn run_codex_exec_linux_sandbox_smoke(
         .function_call_output(call_id)
         .get("output")
         .and_then(Value::as_str)
-        .expect("shell command output should be a string")
+        .context("shell command output should be a string")?
         .to_string();
     assert!(
         output.contains(expected_marker),
