@@ -69,6 +69,36 @@ fn guardian_review_request_includes_patch_context() {
     );
 }
 
+#[test]
+fn build_sandbox_command_preserves_minimal_apply_patch_environment() {
+    let env = ApplyPatchRuntime::minimal_env_for_apply_patch_from_vars([
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("TMP".to_string(), "/tmp".to_string()),
+        ("SECRET_TOKEN".to_string(), "nope".to_string()),
+    ]);
+
+    assert_eq!(env.get("PATH"), Some(&"/usr/bin:/bin".to_string()));
+    assert_eq!(env.get("TMP"), Some(&"/tmp".to_string()));
+    assert!(!env.contains_key("SECRET_TOKEN"));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn build_sandbox_command_preserves_windows_core_environment_case_insensitively() {
+    let env = ApplyPatchRuntime::minimal_env_for_apply_patch_from_vars([
+        ("systemroot".to_string(), "C:\\Windows".to_string()),
+        ("ComSpec".to_string(), "C:\\Windows\\System32\\cmd.exe".to_string()),
+        ("UNRELATED".to_string(), "ignored".to_string()),
+    ]);
+
+    assert_eq!(env.get("systemroot"), Some(&"C:\\Windows".to_string()));
+    assert_eq!(
+        env.get("ComSpec"),
+        Some(&"C:\\Windows\\System32\\cmd.exe".to_string())
+    );
+    assert!(!env.contains_key("UNRELATED"));
+}
+
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn build_sandbox_command_prefers_configured_codex_self_exe_for_apply_patch() {

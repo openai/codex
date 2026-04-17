@@ -95,6 +95,52 @@ impl ApplyPatchRuntime {
             .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
     }
 
+    fn minimal_env_for_apply_patch() -> HashMap<String, String> {
+        Self::minimal_env_for_apply_patch_from_vars(std::env::vars())
+    }
+
+    fn minimal_env_for_apply_patch_from_vars<I>(vars: I) -> HashMap<String, String>
+    where
+        I: IntoIterator<Item = (String, String)>,
+    {
+        const BASE_ENV_VARS: &[&str] = &[
+            "HOME", "LOGNAME", "PATH", "SHELL", "USER", "USERNAME", "TMPDIR", "TEMP", "TMP",
+        ];
+        #[cfg(target_os = "windows")]
+        const WINDOWS_ENV_VARS: &[&str] = &[
+            "APPDATA",
+            "LOCALAPPDATA",
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "CommonProgramFiles",
+            "CommonProgramFiles(x86)",
+            "SystemRoot",
+            "ComSpec",
+            "PATHEXT",
+            "HOMEDRIVE",
+            "HOMEPATH",
+        ];
+
+        vars.into_iter()
+            .filter(|(key, _)| {
+                BASE_ENV_VARS.contains(&key.as_str())
+                    || {
+                        #[cfg(target_os = "windows")]
+                        {
+                            WINDOWS_ENV_VARS
+                                .iter()
+                                .any(|allowed| allowed.eq_ignore_ascii_case(key))
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            false
+                        }
+                    }
+            })
+            .collect()
+    }
+
     fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
         SandboxCommand {
             program: exe.into_os_string(),
@@ -103,8 +149,8 @@ impl ApplyPatchRuntime {
                 req.action.patch.clone(),
             ],
             cwd: req.action.cwd.clone(),
-            // Run apply_patch with a minimal environment for determinism and to avoid leaks.
-            env: HashMap::new(),
+            // Preserve the minimal platform env needed for sandbox resolution.
+            env: Self::minimal_env_for_apply_patch(),
             additional_permissions: req.additional_permissions.clone(),
         }
     }
