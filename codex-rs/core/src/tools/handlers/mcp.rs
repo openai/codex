@@ -36,18 +36,17 @@ impl ToolHandler for McpHandler {
 
     fn post_tool_use_payload(
         &self,
-        call_id: &str,
-        tool_name: &codex_tools::ToolName,
-        payload: &ToolPayload,
+        invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Mcp { raw_arguments, .. } = payload else {
+        let ToolPayload::Mcp { raw_arguments, .. } = &invocation.payload else {
             return None;
         };
 
-        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
-            tool_name: HookToolName::new(tool_name.display()),
+            tool_name: HookToolName::new(invocation.tool_name.display()),
             tool_input: mcp_hook_tool_input(raw_arguments),
             tool_response,
         })
@@ -151,8 +150,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mcp_post_tool_use_payload_uses_model_tool_name_args_and_result() {
+    #[tokio::test]
+    async fn mcp_post_tool_use_payload_uses_model_tool_name_args_and_result() {
         let payload = ToolPayload::Mcp {
             server: "filesystem".to_string(),
             tool: "read_file".to_string(),
@@ -171,10 +170,20 @@ mod tests {
             wall_time: Duration::from_millis(42),
             original_image_detail_supported: true,
         };
-        let tool_name = codex_tools::ToolName::namespaced("mcp__filesystem__", "read_file");
+        let (session, turn) = make_session_and_context().await;
 
         assert_eq!(
-            McpHandler.post_tool_use_payload("call-mcp-post", &tool_name, &payload, &output),
+            McpHandler.post_tool_use_payload(
+                &ToolInvocation {
+                    session: session.into(),
+                    turn: turn.into(),
+                    tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                    call_id: "call-mcp-post".to_string(),
+                    tool_name: codex_tools::ToolName::namespaced("mcp__filesystem__", "read_file"),
+                    payload,
+                },
+                &output,
+            ),
             Some(PostToolUsePayload {
                 tool_name: "mcp__filesystem__read_file".to_string(),
                 tool_input: json!({ "path": "/tmp/notes.txt" }),

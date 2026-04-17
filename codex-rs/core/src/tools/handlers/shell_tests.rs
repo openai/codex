@@ -266,8 +266,8 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
     );
 }
 
-#[test]
-fn build_post_tool_use_payload_uses_tool_output_wire_value() {
+#[tokio::test]
+async fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let payload = ToolPayload::Function {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
@@ -279,10 +279,20 @@ fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let handler = ShellCommandHandler {
         backend: super::ShellCommandBackend::Classic,
     };
-    let tool_name = codex_tools::ToolName::plain("shell_command");
+    let (session, turn) = make_session_and_context().await;
 
     assert_eq!(
-        handler.post_tool_use_payload("call-42", &tool_name, &payload, &output),
+        handler.post_tool_use_payload(
+            &ToolInvocation {
+                session: session.into(),
+                turn: turn.into(),
+                tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+                call_id: "call-42".to_string(),
+                tool_name: codex_tools::ToolName::plain("shell_command"),
+                payload,
+            },
+            &output,
+        ),
         Some(crate::tools::registry::PostToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: json!({ "command": "printf shell command" }),

@@ -145,12 +145,10 @@ impl ToolHandler for UnifiedExecHandler {
 
     fn post_tool_use_payload(
         &self,
-        call_id: &str,
-        _tool_name: &codex_tools::ToolName,
-        payload: &ToolPayload,
+        invocation: &ToolInvocation,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        let ToolPayload::Function { arguments } = payload else {
+        let ToolPayload::Function { arguments } = &invocation.payload else {
             return None;
         };
 
@@ -159,7 +157,8 @@ impl ToolHandler for UnifiedExecHandler {
             return None;
         }
 
-        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        let tool_response =
+            result.post_tool_use_response(&invocation.call_id, &invocation.payload)?;
         Some(PostToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": args.cmd }),
