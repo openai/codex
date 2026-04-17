@@ -443,7 +443,7 @@ impl Session {
         self: &Arc<Self>,
         reason: TurnAbortReason,
     ) {
-        self.abort_all_tasks_without_goal_accounting_inner(reason, None)
+        self.abort_all_tasks_without_goal_accounting_inner(reason, /*current_turn_id*/ None)
             .await;
     }
 
@@ -655,9 +655,12 @@ impl Session {
         }
         if should_clear_active_turn {
             let session = Arc::clone(self);
-            tokio::spawn(async move {
+            let scheduler = tokio::spawn(async move {
                 idle_pending_work_scheduler(session).await;
             });
+            if let Err(err) = scheduler.await {
+                warn!("goal continuation scheduler failed after turn completion: {err}");
+            }
         }
     }
 
