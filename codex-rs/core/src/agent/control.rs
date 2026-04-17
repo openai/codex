@@ -4,11 +4,11 @@ use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
-use crate::codex::emit_subagent_session_started;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
 use crate::rollout::RolloutRecorder;
+use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
@@ -276,7 +276,7 @@ impl AgentControl {
                         parent_thread_id = %parent_thread_id,
                         "skipping subagent thread analytics: failed to load parent thread metadata"
                     );
-                    crate::codex::AppServerClientMetadata {
+                    crate::session::session::AppServerClientMetadata {
                         client_name: None,
                         client_version: None,
                     }

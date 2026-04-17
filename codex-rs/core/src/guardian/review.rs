@@ -13,8 +13,8 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;

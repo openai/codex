@@ -416,17 +416,18 @@ task_outcome: success
 mod phase2 {
     use crate::ThreadManager;
     use crate::agent::AgentControl;
-    use crate::codex::Session;
-    use crate::codex::make_session_and_context;
     use crate::config::Config;
     use crate::config::test_config;
     use crate::memories::memory_root;
     use crate::memories::phase2;
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
+    use crate::session::session::Session;
+    use crate::session::tests::make_session_and_context;
     use chrono::Duration as ChronoDuration;
     use chrono::Utc;
     use codex_config::Constrained;
+    use codex_features::Feature;
     use codex_login::CodexAuth;
     use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
@@ -441,7 +442,6 @@ mod phase2 {
     use codex_state::ThreadMetadataBuilder;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::time::Duration;
     use tempfile::TempDir;
 
     fn stage1_output_with_source_updated_at(source_updated_at: i64) -> Stage1Output {
@@ -684,6 +684,7 @@ mod phase2 {
             .expect("get consolidation thread");
         let config_snapshot = subagent.config_snapshot().await;
         pretty_assertions::assert_eq!(config_snapshot.approval_policy, AskForApproval::Never);
+        assert!(config_snapshot.ephemeral);
         pretty_assertions::assert_eq!(
             config_snapshot.cwd.as_path(),
             memory_root(&harness.config.codex_home).as_path()
@@ -748,46 +749,28 @@ mod phase2 {
             NetworkSandboxPolicy::Restricted,
             "consolidation subagent split network policy should preserve no-network sandboxing"
         );
-        subagent.codex.session.ensure_rollout_materialized().await;
-        subagent
-            .codex
-            .session
-            .flush_rollout()
-            .await
-            .expect("subagent rollout should flush");
-        let rollout_path = subagent
-            .rollout_path()
-            .expect("consolidation thread should have a rollout path");
-        codex_rollout::state_db::read_repair_rollout_path(
-            Some(harness.state_db.as_ref()),
-            Some(thread_id),
-            Some(/*archived_only*/ false),
-            rollout_path.as_path(),
-        )
-        .await;
-        let metadata = harness
+        assert!(
+            !turn_context.features.enabled(Feature::MemoryTool),
+            "consolidation subagent should have the memories feature disabled"
+        );
+        assert!(
+            !turn_context.config.memories.generate_memories,
+            "consolidation subagent should not generate memories"
+        );
+        assert!(
+            !turn_context.config.memories.use_memories,
+            "consolidation subagent should not read memories"
+        );
+        assert!(
+            subagent.rollout_path().is_none(),
+            "ephemeral consolidation thread should not materialize a rollout"
+        );
+        let memory_mode = harness
             .state_db
-            .get_thread(thread_id)
+            .get_thread_memory_mode(thread_id)
             .await
-            .expect("read consolidation thread metadata")
-            .expect("consolidation thread metadata should exist");
-        pretty_assertions::assert_eq!(metadata.agent_path.as_deref(), Some(AgentPath::MORPHEUS));
-        let memory_mode = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let memory_mode = harness
-                    .state_db
-                    .get_thread_memory_mode(thread_id)
-                    .await
-                    .expect("read consolidation thread memory mode");
-                if memory_mode.is_some() {
-                    break memory_mode;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("timed out waiting for consolidation thread memory mode to persist");
-        pretty_assertions::assert_eq!(memory_mode.as_deref(), Some("disabled"));
+            .expect("read consolidation thread memory mode");
+        pretty_assertions::assert_eq!(memory_mode, None);
 
         harness.shutdown_threads().await;
     }
