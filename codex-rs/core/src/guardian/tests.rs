@@ -16,6 +16,7 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::test_support;
 use codex_config::config_toml::ConfigToml;
+use codex_exec_server::LOCAL_FS;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -1740,6 +1741,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
     )
     .expect("config layer stack");
     let parent_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
         ConfigToml::default(),
         ConfigOverrides {
             cwd: Some(workspace.path().to_path_buf()),
@@ -1776,6 +1778,7 @@ async fn guardian_review_session_config_uses_default_guardian_policy_without_req
         ConfigLayerStack::new(Vec::new(), Default::default(), Default::default())
             .expect("config layer stack");
     let parent_config = Config::load_config_with_layer_stack(
+        LOCAL_FS.as_ref(),
         ConfigToml::default(),
         ConfigOverrides {
             cwd: Some(workspace.path().to_path_buf()),
