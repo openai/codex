@@ -273,7 +273,7 @@ impl ExternalAgentConfigService {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
-                    "Import {} to {}",
+                    "Migrate {} to {}",
                     source_agents_md.display(),
                     target_agents_md.display()
                 ),
@@ -357,7 +357,7 @@ impl ExternalAgentConfigService {
 
         Some(ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: format!("Import enabled plugins from {}", source_settings.display()),
+            description: format!("Migrate enabled plugins from {}", source_settings.display()),
             cwd,
             details: Some(plugin_details),
         })

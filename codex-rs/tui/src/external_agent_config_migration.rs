@@ -98,19 +98,18 @@ pub(crate) async fn run_external_agent_config_migration_prompt(
     selected_items: &[ExternalAgentConfigMigrationItem],
     error: Option<&str>,
 ) -> ExternalAgentConfigMigrationOutcome {
-    let alt = AltScreenGuard::enter(tui);
     let mut screen = ExternalAgentConfigMigrationScreen::new(
-        alt.tui.frame_requester(),
+        tui.frame_requester(),
         items,
         selected_items,
         error.map(str::to_owned),
     );
 
-    let _ = alt.tui.draw(u16::MAX, |frame| {
+    let _ = tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
     });
 
-    let events = alt.tui.event_stream();
+    let events = tui.event_stream();
     tokio::pin!(events);
 
     while !screen.is_done() {
@@ -119,7 +118,7 @@ pub(crate) async fn run_external_agent_config_migration_prompt(
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
                 TuiEvent::Draw => {
-                    let _ = alt.tui.draw(u16::MAX, |frame| {
+                    let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&screen, frame.area());
                     });
                 }
@@ -704,23 +703,6 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
             " for all/none".dim(),
         ])
         .render(footer_area, buf);
-    }
-}
-
-struct AltScreenGuard<'a> {
-    tui: &'a mut Tui,
-}
-
-impl<'a> AltScreenGuard<'a> {
-    fn enter(tui: &'a mut Tui) -> Self {
-        let _ = tui.enter_alt_screen();
-        Self { tui }
-    }
-}
-
-impl Drop for AltScreenGuard<'_> {
-    fn drop(&mut self) {
-        let _ = self.tui.leave_alt_screen();
     }
 }
 

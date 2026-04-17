@@ -3779,6 +3779,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        entered_trust_nux: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
@@ -3803,6 +3804,7 @@ impl App {
                 &mut config,
                 &cli_kv_overrides,
                 &harness_overrides,
+                entered_trust_nux,
             )
             .await?;
         let external_agent_config_migration_message = match external_agent_config_migration_outcome

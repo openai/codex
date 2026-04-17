@@ -25,6 +25,13 @@ pub(crate) enum ExternalAgentConfigMigrationStartupOutcome {
     ExitRequested,
 }
 
+fn should_show_external_agent_config_migration_prompt(
+    config: &Config,
+    entered_trust_nux: bool,
+) -> bool {
+    entered_trust_nux && config.features.enabled(Feature::ExternalMigration)
+}
+
 fn external_config_migration_project_key(path: &Path) -> String {
     path.display().to_string()
 }
@@ -241,8 +248,9 @@ pub(crate) async fn handle_external_agent_config_migration_prompt_if_needed(
     config: &mut Config,
     cli_kv_overrides: &[(String, TomlValue)],
     harness_overrides: &ConfigOverrides,
+    entered_trust_nux: bool,
 ) -> Result<ExternalAgentConfigMigrationStartupOutcome> {
-    if !config.features.enabled(Feature::ExternalMigration) {
+    if !should_show_external_agent_config_migration_prompt(config, entered_trust_nux) {
         return Ok(ExternalAgentConfigMigrationStartupOutcome::Continue {
             success_message: None,
         });
@@ -537,5 +545,23 @@ mod tests {
             }]);
 
         assert_eq!(message, "External config migration completed successfully.");
+    }
+
+    #[tokio::test]
+    async fn external_agent_config_migration_prompt_requires_trust_nux_entry() {
+        let codex_home = tempdir().expect("temp codex home");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        let _ = config.features.enable(Feature::ExternalMigration);
+
+        assert!(!should_show_external_agent_config_migration_prompt(
+            &config, /*entered_trust_nux*/ false,
+        ));
+        assert!(should_show_external_agent_config_migration_prompt(
+            &config, /*entered_trust_nux*/ true,
+        ));
     }
 }
