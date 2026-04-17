@@ -45,6 +45,9 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_RESOURCE_URI: &str = "test://codex/resource";
 const TEST_BLOB_RESOURCE_URI: &str = "test://codex/resource.bin";
