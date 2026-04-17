@@ -1120,6 +1120,7 @@ async fn active_goal_suppresses_agent_turn_complete_notification() {
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
                 thread_id: "thread-1".to_string(),
+                turn_id: None,
                 goal: codex_app_server_protocol::ThreadGoal {
                     thread_id: "thread-1".to_string(),
                     objective: "finish the benchmark".to_string(),

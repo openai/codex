@@ -1233,6 +1233,7 @@ async fn status_line_goal_active_token_budget_footer_snapshot() {
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
                 thread_id: "thread-1".to_string(),
+                turn_id: None,
                 goal: test_thread_goal(
                     codex_app_server_protocol::ThreadGoalStatus::Active,
                     /*token_budget*/ Some(50_000),
@@ -1269,6 +1270,7 @@ async fn status_line_goal_complete_elapsed_footer_snapshot() {
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
                 thread_id: "thread-1".to_string(),
+                turn_id: None,
                 goal: test_thread_goal(
                     codex_app_server_protocol::ThreadGoalStatus::Complete,
                     /*token_budget*/ None,
@@ -1299,6 +1301,7 @@ async fn session_configured_clears_goal_status_footer() {
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
                 thread_id: "thread-1".to_string(),
+                turn_id: None,
                 goal: test_thread_goal(
                     codex_app_server_protocol::ThreadGoalStatus::Active,
                     /*token_budget*/ Some(50_000),

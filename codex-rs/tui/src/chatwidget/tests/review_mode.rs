@@ -1246,6 +1246,7 @@ async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot
         codex_app_server_protocol::ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
                 thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
                 goal: codex_app_server_protocol::ThreadGoal {
                     thread_id: "thread-1".to_string(),
                     objective: "Run until the token budget is limited".to_string(),

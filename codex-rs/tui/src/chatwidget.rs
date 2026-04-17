@@ -6504,7 +6504,7 @@ impl ChatWidget {
                 }
             }
             ServerNotification::ThreadGoalUpdated(notification) => {
-                self.on_thread_goal_updated(notification.goal);
+                self.on_thread_goal_updated(notification.goal, notification.turn_id);
             }
             ServerNotification::TurnStarted(notification) => {
                 self.last_turn_id = Some(notification.turn.id);
@@ -7046,23 +7046,26 @@ impl ChatWidget {
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::ThreadGoalUpdated(event) => {
                 let goal = event.goal;
-                self.on_thread_goal_updated(AppThreadGoal {
-                    thread_id: goal.thread_id.to_string(),
-                    objective: goal.objective,
-                    status: match goal.status {
-                        ProtocolThreadGoalStatus::Active => AppThreadGoalStatus::Active,
-                        ProtocolThreadGoalStatus::Paused => AppThreadGoalStatus::Paused,
-                        ProtocolThreadGoalStatus::BudgetLimited => {
-                            AppThreadGoalStatus::BudgetLimited
-                        }
-                        ProtocolThreadGoalStatus::Complete => AppThreadGoalStatus::Complete,
+                self.on_thread_goal_updated(
+                    AppThreadGoal {
+                        thread_id: goal.thread_id.to_string(),
+                        objective: goal.objective,
+                        status: match goal.status {
+                            ProtocolThreadGoalStatus::Active => AppThreadGoalStatus::Active,
+                            ProtocolThreadGoalStatus::Paused => AppThreadGoalStatus::Paused,
+                            ProtocolThreadGoalStatus::BudgetLimited => {
+                                AppThreadGoalStatus::BudgetLimited
+                            }
+                            ProtocolThreadGoalStatus::Complete => AppThreadGoalStatus::Complete,
+                        },
+                        token_budget: goal.token_budget,
+                        tokens_used: goal.tokens_used,
+                        time_used_seconds: goal.time_used_seconds,
+                        created_at: goal.created_at,
+                        updated_at: goal.updated_at,
                     },
-                    token_budget: goal.token_budget,
-                    tokens_used: goal.tokens_used,
-                    time_used_seconds: goal.time_used_seconds,
-                    created_at: goal.created_at,
-                    updated_at: goal.updated_at,
-                });
+                    event.turn_id,
+                );
             }
             // NOTE: All three AgentMessage arms feed `record_agent_markdown` even
             // when the message is otherwise not rendered (thread-snapshot replay,
@@ -10098,7 +10101,7 @@ impl ChatWidget {
                 .is_some_and(GoalStatusState::is_active)
     }
 
-    fn on_thread_goal_updated(&mut self, goal: AppThreadGoal) {
+    fn on_thread_goal_updated(&mut self, goal: AppThreadGoal, turn_id: Option<String>) {
         if !self.config.features.enabled(Feature::GoalMode) {
             self.current_goal_status_indicator = None;
             self.current_goal_status = None;
@@ -10106,10 +10109,9 @@ impl ChatWidget {
             return;
         }
         if goal.status == AppThreadGoalStatus::BudgetLimited
-            && self.agent_turn_running
-            && let Some(turn_id) = &self.last_turn_id
+            && let Some(turn_id) = turn_id
         {
-            self.budget_limited_turn_ids.insert(turn_id.clone());
+            self.budget_limited_turn_ids.insert(turn_id);
         }
         self.current_goal_status = Some(GoalStatusState::new(goal, Instant::now()));
         self.update_collaboration_mode_indicator();

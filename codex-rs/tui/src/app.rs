@@ -4586,14 +4586,13 @@ impl App {
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
+                    if let Err(err) = self.shutdown_current_thread(app_server).await {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to stop current thread: {err}"));
+                        return Ok(AppRunControl::Continue);
+                    }
                     match app_server.fork_thread(self.config.clone(), thread_id).await {
                         Ok(forked) => {
-                            if let Err(err) = self.shutdown_current_thread(app_server).await {
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to stop current thread: {err}"
-                                ));
-                                return Ok(AppRunControl::Continue);
-                            }
                             match self
                                 .replace_chat_widget_with_app_server_thread(tui, app_server, forked)
                                 .await
