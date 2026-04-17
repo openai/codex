@@ -3059,14 +3059,42 @@ impl CodexMessageProcessor {
                 self.send_invalid_request_error(request_id, message).await;
                 return;
             }
-            state_db
-                .replace_thread_goal(
-                    thread_id,
-                    objective,
-                    status.unwrap_or(codex_state::ThreadGoalStatus::Active),
-                    params.token_budget.flatten(),
-                )
-                .await
+            match state_db.get_thread_goal(thread_id).await {
+                Ok(goal) => {
+                    let same_nonterminal_goal = goal.as_ref().is_some_and(|goal| {
+                        goal.objective == objective
+                            && goal.status != codex_state::ThreadGoalStatus::Complete
+                    });
+                    if same_nonterminal_goal {
+                        state_db
+                            .update_thread_goal(
+                                thread_id,
+                                codex_state::ThreadGoalUpdate {
+                                    status: status.or(Some(codex_state::ThreadGoalStatus::Active)),
+                                    token_budget: params.token_budget,
+                                },
+                            )
+                            .await
+                            .and_then(|goal| {
+                                goal.ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "cannot update goal for thread {thread_id}: no goal exists"
+                                    )
+                                })
+                            })
+                    } else {
+                        state_db
+                            .replace_thread_goal(
+                                thread_id,
+                                objective,
+                                status.unwrap_or(codex_state::ThreadGoalStatus::Active),
+                                params.token_budget.flatten(),
+                            )
+                            .await
+                    }
+                }
+                Err(err) => Err(err),
+            }
         } else {
             if let Some(token_budget) = params.token_budget
                 && let Err(message) = validate_goal_budget(token_budget)
