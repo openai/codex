@@ -21,6 +21,8 @@ const SERVER_VERSION: &str = "1.0.0";
 const SEARCHABLE_TOOL_COUNT: usize = 100;
 pub const CALENDAR_CREATE_EVENT_RESOURCE_URI: &str =
     "connector://calendar/tools/calendar_create_event";
+pub const CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI: &str =
+    "ui://widget/calendar-create-event.html";
 const CALENDAR_LIST_EVENTS_RESOURCE_URI: &str = "connector://calendar/tools/calendar_list_events";
 pub const DOCUMENT_EXTRACT_TEXT_RESOURCE_URI: &str =
     "connector://calendar/tools/calendar_extract_text";
@@ -206,6 +208,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                                     "connector_id": CONNECTOR_ID,
                                     "connector_name": self.connector_name.clone(),
                                     "connector_description": self.connector_description.clone(),
+                                    "openai/outputTemplate": CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI,
                                     "_codex_apps": {
                                         "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
                                         "contains_mcp_source": true,

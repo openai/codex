@@ -80,6 +80,11 @@ pub enum ResponseEvent {
         token_usage: Option<TokenUsage>,
     },
     OutputTextDelta(String),
+    ToolCallInputDelta {
+        item_id: String,
+        call_id: Option<String>,
+        delta: String,
+    },
     ReasoningSummaryDelta {
         delta: String,
         summary_index: i64,

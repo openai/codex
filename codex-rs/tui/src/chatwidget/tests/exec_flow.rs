@@ -11,7 +11,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         approval_id: Some("call-short".into()),
         turn_id: "turn-short".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
@@ -53,8 +53,8 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
 #[test]
 fn app_server_exec_approval_request_splits_shell_wrapped_command() {
     let script = r#"python3 -c 'print("Hello, world!")'"#;
-    let request =
-        exec_approval_request_from_params(AppServerCommandExecutionRequestApprovalParams {
+    let request = exec_approval_request_from_params(
+        AppServerCommandExecutionRequestApprovalParams {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),
@@ -65,13 +65,15 @@ fn app_server_exec_approval_request_splits_shell_wrapped_command() {
                 shlex::try_join(["/bin/zsh", "-lc", script])
                     .expect("round-trippable shell wrapper"),
             ),
-            cwd: Some(PathBuf::from("/tmp")),
+            cwd: Some(test_path_buf("/tmp").abs()),
             command_actions: None,
             additional_permissions: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             available_decisions: None,
-        });
+        },
+        &test_path_buf("/tmp").abs(),
+    );
 
     assert_eq!(
         request.command,
@@ -94,7 +96,7 @@ async fn exec_approval_uses_approval_id_when_present() {
             approval_id: Some("approval-subcommand".into()),
             turn_id: "turn-short".into(),
             command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            cwd: AbsolutePathBuf::current_dir().expect("current dir"),
             reason: Some(
                 "this is a test reason such as one that would be produced by the model".into(),
             ),
@@ -135,7 +137,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         approval_id: Some("call-multi".into()),
         turn_id: "turn-multi".into(),
         command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
@@ -192,7 +194,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         approval_id: Some("call-long".into()),
         turn_id: "turn-long".into(),
         command: vec!["bash".into(), "-lc".into(), long],
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: None,
         network_approval_context: None,
         proposed_execpolicy_amendment: None,
@@ -355,7 +357,7 @@ async fn exec_end_without_begin_uses_event_command() {
         "echo orphaned".to_string(),
     ];
     let parsed_cmd = codex_shell_command::parse_command::parse_command(&command);
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
     chat.handle_codex_event(Event {
         id: "call-orphan".to_string(),
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
@@ -872,7 +874,7 @@ async fn view_image_tool_call_adds_history_cell() {
         id: "sub-image".into(),
         msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
             call_id: "call-image".into(),
-            path: image_path.to_path_buf(),
+            path: image_path,
         }),
     });
 
@@ -893,13 +895,17 @@ async fn image_generation_call_adds_history_cell() {
             status: "completed".into(),
             revised_prompt: Some("A tiny blue square".into()),
             result: "Zm9v".into(),
-            saved_path: Some("file:///tmp/ig-1.png".into()),
+            saved_path: Some(test_path_buf("/tmp/ig-1.png").abs()),
         }),
     });
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected a single history cell");
-    let combined = lines_to_single_string(&cells[0]);
+    let platform_file_url = url::Url::from_file_path(test_path_buf("/tmp/ig-1.png"))
+        .expect("test path should convert to file URL")
+        .to_string();
+    let combined =
+        lines_to_single_string(&cells[0]).replace(&platform_file_url, "file:///tmp/ig-1.png");
     assert_chatwidget_snapshot!("image_generation_call_history_snapshot", combined);
 }
 
@@ -995,7 +1001,7 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        cwd: PathBuf::from("/home/user/project"),
+        cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -1060,7 +1066,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         approval_id: Some("call-approve-cmd".into()),
         turn_id: "turn-approve-cmd".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: Some(
             "this is a test reason such as one that would be produced by the model".into(),
         ),
@@ -1123,7 +1129,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         approval_id: Some("call-approve-cmd-noreason".into()),
         turn_id: "turn-approve-cmd-noreason".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: None,
         network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
@@ -1175,7 +1181,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         approval_id: Some("call-approve-cmd-multiline-trunc".into()),
         turn_id: "turn-approve-cmd-multiline-trunc".into(),
         command: command.clone(),
-        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        cwd: AbsolutePathBuf::current_dir().expect("current dir"),
         reason: None,
         network_approval_context: None,
         proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),

@@ -16,6 +16,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::overlay_network_domain_permissions;
+use codex_exec_server::LOCAL_FS;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxyConfig;
@@ -25,8 +26,8 @@ use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
 use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -46,6 +47,7 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     let cli_overrides = Vec::new();
     let overrides = LoaderOverrides::default();
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         /*cwd*/ None,
         &cli_overrides,
@@ -86,17 +88,12 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
         .iter()
         .filter_map(|layer| {
             let path = match &layer.name {
-                ConfigLayerSource::System { file } => Some(file.as_path().to_path_buf()),
-                ConfigLayerSource::User { file } => Some(file.as_path().to_path_buf()),
-                ConfigLayerSource::Project { dot_codex_folder } => Some(
-                    dot_codex_folder
-                        .join(CONFIG_TOML_FILE)
-                        .as_path()
-                        .to_path_buf(),
-                ),
-                ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
-                    Some(file.as_path().to_path_buf())
+                ConfigLayerSource::System { file } => Some(file.clone()),
+                ConfigLayerSource::User { file } => Some(file.clone()),
+                ConfigLayerSource::Project { dot_codex_folder } => {
+                    Some(dot_codex_folder.join(CONFIG_TOML_FILE))
                 }
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.clone()),
                 _ => None,
             };
             path.map(LayerMtime::new)
@@ -265,12 +262,12 @@ fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
 
 #[derive(Clone)]
 struct LayerMtime {
-    path: PathBuf,
+    path: AbsolutePathBuf,
     mtime: Option<std::time::SystemTime>,
 }
 
 impl LayerMtime {
-    fn new(path: PathBuf) -> Self {
+    fn new(path: AbsolutePathBuf) -> Self {
         let mtime = path.metadata().and_then(|m| m.modified()).ok();
         Self { path, mtime }
     }

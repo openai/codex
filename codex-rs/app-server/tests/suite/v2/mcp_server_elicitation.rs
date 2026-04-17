@@ -66,8 +66,9 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CONNECTOR_ID: &str = "calendar";
 const CONNECTOR_NAME: &str = "Calendar";
+const TOOL_NAMESPACE: &str = "mcp__codex_apps__calendar";
+const CALLABLE_TOOL_NAME: &str = "_confirm_action";
 const TOOL_NAME: &str = "calendar_confirm_action";
-const QUALIFIED_TOOL_NAME: &str = "mcp__codex_apps__calendar_confirm_action";
 const TOOL_CALL_ID: &str = "call-calendar-confirm";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
 
@@ -85,9 +86,10 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
             ]),
             responses::sse(vec![
                 responses::ev_response_created("resp-1"),
-                responses::ev_function_call(
+                responses::ev_function_call_with_namespace(
                     TOOL_CALL_ID,
-                    QUALIFIED_TOOL_NAME,
+                    TOOL_NAMESPACE,
+                    CALLABLE_TOOL_NAME,
                     &tool_call_arguments,
                 ),
                 responses::ev_completed("resp-1"),

@@ -21,6 +21,7 @@ use codex_config::types::ShellEnvironmentPolicy;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -96,7 +97,11 @@ async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
     tokio::fs::create_dir_all(&turn.config.codex_home)
         .await
         .expect("codex home should be created");
-    let role_config_path = turn.config.codex_home.join("fork-context-role.toml");
+    let role_config_path = turn
+        .config
+        .codex_home
+        .as_path()
+        .join("fork-context-role.toml");
     tokio::fs::write(
         &role_config_path,
         r#"model = "gpt-5-role-override"
@@ -349,10 +354,10 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let mut config = (*turn.config).clone();
-    let provider =
+    let provider_info =
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["ollama"].clone();
     config.model_provider_id = "ollama".to_string();
-    config.model_provider = provider.clone();
+    config.model_provider = provider_info.clone();
     config
         .permissions
         .approval_policy
@@ -361,7 +366,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
-    turn.provider = provider;
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
     turn.config = Arc::new(config);
 
     let invocation = invocation(
@@ -1488,24 +1493,25 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandlerV2
-        .handle(invocation(
-            session.clone(),
-            turn.clone(),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "boot worker",
-                "task_name": "worker"
-            })),
-        ))
-        .await
-        .expect("spawn worker");
+    let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
     let agent_id = session
         .services
         .agent_control
-        .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
+        .spawn_agent_with_metadata(
+            (*turn.config).clone(),
+            Op::CleanBackgroundTerminals,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: Some(worker_path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
         .await
-        .expect("worker should resolve");
+        .expect("worker spawn should succeed")
+        .thread_id;
     let thread = manager
         .get_thread(agent_id)
         .await
@@ -1562,7 +1568,7 @@ async fn multi_agent_v2_followup_task_interrupts_busy_child_without_losing_messa
         &thread,
         &InterAgentCommunication::new(
             AgentPath::root(),
-            AgentPath::try_from("/root/worker").expect("agent path"),
+            worker_path,
             Vec::new(),
             "continue".to_string(),
             /*trigger_turn*/ true,
@@ -3500,7 +3506,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     let mut expected = (*turn.config).clone();
     expected.base_instructions = Some(base_instructions.text);
     expected.model = Some(turn.model_info.slug.clone());
-    expected.model_provider = turn.provider.clone();
+    expected.model_provider = turn.provider.info().clone();
     expected.model_reasoning_effort = turn.reasoning_effort;
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
@@ -3554,7 +3560,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     let mut expected = (*turn.config).clone();
     expected.base_instructions = None;
     expected.model = Some(turn.model_info.slug.clone());
-    expected.model_provider = turn.provider.clone();
+    expected.model_provider = turn.provider.info().clone();
     expected.model_reasoning_effort = turn.reasoning_effort;
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();

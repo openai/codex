@@ -5,8 +5,13 @@ use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::Constrained;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
@@ -38,6 +43,8 @@ use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use tokio::time::Duration;
+
+const UNIFIED_EXEC_LAGGED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn extract_output_text(item: &Value) -> Option<&str> {
     item.get("output").and_then(|value| match value {
@@ -384,7 +391,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     assert_command(&begin_event.command, "-lc", "/bin/echo hello unified exec");
 
-    assert_eq!(begin_event.cwd, cwd);
+    assert_eq!(begin_event.cwd.as_path(), cwd.as_path());
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -449,7 +456,8 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
     .await;
 
     assert_eq!(
-        begin_event.cwd, workdir,
+        begin_event.cwd.as_path(),
+        workdir.as_path(),
         "exec_command cwd should resolve relative workdir against turn cwd",
     );
 
@@ -511,7 +519,8 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
     .await;
 
     assert_eq!(
-        begin_event.cwd, workdir,
+        begin_event.cwd.as_path(),
+        workdir.as_path(),
         "exec_command cwd should reflect the requested workdir override"
     );
 
@@ -2053,11 +2062,12 @@ PY
         SandboxPolicy::DangerFullAccess,
     )
     .await?;
-    // This is a worst case scenario for the truncate logic.
+    // This is a worst case scenario for the truncate logic, and CI can spend a
+    // while draining the lagged tail before the follow-up tool call completes.
     wait_for_event_with_timeout(
         &test.codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
-        Duration::from_secs(10),
+        UNIFIED_EXEC_LAGGED_OUTPUT_TIMEOUT,
     )
     .await;
 
@@ -2332,6 +2342,127 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let output = outputs.get(call_id).expect("missing output");
 
     assert_regex_match("hello[\r\n]+", &output.output);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let read_only_policy = SandboxPolicy::new_read_only_policy();
+    let read_only_policy_for_config = read_only_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config.permissions.sandbox_policy = Constrained::allow_any(read_only_policy_for_config);
+        let mut file_system_sandbox_policy = FileSystemSandboxPolicy::default();
+        file_system_sandbox_policy
+            .entries
+            .push(FileSystemSandboxEntry {
+                path: FileSystemPath::GlobPattern {
+                    pattern: format!("{}/**/*.env", config.cwd.as_path().display()),
+                },
+                access: FileSystemAccessMode::None,
+            });
+        config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+    });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let fixture_dir = cwd.path().join("glob-deny-read");
+    fs::create_dir_all(&fixture_dir).context("create glob deny-read fixture directory")?;
+    let denied_path = fixture_dir.join("secret.env");
+    let allowed_path = fixture_dir.join("notes.txt");
+    let secret = "unified exec glob deny-read secret";
+    let allowed = "unified exec glob deny-read allowed";
+    fs::write(&denied_path, format!("{secret}\n")).context("write denied fixture")?;
+    fs::write(&allowed_path, format!("{allowed}\n")).context("write allowed fixture")?;
+
+    let call_id = "uexec-glob-deny-read";
+    let cmd = format!(
+        "read_status=0; cat {denied_path:?} || read_status=$?; cat {allowed_path:?}; exit $read_status"
+    );
+    let args = serde_json::json!({
+        "cmd": cmd,
+        "yield_time_ms": 5_000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    let session_model = session_configured.model.clone();
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "read the fixture files".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: read_only_policy,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+
+    let outputs = collect_tool_outputs(&bodies)?;
+    let output = outputs.get(call_id).expect("missing output");
+
+    assert!(
+        output.exit_code.is_some_and(|code| code != 0),
+        "glob deny-read should surface a non-zero exit code: {output:?}"
+    );
+    assert!(
+        output.output.contains(allowed),
+        "expected allowed file contents in unified exec output: {output:?}"
+    );
+    assert!(
+        !output.output.contains(secret),
+        "denied file contents leaked into unified exec output: {output:?}"
+    );
+    let output_lower = output.output.to_lowercase();
+    let has_denial = output_lower.contains("permission denied")
+        || output_lower.contains("operation not permitted")
+        || output_lower.contains("read-only file system");
+    assert!(
+        has_denial,
+        "expected sandbox denial details in unified exec output: {output:?}"
+    );
 
     Ok(())
 }

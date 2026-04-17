@@ -410,7 +410,7 @@ pub async fn run_main_with_transport(
             cloud_requirements_loader(
                 auth_manager,
                 config.chatgpt_base_url,
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
             )
         }
         Err(err) => {
@@ -432,12 +432,14 @@ pub async fn run_main_with_transport(
         Err(err) => {
             let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
-            Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!("error loading default config after config error: {e}"),
-                )
-            })?
+            Config::load_default_with_cli_overrides(cli_kv_overrides.clone())
+                .await
+                .map_err(|e| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("error loading default config after config error: {e}"),
+                    )
+                })?
         }
     };
 
@@ -652,7 +654,7 @@ pub async fn run_main_with_transport(
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
-        let processor = MessageProcessor::new(MessageProcessorArgs {
+        let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),
@@ -667,7 +669,7 @@ pub async fn run_main_with_transport(
             auth_manager,
             rpc_transport: analytics_rpc_transport(transport),
             remote_control_handle: Some(remote_control_handle),
-        });
+        }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
@@ -769,23 +771,28 @@ pub async fn run_main_with_transport(
                                             warn!("dropping request from unknown connection: {connection_id:?}");
                                             continue;
                                         };
-                                        let was_initialized = connection_state.session.initialized;
+                                        let was_initialized =
+                                            connection_state.session.initialized();
                                         processor
                                             .process_request(
                                                 connection_id,
                                                 request,
                                                 transport,
-                                                &mut connection_state.session,
+                                                Arc::clone(&connection_state.session),
                                             )
                                             .await;
+                                        let opted_out_notification_methods_snapshot = connection_state
+                                            .session
+                                            .opted_out_notification_methods();
+                                        let experimental_api_enabled =
+                                            connection_state.session.experimental_api_enabled();
+                                        let is_initialized = connection_state.session.initialized();
                                         if let Ok(mut opted_out_notification_methods) = connection_state
                                             .outbound_opted_out_notification_methods
                                             .write()
                                         {
-                                            *opted_out_notification_methods = connection_state
-                                                .session
-                                                .opted_out_notification_methods
-                                                .clone();
+                                            *opted_out_notification_methods =
+                                                opted_out_notification_methods_snapshot;
                                         } else {
                                             warn!(
                                                 "failed to update outbound opted-out notifications"
@@ -794,10 +801,10 @@ pub async fn run_main_with_transport(
                                         connection_state
                                             .outbound_experimental_api_enabled
                                             .store(
-                                                connection_state.session.experimental_api_enabled,
+                                                experimental_api_enabled,
                                                 std::sync::atomic::Ordering::Release,
                                             );
-                                        if !was_initialized && connection_state.session.initialized {
+                                        if !was_initialized && is_initialized {
                                             processor
                                                 .send_initialize_notifications_to_connection(
                                                     connection_id,
@@ -837,12 +844,12 @@ pub async fn run_main_with_transport(
                     created = thread_created_rx.recv(), if listen_for_threads => {
                         match created {
                             Ok(thread_id) => {
-                                let initialized_connection_ids: Vec<ConnectionId> = connections
-                                    .iter()
-                                    .filter_map(|(connection_id, connection_state)| {
-                                        connection_state.session.initialized.then_some(*connection_id)
-                                    })
-                                    .collect();
+                                let mut initialized_connection_ids = Vec::new();
+                                for (connection_id, connection_state) in &connections {
+                                    if connection_state.session.initialized() {
+                                        initialized_connection_ids.push(*connection_id);
+                                    }
+                                }
                                 processor
                                     .try_attach_thread_listener(
                                         thread_id,

@@ -34,6 +34,11 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use wiremock::MockServer;
 
+// macOS and Windows Bazel CI can spend tens of seconds starting app-server
+// subprocesses or processing test RPCs under load.
+#[cfg(any(target_os = "macos", windows))]
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
+#[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Ensures dynamic tool specs are serialized into the model request payload.

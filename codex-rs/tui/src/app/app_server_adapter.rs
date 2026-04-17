@@ -12,6 +12,7 @@ should shrink and eventually disappear.
 */
 
 use super::App;
+use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
@@ -153,13 +154,17 @@ impl App {
 
     async fn handle_server_notification_event(
         &mut self,
-        _app_server_client: &AppServerSession,
+        app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
-                self.pending_app_server_requests
-                    .resolve_notification(&notification.request_id);
+                if let Some(request) = self
+                    .pending_app_server_requests
+                    .resolve_notification(&notification.request_id)
+                {
+                    self.chat_widget.dismiss_app_server_request(&request);
+                }
             }
             ServerNotification::McpServerStatusUpdated(_) => {
                 self.refresh_mcp_startup_expected_servers_from_config();
@@ -182,6 +187,19 @@ impl App {
                         Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
                     ),
                 );
+                return;
+            }
+            ServerNotification::ExternalAgentConfigImportCompleted(_) => {
+                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+                if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                    tracing::warn!(
+                        error = %err,
+                        "failed to refresh config after external agent config import"
+                    );
+                }
+                self.chat_widget.refresh_plugin_mentions();
+                self.chat_widget.submit_op(AppCommand::reload_user_config());
+                self.fetch_plugins_list(app_server_client, cwd);
                 return;
             }
             _ => {}
@@ -385,7 +403,10 @@ fn server_notification_thread_target(
         ServerNotification::ThreadRealtimeItemAdded(notification) => {
             Some(notification.thread_id.as_str())
         }
-        ServerNotification::ThreadRealtimeTranscriptUpdated(notification) => {
+        ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::ThreadRealtimeTranscriptDone(notification) => {
             Some(notification.thread_id.as_str())
         }
         ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
@@ -406,6 +427,7 @@ fn server_notification_thread_target(
         | ServerNotification::AccountUpdated(_)
         | ServerNotification::AccountRateLimitsUpdated(_)
         | ServerNotification::AppListUpdated(_)
+        | ServerNotification::ExternalAgentConfigImportCompleted(_)
         | ServerNotification::DeprecationNotice(_)
         | ServerNotification::ConfigWarning(_)
         | ServerNotification::FuzzyFileSearchSessionUpdated(_)
@@ -1058,8 +1080,9 @@ mod tests {
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
 
     #[test]
     fn bridges_completed_agent_messages_from_server_notifications() {
@@ -1157,7 +1180,7 @@ mod tests {
         let item = ThreadItem::CommandExecution {
             id: "cmd-1".to_string(),
             command: "printf 'hello world\\n'".to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             process_id: None,
             source: CommandExecutionSource::UserShell,
             status: CommandExecutionStatus::InProgress,
@@ -1188,7 +1211,7 @@ mod tests {
             begin.command,
             vec!["printf".to_string(), "hello world\\n".to_string()]
         );
-        assert_eq!(begin.cwd, PathBuf::from("/tmp"));
+        assert_eq!(begin.cwd.as_path(), test_path_buf("/tmp").as_path());
         assert_eq!(begin.source, ExecCommandSource::UserShell);
 
         let (_, delta_events) =
@@ -1213,7 +1236,7 @@ mod tests {
         let completed_item = ThreadItem::CommandExecution {
             id: "cmd-1".to_string(),
             command: "printf 'hello world\\n'".to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             process_id: None,
             source: CommandExecutionSource::UserShell,
             status: CommandExecutionStatus::Completed,
@@ -1250,7 +1273,7 @@ mod tests {
         let item = ThreadItem::CommandExecution {
             id: "cmd-1".to_string(),
             command: r#"C:\Program Files\Git\bin\bash.exe -lc "echo hi""#.to_string(),
-            cwd: PathBuf::from("C:\\repo"),
+            cwd: test_path_buf("/tmp").abs(),
             process_id: None,
             source: CommandExecutionSource::UserShell,
             status: CommandExecutionStatus::InProgress,
@@ -1286,7 +1309,7 @@ mod tests {
             updated_at: 1,
             status: ThreadStatus::Idle,
             path: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             cli_version: "test".to_string(),
             source: SessionSource::Cli.into(),
             agent_nickname: None,
@@ -1298,7 +1321,7 @@ mod tests {
                 items: vec![ThreadItem::CommandExecution {
                     id: "cmd-1".to_string(),
                     command: "printf 'hello world\\n'".to_string(),
-                    cwd: PathBuf::from("/tmp"),
+                    cwd: test_path_buf("/tmp").abs(),
                     process_id: None,
                     source: CommandExecutionSource::UserShell,
                     status: CommandExecutionStatus::Completed,
@@ -1462,7 +1485,7 @@ mod tests {
                 updated_at: 0,
                 status: ThreadStatus::Idle,
                 path: None,
-                cwd: PathBuf::from("/tmp/project"),
+                cwd: test_path_buf("/tmp/project").abs(),
                 cli_version: "test".to_string(),
                 source: SessionSource::Cli.into(),
                 agent_nickname: None,

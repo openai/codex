@@ -45,6 +45,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
@@ -234,7 +235,7 @@ impl ThreadManager {
             .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(/*base_url*/ None));
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
-            codex_home.clone(),
+            codex_home.to_path_buf(),
             restriction_product,
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
@@ -249,7 +250,7 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new_with_provider(
-                    codex_home,
+                    codex_home.to_path_buf(),
                     auth_manager.clone(),
                     config.model_catalog.clone(),
                     collaboration_modes_config,
@@ -303,6 +304,10 @@ impl ThreadManager {
     ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
+        let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
+            Ok(codex_home) => codex_home,
+            Err(err) => panic!("test codex_home should be absolute: {err}"),
+        };
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let restriction_product = SessionSource::Exec.restriction_product();
         let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
@@ -311,7 +316,7 @@ impl ThreadManager {
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
-            codex_home.clone(),
+            skills_codex_home,
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
@@ -358,6 +363,10 @@ impl ThreadManager {
 
     pub fn mcp_manager(&self) -> Arc<McpManager> {
         self.state.mcp_manager.clone()
+    }
+
+    pub fn environment_manager(&self) -> Arc<EnvironmentManager> {
+        self.state.environment_manager.clone()
     }
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
@@ -898,11 +907,24 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
-        let watch_registration = self.skills_watcher.register_config(
-            &config,
-            self.skills_manager.as_ref(),
-            self.plugins_manager.as_ref(),
-        );
+        let environment = self
+            .environment_manager
+            .current()
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let watch_registration = match environment.as_ref() {
+            Some(environment) if !environment.is_remote() => {
+                self.skills_watcher
+                    .register_config(
+                        &config,
+                        self.skills_manager.as_ref(),
+                        self.plugins_manager.as_ref(),
+                        Some(environment.get_filesystem()),
+                    )
+                    .await
+            }
+            Some(_) | None => crate::file_watcher::WatchRegistration::default(),
+        };
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {

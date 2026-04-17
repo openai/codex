@@ -11,6 +11,13 @@ use codex_config::types::AppConfig;
 use codex_config::types::AppToolConfig;
 use codex_config::types::AppToolsConfig;
 use codex_config::types::AppsDefaultConfig;
+use codex_connectors::filter::filter_disallowed_connectors;
+use codex_connectors::filter::filter_tool_suggest_discoverable_connectors;
+use codex_connectors::merge::merge_connectors;
+use codex_connectors::merge::plugin_connector_to_app_info;
+use codex_connectors::metadata::connector_install_url;
+use codex_connectors::metadata::connector_mention_slug;
+use codex_connectors::metadata::sanitize_name;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
@@ -138,7 +145,7 @@ fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
 
 #[test]
 fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
-    let plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
+    let plugin = plugin_connector_to_app_info("calendar".to_string());
     let accessible = google_calendar_accessible_connector(&[]);
 
     let merged = merge_connectors(vec![plugin], vec![accessible]);
@@ -281,7 +288,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
 
 #[test]
 fn merge_connectors_unions_and_dedupes_plugin_display_names() {
-    let mut plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
+    let mut plugin = plugin_connector_to_app_info("calendar".to_string());
     plugin.plugin_display_names = plugin_names(&["sample", "alpha", "sample"]);
 
     let accessible = google_calendar_accessible_connector(&["beta", "alpha"]);
@@ -1031,33 +1038,40 @@ fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
 
 #[test]
 fn filter_disallowed_connectors_allows_non_disallowed_connectors() {
-    let filtered = filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
+    let filtered =
+        filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")], "codex_cli");
     assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
 }
 
 #[test]
 fn filter_disallowed_connectors_filters_openai_prefix() {
-    let filtered = filter_disallowed_connectors(vec![
-        app("connector_openai_foo"),
-        app("connector_openai_bar"),
-        app("gamma"),
-    ]);
+    let filtered = filter_disallowed_connectors(
+        vec![
+            app("connector_openai_foo"),
+            app("connector_openai_bar"),
+            app("gamma"),
+        ],
+        "codex_cli",
+    );
     assert_eq!(filtered, vec![app("gamma")]);
 }
 
 #[test]
 fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
-    let filtered = filter_disallowed_connectors(vec![
-        app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
-        app("connector_3f8d1a79f27c4c7ba1a897ab13bf37dc"),
-        app("delta"),
-    ]);
+    let filtered = filter_disallowed_connectors(
+        vec![
+            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+            app("connector_3f8d1a79f27c4c7ba1a897ab13bf37dc"),
+            app("delta"),
+        ],
+        "codex_cli",
+    );
     assert_eq!(filtered, vec![app("delta")]);
 }
 
 #[test]
 fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
-    let filtered = filter_disallowed_connectors_for_originator(
+    let filtered = filter_disallowed_connectors(
         vec![
             app("connector_openai_foo"),
             app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
@@ -1093,7 +1107,7 @@ discoverables = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config),
+        tool_suggest_connector_ids(&config).await,
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
     );
 }
@@ -1120,6 +1134,7 @@ fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstal
             "connector_2128aebfecb84f64a069897515042a44".to_string(),
             "connector_68df038e0ba48191908c8434991bbac2".to_string(),
         ]),
+        "codex_cli",
     );
 
     assert_eq!(
@@ -1159,6 +1174,7 @@ fn filter_tool_suggest_discoverable_connectors_excludes_accessible_apps_even_whe
             "connector_2128aebfecb84f64a069897515042a44".to_string(),
             "connector_68df038e0ba48191908c8434991bbac2".to_string(),
         ]),
+        "codex_cli",
     );
 
     assert_eq!(filtered, Vec::<AppInfo>::new());

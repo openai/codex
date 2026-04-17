@@ -2838,10 +2838,12 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     ];
     let compact_mock =
         mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+    let chatgpt_base_url = format!("{}/backend-api", server.uri());
 
     let codex = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
             set_test_compact_prompt(config);
             config.model_auto_compact_token_limit = Some(300);
         })
