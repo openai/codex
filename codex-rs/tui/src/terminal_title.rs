@@ -84,9 +84,10 @@ struct SetWindowTitle(String);
 
 impl Command for SetWindowTitle {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        // xterm/ctlseqs documents OSC 0/2 title sequences with ST (ESC \) termination.
-        // Most terminals also accept BEL for compatibility, but ST is the canonical form.
-        write!(f, "\x1b]0;{}\x1b\\", self.0)
+        // Match crossterm's SetTitle command and terminate OSC 0 with BEL.
+        // Some terminal title integrations expose the ST terminator in process
+        // decorations even though they otherwise accept the title update.
+        write!(f, "\x1b]0;{}\x07", self.0)
     }
 
     #[cfg(windows)]
@@ -214,11 +215,11 @@ mod tests {
     }
 
     #[test]
-    fn writes_osc_title_with_string_terminator() {
+    fn writes_osc_title_with_bel_terminator() {
         let mut out = String::new();
         SetWindowTitle("hello".to_string())
             .write_ansi(&mut out)
             .expect("encode terminal title");
-        assert_eq!(out, "\x1b]0;hello\x1b\\");
+        assert_eq!(out, "\x1b]0;hello\x07");
     }
 }
