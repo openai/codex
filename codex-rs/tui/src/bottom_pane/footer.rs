@@ -100,7 +100,7 @@ pub(crate) enum GoalStatusIndicator {
     Active { usage: Option<String> },
     Paused,
     BudgetLimited { usage: Option<String> },
-    Complete,
+    Complete { usage: Option<String> },
 }
 
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
@@ -511,7 +511,13 @@ pub(crate) fn goal_status_indicator_line(
                 "Goal abandoned".to_string()
             }
         }
-        GoalStatusIndicator::Complete => "Goal achieved".to_string(),
+        GoalStatusIndicator::Complete { usage } => {
+            if let Some(usage) = usage {
+                format!("Goal achieved ({usage})")
+            } else {
+                "Goal achieved".to_string()
+            }
+        }
     };
 
     Some(Line::from(vec![Span::from(label).magenta()]))

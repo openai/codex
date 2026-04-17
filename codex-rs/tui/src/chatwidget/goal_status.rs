@@ -49,7 +49,13 @@ pub(super) fn goal_status_indicator_from_app_goal(
         AppThreadGoalStatus::BudgetLimited => Some(GoalStatusIndicator::BudgetLimited {
             usage: stopped_goal_budget_usage(goal.token_budget, goal.tokens_used),
         }),
-        AppThreadGoalStatus::Complete => Some(GoalStatusIndicator::Complete),
+        AppThreadGoalStatus::Complete => Some(GoalStatusIndicator::Complete {
+            usage: Some(completed_goal_usage(
+                goal.token_budget,
+                goal.tokens_used,
+                goal.time_used_seconds,
+            )),
+        }),
     }
 }
 
@@ -79,10 +85,23 @@ fn stopped_goal_budget_usage(token_budget: Option<i64>, tokens_used: i64) -> Opt
     })
 }
 
+fn completed_goal_usage(
+    token_budget: Option<i64>,
+    tokens_used: i64,
+    time_used_seconds: i64,
+) -> String {
+    if token_budget.is_some() {
+        return format!("{} tokens", format_tokens_compact(tokens_used));
+    }
+
+    format_goal_elapsed_seconds(time_used_seconds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::GoalStatusState;
     use super::active_goal_usage;
+    use super::completed_goal_usage;
     use super::stopped_goal_budget_usage;
     use crate::bottom_pane::GoalStatusIndicator;
     use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
@@ -126,6 +145,29 @@ mod tests {
         assert_eq!(
             stopped_goal_budget_usage(/*token_budget*/ None, /*tokens_used*/ 12_500),
             None
+        );
+    }
+
+    #[test]
+    fn completed_goal_usage_reports_tokens_when_budgeted() {
+        assert_eq!(
+            completed_goal_usage(
+                Some(50_000),
+                /*tokens_used*/ 40_000,
+                /*time_used_seconds*/ 120,
+            ),
+            "40K tokens".to_string()
+        );
+    }
+
+    #[test]
+    fn completed_goal_usage_reports_time_without_token_budget() {
+        assert_eq!(
+            completed_goal_usage(
+                /*token_budget*/ None, /*tokens_used*/ 40_000,
+                /*time_used_seconds*/ 36_720,
+            ),
+            "10h 12m".to_string()
         );
     }
 

@@ -1274,6 +1274,42 @@ async fn status_line_goal_active_token_budget_footer_snapshot() {
 }
 
 #[tokio::test]
+async fn status_line_goal_complete_elapsed_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
+    chat.refresh_status_line();
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                goal: test_thread_goal(
+                    codex_app_server_protocol::ThreadGoalStatus::Complete,
+                    /*token_budget*/ None,
+                    /*tokens_used*/ 40_000,
+                ),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw goal status footer");
+    assert_chatwidget_snapshot!(
+        "status_line_goal_complete_elapsed_footer",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
 async fn session_configured_clears_goal_status_footer() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
@@ -1369,7 +1405,9 @@ fn goal_status_indicator_formats_statuses_and_budgets() {
             /*token_budget*/ Some(50_000),
             /*tokens_used*/ 40_000,
         )),
-        Some(GoalStatusIndicator::Complete)
+        Some(GoalStatusIndicator::Complete {
+            usage: Some("40K tokens".to_string()),
+        })
     );
 }
 
@@ -1393,7 +1431,16 @@ fn goal_status_indicator_line_formats_goal_mode_text() {
             GoalStatusIndicator::BudgetLimited { usage: None },
             "Goal abandoned",
         ),
-        (GoalStatusIndicator::Complete, "Goal achieved"),
+        (
+            GoalStatusIndicator::Complete {
+                usage: Some("10h 12m".to_string()),
+            },
+            "Goal achieved (10h 12m)",
+        ),
+        (
+            GoalStatusIndicator::Complete { usage: None },
+            "Goal achieved",
+        ),
     ];
 
     for (indicator, expected) in cases {
