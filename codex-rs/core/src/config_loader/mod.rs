@@ -228,7 +228,7 @@ pub async fn load_config_layers_state(
     };
     layers.push(user_layer);
 
-    if let Some(cwd) = cwd.as_ref() {
+    if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
             merge_toml_values(&mut merged_so_far, &layer.config);
@@ -253,7 +253,7 @@ pub async fn load_config_layers_state(
         let project_trust_context = match project_trust_context(
             fs,
             &merged_so_far,
-            cwd,
+            &cwd,
             &project_root_markers,
             codex_home,
             &user_file,
@@ -278,7 +278,7 @@ pub async fn load_config_layers_state(
         };
         let project_layers = load_project_layers(
             fs,
-            cwd,
+            &cwd,
             &project_trust_context.project_root,
             &project_trust_context,
             codex_home,
