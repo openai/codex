@@ -54,8 +54,8 @@ fn build_js_repl_exec_output(
 }
 
 async fn emit_js_repl_exec_begin(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
     call_id: &str,
 ) {
     let emitter = ToolEmitter::shell(
@@ -69,8 +69,8 @@ async fn emit_js_repl_exec_begin(
 }
 
 async fn emit_js_repl_exec_end(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
     call_id: &str,
     output: &str,
     error: Option<&str>,

@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use std::env;
 use std::sync::Arc;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::config::Config;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
