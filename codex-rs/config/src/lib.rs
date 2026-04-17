@@ -96,6 +96,7 @@ pub use state::ConfigLayerStackOrdering;
 pub use state::LoaderOverrides;
 pub use thread_config::NoopThreadConfigLoader;
 pub use thread_config::SessionThreadConfig;
+pub use thread_config::StaticThreadConfigLoader;
 pub use thread_config::ThreadConfigContext;
 pub use thread_config::ThreadConfigLoadError;
 pub use thread_config::ThreadConfigLoadErrorCode;

@@ -3,8 +3,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_model_provider_info::ModelProviderInfo;
 use thiserror::Error;
+use toml::Value as TomlValue;
+
+use crate::ConfigLayerEntry;
 
 /// Context available to implementations when loading thread-scoped config.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -80,10 +84,50 @@ impl ThreadConfigLoadError {
 /// runtime config.
 #[async_trait]
 pub trait ThreadConfigLoader: Send + Sync {
+    /// Load source-specific typed config.
+    ///
+    /// Implementations should keep this method focused on fetching and parsing
+    /// their owned sources. Most callers should use [`Self::load_config_layers`]
+    /// so precedence and merging continue through the ordinary config layer
+    /// stack.
     async fn load(
         &self,
         context: ThreadConfigContext,
     ) -> Result<Vec<ThreadConfigSource>, ThreadConfigLoadError>;
+
+    async fn load_config_layers(
+        &self,
+        context: ThreadConfigContext,
+    ) -> Result<Vec<ConfigLayerEntry>, ThreadConfigLoadError> {
+        let sources = self.load(context).await?;
+        sources
+            .into_iter()
+            .map(thread_config_source_to_layer)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|layers| layers.into_iter().flatten().collect())
+    }
+}
+
+/// Loader backed by a static set of typed thread config sources.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StaticThreadConfigLoader {
+    sources: Vec<ThreadConfigSource>,
+}
+
+impl StaticThreadConfigLoader {
+    pub fn new(sources: Vec<ThreadConfigSource>) -> Self {
+        Self { sources }
+    }
+}
+
+#[async_trait]
+impl ThreadConfigLoader for StaticThreadConfigLoader {
+    async fn load(
+        &self,
+        _context: ThreadConfigContext,
+    ) -> Result<Vec<ThreadConfigSource>, ThreadConfigLoadError> {
+        Ok(self.sources.clone())
+    }
 }
 
 /// Loader used when no external thread config source is configured.
@@ -100,6 +144,67 @@ impl ThreadConfigLoader for NoopThreadConfigLoader {
     }
 }
 
+fn thread_config_source_to_layer(
+    source: ThreadConfigSource,
+) -> Result<Option<ConfigLayerEntry>, ThreadConfigLoadError> {
+    match source {
+        ThreadConfigSource::Session(config) => {
+            let config = session_thread_config_to_toml(config)?;
+            if is_empty_table(&config) {
+                Ok(None)
+            } else {
+                Ok(Some(ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionFlags,
+                    config,
+                )))
+            }
+        }
+        // UserThreadConfig has no TOML-backed fields yet. When it grows one,
+        // fold it into the existing user layer instead of adding another
+        // ConfigLayerSource variant.
+        ThreadConfigSource::User(_config) => Ok(None),
+    }
+}
+
+fn is_empty_table(config: &TomlValue) -> bool {
+    config.as_table().is_some_and(toml::map::Map::is_empty)
+}
+
+fn session_thread_config_to_toml(
+    config: SessionThreadConfig,
+) -> Result<TomlValue, ThreadConfigLoadError> {
+    let mut table = toml::map::Map::new();
+
+    if let Some(model_provider) = config.model_provider {
+        table.insert(
+            "model_provider".to_string(),
+            TomlValue::String(model_provider),
+        );
+    }
+
+    if !config.model_providers.is_empty() {
+        let model_providers = TomlValue::try_from(config.model_providers).map_err(|err| {
+            ThreadConfigLoadError::new(
+                ThreadConfigLoadErrorCode::Parse,
+                /*status_code*/ None,
+                format!("failed to convert session model providers to config TOML: {err}"),
+            )
+        })?;
+        table.insert("model_providers".to_string(), model_providers);
+    }
+
+    if !config.features.is_empty() {
+        let features = config
+            .features
+            .into_iter()
+            .map(|(feature, enabled)| (feature, TomlValue::Boolean(enabled)))
+            .collect();
+        table.insert("features".to_string(), TomlValue::Table(features));
+    }
+
+    Ok(TomlValue::Table(table))
+}
+
 #[cfg(test)]
 mod tests {
     use codex_model_provider_info::ModelProviderInfo;
@@ -110,30 +215,14 @@ mod tests {
 
     #[tokio::test]
     async fn loader_returns_session_and_user_sources() {
-        struct TestThreadConfigLoader;
-
-        #[async_trait]
-        impl ThreadConfigLoader for TestThreadConfigLoader {
-            async fn load(
-                &self,
-                context: ThreadConfigContext,
-            ) -> Result<Vec<ThreadConfigSource>, ThreadConfigLoadError> {
-                assert_eq!(context.thread_id.as_deref(), Some("thread-1"));
-                Ok(vec![
-                    ThreadConfigSource::Session(SessionThreadConfig {
-                        model_provider: Some("local".to_string()),
-                        model_providers: HashMap::from([(
-                            "local".to_string(),
-                            test_provider("local"),
-                        )]),
-                        features: BTreeMap::from([("plugins".to_string(), false)]),
-                    }),
-                    ThreadConfigSource::User(UserThreadConfig::default()),
-                ])
-            }
-        }
-
-        let loader = TestThreadConfigLoader;
+        let loader = StaticThreadConfigLoader::new(vec![
+            ThreadConfigSource::Session(SessionThreadConfig {
+                model_provider: Some("local".to_string()),
+                model_providers: HashMap::from([("local".to_string(), test_provider("local"))]),
+                features: BTreeMap::from([("plugins".to_string(), false)]),
+            }),
+            ThreadConfigSource::User(UserThreadConfig::default()),
+        ]);
 
         let sources = loader
             .load(ThreadConfigContext {
@@ -153,6 +242,46 @@ mod tests {
                 }),
                 ThreadConfigSource::User(UserThreadConfig::default()),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn loader_translates_sources_to_config_layers() {
+        let loader = StaticThreadConfigLoader::new(vec![
+            ThreadConfigSource::User(UserThreadConfig::default()),
+            ThreadConfigSource::Session(SessionThreadConfig {
+                model_provider: Some("local".to_string()),
+                model_providers: HashMap::from([("local".to_string(), test_provider("local"))]),
+                features: BTreeMap::from([("plugins".to_string(), false)]),
+            }),
+        ]);
+        let layers = loader
+            .load_config_layers(ThreadConfigContext {
+                cwd: Some(PathBuf::from("/tmp/project")),
+                ..Default::default()
+            })
+            .await
+            .expect("thread config layers load");
+
+        assert_eq!(
+            layers,
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                toml::toml! {
+                    model_provider = "local"
+
+                    [model_providers.local]
+                    name = "local"
+                    base_url = "http://127.0.0.1:8061/api/codex"
+                    wire_api = "responses"
+                    requires_openai_auth = false
+                    supports_websockets = true
+
+                    [features]
+                    plugins = false
+                }
+                .into()
+            )]
         );
     }
 

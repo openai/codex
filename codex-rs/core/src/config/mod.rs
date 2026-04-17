@@ -21,6 +21,8 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
+use codex_config::NoopThreadConfigLoader;
+use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -90,6 +92,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
@@ -642,13 +645,14 @@ impl AuthManagerConfig for Config {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ConfigBuilder {
     codex_home: Option<PathBuf>,
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
     cloud_requirements: CloudRequirementsLoader,
+    thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
 }
 
@@ -678,6 +682,14 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn thread_config_loader(
+        mut self,
+        thread_config_loader: Arc<dyn ThreadConfigLoader>,
+    ) -> Self {
+        self.thread_config_loader = Some(thread_config_loader);
+        self
+    }
+
     pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
         self.fallback_cwd = fallback_cwd;
         self
@@ -690,6 +702,7 @@ impl ConfigBuilder {
             harness_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader,
             fallback_cwd,
         } = self;
         let codex_home = match codex_home {
@@ -712,6 +725,9 @@ impl ConfigBuilder {
             &cli_overrides,
             loader_overrides,
             cloud_requirements,
+            thread_config_loader
+                .as_deref()
+                .unwrap_or(&NoopThreadConfigLoader),
         )
         .await?;
         let merged_toml = config_layer_stack.effective_config();
@@ -890,6 +906,7 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
         &cli_overrides,
         loader_overrides,
         CloudRequirementsLoader::default(),
+        &NoopThreadConfigLoader,
     )
     .await?;
 
@@ -1061,6 +1078,7 @@ pub async fn load_global_mcp_servers(
         &cli_overrides,
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
+        &NoopThreadConfigLoader,
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();

@@ -9,6 +9,8 @@ use crate::config_loader::layer_io::LoadedConfigLayers;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
+use codex_config::ThreadConfigContext;
+use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_exec_server::ExecutorFileSystem;
@@ -127,6 +129,7 @@ pub async fn load_config_layers_state(
     cli_overrides: &[(String, TomlValue)],
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    thread_config_loader: &dyn ThreadConfigLoader,
 ) -> io::Result<ConfigLayerStack> {
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
@@ -160,6 +163,15 @@ pub async fn load_config_layers_state(
         loaded_config_layers.clone(),
     )
     .await?;
+
+    let thread_config_context = ThreadConfigContext {
+        thread_id: None,
+        cwd: cwd.as_ref().map(AbsolutePathBuf::to_path_buf),
+    };
+    let thread_config_layers = thread_config_loader
+        .load_config_layers(thread_config_context)
+        .await
+        .map_err(io::Error::other)?;
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
 
@@ -216,7 +228,7 @@ pub async fn load_config_layers_state(
     };
     layers.push(user_layer);
 
-    if let Some(cwd) = cwd {
+    if let Some(cwd) = cwd.as_ref() {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
             merge_toml_values(&mut merged_so_far, &layer.config);
@@ -241,7 +253,7 @@ pub async fn load_config_layers_state(
         let project_trust_context = match project_trust_context(
             fs,
             &merged_so_far,
-            &cwd,
+            cwd,
             &project_root_markers,
             codex_home,
             &user_file,
@@ -266,7 +278,7 @@ pub async fn load_config_layers_state(
         };
         let project_layers = load_project_layers(
             fs,
-            &cwd,
+            cwd,
             &project_trust_context.project_root,
             &project_trust_context,
             codex_home,
@@ -281,6 +293,10 @@ pub async fn load_config_layers_state(
             ConfigLayerSource::SessionFlags,
             cli_overrides_layer,
         ));
+    }
+
+    for thread_config_layer in thread_config_layers {
+        insert_layer_by_precedence(&mut layers, thread_config_layer);
     }
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
@@ -330,6 +346,16 @@ pub async fn load_config_layers_state(
         config_requirements_toml.into_toml(),
     )?
     .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules))
+}
+
+fn insert_layer_by_precedence(layers: &mut Vec<ConfigLayerEntry>, layer: ConfigLayerEntry) {
+    match layers
+        .iter()
+        .position(|existing| existing.name.precedence() > layer.name.precedence())
+    {
+        Some(index) => layers.insert(index, layer),
+        None => layers.push(layer),
+    }
 }
 
 /// Attempts to load a config.toml file from `config_toml`.

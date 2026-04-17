@@ -213,9 +213,7 @@ use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCre
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
-use codex_config::ThreadConfigContext;
 use codex_config::ThreadConfigLoader;
-use codex_config::ThreadConfigSource;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::ForkSnapshot;
@@ -354,7 +352,6 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Error as IoError;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2529,32 +2526,11 @@ impl CodexMessageProcessor {
         request_trace: Option<W3cTraceContext>,
     ) {
         let requested_cwd = typesafe_overrides.cwd.clone();
-        let thread_config_sources = match thread_config_loader
-            .load(ThreadConfigContext {
-                thread_id: None,
-                cwd: requested_cwd.clone(),
-            })
-            .await
-        {
-            Ok(sources) => sources,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to load thread config: {err}"),
-                    data: None,
-                };
-                listener_task_context
-                    .outgoing
-                    .send_error(request_id, error)
-                    .await;
-                return;
-            }
-        };
         let mut config = match derive_config_from_params(
             &cli_overrides,
             config_overrides.clone(),
             typesafe_overrides.clone(),
-            &thread_config_sources,
+            Arc::clone(&thread_config_loader),
             &cloud_requirements,
             &listener_task_context.codex_home,
             &runtime_feature_enablement,
@@ -2636,7 +2612,7 @@ impl CodexMessageProcessor {
                 cli_overrides_for_reload,
                 config_overrides,
                 typesafe_overrides,
-                &thread_config_sources,
+                thread_config_loader,
                 &cloud_requirements,
                 &listener_task_context.codex_home,
                 &runtime_feature_enablement,
@@ -6460,6 +6436,7 @@ impl CodexMessageProcessor {
                 &cli_overrides,
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
+                self.thread_config_loader.as_ref(),
             )
             .await
             {
@@ -9380,18 +9357,16 @@ async fn sync_default_client_residency_requirement(
 ///   `typesafe_overrides` is a `ConfigOverrides` derived from the respective request object.
 ///   Because the overrides are defined explicitly in the `*Params`, this takes priority over
 ///   the more general "bag of config options" provided by `cli_overrides` and `request_overrides`.
-/// - `thread_config_sources`: typed config returned by session/user config loaders. The app-server
-///   owns source precedence and folds the supported values into the same ConfigBuilder inputs.
 async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
     request_overrides: Option<HashMap<String, serde_json::Value>>,
-    mut typesafe_overrides: ConfigOverrides,
-    thread_config_sources: &[ThreadConfigSource],
+    typesafe_overrides: ConfigOverrides,
+    thread_config_loader: Arc<dyn ThreadConfigLoader>,
     cloud_requirements: &CloudRequirementsLoader,
     codex_home: &Path,
     runtime_feature_enablement: &BTreeMap<String, bool>,
 ) -> std::io::Result<Config> {
-    let mut merged_cli_overrides = cli_overrides
+    let merged_cli_overrides = cli_overrides
         .iter()
         .cloned()
         .chain(
@@ -9401,54 +9376,17 @@ async fn derive_config_from_params(
                 .map(|(k, v)| (k, json_to_toml(v))),
         )
         .collect::<Vec<_>>();
-    apply_thread_config_sources(
-        &mut merged_cli_overrides,
-        &mut typesafe_overrides,
-        thread_config_sources,
-    )?;
 
     let mut config = codex_core::config::ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
+        .thread_config_loader(thread_config_loader)
         .build()
         .await?;
     apply_runtime_feature_enablement(&mut config, runtime_feature_enablement);
     Ok(config)
-}
-
-fn apply_thread_config_sources(
-    merged_cli_overrides: &mut Vec<(String, TomlValue)>,
-    typesafe_overrides: &mut ConfigOverrides,
-    thread_config_sources: &[ThreadConfigSource],
-) -> std::io::Result<()> {
-    for source in thread_config_sources {
-        match source {
-            ThreadConfigSource::Session(config) => {
-                for (provider_id, provider) in &config.model_providers {
-                    let value = TomlValue::try_from(provider.clone()).map_err(|err| {
-                        std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            format!(
-                                "failed to convert session model provider {provider_id:?}: {err}"
-                            ),
-                        )
-                    })?;
-                    merged_cli_overrides.push((format!("model_providers.{provider_id}"), value));
-                }
-                if let Some(model_provider) = &config.model_provider {
-                    typesafe_overrides.model_provider = Some(model_provider.clone());
-                }
-                for (feature, enabled) in &config.features {
-                    merged_cli_overrides
-                        .push((format!("features.{feature}"), TomlValue::Boolean(*enabled)));
-                }
-            }
-            ThreadConfigSource::User(_) => {}
-        }
-    }
-    Ok(())
 }
 
 async fn derive_config_for_cwd(
@@ -10321,6 +10259,8 @@ mod tests {
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_config::SessionThreadConfig;
+    use codex_config::StaticThreadConfigLoader;
+    use codex_config::ThreadConfigSource;
     use codex_model_provider_info::ModelProviderInfo;
     use codex_model_provider_info::WireApi;
     use codex_protocol::ThreadId;
@@ -10335,6 +10275,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     #[test]
@@ -10508,12 +10449,6 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: true,
         };
-        let thread_config_sources = vec![ThreadConfigSource::Session(SessionThreadConfig {
-            model_provider: Some("session".to_string()),
-            model_providers: HashMap::from([("session".to_string(), session_provider.clone())]),
-            features: BTreeMap::from([("plugins".to_string(), false)]),
-        })];
-
         let config = derive_config_from_params(
             &[],
             Some(HashMap::from([
@@ -10528,11 +10463,17 @@ mod tests {
                     }),
                 ),
             ])),
-            ConfigOverrides {
-                model_provider: Some("request".to_string()),
-                ..Default::default()
-            },
-            &thread_config_sources,
+            ConfigOverrides::default(),
+            Arc::new(StaticThreadConfigLoader::new(vec![
+                ThreadConfigSource::Session(SessionThreadConfig {
+                    model_provider: Some("session".to_string()),
+                    model_providers: HashMap::from([(
+                        "session".to_string(),
+                        session_provider.clone(),
+                    )]),
+                    features: BTreeMap::from([("plugins".to_string(), false)]),
+                }),
+            ])),
             &CloudRequirementsLoader::default(),
             temp_dir.path(),
             &BTreeMap::new(),
