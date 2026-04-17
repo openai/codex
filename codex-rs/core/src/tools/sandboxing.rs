@@ -131,6 +131,13 @@ pub(crate) struct ApprovalCtx<'a> {
     pub network_approval_context: Option<NetworkApprovalContext>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PermissionRequestPayload {
+    pub tool_name: String,
+    pub command: String,
+    pub description: Option<String>,
+}
+
 // Specifies what tool orchestrator should do with a given tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExecApprovalRequirement {
@@ -270,6 +277,12 @@ pub(crate) trait Approvable<Req> {
     /// Return `Some(_)` to specify a custom exec approval requirement, or `None`
     /// to fall back to policy-based default.
     fn exec_approval_requirement(&self, _req: &Req) -> Option<ExecApprovalRequirement> {
+        None
+    }
+
+    /// Return hook input for approval-time policy hooks when this runtime wants
+    /// hook evaluation to run before guardian or user approval.
+    fn permission_request_payload(&self, _req: &Req) -> Option<PermissionRequestPayload> {
         None
     }
 

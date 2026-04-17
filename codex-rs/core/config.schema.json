@@ -497,6 +497,9 @@
             "tool_search": {
               "type": "boolean"
             },
+            "tool_search_always_defer_mcp_tools": {
+              "type": "boolean"
+            },
             "tool_suggest": {
               "type": "boolean"
             },
@@ -2388,6 +2391,9 @@
           "type": "boolean"
         },
         "tool_search": {
+          "type": "boolean"
+        },
+        "tool_search_always_defer_mcp_tools": {
           "type": "boolean"
         },
         "tool_suggest": {

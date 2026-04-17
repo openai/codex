@@ -190,6 +190,52 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config
+                .features
+                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "list tools",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let body = mock.single_request().body_json();
+    let tools = tool_names(&body);
+    assert!(
+        tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
+        "small app tool sets should be deferred behind tool_search: {tools:?}"
+    );
+    assert!(
+        tools.iter().all(|name| !name.starts_with("mcp__")),
+        "MCP tools should not be directly exposed: {tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_search_disabled_exposes_apps_tools_directly() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

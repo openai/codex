@@ -1,0 +1,209 @@
+//! Best-effort OAuth token revocation used during logout.
+//!
+//! Managed ChatGPT auth stores OAuth tokens locally. Logout attempts to revoke the
+//! refresh token, falling back to the access token when no refresh token is
+//! available, and callers still remove local auth if the revoke request fails.
+
+use serde::Serialize;
+use std::time::Duration;
+
+use codex_app_server_protocol::AuthMode as ApiAuthMode;
+use codex_client::CodexHttpClient;
+
+use super::manager::CLIENT_ID;
+use super::manager::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use super::manager::REVOKE_TOKEN_URL;
+use super::manager::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
+use super::storage::AuthDotJson;
+use super::util::try_parse_error_message;
+use crate::default_client::create_client;
+use crate::token_data::TokenData;
+
+const REVOKE_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RevokeTokenKind {
+    Access,
+    Refresh,
+}
+
+impl RevokeTokenKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Access => "access_token",
+            Self::Refresh => "refresh_token",
+        }
+    }
+
+    fn client_id(self) -> Option<&'static str> {
+        match self {
+            Self::Access => None,
+            Self::Refresh => Some(CLIENT_ID),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct RevokeTokenRequest<'a> {
+    token: &'a str,
+    token_type_hint: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_id: Option<&'static str>,
+}
+
+pub(super) async fn revoke_auth_tokens(
+    auth_dot_json: Option<&AuthDotJson>,
+) -> Result<(), std::io::Error> {
+    let Some(tokens) = auth_dot_json.and_then(managed_chatgpt_tokens) else {
+        return Ok(());
+    };
+
+    let client = create_client();
+    let endpoint = revoke_token_endpoint();
+    if !tokens.refresh_token.is_empty() {
+        revoke_oauth_token(
+            &client,
+            endpoint.as_str(),
+            tokens.refresh_token.as_str(),
+            RevokeTokenKind::Refresh,
+            REVOKE_HTTP_TIMEOUT,
+        )
+        .await
+    } else if !tokens.access_token.is_empty() {
+        revoke_oauth_token(
+            &client,
+            endpoint.as_str(),
+            tokens.access_token.as_str(),
+            RevokeTokenKind::Access,
+            REVOKE_HTTP_TIMEOUT,
+        )
+        .await
+    } else {
+        Ok(())
+    }
+}
+
+fn managed_chatgpt_tokens(auth_dot_json: &AuthDotJson) -> Option<&TokenData> {
+    if resolved_auth_mode(auth_dot_json) == ApiAuthMode::Chatgpt {
+        auth_dot_json.tokens.as_ref()
+    } else {
+        None
+    }
+}
+
+fn resolved_auth_mode(auth_dot_json: &AuthDotJson) -> ApiAuthMode {
+    if let Some(mode) = auth_dot_json.auth_mode {
+        return mode;
+    }
+    if auth_dot_json.openai_api_key.is_some() {
+        return ApiAuthMode::ApiKey;
+    }
+    ApiAuthMode::Chatgpt
+}
+
+async fn revoke_oauth_token(
+    client: &CodexHttpClient,
+    endpoint: &str,
+    token: &str,
+    kind: RevokeTokenKind,
+    timeout: Duration,
+) -> Result<(), std::io::Error> {
+    let request = RevokeTokenRequest {
+        token,
+        token_type_hint: kind.as_str(),
+        client_id: kind.client_id(),
+    };
+
+    let response = client
+        .post(endpoint)
+        .header("Content-Type", "application/json")
+        .timeout(timeout)
+        .json(&request)
+        .send()
+        .await
+        .map_err(std::io::Error::other)?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body = response.text().await.unwrap_or_default();
+    let message = try_parse_error_message(&body);
+    Err(std::io::Error::other(format!(
+        "failed to revoke {}: {}: {}",
+        kind.as_str(),
+        status,
+        message
+    )))
+}
+
+fn revoke_token_endpoint() -> String {
+    if let Ok(endpoint) = std::env::var(REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR) {
+        return endpoint;
+    }
+
+    if let Ok(refresh_endpoint) = std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
+        && let Some(endpoint) = derive_revoke_token_endpoint(&refresh_endpoint)
+    {
+        return endpoint;
+    }
+
+    REVOKE_TOKEN_URL.to_string()
+}
+
+fn derive_revoke_token_endpoint(refresh_endpoint: &str) -> Option<String> {
+    let mut url = url::Url::parse(refresh_endpoint).ok()?;
+    url.set_path("/oauth/revoke");
+    url.set_query(None);
+    Some(url.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_test_support::skip_if_no_network;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    #[test]
+    fn derives_revoke_url_from_refresh_token_override() {
+        assert_eq!(
+            derive_revoke_token_endpoint("http://127.0.0.1:1234/oauth/token?unified=true"),
+            Some("http://127.0.0.1:1234/oauth/revoke".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_request_times_out() {
+        skip_if_no_network!();
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/revoke"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+            .mount(&server)
+            .await;
+
+        let client = CodexHttpClient::new(reqwest::Client::new());
+        let endpoint = format!("{}/oauth/revoke", server.uri());
+        let error = revoke_oauth_token(
+            &client,
+            endpoint.as_str(),
+            "refresh-token",
+            RevokeTokenKind::Refresh,
+            Duration::from_millis(20),
+        )
+        .await
+        .expect_err("stalled revoke request should time out");
+
+        let reqwest_error = error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<reqwest::Error>())
+            .expect("timeout error should preserve reqwest error");
+        assert!(reqwest_error.is_timeout());
+    }
+}
