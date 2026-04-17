@@ -3971,11 +3971,7 @@ impl App {
                     &[("source", "cli_subcommand")],
                 );
                 let forked = app_server
-                    .fork_thread(
-                        config.clone(),
-                        target_session.thread_id,
-                        /*tool_access_policy*/ None,
-                    )
+                    .fork_thread(config.clone(), target_session.thread_id)
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
@@ -4503,14 +4499,7 @@ impl App {
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
-                    match app_server
-                        .fork_thread(
-                            self.config.clone(),
-                            thread_id,
-                            /*tool_access_policy*/ None,
-                        )
-                        .await
-                    {
+                    match app_server.fork_thread(self.config.clone(), thread_id).await {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
                             match self
@@ -9564,9 +9553,12 @@ guardian_approval = true
         ));
         assert!(developer_instructions.contains("Do not continue, execute, or complete any task"));
         assert!(
-            developer_instructions.contains(
-                "MCPs, app connector tools, and dynamic external tools are not available"
-            )
+            developer_instructions
+                .contains("External tools may be available according to this thread's current")
+        );
+        assert!(
+            developer_instructions
+                .contains("Any MCP or external tool calls or outputs visible in the inherited")
         );
         assert!(developer_instructions.contains("non-mutating inspection"));
         assert!(developer_instructions.contains("Do not modify files"));
@@ -9591,8 +9583,9 @@ guardian_approval = true
         assert!(text.contains("Do not continue, execute, or complete"));
         assert!(text.contains("separate from the main thread"));
         assert!(
-            text.contains("MCPs, app connector tools, and dynamic external tools are unavailable")
+            text.contains("External tools may be available according to this thread's current")
         );
+        assert!(text.contains("Any tool calls or outputs visible before this boundary happened"));
         assert!(text.contains("Do not modify files"));
     }
 
@@ -9752,6 +9745,7 @@ guardian_approval = true
         app.active_thread_id = Some(side_thread_id);
         app.side_threads
             .insert(side_thread_id, SideThreadState { parent_thread_id });
+        app.sync_side_thread_ui();
 
         app.handle_server_notification_event(
             &app_server,

@@ -217,12 +217,6 @@ impl App {
             ServerNotificationThreadTarget::Global => {}
         }
 
-        if self.active_side_parent_thread_id().is_some()
-            && matches!(notification, ServerNotification::McpServerStatusUpdated(_))
-        {
-            return;
-        }
-
         self.chat_widget
             .handle_server_notification(notification, /*replay_kind*/ None);
     }

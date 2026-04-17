@@ -6197,6 +6197,12 @@ impl ChatWidget {
         notification: ServerNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        if self.active_side_conversation
+            && replay_kind.is_none()
+            && matches!(notification, ServerNotification::McpServerStatusUpdated(_))
+        {
+            return;
+        }
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));

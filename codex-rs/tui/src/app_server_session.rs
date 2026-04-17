@@ -68,7 +68,6 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
-use codex_app_server_protocol::ToolAccessPolicy;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -346,7 +345,6 @@ impl AppServerSession {
         &mut self,
         config: Config,
         thread_id: ThreadId,
-        tool_access_policy: Option<ToolAccessPolicy>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadForkResponse = self
@@ -358,7 +356,6 @@ impl AppServerSession {
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
-                    tool_access_policy,
                 ),
             })
             .await
@@ -972,7 +969,6 @@ fn thread_fork_params_from_config(
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
-    tool_access_policy: Option<ToolAccessPolicy>,
 ) -> ThreadForkParams {
     ThreadForkParams {
         thread_id: thread_id.to_string(),
@@ -985,7 +981,6 @@ fn thread_fork_params_from_config(
         config: config_request_overrides_from_config(&config),
         base_instructions: config.base_instructions.clone(),
         developer_instructions: config.developer_instructions.clone(),
-        tool_access_policy,
         ephemeral: config.ephemeral,
         persist_extended_history: true,
         ..ThreadForkParams::default()
@@ -1304,7 +1299,6 @@ mod tests {
             thread_id,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
-            /*tool_access_policy*/ None,
         );
 
         assert_eq!(start.cwd, None);
@@ -1339,7 +1333,6 @@ mod tests {
             thread_id,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
-            /*tool_access_policy*/ None,
         );
 
         assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));
@@ -1363,33 +1356,12 @@ mod tests {
             thread_id,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
-            /*tool_access_policy*/ None,
         );
 
         assert_eq!(params.base_instructions.as_deref(), Some("Base override."));
         assert_eq!(
             params.developer_instructions.as_deref(),
             Some("Developer override.")
-        );
-    }
-
-    #[tokio::test]
-    async fn thread_fork_params_forward_tool_access_policy() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let config = build_config(&temp_dir).await;
-        let thread_id = ThreadId::new();
-
-        let params = thread_fork_params_from_config(
-            config,
-            thread_id,
-            ThreadParamsMode::Embedded,
-            /*remote_cwd_override*/ None,
-            Some(ToolAccessPolicy::NoExternalTools),
-        );
-
-        assert_eq!(
-            params.tool_access_policy,
-            Some(ToolAccessPolicy::NoExternalTools)
         );
     }
 
