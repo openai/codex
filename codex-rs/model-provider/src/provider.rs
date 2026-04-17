@@ -112,7 +112,10 @@ mod tests {
 
     #[test]
     fn create_model_provider_builds_command_auth_manager_without_base_manager() {
-        let provider = create_model_provider(provider_info_with_command_auth(), None);
+        let provider = create_model_provider(
+            provider_info_with_command_auth(),
+            /*auth_manager*/ None,
+        );
 
         let auth_manager = provider
             .auth_manager()
