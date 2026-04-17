@@ -445,6 +445,7 @@ async fn test_goal_mode_adds_goal_tools() {
             "request_user_input",
             "apply_patch",
             "web_search",
+            "image_generation",
             "view_image",
             "spawn_agent",
             "send_input",
