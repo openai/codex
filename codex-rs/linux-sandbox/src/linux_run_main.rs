@@ -437,7 +437,7 @@ fn run_bwrap_with_proc_fallback(
         options,
     );
     apply_inner_command_argv0(&mut bwrap_args.args);
-    exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    run_bwrap_command(bwrap_args);
 }
 
 fn bwrap_network_mode(
@@ -474,7 +474,44 @@ fn build_bwrap_argv(
     crate::bwrap::BwrapArgs {
         args: argv,
         preserved_files: bwrap_args.preserved_files,
+        cleanup_mount_points: bwrap_args.cleanup_mount_points,
     }
+}
+
+fn run_bwrap_command(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
+    if bwrap_args.cleanup_mount_points.is_empty() {
+        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    }
+    run_bwrap_in_child_then_cleanup(bwrap_args)
+}
+
+fn run_bwrap_in_child_then_cleanup(bwrap_args: crate::bwrap::BwrapArgs) -> ! {
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("failed to fork for bubblewrap: {err}");
+    }
+
+    if pid == 0 {
+        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    }
+
+    let mut status: libc::c_int = 0;
+    let wait_res = unsafe { libc::waitpid(pid, &mut status as *mut libc::c_int, 0) };
+    if wait_res < 0 {
+        let err = std::io::Error::last_os_error();
+        panic!("waitpid failed for bubblewrap child: {err}");
+    }
+
+    cleanup_bwrap_mount_points(&bwrap_args.cleanup_mount_points);
+
+    if libc::WIFEXITED(status) {
+        unsafe { libc::_exit(libc::WEXITSTATUS(status)) };
+    }
+    if libc::WIFSIGNALED(status) {
+        unsafe { libc::_exit(128 + libc::WTERMSIG(status)) };
+    }
+    unsafe { libc::_exit(1) };
 }
 
 fn apply_inner_command_argv0(argv: &mut Vec<String>) {
@@ -529,8 +566,8 @@ fn preflight_proc_mount_support(
         file_system_sandbox_policy,
         network_mode,
     );
-    let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
-    !is_proc_mount_failure(stderr.as_str())
+    let output = run_bwrap_in_child_capture_stderr(preflight_argv);
+    !should_disable_proc_mount_after_preflight(output.status, output.stderr.as_str())
 }
 
 fn build_preflight_bwrap_argv(
@@ -573,7 +610,13 @@ fn resolve_true_command() -> String {
 /// - We capture stderr from that preflight to match known mount-failure text.
 ///   We do not stream it because this is a one-shot probe with a trivial
 ///   command, and reads are bounded to a fixed max size.
-fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> String {
+#[derive(Debug)]
+struct BwrapChildOutput {
+    stderr: String,
+    status: libc::c_int,
+}
+
+fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> BwrapChildOutput {
     const MAX_PREFLIGHT_STDERR_BYTES: u64 = 64 * 1024;
 
     let mut pipe_fds = [0; 2];
@@ -623,7 +666,42 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
         panic!("waitpid failed for bubblewrap child: {err}");
     }
 
-    String::from_utf8_lossy(&stderr_bytes).into_owned()
+    cleanup_bwrap_mount_points(&bwrap_args.cleanup_mount_points);
+
+    BwrapChildOutput {
+        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+        status,
+    }
+}
+
+fn should_disable_proc_mount_after_preflight(_status: libc::c_int, stderr: &str) -> bool {
+    is_proc_mount_failure(stderr)
+}
+
+fn cleanup_bwrap_mount_points(mount_points: &[PathBuf]) {
+    for mount_point in mount_points {
+        remove_bwrap_mount_point_if_safe(mount_point);
+    }
+}
+
+fn remove_bwrap_mount_point_if_safe(mount_point: &Path) {
+    let Ok(metadata) = std::fs::symlink_metadata(mount_point) else {
+        return;
+    };
+
+    if metadata.file_type().is_file() && metadata.len() == 0 {
+        let _ = std::fs::remove_file(mount_point);
+        return;
+    }
+
+    if metadata.file_type().is_dir() {
+        let Ok(mut entries) = std::fs::read_dir(mount_point) else {
+            return;
+        };
+        if entries.next().is_none() {
+            let _ = std::fs::remove_dir(mount_point);
+        }
+    }
 }
 
 /// Close an owned file descriptor and panic with context on failure.
