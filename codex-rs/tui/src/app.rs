@@ -139,6 +139,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use ratatui::backend::Backend;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -146,6 +147,7 @@ use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -3469,11 +3471,26 @@ impl App {
         self.overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
+        tui.clear_pending_history_lines();
         self.has_emitted_history_lines = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
-        tui.terminal.clear_scrollback()?;
-        tui.terminal.clear()?;
+        Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
+        Ok(())
+    }
+
+    fn clear_terminal_for_thread_switch<B>(
+        terminal: &mut crate::custom_terminal::Terminal<B>,
+    ) -> Result<()>
+    where
+        B: Backend + Write,
+    {
+        terminal.clear_scrollback_and_visible_screen_ansi()?;
+        let mut area = terminal.viewport_area;
+        if area.y > 0 {
+            area.y = 0;
+            terminal.set_viewport_area(area);
+        }
         Ok(())
     }
 
