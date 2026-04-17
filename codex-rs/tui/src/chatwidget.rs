@@ -8495,9 +8495,9 @@ impl ChatWidget {
 
                 if guardian_approval_enabled {
                     items.push(SelectionItem {
-                        name: "Guardian Approvals".to_string(),
+                        name: "Auto-review".to_string(),
                         description: Some(
-                            "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the guardian reviewer subagent."
+                            "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the auto-reviewer subagent."
                                 .to_string(),
                         ),
                         is_current: current_review_policy == ApprovalsReviewer::GuardianSubagent
@@ -8509,7 +8509,7 @@ impl ChatWidget {
                         actions: Self::approval_preset_actions(
                             preset.approval,
                             preset.sandbox.clone(),
-                            "Guardian Approvals".to_string(),
+                            "Auto-review".to_string(),
                             ApprovalsReviewer::GuardianSubagent,
                         ),
                         dismiss_on_select: true,

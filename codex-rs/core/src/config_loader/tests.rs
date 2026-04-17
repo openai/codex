@@ -749,8 +749,8 @@ deny_read = ["./sensitive", "../shared/secret.txt"]
     )
     .await?;
 
-    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
     let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
     load_requirements_toml(
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
@@ -803,8 +803,8 @@ deny_read = ["./sensitive/**/*.txt"]
     )
     .await?;
 
-    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
     let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
     load_requirements_toml(
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
