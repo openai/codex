@@ -5800,6 +5800,8 @@ impl ChatWidget {
                 duration_ms,
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
+                self.restored_active_turn_id
+                    .get_or_insert_with(|| turn_id.clone());
                 self.last_turn_id = Some(turn_id.clone());
                 self.last_non_retry_error = None;
                 self.on_task_started();
@@ -6212,7 +6214,15 @@ impl ChatWidget {
                 }
             }
             ServerNotification::TurnStarted(notification) => {
-                self.last_turn_id = Some(notification.turn.id);
+                let turn_id = notification.turn.id;
+                if from_replay {
+                    if self.restored_active_turn_id.is_none() {
+                        self.restored_active_turn_id = Some(turn_id.clone());
+                    } else if !self.replayed_turn_matches_restored_active_turn(&turn_id) {
+                        return;
+                    }
+                }
+                self.last_turn_id = Some(turn_id);
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
                     self.on_task_started();
@@ -6296,10 +6306,18 @@ impl ChatWidget {
                     if self.replayed_turn_is_stale_for_restored_input(&notification.turn_id) {
                         return;
                     }
-                    if !matches!(
+                    if matches!(
                         notification.error.codex_error_info,
                         Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
                     ) {
+                        if self.pending_steers.front().is_some_and(|pending| {
+                            pending.turn_id.as_deref().is_none_or(|pending_turn_id| {
+                                pending_turn_id == notification.turn_id
+                            })
+                        }) {
+                            self.enqueue_rejected_steer();
+                        }
+                    } else {
                         self.queue_unacknowledged_pending_steers_for_turn(&notification.turn_id);
                         self.finalize_turn();
                         self.request_redraw();

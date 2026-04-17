@@ -532,6 +532,25 @@ async fn replayed_in_progress_turn_is_captured_as_active_turn() {
         .capture_thread_input_state()
         .expect("expected thread input state");
     assert_eq!(input_state.active_turn_id.as_deref(), Some("active-turn"));
+    assert_eq!(chat.restored_active_turn_id.as_deref(), Some("active-turn"));
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "older-turn".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+
+    assert_eq!(chat.last_turn_id.as_deref(), Some("active-turn"));
 }
 
 #[tokio::test]
@@ -563,6 +582,39 @@ async fn replayed_user_message_acknowledges_pending_steer_only_for_restored_turn
         ReplayKind::ThreadSnapshot,
     );
     assert!(chat.pending_steers.is_empty());
+}
+
+#[tokio::test]
+async fn replayed_steer_rejection_queues_matching_pending_steer() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut pending = pending_steer("retry after rejection");
+    pending.turn_id = Some("active-turn".to_string());
+    chat.pending_steers.push_back(pending);
+    chat.restored_active_turn_id = Some("active-turn".to_string());
+
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                message: "cannot steer this turn".to_string(),
+                codex_error_info: Some(
+                    codex_app_server_protocol::CodexErrorInfo::ActiveTurnNotSteerable {
+                        turn_kind: codex_app_server_protocol::NonSteerableTurnKind::Review,
+                    },
+                ),
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: "thread-1".to_string(),
+            turn_id: "active-turn".to_string(),
+        }),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["retry after rejection"]
+    );
 }
 
 #[tokio::test]
