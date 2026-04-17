@@ -1,6 +1,6 @@
 use super::*;
-use crate::codex::make_session_and_context;
-use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
+use crate::session::tests::make_session_and_context;
+use crate::session::tests::make_session_and_context_with_dynamic_tools_and_rx;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -22,7 +22,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 
-fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
+fn set_danger_full_access(turn: &mut crate::session::turn_context::TurnContext) {
     turn.sandbox_policy
         .set(SandboxPolicy::DangerFullAccess)
         .expect("test setup should allow updating sandbox policy");
@@ -881,7 +881,7 @@ async fn js_repl_uncaught_exception_returns_exec_error_and_recovers() -> anyhow:
         return Ok(());
     }
 
-    let (session, turn) = crate::codex::make_session_and_context().await;
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));

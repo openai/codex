@@ -1,7 +1,7 @@
 use super::*;
-use crate::codex::make_session_and_context;
 use crate::config::test_config;
 use crate::rollout::RolloutRecorder;
+use crate::session::tests::make_session_and_context;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::manager::RefreshStrategy;

@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "HookEventNameWire": {
+      "enum": [
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolUse",
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestBehaviorWire": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    },
+    "PermissionRequestDecisionWire": {
+      "additionalProperties": false,
+      "properties": {
+        "behavior": {
+          "$ref": "#/definitions/PermissionRequestBehaviorWire"
+        },
+        "interrupt": {
+          "default": false,
+          "description": "Reserved for future short-circuiting semantics.\n\nPermissionRequest hooks currently fail closed if this field is `true`.",
+          "type": "boolean"
+        },
+        "message": {
+          "default": null,
+          "type": "string"
+        },
+        "updatedInput": {
+          "default": null,
+          "description": "Reserved for a future input-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+        },
+        "updatedPermissions": {
+          "default": null,
+          "description": "Reserved for a future permission-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+        }
+      },
+      "required": [
+        "behavior"
+      ],
+      "type": "object"
+    },
+    "PermissionRequestHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionRequestDecisionWire"
+            }
+          ],
+          "default": null
+        },
+        "hookEventName": {
+          "$ref": "#/definitions/HookEventNameWire"
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionRequestHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "permission-request.command.output",
+  "type": "object"
+}

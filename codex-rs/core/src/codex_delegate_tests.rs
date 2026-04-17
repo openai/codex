@@ -37,7 +37,7 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
     let (tx_events, rx_events) = bounded(1);
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
-    let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
+    let (session, ctx, _rx_evt) = crate::session::tests::make_session_and_context_with_rx().await;
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event: rx_events,
@@ -114,7 +114,7 @@ async fn forward_ops_preserves_submission_trace_context() {
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
-    let (session, _ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
+    let (session, _ctx, _rx_evt) = crate::session::tests::make_session_and_context_with_rx().await;
     let codex = Arc::new(Codex {
         tx_sub,
         rx_event: rx_events,
@@ -156,7 +156,7 @@ async fn forward_ops_preserves_submission_trace_context() {
 #[tokio::test]
 async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
     let (parent_session, parent_ctx, rx_events) =
-        crate::codex::make_session_and_context_with_rx().await;
+        crate::session::tests::make_session_and_context_with_rx().await;
     *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
 
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -244,7 +244,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
 #[tokio::test]
 async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_for_reply() {
     let (parent_session, parent_ctx, rx_events) =
-        crate::codex::make_session_and_context_with_rx().await;
+        crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let mut config = (*parent_ctx.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
@@ -356,7 +356,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
 #[tokio::test]
 async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
     let (parent_session, parent_ctx, _rx_events) =
-        crate::codex::make_session_and_context_with_rx().await;
+        crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let mut config = (*parent_ctx.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;

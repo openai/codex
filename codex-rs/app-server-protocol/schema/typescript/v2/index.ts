@@ -87,6 +87,7 @@ export type { ExperimentalFeatureListResponse } from "./ExperimentalFeatureListR
 export type { ExperimentalFeatureStage } from "./ExperimentalFeatureStage";
 export type { ExternalAgentConfigDetectParams } from "./ExternalAgentConfigDetectParams";
 export type { ExternalAgentConfigDetectResponse } from "./ExternalAgentConfigDetectResponse";
+export type { ExternalAgentConfigImportCompletedNotification } from "./ExternalAgentConfigImportCompletedNotification";
 export type { ExternalAgentConfigImportParams } from "./ExternalAgentConfigImportParams";
 export type { ExternalAgentConfigImportResponse } from "./ExternalAgentConfigImportResponse";
 export type { ExternalAgentConfigMigrationItem } from "./ExternalAgentConfigMigrationItem";
@@ -139,6 +140,7 @@ export type { HookPromptFragment } from "./HookPromptFragment";
 export type { HookRunStatus } from "./HookRunStatus";
 export type { HookRunSummary } from "./HookRunSummary";
 export type { HookScope } from "./HookScope";
+export type { HookSource } from "./HookSource";
 export type { HookStartedNotification } from "./HookStartedNotification";
 export type { ItemCompletedNotification } from "./ItemCompletedNotification";
 export type { ItemGuardianApprovalReviewCompletedNotification } from "./ItemGuardianApprovalReviewCompletedNotification";
