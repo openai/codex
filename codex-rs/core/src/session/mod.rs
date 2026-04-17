@@ -1861,6 +1861,10 @@ impl Session {
     /// be used to derive the available decisions via
     /// [ExecApprovalRequestEvent::default_available_decisions].
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_command_approval(
         &self,
         turn_context: &TurnContext,
@@ -1932,6 +1936,10 @@ impl Session {
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_patch_approval(
         &self,
         turn_context: &TurnContext,
@@ -1968,6 +1976,10 @@ impl Session {
         rx_approve
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_permissions(
         &self,
         turn_context: &TurnContext,
@@ -2023,6 +2035,10 @@ impl Session {
         rx_response.await.ok()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn request_user_input(
         &self,
         turn_context: &TurnContext,
@@ -2055,6 +2071,10 @@ impl Session {
         rx_response.await.ok()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_user_input_response(
         &self,
         sub_id: &str,
@@ -2080,6 +2100,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_request_permissions_response(
         &self,
         call_id: &str,
@@ -2121,6 +2145,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn reads must stay consistent with the matching turn state"
+    )]
     pub(crate) async fn granted_turn_permissions(&self) -> Option<PermissionProfile> {
         let active = self.active_turn.lock().await;
         let active = active.as_ref()?;
@@ -2133,6 +2161,10 @@ impl Session {
         state.granted_permissions()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -2154,6 +2186,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -2314,6 +2350,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "MCP app context rendering reads through the session-owned manager guard"
+    )]
     pub(crate) async fn build_initial_context(
         &self,
         turn_context: &TurnContext,
@@ -2758,6 +2798,10 @@ impl Session {
     /// Inject additional user input into the currently active turn.
     ///
     /// Returns the active turn id when accepted.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
@@ -2817,6 +2861,10 @@ impl Session {
     }
 
     /// Returns the input if there was no task running to inject into.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
@@ -2882,6 +2930,10 @@ impl Session {
         self.mailbox_rx.lock().await.has_pending_trigger_turn()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -2894,6 +2946,10 @@ impl Session {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state updates must remain atomic"
+    )]
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let (pending_input, accepts_mailbox_delivery) = {
             let mut active = self.active_turn.lock().await;
@@ -2949,6 +3005,10 @@ impl Session {
         !self.idle_pending_input.lock().await.is_empty()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and turn state reads must remain atomic"
+    )]
     pub async fn has_pending_input(&self) -> bool {
         let (has_turn_pending_input, accepts_mailbox_delivery) = {
             let active = self.active_turn.lock().await;
