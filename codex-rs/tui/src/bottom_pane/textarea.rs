@@ -241,6 +241,19 @@ impl TextArea {
         self.wrapped_lines(width).len() as u16
     }
 
+    pub(crate) fn desired_height_with_hidden_prefix(
+        &self,
+        width: u16,
+        hidden_prefix: usize,
+    ) -> u16 {
+        let hidden_prefix = self.clamped_hidden_prefix(hidden_prefix);
+        if hidden_prefix == 0 {
+            return self.desired_height(width);
+        }
+
+        Self::wrapped_lines_for_text(&self.text[hidden_prefix..], width).len() as u16
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.cursor_pos_with_state(area, TextAreaState::default())
@@ -249,10 +262,37 @@ impl TextArea {
     /// Compute the on-screen cursor position taking scrolling into account.
     pub fn cursor_pos_with_state(&self, area: Rect, state: TextAreaState) -> Option<(u16, u16)> {
         let lines = self.wrapped_lines(area.width);
-        let effective_scroll = self.effective_scroll(area.height, &lines, state.scroll);
+        let effective_scroll =
+            Self::effective_scroll_for_cursor(area.height, &lines, state.scroll, self.cursor_pos);
         let i = Self::wrapped_line_index_by_start(&lines, self.cursor_pos)?;
         let ls = &lines[i];
         let col = self.text[ls.start..self.cursor_pos].width() as u16;
+        let screen_row = i
+            .saturating_sub(effective_scroll as usize)
+            .try_into()
+            .unwrap_or(0);
+        Some((area.x + col, area.y + screen_row))
+    }
+
+    pub(crate) fn cursor_pos_with_state_and_hidden_prefix(
+        &self,
+        area: Rect,
+        state: TextAreaState,
+        hidden_prefix: usize,
+    ) -> Option<(u16, u16)> {
+        let hidden_prefix = self.clamped_hidden_prefix(hidden_prefix);
+        if hidden_prefix == 0 {
+            return self.cursor_pos_with_state(area, state);
+        }
+
+        let visible_text = &self.text[hidden_prefix..];
+        let cursor_pos = self.cursor_pos.saturating_sub(hidden_prefix);
+        let lines = Self::wrapped_lines_for_text(visible_text, area.width);
+        let effective_scroll =
+            Self::effective_scroll_for_cursor(area.height, &lines, state.scroll, cursor_pos);
+        let i = Self::wrapped_line_index_by_start(&lines, cursor_pos)?;
+        let ls = &lines[i];
+        let col = visible_text[ls.start..cursor_pos].width() as u16;
         let screen_row = i
             .saturating_sub(effective_scroll as usize)
             .try_into()
@@ -1329,6 +1369,17 @@ impl TextArea {
         Ref::map(cache, |c| &c.as_ref().unwrap().lines)
     }
 
+    fn wrapped_lines_for_text(text: &str, width: u16) -> Vec<Range<usize>> {
+        crate::wrapping::wrap_ranges(
+            text,
+            Options::new(width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+        )
+    }
+
+    fn clamped_hidden_prefix(&self, hidden_prefix: usize) -> usize {
+        self.clamp_pos_to_char_boundary(hidden_prefix.min(self.text.len()))
+    }
+
     /// Calculate the scroll offset that should be used to satisfy the
     /// invariants given the current area size and wrapped lines.
     ///
@@ -1340,6 +1391,15 @@ impl TextArea {
         lines: &[Range<usize>],
         current_scroll: u16,
     ) -> u16 {
+        Self::effective_scroll_for_cursor(area_height, lines, current_scroll, self.cursor_pos)
+    }
+
+    fn effective_scroll_for_cursor(
+        area_height: u16,
+        lines: &[Range<usize>],
+        current_scroll: u16,
+        cursor_pos: usize,
+    ) -> u16 {
         let total_lines = lines.len() as u16;
         if area_height >= total_lines {
             return 0;
@@ -1348,7 +1408,7 @@ impl TextArea {
         // Where is the cursor within wrapped lines? Prefer assigning boundary positions
         // (where pos equals the start of a wrapped line) to that later line.
         let cursor_line_idx =
-            Self::wrapped_line_index_by_start(lines, self.cursor_pos).unwrap_or(0) as u16;
+            Self::wrapped_line_index_by_start(lines, cursor_pos).unwrap_or(0) as u16;
 
         let max_scroll = total_lines.saturating_sub(area_height);
         let mut scroll = current_scroll.min(max_scroll);
@@ -1439,6 +1499,68 @@ impl TextArea {
         let start = scroll as usize;
         let end = (scroll + area.height).min(lines.len() as u16) as usize;
         self.render_lines(area, buf, &lines, start..end, base_style, highlights);
+    }
+
+    /// Render a view of the textarea with a prefix hidden from display.
+    ///
+    /// This is a presentation-only projection: the editable text, cursor, and
+    /// element ranges remain in their original coordinates.
+    pub(crate) fn render_ref_styled_with_hidden_prefix(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        state: &mut TextAreaState,
+        base_style: Style,
+        highlights: &[(Range<usize>, Style)],
+        hidden_prefix: usize,
+    ) {
+        let hidden_prefix = self.clamped_hidden_prefix(hidden_prefix);
+        if hidden_prefix == 0 {
+            self.render_ref_styled_with_highlights(area, buf, state, base_style, highlights);
+            return;
+        }
+
+        let visible_text = &self.text[hidden_prefix..];
+        let lines = Self::wrapped_lines_for_text(visible_text, area.width);
+        let cursor_pos = self.cursor_pos.saturating_sub(hidden_prefix);
+        let scroll =
+            Self::effective_scroll_for_cursor(area.height, &lines, state.scroll, cursor_pos);
+        state.scroll = scroll;
+
+        let start = scroll as usize;
+        let end = (scroll + area.height).min(lines.len() as u16) as usize;
+        for (row, idx) in (start..end).enumerate() {
+            let r = &lines[idx];
+            let y = area.y + row as u16;
+            let line_range = r.start..r.end - 1;
+            let absolute_line_range =
+                hidden_prefix + line_range.start..hidden_prefix + line_range.end;
+            buf.set_style(Rect::new(area.x, y, area.width, 1), base_style);
+            buf.set_string(area.x, y, &visible_text[line_range.clone()], base_style);
+
+            for elem in &self.elements {
+                let overlap_start = elem.range.start.max(absolute_line_range.start);
+                let overlap_end = elem.range.end.min(absolute_line_range.end);
+                if overlap_start >= overlap_end {
+                    continue;
+                }
+                let styled = &self.text[overlap_start..overlap_end];
+                let x_off = self.text[absolute_line_range.start..overlap_start].width() as u16;
+                let style = base_style.fg(ratatui::style::Color::Cyan);
+                buf.set_string(area.x + x_off, y, styled, style);
+            }
+
+            for (highlight_range, style) in highlights {
+                let overlap_start = highlight_range.start.max(absolute_line_range.start);
+                let overlap_end = highlight_range.end.min(absolute_line_range.end);
+                if overlap_start >= overlap_end {
+                    continue;
+                }
+                let highlighted = &self.text[overlap_start..overlap_end];
+                let x_off = self.text[absolute_line_range.start..overlap_start].width() as u16;
+                buf.set_string(area.x + x_off, y, highlighted, *style);
+            }
+        }
     }
 
     fn render_lines(

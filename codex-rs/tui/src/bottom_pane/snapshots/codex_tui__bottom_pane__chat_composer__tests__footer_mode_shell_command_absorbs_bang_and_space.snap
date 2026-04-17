@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                                                                    "
+"!  git status                                                                                       "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"  gpt-5.5 high fast · ~/code/codex-1 · Context 0% used                     Bash mode (! to toggle)  "
