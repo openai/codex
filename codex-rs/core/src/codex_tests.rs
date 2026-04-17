@@ -5217,6 +5217,36 @@ impl SessionTask for NeverEndingTask {
     }
 }
 
+struct TokenUsageOnAbortTask {
+    token_usage: TokenUsage,
+}
+
+impl SessionTask for TokenUsageOnAbortTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.token_usage_on_abort"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<UserInput>,
+        _cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        loop {
+            sleep(Duration::from_secs(60)).await;
+        }
+    }
+
+    async fn abort(&self, session: Arc<SessionTaskContext>, _ctx: Arc<TurnContext>) {
+        set_total_token_usage(&session.clone_session(), self.token_usage.clone()).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
 async fn abort_regular_task_emits_turn_aborted_only() {
@@ -5614,8 +5644,17 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_only_queued_goal_continuations_for_next_turn() {
-    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+async fn interrupt_clears_only_queued_goal_continuations_for_next_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
     let queued_goal_continuation = ResponseInputItem::Message {
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
@@ -5640,6 +5679,17 @@ async fn interrupt_clears_only_queued_goal_continuations_for_next_turn() {
 
     assert!(sess.has_active_turn().await);
     assert_eq!(vec![queued_user_item], sess.get_pending_input().await);
+
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should remain persisted after interrupt");
+    assert_eq!(
+        codex_protocol::protocol::ThreadGoalStatus::Paused,
+        goal.status
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -5749,9 +5799,8 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
     sess.spawn_task(
         Arc::clone(&tc),
         Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
+        TokenUsageOnAbortTask {
+            token_usage: post_goal_token_usage(),
         },
     )
     .await;
@@ -5767,7 +5816,7 @@ async fn interrupt_accounts_active_goal_before_pausing() -> anyhow::Result<()> {
         codex_protocol::protocol::ThreadGoalStatus::Paused,
         goal.status
     );
-    assert_eq!(40, goal.tokens_used);
+    assert_eq!(70, goal.tokens_used);
 
     Ok(())
 }

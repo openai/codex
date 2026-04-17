@@ -72,6 +72,12 @@ enum InitialResponseItems {
     Direct(Vec<ResponseInputItem>),
 }
 
+#[derive(Clone, Copy)]
+enum GoalPauseOnInterrupt {
+    Pause,
+    Defer,
+}
+
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
 pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
@@ -563,24 +569,27 @@ impl Session {
             cancellation_token.cancel();
         }
 
+        self.abort_all_tasks_without_goal_accounting_inner(
+            reason.clone(),
+            /*current_turn_id*/ None,
+            GoalPauseOnInterrupt::Defer,
+        )
+        .await;
+
         for (turn_context, _) in active_tasks {
             if let Err(err) = self
                 .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
                 .await
             {
-                warn!("failed to account thread goal progress before abort: {err}");
+                warn!("failed to account thread goal progress after abort: {err}");
             }
         }
 
-        self.abort_all_tasks_without_goal_accounting(reason).await;
-    }
-
-    pub(crate) async fn abort_all_tasks_without_goal_accounting(
-        self: &Arc<Self>,
-        reason: TurnAbortReason,
-    ) {
-        self.abort_all_tasks_without_goal_accounting_inner(reason, /*current_turn_id*/ None)
-            .await;
+        if reason == TurnAbortReason::Interrupted
+            && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
+        {
+            warn!("failed to pause active thread goal after interrupt: {err}");
+        }
     }
 
     pub(crate) async fn abort_all_tasks_without_goal_accounting_from_current_turn(
@@ -591,6 +600,7 @@ impl Session {
         self.abort_all_tasks_without_goal_accounting_inner(
             reason,
             Some(current_turn_id.to_string()),
+            GoalPauseOnInterrupt::Pause,
         )
         .await;
     }
@@ -599,6 +609,7 @@ impl Session {
         self: &Arc<Self>,
         reason: TurnAbortReason,
         current_turn_id: Option<String>,
+        goal_pause_on_interrupt: GoalPauseOnInterrupt,
     ) {
         let active_turn = {
             let mut active = self.active_turn.lock().await;
@@ -624,12 +635,13 @@ impl Session {
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
-            turn_state.lock().await.clear_pending();
             let mut active = self.active_turn.lock().await;
+            turn_state.lock().await.clear_pending();
             *active = None;
         }
 
         if reason == TurnAbortReason::Interrupted
+            && matches!(goal_pause_on_interrupt, GoalPauseOnInterrupt::Pause)
             && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
         {
             warn!("failed to pause active thread goal after interrupt: {err}");
