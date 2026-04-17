@@ -139,7 +139,24 @@ async fn handle_set_goal(
         token_budget: args.token_budget,
     };
 
-    if is_update && status == Some(ToolGoalStatus::Complete) {
+    if is_update
+        && matches!(
+            status,
+            Some(ToolGoalStatus::Paused | ToolGoalStatus::BudgetLimited | ToolGoalStatus::Complete)
+        )
+    {
+        if status == Some(ToolGoalStatus::Paused) {
+            let goal = session
+                .get_thread_goal()
+                .await
+                .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+            if goal
+                .as_ref()
+                .is_some_and(|goal| goal.status == ThreadGoalStatus::BudgetLimited)
+            {
+                return goal_response(goal);
+            }
+        }
         session
             .set_thread_goal(turn_context, request)
             .await
@@ -153,30 +170,6 @@ async fn handle_set_goal(
             .await
             .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
         return goal_response(goal);
-    }
-
-    if is_update
-        && matches!(
-            status,
-            Some(ToolGoalStatus::Paused | ToolGoalStatus::BudgetLimited)
-        )
-    {
-        session
-            .account_thread_goal_progress(turn_context, GoalAccountingBoundary::Tool)
-            .await
-            .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-        if status == Some(ToolGoalStatus::Paused) {
-            let goal = session
-                .get_thread_goal()
-                .await
-                .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-            if goal
-                .as_ref()
-                .is_some_and(|goal| goal.status == ThreadGoalStatus::BudgetLimited)
-            {
-                return goal_response(goal);
-            }
-        }
     }
     let goal = session
         .set_thread_goal(turn_context, request)

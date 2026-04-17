@@ -44,6 +44,7 @@ pub(crate) struct GoalAccountingState {
     accounting_lock: Mutex<()>,
     last_accounted_token_usage: Mutex<TokenUsage>,
     completed_this_turn: AtomicBool,
+    stopped_this_turn: AtomicBool,
     active_this_turn: AtomicBool,
     active_goal_created_at_ms: Mutex<Option<i64>>,
 }
@@ -54,6 +55,7 @@ impl GoalAccountingState {
             accounting_lock: Mutex::new(()),
             last_accounted_token_usage: Mutex::new(TokenUsage::default()),
             completed_this_turn: AtomicBool::new(false),
+            stopped_this_turn: AtomicBool::new(false),
             active_this_turn: AtomicBool::new(false),
             active_goal_created_at_ms: Mutex::new(None),
         }
@@ -62,6 +64,7 @@ impl GoalAccountingState {
     pub(crate) async fn mark_turn_started(&self, token_usage: TokenUsage) {
         *self.last_accounted_token_usage.lock().await = token_usage;
         self.completed_this_turn.store(false, Ordering::SeqCst);
+        self.stopped_this_turn.store(false, Ordering::SeqCst);
         self.active_this_turn.store(false, Ordering::SeqCst);
         *self.active_goal_created_at_ms.lock().await = None;
     }
@@ -98,6 +101,18 @@ impl GoalAccountingState {
 
     fn clear_completed_this_turn(&self) {
         self.completed_this_turn.store(false, Ordering::SeqCst);
+    }
+
+    fn stopped_this_turn(&self) -> bool {
+        self.stopped_this_turn.load(Ordering::SeqCst)
+    }
+
+    fn mark_stopped_this_turn(&self) {
+        self.stopped_this_turn.store(true, Ordering::SeqCst);
+    }
+
+    fn clear_stopped_this_turn(&self) {
+        self.stopped_this_turn.store(false, Ordering::SeqCst);
     }
 
     async fn token_delta_since_last_accounting(&self, current: TokenUsage) -> i64 {
@@ -215,8 +230,7 @@ impl Session {
             )
             .await?;
         }
-        let previous_status = if !replacing_goal && request.status == Some(ThreadGoalStatus::Active)
-        {
+        let previous_status = if !replacing_goal && request.status.is_some() {
             state_db
                 .get_thread_goal(self.conversation_id)
                 .await?
@@ -291,6 +305,12 @@ impl Session {
         }
         if goal.status == ThreadGoalStatus::Complete {
             turn_context.goal_accounting.mark_completed_this_turn();
+        } else if matches!(
+            goal.status,
+            ThreadGoalStatus::Paused | ThreadGoalStatus::BudgetLimited
+        ) && previous_status == Some(codex_state::ThreadGoalStatus::Active)
+        {
+            turn_context.goal_accounting.mark_stopped_this_turn();
         }
         self.send_event(
             turn_context,
@@ -356,13 +376,15 @@ impl Session {
         turn_context: &TurnContext,
         boundary: GoalAccountingBoundary,
     ) -> anyhow::Result<()> {
-        let clear_completion_accounting = matches!(boundary, GoalAccountingBoundary::Turn)
-            && turn_context.goal_accounting.completed_this_turn();
+        let clear_terminal_accounting = matches!(boundary, GoalAccountingBoundary::Turn)
+            && (turn_context.goal_accounting.completed_this_turn()
+                || turn_context.goal_accounting.stopped_this_turn());
         let result = self
             .account_thread_goal_progress_inner(turn_context, boundary)
             .await;
-        if clear_completion_accounting {
+        if clear_terminal_accounting {
             turn_context.goal_accounting.clear_completed_this_turn();
+            turn_context.goal_accounting.clear_stopped_this_turn();
         }
         result
     }
@@ -414,12 +436,15 @@ impl Session {
             GoalAccountingBoundary::Tool => {
                 if turn_context.goal_accounting.completed_this_turn() {
                     codex_state::ThreadGoalAccountingMode::ActiveOrComplete
+                } else if turn_context.goal_accounting.stopped_this_turn() {
+                    codex_state::ThreadGoalAccountingMode::ActiveOrStopped
                 } else {
                     codex_state::ThreadGoalAccountingMode::ActiveOnly
                 }
             }
             GoalAccountingBoundary::Turn => {
                 let completed_this_turn = turn_context.goal_accounting.completed_this_turn();
+                let stopped_this_turn = turn_context.goal_accounting.stopped_this_turn();
                 match state_db.get_thread_goal(self.conversation_id).await? {
                     Some(goal) => {
                         let status = goal.status;
@@ -429,12 +454,13 @@ impl Session {
                                 && status == codex_state::ThreadGoalStatus::Complete)
                         {
                             codex_state::ThreadGoalAccountingMode::ActiveOrComplete
-                        } else if turn_context.goal_accounting.active_this_turn()
-                            && matches!(
-                                status,
-                                codex_state::ThreadGoalStatus::Paused
-                                    | codex_state::ThreadGoalStatus::BudgetLimited
-                            )
+                        } else if stopped_this_turn
+                            || (turn_context.goal_accounting.active_this_turn()
+                                && matches!(
+                                    status,
+                                    codex_state::ThreadGoalStatus::Paused
+                                        | codex_state::ThreadGoalStatus::BudgetLimited
+                                ))
                         {
                             codex_state::ThreadGoalAccountingMode::ActiveOrStopped
                         } else {
