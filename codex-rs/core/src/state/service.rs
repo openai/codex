@@ -63,6 +63,8 @@ pub(crate) struct SessionServices {
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
+    /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
+    /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) environment: Option<Arc<Environment>>,
     pub(crate) allows_agent_environment_access: bool,
