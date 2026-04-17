@@ -382,6 +382,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
                 ContentItem::InputImage {
                     image_url: "https://example.com/img.png".to_string(),
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 ContentItem::InputText {
                     text: "caption".to_string(),
@@ -405,7 +406,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "https://example.com/result.png".to_string(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ]),
         },
@@ -425,7 +426,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "https://example.com/js-repl-result.png".to_string(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ]),
         },
@@ -506,6 +507,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             },
             ContentItem::InputImage {
                 image_url: "https://example.com/img.png".to_string(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
         end_turn: None,
@@ -715,7 +717,7 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                 body: FunctionCallOutputBody::ContentItems(vec![
                     FunctionCallOutputContentItem::InputImage {
                         image_url: "data:image/png;base64,AAA".to_string(),
-                        detail: None,
+                        detail: Some(DEFAULT_IMAGE_DETAIL),
                     },
                 ]),
                 success: Some(true),
@@ -752,6 +754,7 @@ fn replace_last_turn_images_does_not_touch_user_images() {
         role: "user".to_string(),
         content: vec![ContentItem::InputImage {
             image_url: "data:image/png;base64,AAA".to_string(),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         end_turn: None,
         phase: None,
@@ -1680,7 +1683,10 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
             ContentItem::InputText {
                 text: "Here is the screenshot".to_string(),
             },
-            ContentItem::InputImage { image_url },
+            ContentItem::InputImage {
+                image_url,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
         ],
         end_turn: None,
         phase: None,
@@ -1717,7 +1723,7 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url,
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
     };
@@ -1743,7 +1749,7 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url,
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
     };
@@ -1763,6 +1769,7 @@ fn non_base64_image_urls_are_unchanged() {
         role: "user".to_string(),
         content: vec![ContentItem::InputImage {
             image_url: "https://example.com/foo.png".to_string(),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         end_turn: None,
         phase: None,
@@ -1772,7 +1779,7 @@ fn non_base64_image_urls_are_unchanged() {
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "file:///tmp/foo.png".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
     };
@@ -1794,6 +1801,7 @@ fn data_url_without_base64_marker_is_unchanged() {
         role: "user".to_string(),
         content: vec![ContentItem::InputImage {
             image_url: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>".to_string(),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         }],
         end_turn: None,
         phase: None,
@@ -1814,7 +1822,7 @@ fn non_image_base64_data_url_is_unchanged() {
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url,
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
     };
@@ -1832,7 +1840,10 @@ fn mixed_case_data_url_markers_are_adjusted() {
     let item = ResponseItem::Message {
         id: None,
         role: "user".to_string(),
-        content: vec![ContentItem::InputImage { image_url }],
+        content: vec![ContentItem::InputImage {
+            image_url,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        }],
         end_turn: None,
         phase: None,
     };
@@ -1859,9 +1870,11 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
             },
             ContentItem::InputImage {
                 image_url: image_url_one,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputImage {
                 image_url: image_url_two,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
         end_turn: None,

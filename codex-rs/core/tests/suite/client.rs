@@ -511,6 +511,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputImage {
                     image_url: legacy_image_url.to_string(),
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 }],
                 end_turn: None,
                 phase: None,

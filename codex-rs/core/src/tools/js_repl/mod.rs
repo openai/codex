@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
@@ -1750,7 +1751,8 @@ fn emitted_image_content_item(
 ) -> FunctionCallOutputContentItem {
     FunctionCallOutputContentItem::InputImage {
         image_url,
-        detail: normalize_output_image_detail(&turn.model_info, detail),
+        detail: normalize_output_image_detail(&turn.model_info, detail)
+            .or(Some(DEFAULT_IMAGE_DETAIL)),
     }
 }
 

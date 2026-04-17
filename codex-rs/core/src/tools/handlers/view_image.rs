@@ -1,6 +1,7 @@
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::InputModality;
@@ -133,7 +134,11 @@ impl ToolHandler for ViewImageHandler {
         } else {
             PromptImageMode::ResizeToFit
         };
-        let image_detail = use_original_detail.then_some(ImageDetail::Original);
+        let image_detail = Some(if use_original_detail {
+            ImageDetail::Original
+        } else {
+            DEFAULT_IMAGE_DETAIL
+        });
 
         let image =
             load_for_prompt_bytes(abs_path.as_path(), file_bytes, image_mode).map_err(|error| {
@@ -210,7 +215,7 @@ mod tests {
     fn code_mode_result_returns_image_url_object() {
         let output = ViewImageOutput {
             image_url: "data:image/png;base64,AAA".to_string(),
-            image_detail: None,
+            image_detail: Some(DEFAULT_IMAGE_DETAIL),
         };
 
         let result = output.code_mode_result(&ToolPayload::Function {
@@ -221,7 +226,7 @@ mod tests {
             result,
             json!({
                 "image_url": "data:image/png;base64,AAA",
-                "detail": null,
+                "detail": "high",
             })
         );
     }

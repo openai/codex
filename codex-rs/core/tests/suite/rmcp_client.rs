@@ -787,7 +787,8 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         output[1],
         json!({
             "type": "input_image",
-            "image_url": OPENAI_PNG
+            "image_url": OPENAI_PNG,
+            "detail": "high"
         })
     );
     server.verify().await;

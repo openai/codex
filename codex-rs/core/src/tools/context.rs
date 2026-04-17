@@ -10,6 +10,7 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
@@ -463,10 +464,10 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
                     | codex_protocol::models::ContentItem::OutputText { text } => {
                         FunctionCallOutputContentItem::InputText { text }
                     }
-                    codex_protocol::models::ContentItem::InputImage { image_url } => {
+                    codex_protocol::models::ContentItem::InputImage { image_url, detail } => {
                         FunctionCallOutputContentItem::InputImage {
                             image_url,
-                            detail: None,
+                            detail: detail.or(Some(DEFAULT_IMAGE_DETAIL)),
                         }
                     }
                 })

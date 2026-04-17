@@ -5,6 +5,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -26,9 +27,11 @@ fn parses_user_message_with_text_and_two_images() {
             },
             ContentItem::InputImage {
                 image_url: img1.clone(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputImage {
                 image_url: img2.clone(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ],
         end_turn: None,
@@ -66,6 +69,7 @@ fn skips_local_image_label_text() {
             ContentItem::InputText { text: label },
             ContentItem::InputImage {
                 image_url: image_url.clone(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputText {
                 text: "</image>".to_string(),
@@ -145,6 +149,7 @@ fn skips_unnamed_image_label_text() {
             ContentItem::InputText { text: label },
             ContentItem::InputImage {
                 image_url: image_url.clone(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             ContentItem::InputText {
                 text: codex_protocol::models::image_close_tag_text(),

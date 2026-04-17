@@ -24,6 +24,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -477,7 +478,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
             DynamicToolCallOutputContentItem::InputImage { image_url } => {
                 FunctionCallOutputContentItem::InputImage {
                     image_url,
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 }
             }
         })
@@ -535,7 +536,8 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
             },
             {
                 "type": "input_image",
-                "image_url": "data:image/png;base64,AAA"
+                "image_url": "data:image/png;base64,AAA",
+                "detail": "high"
             }
         ])
     );

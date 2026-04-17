@@ -672,7 +672,7 @@ text(JSON.stringify(returnsUndefined));
                     },
                     FunctionCallOutputContentItem::InputImage {
                         image_url: "https://example.com/image.jpg".to_string(),
-                        detail: None,
+                        detail: Some(crate::DEFAULT_IMAGE_DETAIL),
                     },
                     FunctionCallOutputContentItem::InputText {
                         text: "[true,true,true]".to_string(),

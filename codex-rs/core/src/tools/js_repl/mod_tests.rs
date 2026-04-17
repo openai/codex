@@ -253,7 +253,7 @@ fn summarize_tool_call_response_for_multimodal_function_output() {
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,abcd".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
     };
@@ -277,7 +277,7 @@ fn summarize_tool_call_response_for_multimodal_function_output() {
 }
 
 #[tokio::test]
-async fn emitted_image_content_item_drops_unsupported_explicit_detail() {
+async fn emitted_image_content_item_preserves_explicit_non_original_detail() {
     let (_session, turn) = make_session_and_context().await;
     let content_item = emitted_image_content_item(
         &turn,
@@ -288,7 +288,7 @@ async fn emitted_image_content_item_drops_unsupported_explicit_detail() {
         content_item,
         FunctionCallOutputContentItem::InputImage {
             image_url: "data:image/png;base64,AAA".to_string(),
-            detail: None,
+            detail: Some(ImageDetail::Low),
         }
     );
 }
@@ -314,7 +314,7 @@ async fn emitted_image_content_item_allows_explicit_original_detail_when_support
 }
 
 #[tokio::test]
-async fn emitted_image_content_item_drops_explicit_original_detail_when_unsupported() {
+async fn emitted_image_content_item_defaults_to_high_for_unsupported_original_detail() {
     let (_session, turn) = make_session_and_context().await;
 
     let content_item = emitted_image_content_item(
@@ -327,7 +327,7 @@ async fn emitted_image_content_item_drops_explicit_original_detail_when_unsuppor
         content_item,
         FunctionCallOutputContentItem::InputImage {
             image_url: "data:image/png;base64,AAA".to_string(),
-            detail: None,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         }
     );
 }
@@ -356,7 +356,7 @@ fn summarize_tool_call_response_for_multimodal_custom_output() {
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,abcd".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]),
     };
@@ -1213,7 +1213,7 @@ console.log(out.type);
                 image_url:
                     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                         .to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
             .as_slice()
         );
@@ -1268,7 +1268,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png" });
                 image_url:
                     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                         .to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
             .as_slice()
         );
@@ -1325,13 +1325,13 @@ await codex.emitImage(
                     image_url:
                         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                             .to_string(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url:
                         "data:image/gif;base64,R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs="
                             .to_string(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ]
             .as_slice()
@@ -1387,7 +1387,7 @@ console.log("cell-complete");
                 image_url:
                     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
                         .to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
             .as_slice()
         );
@@ -1465,11 +1465,11 @@ console.log("helpers-ran");
         vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: data_url.to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: data_url.to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]
     );
@@ -1701,7 +1701,7 @@ await codex.emitImage("DATA:image/png;base64,AAA");
         result.content_items.as_slice(),
         [FunctionCallOutputContentItem::InputImage {
             image_url: "DATA:image/png;base64,AAA".to_string(),
-            detail: None,
+            detail: Some(DEFAULT_IMAGE_DETAIL),
         }]
         .as_slice()
     );
@@ -1751,10 +1751,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: "ultra" });
         )
         .await
         .expect_err("invalid detail should fail");
-    assert!(
-        err.to_string()
-            .contains("only supports detail \"original\"")
-    );
+    assert!(err.to_string().contains("expected detail to be one of"));
     assert!(session.get_pending_input().await.is_empty());
 
     Ok(())
@@ -1804,7 +1801,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: null });
             result.content_items.as_slice(),
             [FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
             .as_slice()
         );

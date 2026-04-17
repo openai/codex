@@ -16,6 +16,7 @@ pub use description::parse_exec_source;
 pub use description::render_code_mode_sample;
 pub use description::render_json_schema_to_typescript;
 pub use response::FunctionCallOutputContentItem;
+pub use response::DEFAULT_IMAGE_DETAIL;
 pub use response::ImageDetail;
 pub use runtime::DEFAULT_EXEC_YIELD_TIME_MS;
 pub use runtime::DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL;
