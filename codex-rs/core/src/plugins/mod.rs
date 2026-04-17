@@ -34,6 +34,7 @@ pub use manager::ConfiguredMarketplaceListOutcome;
 pub use manager::ConfiguredMarketplacePlugin;
 pub use manager::OPENAI_CURATED_MARKETPLACE_NAME;
 pub use manager::PluginDetail;
+pub use manager::PluginDetailsUnavailableReason;
 pub use manager::PluginInstallError;
 pub use manager::PluginInstallOutcome;
 pub use manager::PluginInstallRequest;

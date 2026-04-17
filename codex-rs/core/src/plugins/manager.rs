@@ -188,6 +188,12 @@ pub struct PluginDetail {
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub apps: Vec<AppConnectorId>,
     pub mcp_server_names: Vec<String>,
+    pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginDetailsUnavailableReason {
+    InstallRequiredForRemoteSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1044,17 +1050,55 @@ impl PluginsManager {
             });
         }
 
-        let codex_home = self.codex_home.clone();
-        let source = plugin.source.clone();
-        let materialized = tokio::task::spawn_blocking(move || {
-            materialize_marketplace_plugin_source(codex_home.as_path(), &source)
-        })
-        .await
-        .map_err(|err| {
-            MarketplaceError::InvalidPlugin(format!("failed to materialize plugin source: {err}"))
-        })?
-        .map_err(MarketplaceError::InvalidPlugin)?;
-        let source_path = materialized.path.clone();
+        let plugin_id =
+            PluginId::new(plugin.name.clone(), marketplace_name.to_string()).map_err(|err| {
+                match err {
+                    PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+                }
+            })?;
+        let plugin_key = plugin_id.as_key();
+        if matches!(plugin.source, MarketplacePluginSource::Git { .. }) && !plugin.installed {
+            return Ok(PluginDetail {
+                id: plugin_key,
+                name: plugin.name,
+                description: None,
+                source: plugin.source,
+                policy: plugin.policy,
+                interface: plugin.interface,
+                installed: plugin.installed,
+                enabled: plugin.enabled,
+                skills: Vec::new(),
+                disabled_skill_paths: HashSet::new(),
+                apps: Vec::new(),
+                mcp_server_names: Vec::new(),
+                details_unavailable_reason: Some(
+                    PluginDetailsUnavailableReason::InstallRequiredForRemoteSource,
+                ),
+            });
+        }
+
+        let source_path =
+            if matches!(plugin.source, MarketplacePluginSource::Git { .. }) && plugin.installed {
+                self.store.active_plugin_root(&plugin_id).ok_or_else(|| {
+                    MarketplaceError::InvalidPlugin(format!(
+                        "installed plugin cache entry is missing for {plugin_key}"
+                    ))
+                })?
+            } else {
+                let codex_home = self.codex_home.clone();
+                let source = plugin.source.clone();
+                let materialized = tokio::task::spawn_blocking(move || {
+                    materialize_marketplace_plugin_source(codex_home.as_path(), &source)
+                })
+                .await
+                .map_err(|err| {
+                    MarketplaceError::InvalidPlugin(format!(
+                        "failed to materialize plugin source: {err}"
+                    ))
+                })?
+                .map_err(MarketplaceError::InvalidPlugin)?;
+                materialized.path.clone()
+            };
         if !source_path.as_path().is_dir() {
             return Err(MarketplaceError::InvalidPlugin(
                 "path does not exist or is not a directory".to_string(),
@@ -1087,13 +1131,14 @@ impl PluginsManager {
             description,
             source: plugin.source,
             policy: plugin.policy,
-            interface: plugin.interface,
+            interface: plugin.interface.or(manifest.interface),
             installed: plugin.installed,
             enabled: plugin.enabled,
             skills: resolved_skills.skills,
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
             apps,
             mcp_server_names,
+            details_unavailable_reason: None,
         })
     }
 
