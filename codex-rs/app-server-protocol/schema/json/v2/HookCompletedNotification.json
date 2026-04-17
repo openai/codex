@@ -8,6 +8,7 @@
     "HookEventName": {
       "enum": [
         "preToolUse",
+        "permissionRequest",
         "postToolUse",
         "sessionStart",
         "userPromptSubmit",

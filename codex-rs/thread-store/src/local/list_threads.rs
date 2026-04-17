@@ -5,6 +5,7 @@ use codex_rollout::parse_cursor;
 use super::LocalThreadStore;
 use super::helpers::stored_thread_from_rollout_item;
 use crate::ListThreadsParams;
+use crate::SortDirection;
 use crate::ThreadPage;
 use crate::ThreadSortKey;
 use crate::ThreadStoreError;
@@ -27,7 +28,18 @@ pub(super) async fn list_threads(
         ThreadSortKey::CreatedAt => codex_rollout::ThreadSortKey::CreatedAt,
         ThreadSortKey::UpdatedAt => codex_rollout::ThreadSortKey::UpdatedAt,
     };
-    let page = list_rollout_threads(&store.config, &params, cursor.as_ref(), sort_key).await?;
+    let sort_direction = match params.sort_direction {
+        SortDirection::Asc => codex_rollout::SortDirection::Asc,
+        SortDirection::Desc => codex_rollout::SortDirection::Desc,
+    };
+    let page = list_rollout_threads(
+        &store.config,
+        &params,
+        cursor.as_ref(),
+        sort_key,
+        sort_direction,
+    )
+    .await?;
 
     let next_cursor = page
         .next_cursor
@@ -54,6 +66,7 @@ async fn list_rollout_threads(
     params: &ListThreadsParams,
     cursor: Option<&codex_rollout::Cursor>,
     sort_key: codex_rollout::ThreadSortKey,
+    sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
     let page = if params.archived {
         RolloutRecorder::list_archived_threads(
@@ -61,6 +74,7 @@ async fn list_rollout_threads(
             params.page_size,
             cursor,
             sort_key,
+            sort_direction,
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             config.model_provider_id.as_str(),
@@ -73,6 +87,7 @@ async fn list_rollout_threads(
             params.page_size,
             cursor,
             sort_key,
+            sort_direction,
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
             config.model_provider_id.as_str(),
@@ -122,6 +137,7 @@ mod tests {
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 archived: false,
@@ -177,6 +193,7 @@ mod tests {
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 archived: false,
@@ -213,6 +230,7 @@ mod tests {
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 archived: false,
@@ -225,6 +243,7 @@ mod tests {
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 archived: true,
@@ -273,6 +292,7 @@ mod tests {
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
                 allowed_sources: vec![SessionSource::Cli],
                 model_providers: Some(vec!["test-provider".to_string()]),
                 archived: false,
@@ -306,6 +326,7 @@ mod tests {
                 page_size: 10,
                 cursor: Some("not-a-cursor".to_string()),
                 sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 archived: false,

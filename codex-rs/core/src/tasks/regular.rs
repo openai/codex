@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::TurnContext;
-use crate::codex::run_turn;
+use crate::session::turn::run_turn;
+use crate::session::turn_context::TurnContext;
 use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
 use crate::state::TaskKind;
 use codex_protocol::protocol::EventMsg;
