@@ -42,6 +42,7 @@ const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
 const USERPROFILE_READ_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
+    ".tsh",
     ".gnupg",
     ".aws",
     ".azure",
@@ -1031,11 +1032,13 @@ mod tests {
         let allowed_dir = user_profile.join("Documents");
         let allowed_file = user_profile.join(".gitconfig");
         let excluded_dir = user_profile.join(".ssh");
+        let excluded_tsh_dir = user_profile.join(".tsh");
         let excluded_case_variant = user_profile.join(".AWS");
 
         fs::create_dir_all(&allowed_dir).expect("create allowed dir");
         fs::write(&allowed_file, "safe").expect("create allowed file");
         fs::create_dir_all(&excluded_dir).expect("create excluded dir");
+        fs::create_dir_all(&excluded_tsh_dir).expect("create excluded tsh dir");
         fs::create_dir_all(&excluded_case_variant).expect("create excluded case variant");
 
         let roots = profile_read_roots(user_profile);
