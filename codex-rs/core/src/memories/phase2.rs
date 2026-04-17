@@ -139,9 +139,8 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     // 5. Spawn the agent
     let prompt = agent::get_prompt(config, &selection, &removed_extension_resources);
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
-    let thread_id = match session
-        .services
-        .agent_control
+    let agent_control = session.services.agent_control.detached_registry();
+    let thread_id = match agent_control
         .spawn_agent(agent_config, prompt.into(), Some(source))
         .await
     {
@@ -182,6 +181,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         raw_memories.clone(),
         pending_extension_resource_removals,
         thread_id,
+        agent_control,
         phase_two_e2e_timer,
     );
 
@@ -367,6 +367,7 @@ mod agent {
         selected_outputs: Vec<codex_state::Stage1Output>,
         pending_extension_resource_removals: Vec<PendingExtensionResourceRemoval>,
         thread_id: ThreadId,
+        agent_control: crate::agent::AgentControl,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
         let Some(db) = session.services.state_db.clone() else {
@@ -376,7 +377,6 @@ mod agent {
 
         tokio::spawn(async move {
             let _phase_two_e2e_timer = phase_two_e2e_timer;
-            let agent_control = session.services.agent_control.clone();
 
             // TODO(jif) we might have a very small race here.
             let rx = match agent_control.subscribe_status(thread_id).await {

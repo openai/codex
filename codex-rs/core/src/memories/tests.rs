@@ -428,6 +428,7 @@ mod phase2 {
     use chrono::Utc;
     use codex_config::Constrained;
     use codex_login::CodexAuth;
+    use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -702,6 +703,19 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
+        pretty_assertions::assert_eq!(
+            config_snapshot.session_source.get_agent_path(),
+            Some(AgentPath::morpheus())
+        );
+        assert!(
+            harness
+                .session
+                .services
+                .agent_control
+                .get_agent_metadata(thread_id)
+                .is_none(),
+            "memory consolidation should not be registered in the root collab agent registry"
+        );
         let turn_context = subagent.codex.session.new_default_turn().await;
         pretty_assertions::assert_eq!(
             turn_context.file_system_sandbox_policy,
@@ -751,6 +765,13 @@ mod phase2 {
             rollout_path.as_path(),
         )
         .await;
+        let metadata = harness
+            .state_db
+            .get_thread(thread_id)
+            .await
+            .expect("read consolidation thread metadata")
+            .expect("consolidation thread metadata should exist");
+        pretty_assertions::assert_eq!(metadata.agent_path.as_deref(), Some(AgentPath::MORPHEUS));
         let memory_mode = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let memory_mode = harness
