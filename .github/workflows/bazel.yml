@@ -91,6 +91,8 @@ jobs:
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            bazel_wrapper_args+=(--windows-msvc-host-platform)
+
             # Temporary smoke test for Windows remote-build/local-test reuse:
             # exclude the V8-dependent slice, which currently mixes Windows
             # GNU targets with Linux RBE-hosted V8 generators/toolchains.
