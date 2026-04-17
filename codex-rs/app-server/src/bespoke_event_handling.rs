@@ -2566,9 +2566,12 @@ async fn on_request_permissions_response(
     let response = receiver.await;
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(request_permissions_guard);
-    let Some(response) =
-        request_permissions_response_from_client_result(requested_permissions, response)
-    else {
+    let cwd = conversation.config_snapshot().await.cwd;
+    let Some(response) = request_permissions_response_from_client_result(
+        requested_permissions,
+        response,
+        cwd.as_path(),
+    ) else {
         return;
     };
 
@@ -2586,6 +2589,7 @@ async fn on_request_permissions_response(
 fn request_permissions_response_from_client_result(
     requested_permissions: CoreRequestPermissionProfile,
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
+    cwd: &std::path::Path,
 ) -> Option<CoreRequestPermissionsResponse> {
     let value = match response {
         Ok(Ok(value)) => value,
@@ -2618,6 +2622,7 @@ fn request_permissions_response_from_client_result(
         permissions: intersect_permission_profiles(
             requested_permissions.into(),
             response.permissions.into(),
+            cwd,
         )
         .into(),
         scope: response.scope.to_core(),
@@ -2992,6 +2997,10 @@ mod tests {
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
     use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -3676,6 +3685,7 @@ mod tests {
         let response = request_permissions_response_from_client_result(
             CoreRequestPermissionProfile::default(),
             Ok(Err(error)),
+            std::env::current_dir().expect("current dir").as_path(),
         );
 
         assert_eq!(response, None);
@@ -3705,10 +3715,10 @@ mod tests {
             network: Some(CoreNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(CoreFileSystemPermissions {
-                read: Some(vec![absolute_path(input_path)]),
-                write: Some(vec![absolute_path(output_path)]),
-            }),
+            file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                Some(vec![absolute_path(input_path)]),
+                Some(vec![absolute_path(output_path)]),
+            )),
         };
         let cases = vec![
             (
@@ -3735,10 +3745,10 @@ mod tests {
                     },
                 }),
                 CoreRequestPermissionProfile {
-                    file_system: Some(CoreFileSystemPermissions {
-                        read: None,
-                        write: Some(vec![absolute_path(output_path)]),
-                    }),
+                    file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                        None,
+                        Some(vec![absolute_path(output_path)]),
+                    )),
                     ..CoreRequestPermissionProfile::default()
                 },
             ),
@@ -3753,21 +3763,23 @@ mod tests {
                     },
                 }),
                 CoreRequestPermissionProfile {
-                    file_system: Some(CoreFileSystemPermissions {
-                        read: Some(vec![absolute_path(input_path)]),
-                        write: Some(vec![absolute_path(output_path)]),
-                    }),
+                    file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                        Some(vec![absolute_path(input_path)]),
+                        Some(vec![absolute_path(output_path)]),
+                    )),
                     ..CoreRequestPermissionProfile::default()
                 },
             ),
         ];
 
+        let cwd = std::env::current_dir().expect("current dir");
         for (granted_permissions, expected_permissions) in cases {
             let response = request_permissions_response_from_client_result(
                 requested_permissions.clone(),
                 Ok(Ok(serde_json::json!({
                     "permissions": granted_permissions,
                 }))),
+                cwd.as_path(),
             )
             .expect("response should be accepted");
 
@@ -3789,6 +3801,7 @@ mod tests {
                 "scope": "session",
                 "permissions": {},
             }))),
+            std::env::current_dir().expect("current dir").as_path(),
         )
         .expect("response should be accepted");
 
@@ -3798,6 +3811,88 @@ mod tests {
                 permissions: CoreRequestPermissionProfile::default(),
                 scope: CorePermissionGrantScope::Session,
             }
+        );
+    }
+
+    #[test]
+    fn request_permissions_response_accepts_explicit_child_grant_for_requested_cwd_scope() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute cwd");
+        let child = cwd.join("child");
+        let requested_permissions = CoreRequestPermissionProfile {
+            file_system: Some(CoreFileSystemPermissions {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    },
+                    access: FileSystemAccessMode::Write,
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let response = request_permissions_response_from_client_result(
+            requested_permissions,
+            Ok(Ok(serde_json::json!({
+                "permissions": {
+                    "fileSystem": {
+                        "write": [child],
+                    },
+                },
+            }))),
+            cwd.as_path(),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response.permissions,
+            CoreRequestPermissionProfile {
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    None,
+                    Some(vec![child]),
+                )),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn request_permissions_response_ignores_broader_cwd_grant_for_requested_child_path() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path()).expect("absolute cwd");
+        let child = cwd.join("child");
+        let requested_permissions = CoreRequestPermissionProfile {
+            file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                None,
+                Some(vec![child]),
+            )),
+            ..Default::default()
+        };
+
+        let response = request_permissions_response_from_client_result(
+            requested_permissions,
+            Ok(Ok(serde_json::json!({
+                "permissions": {
+                    "fileSystem": {
+                        "entries": [{
+                            "path": {
+                                "type": "special",
+                                "value": {
+                                    "kind": "current_working_directory"
+                                }
+                            },
+                            "access": "write"
+                        }],
+                    },
+                },
+            }))),
+            cwd.as_path(),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response.permissions,
+            CoreRequestPermissionProfile::default()
         );
     }
 

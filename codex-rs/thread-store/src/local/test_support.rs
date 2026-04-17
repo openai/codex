@@ -51,6 +51,26 @@ pub(super) fn write_session_file_with(
     first_user_message: &str,
     model_provider: Option<&str>,
 ) -> std::io::Result<PathBuf> {
+    write_session_file_with_fork(
+        root,
+        day_dir,
+        ts,
+        uuid,
+        first_user_message,
+        model_provider,
+        /*forked_from_id*/ None,
+    )
+}
+
+pub(super) fn write_session_file_with_fork(
+    root: &Path,
+    day_dir: PathBuf,
+    ts: &str,
+    uuid: Uuid,
+    first_user_message: &str,
+    model_provider: Option<&str>,
+    forked_from_id: Option<Uuid>,
+) -> std::io::Result<PathBuf> {
     fs::create_dir_all(&day_dir)?;
     let path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
     let mut file = fs::File::create(&path)?;
@@ -59,6 +79,7 @@ pub(super) fn write_session_file_with(
         "type": "session_meta",
         "payload": {
             "id": uuid,
+            "forked_from_id": forked_from_id,
             "timestamp": ts,
             "cwd": root,
             "originator": "test_originator",

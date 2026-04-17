@@ -46,6 +46,10 @@ use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailability
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialPath;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
@@ -1155,22 +1159,46 @@ impl From<CoreNetworkApprovalContext> for NetworkApprovalContext {
 pub struct AdditionalFileSystemPermissions {
     pub read: Option<Vec<AbsolutePathBuf>>,
     pub write: Option<Vec<AbsolutePathBuf>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub entries: Option<Vec<FileSystemSandboxEntry>>,
 }
 
 impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
     fn from(value: CoreFileSystemPermissions) -> Self {
-        Self {
-            read: value.read,
-            write: value.write,
+        if let Some((read, write)) = value.legacy_read_write_roots() {
+            Self {
+                read,
+                write,
+                entries: None,
+            }
+        } else {
+            Self {
+                read: None,
+                write: None,
+                entries: Some(
+                    value
+                        .entries
+                        .into_iter()
+                        .map(FileSystemSandboxEntry::from)
+                        .collect(),
+                ),
+            }
         }
     }
 }
 
 impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
     fn from(value: AdditionalFileSystemPermissions) -> Self {
-        Self {
-            read: value.read,
-            write: value.write,
+        if let Some(entries) = value.entries {
+            Self {
+                entries: entries
+                    .into_iter()
+                    .map(CoreFileSystemSandboxEntry::from)
+                    .collect(),
+            }
+        } else {
+            CoreFileSystemPermissions::from_read_write_roots(value.read, value.write)
         }
     }
 }
@@ -1218,6 +1246,180 @@ impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
 
 impl From<RequestPermissionProfile> for CoreRequestPermissionProfile {
     fn from(value: RequestPermissionProfile) -> Self {
+        Self {
+            network: value.network.map(CoreNetworkPermissions::from),
+            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        }
+    }
+}
+
+v2_enum_from_core!(
+    pub enum FileSystemAccessMode from CoreFileSystemAccessMode {
+        Read,
+        Write,
+        None
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(tag = "kind")]
+#[ts(export_to = "v2/")]
+pub enum FileSystemSpecialPath {
+    Root,
+    Minimal,
+    CurrentWorkingDirectory,
+    ProjectRoots {
+        subpath: Option<PathBuf>,
+    },
+    Tmpdir,
+    SlashTmp,
+    Unknown {
+        path: String,
+        subpath: Option<PathBuf>,
+    },
+}
+
+impl From<CoreFileSystemSpecialPath> for FileSystemSpecialPath {
+    fn from(value: CoreFileSystemSpecialPath) -> Self {
+        match value {
+            CoreFileSystemSpecialPath::Root => Self::Root,
+            CoreFileSystemSpecialPath::Minimal => Self::Minimal,
+            CoreFileSystemSpecialPath::CurrentWorkingDirectory => Self::CurrentWorkingDirectory,
+            CoreFileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
+            CoreFileSystemSpecialPath::Tmpdir => Self::Tmpdir,
+            CoreFileSystemSpecialPath::SlashTmp => Self::SlashTmp,
+            CoreFileSystemSpecialPath::Unknown { path, subpath } => Self::Unknown { path, subpath },
+        }
+    }
+}
+
+impl From<FileSystemSpecialPath> for CoreFileSystemSpecialPath {
+    fn from(value: FileSystemSpecialPath) -> Self {
+        match value {
+            FileSystemSpecialPath::Root => Self::Root,
+            FileSystemSpecialPath::Minimal => Self::Minimal,
+            FileSystemSpecialPath::CurrentWorkingDirectory => Self::CurrentWorkingDirectory,
+            FileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
+            FileSystemSpecialPath::Tmpdir => Self::Tmpdir,
+            FileSystemSpecialPath::SlashTmp => Self::SlashTmp,
+            FileSystemSpecialPath::Unknown { path, subpath } => Self::Unknown { path, subpath },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum FileSystemPath {
+    Path { path: AbsolutePathBuf },
+    GlobPattern { pattern: String },
+    Special { value: FileSystemSpecialPath },
+}
+
+impl From<CoreFileSystemPath> for FileSystemPath {
+    fn from(value: CoreFileSystemPath) -> Self {
+        match value {
+            CoreFileSystemPath::Path { path } => Self::Path { path },
+            CoreFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
+            CoreFileSystemPath::Special { value } => Self::Special {
+                value: value.into(),
+            },
+        }
+    }
+}
+
+impl From<FileSystemPath> for CoreFileSystemPath {
+    fn from(value: FileSystemPath) -> Self {
+        match value {
+            FileSystemPath::Path { path } => Self::Path { path },
+            FileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
+            FileSystemPath::Special { value } => Self::Special {
+                value: value.into(),
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FileSystemSandboxEntry {
+    pub path: FileSystemPath,
+    pub access: FileSystemAccessMode,
+}
+
+impl From<CoreFileSystemSandboxEntry> for FileSystemSandboxEntry {
+    fn from(value: CoreFileSystemSandboxEntry) -> Self {
+        Self {
+            path: value.path.into(),
+            access: value.access.into(),
+        }
+    }
+}
+
+impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
+    fn from(value: FileSystemSandboxEntry) -> Self {
+        Self {
+            path: value.path.into(),
+            access: value.access.to_core(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileFileSystemPermissions {
+    pub entries: Vec<FileSystemSandboxEntry>,
+}
+
+impl From<CoreFileSystemPermissions> for PermissionProfileFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<PermissionProfileFileSystemPermissions> for CoreFileSystemPermissions {
+    fn from(value: PermissionProfileFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(CoreFileSystemSandboxEntry::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfile {
+    pub network: Option<AdditionalNetworkPermissions>,
+    pub file_system: Option<PermissionProfileFileSystemPermissions>,
+}
+
+impl From<CorePermissionProfile> for PermissionProfile {
+    fn from(value: CorePermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value
+                .file_system
+                .map(PermissionProfileFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<PermissionProfile> for CorePermissionProfile {
+    fn from(value: PermissionProfile) -> Self {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
@@ -2592,9 +2794,16 @@ pub struct CommandExecParams {
     /// Optional sandbox policy for this command.
     ///
     /// Uses the same shape as thread/turn execution sandbox configuration and
-    /// defaults to the user's configured policy when omitted.
+    /// defaults to the user's configured policy when omitted. Cannot be
+    /// combined with `permissionProfile`.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Optional full permissions profile for this command.
+    ///
+    /// Defaults to the user's configured permissions when omitted. Cannot be
+    /// combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
 }
 
 /// Final buffered result for `command/exec`.
@@ -2713,6 +2922,10 @@ pub struct ThreadStartParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for this thread. Cannot be combined with
+    /// `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -2781,6 +2994,7 @@ pub struct ThreadStartResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -2838,6 +3052,10 @@ pub struct ThreadResumeParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the resumed thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -2870,6 +3088,7 @@ pub struct ThreadResumeResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -2918,6 +3137,10 @@ pub struct ThreadForkParams {
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Full permissions override for the forked thread. Cannot be combined
+    /// with `sandbox`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, serde_json::Value>>,
     #[ts(optional = nullable)]
@@ -2950,6 +3173,7 @@ pub struct ThreadForkResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -4241,6 +4465,10 @@ pub struct TurnStartParams {
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
+    /// Override the full permissions profile for this turn and subsequent
+    /// turns. Cannot be combined with `sandboxPolicy`.
+    #[ts(optional = nullable)]
+    pub permission_profile: Option<PermissionProfile>,
     /// Override the model for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -4722,7 +4950,7 @@ impl ThreadItem {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Lifecycle state for a guardian approval review.
+/// [UNSTABLE] Lifecycle state for an approval auto-review.
 pub enum GuardianApprovalReviewStatus {
     InProgress,
     Approved,
@@ -4734,7 +4962,7 @@ pub enum GuardianApprovalReviewStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Source that produced a terminal guardian approval review decision.
+/// [UNSTABLE] Source that produced a terminal approval auto-review decision.
 pub enum AutoReviewDecisionSource {
     Agent,
 }
@@ -4750,7 +4978,7 @@ impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Risk level assigned by guardian approval review.
+/// [UNSTABLE] Risk level assigned by approval auto-review.
 pub enum GuardianRiskLevel {
     Low,
     Medium,
@@ -4772,7 +5000,7 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Authorization level assigned by guardian approval review.
+/// [UNSTABLE] Authorization level assigned by approval auto-review.
 pub enum GuardianUserAuthorization {
     Unknown,
     Low,
@@ -4791,7 +5019,7 @@ impl From<CoreGuardianUserAuthorization> for GuardianUserAuthorization {
     }
 }
 
-/// [UNSTABLE] Temporary guardian approval review payload used by
+/// [UNSTABLE] Temporary approval auto-review payload used by
 /// `item/autoApprovalReview/*` notifications. This shape is expected to change
 /// soon.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -5504,8 +5732,8 @@ pub struct ItemStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// [UNSTABLE] Temporary notification payload for approval auto-review. This
+/// shape is expected to change soon.
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -5530,8 +5758,8 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// [UNSTABLE] Temporary notification payload for approval auto-review. This
+/// shape is expected to change soon.
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -6756,6 +6984,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    entries: None,
                 }),
             }
         );
@@ -6766,16 +6995,16 @@ mod tests {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(CoreFileSystemPermissions {
-                    read: Some(vec![
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
-                    write: Some(vec![
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
-                }),
+                )),
             }
         );
     }
@@ -6806,6 +7035,53 @@ mod tests {
         assert!(
             err.to_string().contains("unknown field `macos`"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn additional_file_system_permissions_preserves_canonical_entries() {
+        let core_permissions = CoreFileSystemPermissions {
+            entries: vec![
+                CoreFileSystemSandboxEntry {
+                    path: CoreFileSystemPath::Special {
+                        value: CoreFileSystemSpecialPath::Root,
+                    },
+                    access: CoreFileSystemAccessMode::Write,
+                },
+                CoreFileSystemSandboxEntry {
+                    path: CoreFileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: CoreFileSystemAccessMode::None,
+                },
+            ],
+        };
+
+        let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
+        assert_eq!(
+            permissions,
+            AdditionalFileSystemPermissions {
+                read: None,
+                write: None,
+                entries: Some(vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: "**/*.env".to_string(),
+                        },
+                        access: FileSystemAccessMode::None,
+                    },
+                ]),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
         );
     }
 
@@ -6849,6 +7125,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    entries: None,
                 }),
             }
         );
@@ -6859,16 +7136,16 @@ mod tests {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(CoreFileSystemPermissions {
-                    read: Some(vec![
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
-                    write: Some(vec![
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
-                }),
+                )),
             }
         );
     }
@@ -7099,6 +7376,7 @@ mod tests {
                 env: None,
                 size: None,
                 sandbox_policy: None,
+                permission_profile: None,
             }
         );
     }
@@ -7119,6 +7397,7 @@ mod tests {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7133,6 +7412,7 @@ mod tests {
                 "env": null,
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
                 "outputBytesCap": null,
             })
         );
@@ -7158,6 +7438,7 @@ mod tests {
             env: None,
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7174,6 +7455,7 @@ mod tests {
                 "env": null,
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -7202,6 +7484,7 @@ mod tests {
             ])),
             size: None,
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7220,6 +7503,7 @@ mod tests {
                 },
                 "size": null,
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -7289,6 +7573,7 @@ mod tests {
                 cols: 120,
             }),
             sandbox_policy: None,
+            permission_profile: None,
         };
 
         let value = serde_json::to_value(&params).expect("serialize command/exec params");
@@ -7307,6 +7592,7 @@ mod tests {
                     "cols": 120,
                 },
                 "sandboxPolicy": null,
+                "permissionProfile": null,
             })
         );
 
@@ -8748,6 +9034,20 @@ mod tests {
             "approvalPolicy": "on-failure",
             "approvalsReviewer": "user",
             "sandbox": { "type": "dangerFullAccess" },
+            "permissionProfile": {
+                "network": { "enabled": true },
+                "fileSystem": {
+                    "entries": [
+                        {
+                            "path": {
+                                "type": "special",
+                                "value": { "kind": "root" }
+                            },
+                            "access": "write"
+                        }
+                    ]
+                }
+            },
             "reasoningEffort": null
         });
 
@@ -8787,6 +9087,7 @@ mod tests {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             model: None,
             service_tier: None,
             effort: None,

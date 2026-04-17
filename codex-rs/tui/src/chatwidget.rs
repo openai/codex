@@ -132,6 +132,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
@@ -245,10 +246,6 @@ use tracing::debug;
 use tracing::warn;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
-const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
-const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
-const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
-const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
@@ -370,6 +367,8 @@ use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
 mod plugins;
 use self::plugins::PluginsCacheState;
+mod plan_implementation;
+use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
@@ -794,6 +793,11 @@ pub(crate) struct ChatWidget {
     /// may still return the response from before the rollback. Keeping this as
     /// a single cache avoids coupling copy state to the backtrack transcript.
     last_agent_markdown: Option<String>,
+    /// Raw markdown of the most recently completed proposed plan.
+    ///
+    /// This is cached only for the approval popup. It is reset at the start of each new task so the
+    /// fresh-context action cannot accidentally submit an older plan after a later turn begins.
+    latest_proposed_plan_markdown: Option<String>,
     /// Whether this turn already produced a copyable response.
     ///
     /// `TurnComplete.last_agent_message` is a fallback source: use it only when no earlier
@@ -1300,6 +1304,7 @@ fn thread_session_state_to_legacy_event(
         approval_policy: session.approval_policy,
         approvals_reviewer: session.approvals_reviewer,
         sandbox_policy: session.sandbox_policy,
+        permission_profile: Some(session.permission_profile),
         cwd: session.cwd,
         reasoning_effort: session.reasoning_effort,
         history_log_id: session.history_log_id,
@@ -1969,6 +1974,12 @@ impl ChatWidget {
 
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
+        let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
+            PermissionProfile::from_legacy_sandbox_policy(&event.sandbox_policy, &event.cwd)
+        });
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+
         self.last_agent_markdown = None;
         self.saw_copy_source_this_turn = false;
         self.bottom_pane
@@ -2002,6 +2013,8 @@ impl ChatWidget {
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
+        self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.config.permissions.network_sandbox_policy = network_sandbox_policy;
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = event.forked_from_id;
@@ -2248,6 +2261,7 @@ impl ChatWidget {
         };
         if !plan_text.trim().is_empty() {
             self.record_agent_markdown(&plan_text);
+            self.latest_proposed_plan_markdown = Some(plan_text.clone());
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
@@ -2327,6 +2341,7 @@ impl ChatWidget {
         self.saw_copy_source_this_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
+        self.latest_proposed_plan_markdown = None;
         self.last_plan_progress = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
@@ -2474,48 +2489,12 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
-        let (implement_actions, implement_disabled_reason) = match default_mask {
-            Some(mask) => {
-                let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::SubmitUserMessageWithMode {
-                        text: user_text.clone(),
-                        collaboration_mode: mask.clone(),
-                    });
-                })];
-                (actions, None)
-            }
-            None => (Vec::new(), Some("Default mode unavailable".to_string())),
-        };
-        let items = vec![
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Default and start coding.".to_string()),
-                selected_description: None,
-                is_current: false,
-                actions: implement_actions,
-                disabled_reason: implement_disabled_reason,
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-            SelectionItem {
-                name: PLAN_IMPLEMENTATION_NO.to_string(),
-                description: Some("Continue planning with the model.".to_string()),
-                selected_description: None,
-                is_current: false,
-                actions: Vec::new(),
-                dismiss_on_select: true,
-                ..Default::default()
-            },
-        ];
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
-            subtitle: None,
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
+        self.bottom_pane
+            .show_selection_view(plan_implementation::selection_view_params(
+                default_mask,
+                self.latest_proposed_plan_markdown.as_deref(),
+            ));
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });
@@ -4896,6 +4875,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             last_agent_markdown: None,
+            latest_proposed_plan_markdown: None,
             saw_copy_source_this_turn: false,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
@@ -5569,11 +5549,20 @@ impl ChatWidget {
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = Some(self.config.service_tier);
+        let permission_profile = if matches!(
+            self.config.permissions.sandbox_policy.get(),
+            SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            None
+        } else {
+            Some(self.config.permissions.permission_profile())
+        };
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
             self.config.permissions.sandbox_policy.get().clone(),
+            permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
             /*summary*/ None,
@@ -8495,9 +8484,9 @@ impl ChatWidget {
 
                 if guardian_approval_enabled {
                     items.push(SelectionItem {
-                        name: "Guardian Approvals".to_string(),
+                        name: "Auto-review".to_string(),
                         description: Some(
-                            "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the guardian reviewer subagent."
+                            "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the auto-reviewer subagent."
                                 .to_string(),
                         ),
                         is_current: current_review_policy == ApprovalsReviewer::GuardianSubagent
@@ -8509,7 +8498,7 @@ impl ChatWidget {
                         actions: Self::approval_preset_actions(
                             preset.approval,
                             preset.sandbox.clone(),
-                            "Guardian Approvals".to_string(),
+                            "Auto-review".to_string(),
                             ApprovalsReviewer::GuardianSubagent,
                         ),
                         dismiss_on_select: true,

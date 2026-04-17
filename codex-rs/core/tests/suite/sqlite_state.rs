@@ -297,7 +297,7 @@ async fn web_search_marks_thread_memory_mode_polluted_when_configured() -> Resul
             .features
             .enable(Feature::Sqlite)
             .expect("test config should allow feature update");
-        config.memories.no_memories_if_mcp_or_web_search = true;
+        config.memories.disable_on_external_context = true;
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
@@ -355,7 +355,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
             .features
             .enable(Feature::Sqlite)
             .expect("test config should allow feature update");
-        config.memories.no_memories_if_mcp_or_web_search = true;
+        config.memories.disable_on_external_context = true;
 
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
@@ -406,6 +406,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,

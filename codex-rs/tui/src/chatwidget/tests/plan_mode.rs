@@ -4,6 +4,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -13,6 +14,7 @@ async fn plan_implementation_popup_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
@@ -35,8 +37,69 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     else {
         panic!("expected SubmitUserMessageWithMode, got {event:?}");
     };
-    assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
+    assert_eq!(
+        text,
+        plan_implementation::PLAN_IMPLEMENTATION_CODING_MESSAGE
+    );
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let plan_markdown = "- Step 1\n- Step 2\n";
+    chat.on_plan_item_completed(plan_markdown.to_string());
+    let _ = drain_insert_history(&mut rx);
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::ClearUiAndSubmitUserMessage { text } = event else {
+        panic!("expected ClearUiAndSubmitUserMessage, got {event:?}");
+    };
+    assert_eq!(
+        text,
+        "A previous agent produced the plan below to accomplish the user's task. \
+        Implement the plan in a fresh context. Treat the plan as the source of \
+        user intent, re-read files as needed, and carry the work through \
+        implementation and verification.\n\n- Step 1\n- Step 2\n"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_clear_context_requires_default_mode_and_plan() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let default_mask = collaboration_modes::default_mode_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+
+    let params =
+        plan_implementation::selection_view_params(/*default_mask*/ None, Some("- Step\n"));
+    assert_eq!(
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE)
+    );
+
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask.clone()),
+        /*plan_markdown*/ None,
+    );
+    assert_eq!(
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
+    );
+
+    let params =
+        plan_implementation::selection_view_params(Some(default_mask.clone()), Some("  \n"));
+    assert_eq!(
+        params.items[1].disabled_reason.as_deref(),
+        Some(plan_implementation::PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
+    );
+
+    let params = plan_implementation::selection_view_params(Some(default_mask), Some("- Step\n"));
+    assert_eq!(params.items[1].disabled_reason, None);
+    assert!(!params.items[1].actions.is_empty());
 }
 
 #[tokio::test]
@@ -917,6 +980,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
@@ -1163,6 +1227,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: None,
         cwd: test_path_buf("/home/user/project").abs(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,

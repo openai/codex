@@ -196,10 +196,10 @@ fn write_permissions_for_paths(
         .ok()?;
 
     let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(write_paths),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(write_paths),
+        )),
         ..Default::default()
     })?;
 
@@ -226,6 +226,7 @@ async fn effective_patch_permissions(
     );
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
+        turn.cwd.as_path(),
         crate::sandboxing::SandboxPermissions::UseDefault,
         write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, &turn.cwd),
     )

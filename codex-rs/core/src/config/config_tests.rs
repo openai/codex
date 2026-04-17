@@ -51,6 +51,9 @@ use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -59,6 +62,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::RealtimeVoice;
+use codex_protocol::protocol::SandboxPolicy;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -221,7 +225,7 @@ persistence = "none"
 
     let memories = r#"
 [memories]
-no_memories_if_mcp_or_web_search = true
+disable_on_external_context = true
 generate_memories = false
 use_memories = false
 max_raw_memories_for_consolidation = 512
@@ -236,7 +240,7 @@ consolidation_model = "gpt-5"
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
     assert_eq!(
         Some(MemoriesToml {
-            no_memories_if_mcp_or_web_search: Some(true),
+            disable_on_external_context: Some(true),
             generate_memories: Some(false),
             use_memories: Some(false),
             max_raw_memories_for_consolidation: Some(512),
@@ -260,7 +264,7 @@ consolidation_model = "gpt-5"
     assert_eq!(
         config.memories,
         MemoriesConfig {
-            no_memories_if_mcp_or_web_search: true,
+            disable_on_external_context: true,
             generate_memories: false,
             use_memories: false,
             max_raw_memories_for_consolidation: 512,
@@ -271,6 +275,18 @@ consolidation_model = "gpt-5"
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5".to_string()),
         }
+    );
+
+    let legacy_memories_cfg =
+        toml::from_str::<ConfigToml>("[memories]\nno_memories_if_mcp_or_web_search = true\n")
+            .expect("legacy memories TOML should deserialize");
+    assert!(
+        MemoriesConfig::from(
+            legacy_memories_cfg
+                .memories
+                .expect("legacy memories config")
+        )
+        .disable_on_external_context
     );
 }
 
@@ -658,6 +674,43 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     assert_eq!(
         config.permissions.network_sandbox_policy,
         NetworkSandboxPolicy::Restricted
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_profile_override_populates_runtime_permissions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let permission_profile = PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        file_system: Some(FileSystemPermissions {
+            entries: vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            }],
+        }),
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            permission_profile: Some(permission_profile.clone()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.permissions.permission_profile(), permission_profile);
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::DangerFullAccess
     );
     Ok(())
 }
