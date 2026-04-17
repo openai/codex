@@ -1028,6 +1028,74 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
 }
 
 #[tokio::test]
+async fn user_message_during_user_shell_command_is_queued_not_steered() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    let begin_sleep = begin_exec_with_source(
+        &mut chat,
+        "user-shell-sleep",
+        "sleep 10",
+        ExecCommandSource::UserShell,
+    );
+
+    chat.bottom_pane
+        .set_composer_text("please continue".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.pending_steers.len(), 0);
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["please continue"],
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let mut saw_interrupt = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, AppEvent::CodexOp(Op::Interrupt)) {
+            saw_interrupt = true;
+            break;
+        }
+    }
+    assert!(saw_interrupt, "expected Esc to send Op::Interrupt");
+
+    end_exec(&mut chat, begin_sleep, "", "", /*exit_code*/ 0);
+    chat.handle_codex_event(Event {
+        id: "turn-1-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "please continue".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

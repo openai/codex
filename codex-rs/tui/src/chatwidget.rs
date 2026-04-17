@@ -5208,8 +5208,8 @@ impl ChatWidget {
                     {
                         return;
                     }
-                    let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                    let should_submit_now = self.is_session_configured()
+                        && !self.should_queue_submitted_user_message(&user_message.text);
                     if should_submit_now {
                         // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -5436,6 +5436,19 @@ impl ChatWidget {
         }
     }
 
+    fn should_queue_submitted_user_message(&self, text: &str) -> bool {
+        self.is_plan_streaming_in_tui()
+            || (self.only_user_shell_commands_running() && !text.trim_start().starts_with('!'))
+    }
+
+    fn only_user_shell_commands_running(&self) -> bool {
+        !self.running_commands.is_empty()
+            && self
+                .running_commands
+                .values()
+                .all(|command| command.source == ExecCommandSource::UserShell)
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -5451,6 +5464,16 @@ impl ChatWidget {
             mention_bindings,
         } = user_message;
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
+            return;
+        }
+        if self.should_queue_submitted_user_message(&text) {
+            self.queue_user_message(UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings,
+            });
             return;
         }
         if (!local_images.is_empty() || !remote_image_urls.is_empty())
