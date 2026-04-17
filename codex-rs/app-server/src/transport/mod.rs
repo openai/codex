@@ -13,6 +13,8 @@ use codex_app_server_protocol::ServerRequest;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::path::Path;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -31,16 +33,28 @@ pub(crate) const CHANNEL_CAPACITY: usize = 128;
 
 mod remote_control;
 mod stdio;
+mod unix_socket;
 mod websocket;
 
 pub(crate) use remote_control::RemoteControlHandle;
 pub(crate) use remote_control::start_remote_control;
 pub(crate) use stdio::start_stdio_connection;
+pub(crate) use unix_socket::start_control_socket_acceptor;
 pub(crate) use websocket::start_websocket_acceptor;
+
+const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "app-server-control";
+const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
+
+pub fn app_server_control_socket_path(codex_home: &Path) -> PathBuf {
+    codex_home
+        .join(APP_SERVER_CONTROL_SOCKET_DIR_NAME)
+        .join(APP_SERVER_CONTROL_SOCKET_FILE_NAME)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppServerTransport {
     Stdio,
+    UnixSocket,
     WebSocket { bind_address: SocketAddr },
     Off,
 }
@@ -48,6 +62,7 @@ pub enum AppServerTransport {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AppServerTransportParseError {
     UnsupportedListenUrl(String),
+    InvalidUnixSocket(String),
     InvalidWebSocketListenUrl(String),
 }
 
@@ -56,7 +71,11 @@ impl std::fmt::Display for AppServerTransportParseError {
         match self {
             AppServerTransportParseError::UnsupportedListenUrl(listen_url) => write!(
                 f,
-                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `ws://IP:PORT`, or `off`"
+                "unsupported --listen URL `{listen_url}`; expected `stdio://`, `unix://`, `ws://IP:PORT`, or `off`"
+            ),
+            AppServerTransportParseError::InvalidUnixSocket(listen_url) => write!(
+                f,
+                "invalid unix socket --listen URL `{listen_url}`; expected `unix://`"
             ),
             AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url) => write!(
                 f,
@@ -74,6 +93,16 @@ impl AppServerTransport {
     pub fn from_listen_url(listen_url: &str) -> Result<Self, AppServerTransportParseError> {
         if listen_url == Self::DEFAULT_LISTEN_URL {
             return Ok(Self::Stdio);
+        }
+
+        if listen_url == "unix://" {
+            return Ok(Self::UnixSocket);
+        }
+
+        if listen_url.starts_with("unix://") {
+            return Err(AppServerTransportParseError::InvalidUnixSocket(
+                listen_url.to_string(),
+            ));
         }
 
         if listen_url == "off" {
@@ -432,6 +461,24 @@ mod tests {
         assert_eq!(
             AppServerTransport::from_listen_url("off"),
             Ok(AppServerTransport::Off)
+        );
+    }
+
+    #[test]
+    fn listen_unix_socket_parses_as_unix_socket_transport() {
+        assert_eq!(
+            AppServerTransport::from_listen_url("unix://"),
+            Ok(AppServerTransport::UnixSocket)
+        );
+    }
+
+    #[test]
+    fn listen_unix_socket_rejects_custom_paths() {
+        assert_eq!(
+            AppServerTransport::from_listen_url("unix:///tmp/codex.sock"),
+            Err(AppServerTransportParseError::InvalidUnixSocket(
+                "unix:///tmp/codex.sock".to_string()
+            ))
         );
     }
 
