@@ -4,10 +4,12 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
@@ -71,10 +73,44 @@ pub(crate) struct RunningTask {
     pub(crate) kind: TaskKind,
     pub(crate) task: Arc<dyn AnySessionTask>,
     pub(crate) cancellation_token: CancellationToken,
-    pub(crate) handle: Arc<AbortOnDropHandle<()>>,
+    pub(crate) handle: Arc<RunningTaskHandle>,
     pub(crate) turn_context: Arc<TurnContext>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
+}
+
+pub(crate) struct RunningTaskHandle {
+    abort_handle: AbortHandle,
+    abort_on_drop: AtomicBool,
+}
+
+impl RunningTaskHandle {
+    pub(crate) fn new(abort_handle: AbortHandle) -> Self {
+        Self {
+            abort_handle,
+            abort_on_drop: AtomicBool::new(true),
+        }
+    }
+
+    pub(crate) fn abort(&self) {
+        self.abort_handle.abort();
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.abort_handle.is_finished()
+    }
+
+    fn mark_completed(&self) {
+        self.abort_on_drop.store(false, Ordering::SeqCst);
+    }
+}
+
+impl Drop for RunningTaskHandle {
+    fn drop(&mut self) {
+        if self.abort_on_drop.load(Ordering::SeqCst) {
+            self.abort_handle.abort();
+        }
+    }
 }
 
 impl ActiveTurn {
@@ -84,7 +120,9 @@ impl ActiveTurn {
     }
 
     pub(crate) fn remove_task(&mut self, sub_id: &str) -> bool {
-        self.tasks.swap_remove(sub_id);
+        if let Some(task) = self.tasks.swap_remove(sub_id) {
+            task.handle.mark_completed();
+        }
         self.tasks.is_empty()
     }
 

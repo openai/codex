@@ -7,5 +7,6 @@ pub(crate) use session::SessionState;
 pub(crate) use turn::ActiveTurn;
 pub(crate) use turn::MailboxDeliveryPhase;
 pub(crate) use turn::RunningTask;
+pub(crate) use turn::RunningTaskHandle;
 pub(crate) use turn::TaskKind;
 pub(crate) use turn::TurnState;

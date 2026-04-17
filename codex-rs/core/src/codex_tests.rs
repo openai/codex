@@ -5870,15 +5870,11 @@ async fn finished_active_goal_turn_prunes_stale_finished_tasks_before_continuing
     let stale_tc = sess
         .new_default_turn_with_sub_id("stale-goal-task".to_string())
         .await;
-    let stale_handle = Arc::new(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
-        async {},
-    )));
-    for _ in 0..10 {
-        if stale_handle.is_finished() {
-            break;
-        }
-        sleep(Duration::from_millis(1)).await;
-    }
+    let stale_join_handle = tokio::spawn(async {});
+    let stale_handle = Arc::new(crate::state::RunningTaskHandle::new(
+        stale_join_handle.abort_handle(),
+    ));
+    let _ = stale_join_handle.await;
     assert!(stale_handle.is_finished());
     {
         let mut active = sess.active_turn.lock().await;

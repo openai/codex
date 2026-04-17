@@ -14,7 +14,6 @@ use tokio::select;
 use tokio::sync::Notify;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 use tracing::info_span;
 use tracing::trace;
@@ -31,6 +30,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
+use crate::state::RunningTaskHandle;
 use crate::state::TaskKind;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
@@ -340,7 +340,7 @@ impl Session {
             .ok();
         let running_task = RunningTask {
             done,
-            handle: Arc::new(AbortOnDropHandle::new(handle)),
+            handle: Arc::new(RunningTaskHandle::new(handle.abort_handle())),
             kind: task_kind,
             task,
             cancellation_token,
