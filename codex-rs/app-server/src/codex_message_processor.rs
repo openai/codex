@@ -4737,12 +4737,7 @@ impl CodexMessageProcessor {
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
-                    thread_goal: if self.config.features.enabled(Feature::GoalMode) {
-                        self.thread_goal_updated_notification_goal(existing_thread_id)
-                            .await
-                    } else {
-                        None
-                    },
+                    emit_thread_goal_update: self.config.features.enabled(Feature::GoalMode),
                     continue_goal_if_idle: self.config.features.enabled(Feature::GoalMode),
                 }),
             );
@@ -8938,15 +8933,33 @@ async fn handle_pending_thread_resume_request(
         token_usage_turn_id,
     )
     .await;
-    if let Some(goal) = pending.thread_goal {
-        outgoing
-            .send_server_notification(ServerNotification::ThreadGoalUpdated(
-                ThreadGoalUpdatedNotification {
-                    thread_id: conversation_id.to_string(),
-                    goal,
-                },
-            ))
-            .await;
+    if pending.emit_thread_goal_update {
+        if let Some(state_db) = conversation.state_db() {
+            match state_db.get_thread_goal(conversation_id).await {
+                Ok(Some(goal)) => {
+                    outgoing
+                        .send_server_notification(ServerNotification::ThreadGoalUpdated(
+                            ThreadGoalUpdatedNotification {
+                                thread_id: conversation_id.to_string(),
+                                goal: api_thread_goal_from_state(goal),
+                            },
+                        ))
+                        .await;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        thread_id = %conversation_id,
+                        "failed to read thread goal for running thread resume: {err}"
+                    );
+                }
+            }
+        } else {
+            tracing::warn!(
+                thread_id = %conversation_id,
+                "state db unavailable when reading thread goal for running thread resume"
+            );
+        }
     }
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
