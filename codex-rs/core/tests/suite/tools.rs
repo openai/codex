@@ -168,6 +168,7 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
+                    default_tools_approval_mode: None,
                     enabled_tools: None,
                     disabled_tools: None,
                     scopes: None,

@@ -1,3 +1,5 @@
+use crate::agents_md::DEFAULT_AGENTS_MD_FILENAME;
+use crate::agents_md::LOCAL_AGENTS_MD_FILENAME;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
@@ -88,6 +90,7 @@ fn stdio_mcp(command: &str) -> McpServerConfig {
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
+        default_tools_approval_mode: None,
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
@@ -111,6 +114,7 @@ fn http_mcp(url: &str) -> McpServerConfig {
         disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
+        default_tools_approval_mode: None,
         enabled_tools: None,
         disabled_tools: None,
         scopes: None,
@@ -138,10 +142,12 @@ async fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn load_config_records_global_agents_path() -> std::io::Result<()> {
+async fn load_config_loads_global_agents_instructions() -> std::io::Result<()> {
     let codex_home = tempdir()?;
-    let global_agents_path = codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME);
-    std::fs::write(&global_agents_path, "\n  global instructions  \n")?;
+    std::fs::write(
+        codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME),
+        "\n  global instructions  \n",
+    )?;
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
@@ -154,21 +160,17 @@ async fn load_config_records_global_agents_path() -> std::io::Result<()> {
         config.user_instructions.as_deref(),
         Some("global instructions")
     );
-    assert_eq!(
-        config.user_instructions_path.as_deref(),
-        Some(global_agents_path.as_path())
-    );
     Ok(())
 }
 
 #[tokio::test]
-async fn load_config_records_preferred_global_agents_override_path() -> std::io::Result<()> {
+async fn load_config_prefers_global_agents_override_instructions() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     std::fs::write(
-        codex_home.path().join(DEFAULT_PROJECT_DOC_FILENAME),
+        codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME),
         "global instructions",
     )?;
-    let global_agents_override_path = codex_home.path().join(LOCAL_PROJECT_DOC_FILENAME);
+    let global_agents_override_path = codex_home.path().join(LOCAL_AGENTS_MD_FILENAME);
     std::fs::write(&global_agents_override_path, "local override instructions")?;
 
     let config = Config::load_from_base_config_with_overrides(
@@ -181,10 +183,6 @@ async fn load_config_records_preferred_global_agents_override_path() -> std::io:
     assert_eq!(
         config.user_instructions.as_deref(),
         Some("local override instructions")
-    );
-    assert_eq!(
-        config.user_instructions_path.as_deref(),
-        Some(global_agents_override_path.as_path())
     );
     Ok(())
 }
@@ -2154,6 +2152,7 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(3)),
             tool_timeout_sec: Some(Duration::from_secs(5)),
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -2267,23 +2266,28 @@ fn mcp_servers_toml_parses_per_tool_approval_overrides() {
 [mcp_servers.docs]
 command = "docs-server"
 name = "Docs"
+default_tools_approval_mode = "prompt"
 
 [mcp_servers.docs.tools.search]
 approval_mode = "approve"
 "#,
     )
     .expect("TOML deserialization should succeed");
-    let tool = config
+    let server = config
         .mcp_servers
         .get("docs")
-        .and_then(|server| server.tools.get("search"))
-        .expect("docs/search tool config exists");
+        .expect("docs server config exists");
 
     assert_eq!(
-        tool,
-        &McpServerToolConfig {
+        server.default_tools_approval_mode,
+        Some(AppToolApproval::Prompt)
+    );
+
+    assert_eq!(
+        server.tools.get("search"),
+        Some(&McpServerToolConfig {
             approval_mode: Some(AppToolApproval::Approve),
-        }
+        })
     );
 }
 
@@ -2404,6 +2408,7 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -2479,6 +2484,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -2534,6 +2540,7 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -2587,6 +2594,7 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -2656,6 +2664,7 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -2737,6 +2746,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(2)),
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -2771,6 +2781,7 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -2840,6 +2851,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(2)),
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -2864,6 +2876,7 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 disabled_reason: None,
                 startup_timeout_sec: None,
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -2951,6 +2964,7 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -3000,6 +3014,7 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -3049,6 +3064,7 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: Some(vec!["allowed".to_string()]),
             disabled_tools: Some(vec!["blocked".to_string()]),
             scopes: None,
@@ -3102,6 +3118,7 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,
@@ -4741,7 +4758,6 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(/*initial_value*/ None),
             user_instructions: None,
-            user_instructions_path: None,
             notify: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
@@ -4753,7 +4769,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             mcp_oauth_callback_port: None,
             mcp_oauth_callback_url: None,
             model_providers: fixture.model_provider_map.clone(),
-            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+            project_doc_max_bytes: AGENTS_MD_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
@@ -4892,7 +4908,6 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
-        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
@@ -4904,7 +4919,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),
-        project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+        project_doc_max_bytes: AGENTS_MD_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
@@ -5041,7 +5056,6 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
-        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
@@ -5053,7 +5067,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),
-        project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+        project_doc_max_bytes: AGENTS_MD_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
@@ -5175,7 +5189,6 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         user_instructions: None,
-        user_instructions_path: None,
         notify: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
@@ -5187,7 +5200,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         mcp_oauth_callback_port: None,
         mcp_oauth_callback_url: None,
         model_providers: fixture.model_provider_map.clone(),
-        project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+        project_doc_max_bytes: AGENTS_MD_MAX_BYTES,
         project_doc_fallback_filenames: Vec::new(),
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,

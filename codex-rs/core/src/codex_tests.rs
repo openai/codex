@@ -413,7 +413,7 @@ fn make_mcp_tool(
 ) -> ToolInfo {
     let tool_namespace = if server_name == CODEX_APPS_MCP_SERVER_NAME {
         connector_name
-            .map(crate::connectors::sanitize_name)
+            .map(codex_connectors::metadata::sanitize_name)
             .map(|connector_name| format!("mcp__{server_name}__{connector_name}"))
             .unwrap_or_else(|| server_name.to_string())
     } else {
@@ -4182,7 +4182,7 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn fail_agent_identity_registration_emits_error_and_shutdown() {
+async fn fail_agent_identity_registration_emits_error_without_shutdown() {
     let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
 
     session
@@ -4200,21 +4200,14 @@ async fn fail_agent_identity_registration_emits_error_and_shutdown() {
         }) => {
             assert_eq!(
                 message,
-                "Agent identity registration failed. Codex cannot continue while `features.use_agent_identity` is enabled: registration exploded".to_string()
+                "Agent identity registration failed while `features.use_agent_identity` is enabled: registration exploded".to_string()
             );
             assert_eq!(codex_error_info, Some(CodexErrorInfo::Other));
         }
         other => panic!("expected error event, got {other:?}"),
     }
 
-    let shutdown_event = timeout(Duration::from_secs(1), rx_event.recv())
-        .await
-        .expect("shutdown event should arrive")
-        .expect("shutdown event should be readable");
-    match shutdown_event.msg {
-        EventMsg::ShutdownComplete => {}
-        other => panic!("expected shutdown event, got {other:?}"),
-    }
+    assert!(rx_event.try_recv().is_err());
 }
 
 #[tokio::test]

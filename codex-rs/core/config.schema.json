@@ -1471,6 +1471,14 @@
           "default": null,
           "type": "string"
         },
+        "default_tools_approval_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
+            }
+          ],
+          "default": null
+        },
         "disabled_tools": {
           "default": null,
           "items": {
