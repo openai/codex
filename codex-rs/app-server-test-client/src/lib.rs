@@ -1124,6 +1124,7 @@ async fn thread_list(endpoint: &Endpoint, config_overrides: &[String], limit: u3
             cursor: None,
             limit: Some(limit),
             sort_key: None,
+            sort_direction: None,
             model_providers: None,
             source_kinds: None,
             archived: None,

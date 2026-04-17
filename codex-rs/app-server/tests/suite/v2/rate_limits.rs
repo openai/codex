@@ -7,6 +7,7 @@ use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
+use codex_app_server_protocol::RateLimitReachedType;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
@@ -118,6 +119,9 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 "reset_at": secondary_reset_timestamp,
             }
         },
+        "rate_limit_reached_type": {
+            "type": "workspace_member_usage_limit_reached",
+        },
         "additional_rate_limits": [
             {
                 "limit_name": "codex_other",
@@ -173,6 +177,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
             }),
             credits: None,
             plan_type: Some(AccountPlanType::Pro),
+            rate_limit_reached_type: Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached),
         },
         rate_limits_by_limit_id: Some(
             [
@@ -193,6 +198,9 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                         }),
                         credits: None,
                         plan_type: Some(AccountPlanType::Pro),
+                        rate_limit_reached_type: Some(
+                            RateLimitReachedType::WorkspaceMemberUsageLimitReached,
+                        ),
                     },
                 ),
                 (
@@ -208,6 +216,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                         secondary: None,
                         credits: None,
                         plan_type: Some(AccountPlanType::Pro),
+                        rate_limit_reached_type: None,
                     },
                 ),
             ]

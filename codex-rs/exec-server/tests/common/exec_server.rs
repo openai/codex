@@ -57,6 +57,15 @@ pub(crate) fn test_codex_helper_paths() -> anyhow::Result<TestCodexHelperPaths> 
 }
 
 pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
+    exec_server_with_env(std::iter::empty::<(&str, &str)>()).await
+}
+
+pub(crate) async fn exec_server_with_env<I, K, V>(env: I) -> anyhow::Result<ExecServerHarness>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<std::ffi::OsStr>,
+    V: AsRef<std::ffi::OsStr>,
+{
     let helper_paths = test_codex_helper_paths()?;
     let codex_home = TempDir::new()?;
     let mut child = Command::new(&helper_paths.codex_exe);
@@ -66,6 +75,7 @@ pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
     child.stderr(Stdio::inherit());
     child.kill_on_drop(true);
     child.env("CODEX_HOME", codex_home.path());
+    child.envs(env);
     let mut child = child.spawn()?;
 
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;

@@ -391,11 +391,11 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use tempfile::TempDir;
+    use tokio::sync::Semaphore;
     use tokio::time::Instant;
     use tokio::time::sleep;
 
-    static ESCALATE_SERVER_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-        LazyLock::new(|| tokio::sync::Mutex::new(()));
+    static ESCALATE_SERVER_TEST_LOCK: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
 
     struct DeterministicEscalationPolicy {
         decision: EscalationDecision,
@@ -596,7 +596,7 @@ mod tests {
     /// until `close_client_socket()` is called.
     #[tokio::test]
     async fn start_session_exposes_wrapper_env_overlay() -> anyhow::Result<()> {
-        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let _guard = ESCALATE_SERVER_TEST_LOCK.acquire().await?;
         let execve_wrapper = PathBuf::from("/tmp/codex-execve-wrapper");
         let execve_wrapper_str = execve_wrapper.to_string_lossy().to_string();
         let server = EscalateServer::new(
@@ -638,7 +638,7 @@ mod tests {
 
     #[tokio::test]
     async fn exec_closes_parent_socket_after_shell_spawn() -> anyhow::Result<()> {
-        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let _guard = ESCALATE_SERVER_TEST_LOCK.acquire().await?;
         let after_spawn_invoked = Arc::new(AtomicBool::new(false));
         let server = EscalateServer::new(
             PathBuf::from("/bin/bash"),
@@ -672,7 +672,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_escalate_session_respects_run_in_sandbox_decision() -> anyhow::Result<()> {
-        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let _guard = ESCALATE_SERVER_TEST_LOCK.acquire().await?;
         let (server, client) = AsyncSocket::pair()?;
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
@@ -712,7 +712,7 @@ mod tests {
     #[tokio::test]
     async fn handle_escalate_session_resolves_relative_file_against_request_workdir()
     -> anyhow::Result<()> {
-        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let _guard = ESCALATE_SERVER_TEST_LOCK.acquire().await?;
         let (server, client) = AsyncSocket::pair()?;
         let tmp = tempfile::TempDir::new()?;
         let workdir = tmp.path().join("workspace");
@@ -751,7 +751,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_escalate_session_executes_escalated_command() -> anyhow::Result<()> {
-        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let _guard = ESCALATE_SERVER_TEST_LOCK.acquire().await?;
         let (server, client) = AsyncSocket::pair()?;
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
@@ -844,7 +844,7 @@ mod tests {
     #[tokio::test]
     async fn handle_escalate_session_accepts_received_fds_that_overlap_destinations()
     -> anyhow::Result<()> {
-        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let _guard = ESCALATE_SERVER_TEST_LOCK.acquire().await?;
         let mut pipe_fds = [0; 2];
         if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } == -1 {
             return Err(std::io::Error::last_os_error().into());
@@ -916,7 +916,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_escalate_session_passes_permissions_to_executor() -> anyhow::Result<()> {
-        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let _guard = ESCALATE_SERVER_TEST_LOCK.acquire().await?;
         let (server, client) = AsyncSocket::pair()?;
         let server_task = tokio::spawn(handle_escalate_session_with_policy(
             server,
@@ -972,7 +972,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_session_aborts_intercept_workers_and_kills_spawned_child()
     -> anyhow::Result<()> {
-        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let _guard = ESCALATE_SERVER_TEST_LOCK.acquire().await?;
         let tmp = TempDir::new()?;
         let pid_file = tmp.path().join("escalated-child.pid");
         let pid_file_display = pid_file.display().to_string();
