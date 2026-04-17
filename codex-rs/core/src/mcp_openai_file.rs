@@ -12,9 +12,9 @@
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use codex_api::CoreAuthProvider;
 use codex_api::upload_local_file;
 use codex_login::CodexAuth;
+use codex_model_provider::BearerAuthProvider;
 use serde_json::Value as JsonValue;
 
 pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
@@ -112,7 +112,7 @@ async fn build_uploaded_local_argument_value(
     let token_data = auth
         .get_token_data()
         .map_err(|error| format!("failed to read ChatGPT auth for file upload: {error}"))?;
-    let upload_auth = CoreAuthProvider {
+    let upload_auth = BearerAuthProvider {
         token: Some(token_data.access_token),
         account_id: token_data.account_id,
         is_fedramp_account: auth.is_fedramp_account(),

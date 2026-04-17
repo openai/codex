@@ -37,6 +37,7 @@ impl ExternalAgentConfigApi {
                 include_home: params.include_home,
                 cwds: params.cwds,
             })
+            .await
             .map_err(map_io_error)?;
 
         Ok(ExternalAgentConfigDetectResponse {
