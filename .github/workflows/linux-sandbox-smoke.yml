@@ -100,7 +100,6 @@ jobs:
 
           sudo ln -sf "$profile_source" "$profile_target"
           sudo apparmor_parser -r "$profile_target"
-          sudo aa-enforce /usr/bin/bwrap
           if ! sudo grep -Eq '^bwrap \(enforce\)$' /sys/kernel/security/apparmor/profiles; then
             echo "Ubuntu's bwrap AppArmor profile is not loaded in enforce mode."
             sudo grep bwrap /sys/kernel/security/apparmor/profiles || true
