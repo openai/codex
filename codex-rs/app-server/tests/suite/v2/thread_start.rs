@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
+use app_test_support::PathBufExt;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
@@ -21,6 +22,7 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::ServiceTier;
@@ -856,9 +858,12 @@ model_reasoning_effort = "high"
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let trusted_root = resolve_root_git_project_for_trust(workspace.path())
-        .await
-        .unwrap_or_else(|| workspace.path().to_path_buf());
+    let trusted_root = resolve_root_git_project_for_trust(
+        LOCAL_FS.as_ref(),
+        &workspace.path().to_path_buf().abs(),
+    )
+    .await
+    .unwrap_or_else(|| workspace.path().to_path_buf().abs());
     assert!(config_toml.contains(&persisted_trust_path(&trusted_root)));
     assert!(config_toml.contains("trust_level = \"trusted\""));
 
@@ -894,7 +899,7 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
     .await??;
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let trusted_root = resolve_root_git_project_for_trust(&nested)
+    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested.abs())
         .await
         .expect("git root should resolve");
     assert!(config_toml.contains(&persisted_trust_path(&trusted_root)));
