@@ -167,6 +167,47 @@ fn find_marketplace_plugin_supports_git_subdir_sources() {
 }
 
 #[test]
+fn find_marketplace_plugin_normalizes_github_shorthand_with_dot_git_suffix() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "remote-plugin",
+      "source": {
+        "source": "git-subdir",
+        "url": "openai/toolkit.git",
+        "path": "plugins/toolkit"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let resolved = find_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "remote-plugin",
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolved.source,
+        MarketplacePluginSource::Git {
+            url: "https://github.com/openai/toolkit.git".to_string(),
+            path: Some("plugins/toolkit".to_string()),
+            ref_name: None,
+            sha: None,
+        }
+    );
+}
+
+#[test]
 fn find_marketplace_plugin_normalizes_relative_git_source_urls_to_marketplace_root() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
@@ -207,6 +248,46 @@ fn find_marketplace_plugin_normalizes_relative_git_source_urls_to_marketplace_ro
             sha: None,
         }
     );
+}
+
+#[test]
+fn find_marketplace_plugin_skips_root_equivalent_git_subdir_paths() {
+    for path in [".", "./", "plugins/.."] {
+        let tmp = tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+        fs::write(
+            repo_root.join(".agents/plugins/marketplace.json"),
+            format!(
+                r#"{{
+  "name": "codex-curated",
+  "plugins": [
+    {{
+      "name": "remote-plugin",
+      "source": {{
+        "source": "git-subdir",
+        "url": "openai/toolkit",
+        "path": "{path}"
+      }}
+    }}
+  ]
+}}"#
+            ),
+        )
+        .unwrap();
+
+        let err = find_marketplace_plugin(
+            &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+            "remote-plugin",
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "plugin `remote-plugin` was not found in marketplace `codex-curated`"
+        );
+    }
 }
 
 #[test]

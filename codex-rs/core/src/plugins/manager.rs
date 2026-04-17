@@ -40,6 +40,7 @@ use codex_core_plugins::marketplace::find_installable_marketplace_plugin;
 use codex_core_plugins::marketplace::find_marketplace_plugin;
 use codex_core_plugins::marketplace::list_marketplaces;
 use codex_core_plugins::marketplace::load_marketplace;
+use codex_core_plugins::marketplace::plugin_interface_with_marketplace_category;
 use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use codex_core_plugins::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use codex_core_plugins::marketplace_upgrade::configured_git_marketplace_names;
@@ -1108,6 +1109,14 @@ impl PluginsManager {
             MarketplaceError::InvalidPlugin("missing or invalid plugin.json".to_string())
         })?;
         let description = manifest.description.clone();
+        let marketplace_category = plugin
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.category.clone());
+        let interface = plugin_interface_with_marketplace_category(
+            manifest.interface.clone(),
+            marketplace_category,
+        );
         let resolved_skills = load_plugin_skills(
             &source_path,
             &manifest.paths,
@@ -1131,7 +1140,7 @@ impl PluginsManager {
             description,
             source: plugin.source,
             policy: plugin.policy,
-            interface: plugin.interface.or(manifest.interface),
+            interface,
             installed: plugin.installed,
             enabled: plugin.enabled,
             skills: resolved_skills.skills,

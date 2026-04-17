@@ -401,15 +401,12 @@ fn resolve_marketplace_plugin_entry(
         MarketplacePluginSource::Local { path } => load_plugin_manifest(path.as_path()),
         MarketplacePluginSource::Git { .. } => None,
     };
-    let mut interface = manifest
-        .as_ref()
-        .and_then(|manifest| manifest.interface.clone());
-    if let Some(category) = category {
-        // Marketplace taxonomy wins when both sources provide a category.
-        interface
-            .get_or_insert_with(PluginManifestInterface::default)
-            .category = Some(category);
-    }
+    let interface = plugin_interface_with_marketplace_category(
+        manifest
+            .as_ref()
+            .and_then(|manifest| manifest.interface.clone()),
+        category,
+    );
 
     Ok(Some(ResolvedMarketplacePlugin {
         plugin_id: PluginId::new(name, marketplace_name.to_string()).map_err(|err| match err {
@@ -539,13 +536,13 @@ fn normalize_remote_plugin_subdir(
     path: &str,
 ) -> Result<String, MarketplaceError> {
     let path = path.trim();
+    let path = path.strip_prefix("./").unwrap_or(path);
     if path.is_empty() {
         return Err(MarketplaceError::InvalidMarketplaceFile {
             path: marketplace_path.to_path_buf(),
             message: "git plugin source path must not be empty".to_string(),
         });
     }
-    let path = path.strip_prefix("./").unwrap_or(path);
     let relative_path = Path::new(path);
     if relative_path
         .components()
@@ -596,8 +593,8 @@ fn normalize_git_plugin_source_url(
     if url.starts_with("ssh://") || url.starts_with("git@") && url.contains(':') {
         return Ok(url.to_string());
     }
-    if looks_like_github_shorthand(url) {
-        return Ok(format!("https://github.com/{url}.git"));
+    if let Some(url) = normalize_github_shorthand_url(url) {
+        return Ok(url);
     }
 
     Err(MarketplaceError::InvalidMarketplaceFile {
@@ -622,6 +619,20 @@ fn normalize_github_git_url(url: &str) -> String {
     }
 }
 
+fn normalize_github_shorthand_url(source: &str) -> Option<String> {
+    if !looks_like_github_shorthand(source) {
+        return None;
+    }
+    let mut segments = source.split('/');
+    let owner = segments.next()?;
+    let repo = segments.next()?;
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    if repo.is_empty() {
+        return None;
+    }
+    Some(format!("https://github.com/{owner}/{repo}.git"))
+}
+
 fn looks_like_github_shorthand(source: &str) -> bool {
     let mut segments = source.split('/');
     let owner = segments.next();
@@ -637,6 +648,19 @@ fn is_github_shorthand_segment(segment: &str) -> bool {
         && segment
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
+pub fn plugin_interface_with_marketplace_category(
+    mut interface: Option<PluginManifestInterface>,
+    category: Option<String>,
+) -> Option<PluginManifestInterface> {
+    if let Some(category) = category {
+        // Marketplace taxonomy wins when both sources provide a category.
+        interface
+            .get_or_insert_with(PluginManifestInterface::default)
+            .category = Some(category);
+    }
+    interface
 }
 
 fn marketplace_root_dir(

@@ -1655,7 +1655,8 @@ async fn read_plugin_for_config_installed_git_source_reads_from_cache_without_cl
         "source": "git-subdir",
         "url": "{missing_remote_repo_url}",
         "path": "plugins/toolkit"
-      }}
+      }},
+      "category": "Developer Tools"
     }}
   ]
 }}"#
@@ -1715,12 +1716,12 @@ enabled = true
         Some("Cached toolkit plugin")
     );
     assert_eq!(
-        outcome
-            .plugin
-            .interface
-            .as_ref()
-            .and_then(|interface| interface.display_name.as_deref()),
-        Some("Toolkit")
+        outcome.plugin.interface,
+        Some(PluginManifestInterface {
+            display_name: Some("Toolkit".to_string()),
+            category: Some("Developer Tools".to_string()),
+            ..Default::default()
+        })
     );
     assert!(outcome.plugin.installed);
     assert_eq!(outcome.plugin.skills.len(), 1);
