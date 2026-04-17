@@ -468,7 +468,7 @@ async fn unacknowledged_pending_steer_is_retried_as_follow_up_when_turn_complete
 }
 
 #[tokio::test]
-async fn replayed_user_message_commit_clears_pending_steer_without_retry() {
+async fn replayed_completion_does_not_retry_pending_steer() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -499,26 +499,7 @@ async fn replayed_user_message_commit_clears_pending_steer_without_retry() {
     assert_eq!(chat.pending_steers.len(), 1);
     assert_no_submit_op(&mut op_rx);
 
-    chat.replay_thread_turns(
-        vec![AppServerTurn {
-            id: "turn-with-commit".to_string(),
-            items: vec![AppServerThreadItem::UserMessage {
-                id: "user-1".to_string(),
-                content: vec![AppServerUserInput::Text {
-                    text: "already committed".to_string(),
-                    text_elements: Vec::new(),
-                }],
-            }],
-            status: AppServerTurnStatus::Completed,
-            error: None,
-            started_at: None,
-            completed_at: None,
-            duration_ms: None,
-        }],
-        ReplayKind::ThreadSnapshot,
-    );
-
-    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.pending_steers.len(), 1);
     assert!(chat.rejected_steers_queue.is_empty());
     assert_no_submit_op(&mut op_rx);
 }

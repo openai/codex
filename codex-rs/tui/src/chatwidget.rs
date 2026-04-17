@@ -5816,8 +5816,13 @@ impl ChatWidget {
                 else {
                     unreachable!("user message item should convert to a user message event");
                 };
-                let compare_key = Self::pending_steer_compare_key_from_items(&user_message.content);
-                self.on_user_message_event_reconciling_pending_steer(event, compare_key);
+                if from_replay {
+                    self.on_user_message_event(event);
+                } else {
+                    let compare_key =
+                        Self::pending_steer_compare_key_from_items(&user_message.content);
+                    self.on_user_message_event_reconciling_pending_steer(event, compare_key);
+                }
             }
             ThreadItem::AgentMessage {
                 id,
@@ -6240,8 +6245,13 @@ impl ChatWidget {
                     }
                 } else if from_replay {
                     self.last_non_retry_error = None;
-                    self.finalize_turn();
-                    self.request_redraw();
+                    if !matches!(
+                        notification.error.codex_error_info,
+                        Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
+                    ) {
+                        self.finalize_turn();
+                        self.request_redraw();
+                    }
                 } else {
                     self.last_non_retry_error = Some((
                         notification.turn_id.clone(),
@@ -6769,8 +6779,13 @@ impl ChatWidget {
                 codex_error_info,
             }) => {
                 if from_replay {
-                    self.finalize_turn();
-                    self.request_redraw();
+                    if !matches!(
+                        codex_error_info,
+                        Some(CoreCodexErrorInfo::ActiveTurnNotSteerable { .. })
+                    ) {
+                        self.finalize_turn();
+                        self.request_redraw();
+                    }
                 } else if codex_error_info
                     .as_ref()
                     .is_some_and(|info| self.handle_steer_rejected_error(info))
@@ -6940,7 +6955,7 @@ impl ChatWidget {
             }
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
-                if let codex_protocol::items::TurnItem::UserMessage(item) = &item {
+                if !from_replay && let codex_protocol::items::TurnItem::UserMessage(item) = &item {
                     let EventMsg::UserMessage(event) = item.as_legacy_event() else {
                         unreachable!("user message item should convert to a legacy user message");
                     };
