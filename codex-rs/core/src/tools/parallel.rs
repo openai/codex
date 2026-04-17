@@ -16,6 +16,7 @@ use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
@@ -50,6 +51,13 @@ impl ToolCallRuntime {
 
     pub(crate) fn find_spec(&self, tool_name: &codex_tools::ToolName) -> Option<ToolSpec> {
         self.router.find_spec(tool_name)
+    }
+
+    pub(crate) fn create_diff_consumer(
+        &self,
+        tool_name: &codex_tools::ToolName,
+    ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.router.create_diff_consumer(tool_name)
     }
 
     #[instrument(level = "trace", skip_all)]

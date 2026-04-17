@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
+use codex_connectors::metadata::connector_display_label;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseItem;
 
@@ -46,7 +47,7 @@ pub(crate) fn build_plugin_injections(
                             .iter()
                             .any(|plugin_name| plugin_name == &plugin.display_name)
                 })
-                .map(connectors::connector_display_label)
+                .map(connector_display_label)
                 .collect::<BTreeSet<String>>()
                 .into_iter()
                 .collect::<Vec<_>>();

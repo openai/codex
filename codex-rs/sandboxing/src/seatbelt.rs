@@ -9,6 +9,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
@@ -379,6 +380,150 @@ fn build_seatbelt_access_policy(
     }
 }
 
+fn build_seatbelt_unreadable_glob_policy(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> String {
+    // Seatbelt does not understand the filesystem policy's glob syntax directly.
+    // Convert each unreadable pattern into an anchored regex deny rule and apply
+    // it to both reads and unlink-style writes so a denied path cannot be probed
+    // through destructive filesystem operations.
+    let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
+    if unreadable_globs.is_empty() {
+        return String::new();
+    }
+
+    let mut policy_components = Vec::new();
+    for pattern in unreadable_globs {
+        let mut regexes = BTreeSet::new();
+        if let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern) {
+            regexes.insert(regex);
+        }
+        if let Some(pattern) = canonicalize_glob_static_prefix_for_sandbox(&pattern)
+            && let Some(regex) = seatbelt_regex_for_unreadable_glob(&pattern)
+        {
+            regexes.insert(regex);
+        }
+        for regex in regexes {
+            let regex = regex.replace('"', "\\\"");
+            policy_components.push(format!(r#"(deny file-read* (regex #"{regex}"))"#));
+            policy_components.push(format!(r#"(deny file-write-unlink (regex #"{regex}"))"#));
+        }
+    }
+
+    policy_components.join("\n")
+}
+
+fn canonicalize_glob_static_prefix_for_sandbox(pattern: &str) -> Option<String> {
+    let first_glob_index = pattern
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '*' | '?' | '[' | ']').then_some(index));
+    let Some(first_glob_index) = first_glob_index else {
+        return normalize_path_for_sandbox(Path::new(pattern))
+            .map(|path| path.to_string_lossy().to_string());
+    };
+
+    let static_prefix = &pattern[..first_glob_index];
+    let prefix_end = if static_prefix.ends_with('/') {
+        static_prefix.len() - 1
+    } else {
+        static_prefix.rfind('/').unwrap_or(0)
+    };
+    if prefix_end == 0 {
+        return None;
+    }
+
+    let root = normalize_path_for_sandbox(Path::new(&pattern[..prefix_end]))?;
+    let root = root.to_string_lossy();
+    let suffix = &pattern[prefix_end..];
+    let normalized_pattern = format!("{root}{suffix}");
+    (normalized_pattern != pattern).then_some(normalized_pattern)
+}
+
+fn seatbelt_regex_for_unreadable_glob(pattern: &str) -> Option<String> {
+    if pattern.is_empty() {
+        return None;
+    }
+
+    // Translate the supported git-style glob subset into a Seatbelt regex:
+    // `*` and `?` stay within one path component, `**/` can consume zero or
+    // more components, and closed character classes remain character classes.
+    // A pattern with no glob metacharacters is treated as exact path plus subtree.
+    let mut regex = String::from("^");
+    let mut chars = pattern.chars().collect::<VecDeque<_>>();
+    let mut saw_glob = false;
+
+    while let Some(ch) = chars.pop_front() {
+        match ch {
+            '*' => {
+                saw_glob = true;
+                if chars.front() == Some(&'*') {
+                    chars.pop_front();
+                    if chars.front() == Some(&'/') {
+                        chars.pop_front();
+                        regex.push_str("(.*/)?");
+                    } else {
+                        regex.push_str(".*");
+                    }
+                } else {
+                    regex.push_str("[^/]*");
+                }
+            }
+            '?' => {
+                saw_glob = true;
+                regex.push_str("[^/]");
+            }
+            '[' => {
+                saw_glob = true;
+                let mut class = Vec::new();
+                let mut closed = false;
+                while let Some(class_ch) = chars.pop_front() {
+                    if class_ch == ']' {
+                        closed = true;
+                        break;
+                    }
+                    class.push(class_ch);
+                }
+                if !closed {
+                    regex.push_str("\\[");
+                    for class_ch in class.into_iter().rev() {
+                        chars.push_front(class_ch);
+                    }
+                    continue;
+                }
+
+                regex.push('[');
+                let mut class_chars = class.into_iter();
+                if let Some(first) = class_chars.next() {
+                    match first {
+                        '!' => regex.push('^'),
+                        '^' => regex.push_str("\\^"),
+                        _ => regex.push(first),
+                    }
+                }
+                for class_ch in class_chars {
+                    match class_ch {
+                        '\\' => regex.push_str("\\\\"),
+                        _ => regex.push(class_ch),
+                    }
+                }
+                regex.push(']');
+            }
+            ']' => {
+                saw_glob = true;
+                regex.push_str("\\]");
+            }
+            _ => regex.push_str(&regex_lite::escape(&ch.to_string())),
+        }
+    }
+
+    if !saw_glob {
+        regex.push_str("(/.*)?");
+    }
+    regex.push('$');
+    Some(regex)
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 fn create_seatbelt_command_args_for_legacy_policy(
     command: Vec<String>,
@@ -510,10 +655,13 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
 
     let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
+    let deny_read_policy =
+        build_seatbelt_unreadable_glob_policy(file_system_sandbox_policy, sandbox_policy_cwd);
     let mut policy_sections = vec![
         MACOS_SEATBELT_BASE_POLICY.to_string(),
         file_read_policy,
         file_write_policy,
+        deny_read_policy,
         network_policy,
     ];
     if include_platform_defaults {

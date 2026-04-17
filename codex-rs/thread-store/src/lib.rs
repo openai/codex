@@ -7,6 +7,7 @@
 mod error;
 mod local;
 mod recorder;
+mod remote;
 mod store;
 mod types;
 
@@ -14,6 +15,7 @@ pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
 pub use local::LocalThreadStore;
 pub use recorder::ThreadRecorder;
+pub use remote::RemoteThreadStore;
 pub use store::ThreadStore;
 pub use types::AppendThreadItemsParams;
 pub use types::ArchiveThreadParams;
