@@ -8,14 +8,16 @@ expression: "render_lines(&view, 84)"
                                                                                     
   Type to search                                                                    
   >                                                                                 
-› [x] project        Project name (falls back to current directory name)            
+› [x] project-name   Project name (falls back to current directory name)            
   [x] spinner        Animated task spinner (omitted while idle or when animations…  
   [x] status         Compact session status text (Ready, Working, Thinking)         
-  [x] thread         Current thread title (omitted until available)                 
+  [x] thread-title   Current thread title (omitted when unavailable)                
   [ ] app-name       Codex app name                                                 
+  [ ] current-dir    Current working directory                                      
   [ ] git-branch     Current Git branch (omitted when unavailable)                  
-  [ ] model          Current model name                                             
-  [ ] task-progress  Latest task progress from update_plan (omitted until availab…  
+  [ ] context-remaining  Percentage of context window remaining (omitted when unk…  
+  [ ] context-used   Percentage of context window used (omitted when unknown)       
+  [ ] five-hour-limit  Remaining usage on 5-hour usage limit (omitted when unava…  
                                                                                     
-  my-project ⠋ Working | Investigate flaky test                                     
+  my-project ⠋ Working | thread title                                               
   Use ↑↓ to navigate, ←→ to move, space to select, enter to confirm, esc to cancel.
