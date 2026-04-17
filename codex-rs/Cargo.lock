@@ -2538,9 +2538,13 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "core-foundation 0.10.1",
+ "core-foundation-sys",
  "p256",
  "pretty_assertions",
  "rand 0.9.3",
+ "security-framework 3.5.1",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
