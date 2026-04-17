@@ -569,7 +569,7 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends apparmor apparmor-profiles apparmor-utils bubblewrap pkg-config libcap-dev
           fi
 
       # Some integration tests rely on DotSlash being installed.
@@ -645,16 +645,114 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - name: Enable unprivileged user namespaces (Linux)
+      - name: Check distro bubblewrap sandbox prerequisites (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         run: |
-          # Required for bubblewrap to work on Linux CI runners.
-          sudo sysctl -w kernel.unprivileged_userns_clone=1
-          # Ubuntu 24.04+ can additionally gate unprivileged user namespaces
-          # behind AppArmor.
-          if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          set -euo pipefail
+
+          bwrap="$(command -v bwrap)"
+          bwrap_real="$(readlink -f "$bwrap")"
+          echo "bwrap=$bwrap_real"
+          if [[ "$bwrap_real" != "/usr/bin/bwrap" ]]; then
+            echo "Expected apt-installed bubblewrap at /usr/bin/bwrap."
+            exit 1
           fi
+          bwrap --version
+
+          runner_seccomp="$(grep '^Seccomp:' /proc/self/status | tr -s '[:space:]' ' ' | cut -d' ' -f2)"
+          echo "runner.seccomp=$runner_seccomp"
+          if [[ "$runner_seccomp" != "0" ]]; then
+            echo "Linux workers must not run under an extra outer seccomp filter."
+            exit 1
+          fi
+
+          if [[ ! -r /sys/module/apparmor/parameters/enabled ]]; then
+            echo "AppArmor module status is unavailable on this Linux worker."
+            exit 1
+          fi
+          apparmor_enabled="$(cat /sys/module/apparmor/parameters/enabled)"
+          echo "apparmor.enabled=$apparmor_enabled"
+          if [[ "$apparmor_enabled" != "Y" ]]; then
+            echo "AppArmor must be enabled for the distro bubblewrap smoke test."
+            exit 1
+          fi
+
+          if ! apparmor_userns="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)"; then
+            echo "kernel.apparmor_restrict_unprivileged_userns is unavailable on this Linux worker."
+            exit 1
+          fi
+          echo "kernel.apparmor_restrict_unprivileged_userns=$apparmor_userns"
+          if [[ "$apparmor_userns" == "0" ]]; then
+            echo "AppArmor user namespace restrictions must stay enabled; do not disable them in CI."
+            exit 1
+          fi
+
+          if userns_clone="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null)"; then
+            echo "kernel.unprivileged_userns_clone=$userns_clone"
+            if [[ "$userns_clone" != "1" ]]; then
+              echo "Linux workers must enable unprivileged user namespaces in the base image."
+              exit 1
+            fi
+          fi
+
+          profile_source="/usr/share/apparmor/extra-profiles/bwrap-userns-restrict"
+          profile_target="/etc/apparmor.d/bwrap-userns-restrict"
+          if [[ ! -r "$profile_source" ]]; then
+            echo "Ubuntu's bwrap-userns-restrict AppArmor profile is missing."
+            dpkg -L apparmor-profiles | grep bwrap || true
+            exit 1
+          fi
+
+          sudo ln -sf "$profile_source" "$profile_target"
+          sudo apparmor_parser -r "$profile_target"
+          sudo aa-enforce /usr/bin/bwrap
+          if ! sudo grep -Eq '^bwrap \(enforce\)$' /sys/kernel/security/apparmor/profiles; then
+            echo "Ubuntu's bwrap AppArmor profile is not loaded in enforce mode."
+            sudo grep bwrap /sys/kernel/security/apparmor/profiles || true
+            exit 1
+          fi
+          if ! sudo grep -Eq '^bwrap//.*unpriv_bwrap \(enforce\)$' /sys/kernel/security/apparmor/profiles; then
+            echo "Ubuntu's unprivileged bwrap child profile is not loaded in enforce mode."
+            sudo grep bwrap /sys/kernel/security/apparmor/profiles || true
+            exit 1
+          fi
+
+      - name: Smoke test Codex Linux sandbox through distro bubblewrap
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_file=".codex-bwrap-smoke"
+          rm -f "$smoke_file"
+          trap 'rm -f "$smoke_file"' EXIT
+
+          CODEX_HOME="${RUNNER_TEMP}/codex-bwrap-smoke-home" \
+            cargo run --quiet --target ${{ matrix.target }} --profile ci-test -p codex-cli --bin codex -- \
+              sandbox linux --full-auto -- bash -lc \
+              '
+                set -euo pipefail
+
+                aa_profile="$(cat /proc/self/attr/current)"
+                echo "payload.apparmor=$aa_profile"
+                case "$aa_profile" in
+                  *bwrap*unpriv_bwrap*) ;;
+                  *)
+                    echo "Expected payload to run under the Ubuntu unprivileged bwrap AppArmor profile." >&2
+                    exit 1
+                    ;;
+                esac
+
+                seccomp_mode="$(grep "^Seccomp:" /proc/self/status | tr -s "[:space:]" " " | cut -d" " -f2)"
+                echo "payload.seccomp=$seccomp_mode"
+                if [[ "$seccomp_mode" != "2" ]]; then
+                  echo "Expected Codex to install a seccomp filter in the sandbox payload." >&2
+                  exit 1
+                fi
+
+                printf ok > .codex-bwrap-smoke
+                test "$(cat .codex-bwrap-smoke)" = ok
+              '
 
       - name: Set up remote test env (Docker)
         if: ${{ runner.os == 'Linux' && matrix.remote_env == 'true' }}
