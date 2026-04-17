@@ -2922,6 +2922,45 @@ impl Session {
         }
     }
 
+    pub(crate) async fn get_pending_input_for_turn_state(
+        &self,
+        expected_turn_state: &Arc<tokio::sync::Mutex<crate::state::TurnState>>,
+    ) -> Vec<ResponseInputItem> {
+        let (pending_input, accepts_mailbox_delivery) = {
+            let active = self.active_turn.lock().await;
+            match active.as_ref() {
+                Some(at) if Arc::ptr_eq(&at.turn_state, expected_turn_state) => {
+                    let mut ts = expected_turn_state.lock().await;
+                    (
+                        ts.take_pending_input(),
+                        ts.accepts_mailbox_delivery_for_current_turn(),
+                    )
+                }
+                Some(_) | None => (Vec::new(), false),
+            }
+        };
+        if !accepts_mailbox_delivery {
+            return pending_input;
+        }
+        let mailbox_items = {
+            let mut mailbox_rx = self.mailbox_rx.lock().await;
+            mailbox_rx
+                .drain()
+                .into_iter()
+                .map(|mail| mail.to_response_input_item())
+                .collect::<Vec<_>>()
+        };
+        if pending_input.is_empty() {
+            mailbox_items
+        } else if mailbox_items.is_empty() {
+            pending_input
+        } else {
+            let mut pending_input = pending_input;
+            pending_input.extend(mailbox_items);
+            pending_input
+        }
+    }
+
     /// Queue response items to be injected into the next active turn created for this session.
     #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {

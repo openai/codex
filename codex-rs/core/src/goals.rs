@@ -338,6 +338,10 @@ impl Session {
             return;
         }
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
+            self.thread_goal_wall_clock_accounting
+                .clear_active_goal()
+                .await;
+            turn_context.goal_accounting.clear_active_goal().await;
             return;
         }
         let state_db = match self.state_db_for_thread_goals().await {
@@ -415,9 +419,6 @@ impl Session {
             .goal_accounting
             .token_delta_since_last_accounting(current_token_usage.clone())
             .await;
-        if time_delta_seconds == 0 && token_delta <= 0 {
-            return Ok(());
-        }
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
@@ -430,6 +431,20 @@ impl Session {
             )
             .await?
         {
+            return Ok(());
+        }
+        if time_delta_seconds == 0 && token_delta <= 0 {
+            if let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? {
+                let status = goal.status;
+                *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal));
+                if status == codex_state::ThreadGoalStatus::BudgetLimited {
+                    self.abort_all_tasks_without_goal_accounting_from_current_turn(
+                        TurnAbortReason::BudgetLimited,
+                        &turn_context.sub_id,
+                    )
+                    .await;
+                }
+            }
             return Ok(());
         }
         let mode = match boundary {
