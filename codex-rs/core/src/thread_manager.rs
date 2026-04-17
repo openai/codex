@@ -998,8 +998,6 @@ impl ThreadManagerState {
         let selected_environment_id = effective_environments
             .first()
             .map(|environment| environment.environment_id.clone());
-        let selected_environment_manager =
-            Arc::new(environment_manager.with_current_id(selected_environment_id.clone()));
         let environment = environment_manager
             .environment(selected_environment_id.as_deref())
             .await
@@ -1023,7 +1021,7 @@ impl ThreadManagerState {
             config,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
-            environment_manager: selected_environment_manager,
+            environment_manager,
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),

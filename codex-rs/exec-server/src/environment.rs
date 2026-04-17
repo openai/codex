@@ -95,17 +95,6 @@ impl EnvironmentManager {
         )
     }
 
-    pub fn with_current_id(&self, current_environment_id: Option<String>) -> Self {
-        let current_environment_id = current_environment_id
-            .filter(|environment_id| self.environment_configs.contains_key(environment_id));
-        Self {
-            current_environment_id,
-            environment_configs: self.environment_configs.clone(),
-            environment_cache: self.environment_cache.clone(),
-            local_runtime_paths: self.local_runtime_paths.clone(),
-        }
-    }
-
     pub fn current_config(&self) -> Option<&EnvironmentConfig> {
         self.current_environment_id
             .as_ref()
@@ -525,12 +514,7 @@ mod tests {
             .expect("local environment");
 
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
-        assert_eq!(
-            manager
-                .with_current_id(Some("local".to_string()))
-                .local_runtime_paths,
-            Some(runtime_paths)
-        );
+        assert_eq!(manager.local_runtime_paths, Some(runtime_paths));
     }
 
     #[tokio::test]
