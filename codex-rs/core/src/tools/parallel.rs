@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::RwLock;
+use tokio::task::JoinError;
 use tokio_util::either::Either;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
@@ -85,6 +86,7 @@ impl ToolCallRuntime {
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
         let started = Instant::now();
+        let join_error_call = call.clone();
 
         let dispatch_span = trace_span!(
             "dispatch_tool_call_with_code_mode_result",
@@ -125,11 +127,36 @@ impl ToolCallRuntime {
 
         async move {
             handle.await.map_err(|err| {
-                FunctionCallError::Fatal(format!("tool task failed to receive: {err:?}"))
+                tool_task_join_error_to_function_call_error(
+                    err,
+                    &join_error_call,
+                    started.elapsed(),
+                )
             })?
         }
         .in_current_span()
     }
+}
+
+fn tool_task_join_error_to_function_call_error(
+    err: JoinError,
+    call: &ToolCall,
+    elapsed: std::time::Duration,
+) -> FunctionCallError {
+    if err.is_cancelled() {
+        let secs = elapsed.as_secs_f32().max(0.1);
+        tracing::warn!(
+            tool_name = call.tool_name,
+            call_id = call.call_id,
+            elapsed_seconds = secs,
+            "tool task was cancelled before delivering a response"
+        );
+        return FunctionCallError::RespondToModel(format!(
+            "tool execution interrupted after {secs:.1}s"
+        ));
+    }
+
+    FunctionCallError::Fatal(format!("tool task failed to receive: {err:?}"))
 }
 
 impl ToolCallRuntime {
@@ -177,5 +204,63 @@ impl ToolCallRuntime {
             }
             _ => format!("aborted by user after {secs:.1}s"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::context::ToolPayload;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    fn test_tool_call() -> ToolCall {
+        ToolCall {
+            tool_name: "spawn_agents_on_csv".to_string(),
+            call_id: "call-1".to_string(),
+            tool_namespace: None,
+            payload: ToolPayload::Function {
+                arguments: json!({"csv_path":"in.csv","instruction":"test"}).to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_tool_task_join_error_becomes_model_response() {
+        let handle = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+        handle.abort();
+        let err = handle.await.expect_err("task should be cancelled");
+
+        let mapped = tool_task_join_error_to_function_call_error(
+            err,
+            &test_tool_call(),
+            std::time::Duration::from_millis(200),
+        );
+
+        assert_eq!(
+            mapped,
+            FunctionCallError::RespondToModel("tool execution interrupted after 0.2s".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn panicked_tool_task_join_error_stays_fatal() {
+        let handle = tokio::spawn(async {
+            panic!("boom");
+        });
+        let err = handle.await.expect_err("task should panic");
+
+        let mapped = tool_task_join_error_to_function_call_error(
+            err,
+            &test_tool_call(),
+            std::time::Duration::from_millis(200),
+        );
+
+        let FunctionCallError::Fatal(message) = mapped else {
+            panic!("panic join errors should remain fatal");
+        };
+        assert!(message.contains("tool task failed to receive"));
     }
 }

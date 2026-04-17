@@ -92,20 +92,24 @@ pub(super) async fn launch_pending_items(
         return Ok(false);
     }
 
-    let pending_items = db
-        .list_agent_job_items(
+    let pending_items = db_ops::retry_locked("list_pending_agent_job_items_for_launch", || async {
+        db.list_agent_job_items(
             job_id,
             Some(codex_state::AgentJobItemStatus::Pending),
             Some(slots),
         )
-        .await?;
+        .await
+    })
+    .await?;
 
     let mut launched = 0usize;
     let mut progressed = false;
     for item in pending_items {
-        let claimed = db
-            .mark_agent_job_item_running(job_id, item.item_id.as_str())
-            .await?;
+        let claimed = db_ops::retry_locked("mark_agent_job_item_running_for_launch", || async {
+            db.mark_agent_job_item_running(job_id, item.item_id.as_str())
+                .await
+        })
+        .await?;
         if !claimed {
             continue;
         }
@@ -114,11 +118,14 @@ pub(super) async fn launch_pending_items(
             Ok(prompt) => prompt,
             Err(err) => {
                 let error_message = format!("failed to build worker prompt: {err}");
-                db.mark_agent_job_item_failed(
-                    job_id,
-                    item.item_id.as_str(),
-                    error_message.as_str(),
-                )
+                db_ops::retry_locked("mark_agent_job_item_failed_for_prompt_build", || async {
+                    db.mark_agent_job_item_failed(
+                        job_id,
+                        item.item_id.as_str(),
+                        error_message.as_str(),
+                    )
+                    .await
+                })
                 .await?;
                 progressed = true;
                 continue;
@@ -283,8 +290,11 @@ pub(super) async fn reap_stale_startups(
         item.abort_handle.abort();
         let error_message =
             format!("worker exceeded max runtime of {runtime_timeout:?} before startup completed");
-        db.mark_agent_job_item_failed(job_id, item.item_id.as_str(), error_message.as_str())
-            .await?;
+        db_ops::retry_locked("mark_agent_job_item_failed_for_stale_startup", || async {
+            db.mark_agent_job_item_failed(job_id, item.item_id.as_str(), error_message.as_str())
+                .await
+        })
+        .await?;
         tracing::warn!(
             job_id,
             item_id = item.item_id,
@@ -310,12 +320,15 @@ async fn handle_worker_startup_result(
             match startup.result {
                 Ok(thread_id) => {
                     let thread_id_str = thread_id.to_string();
-                    let assigned = db
-                        .set_agent_job_item_thread(
-                            job_id,
-                            startup.item_id.as_str(),
-                            thread_id_str.as_str(),
-                        )
+                    let assigned =
+                        db_ops::retry_locked("set_agent_job_item_thread_after_startup", || async {
+                            db.set_agent_job_item_thread(
+                                job_id,
+                                startup.item_id.as_str(),
+                                thread_id_str.as_str(),
+                            )
+                            .await
+                        })
                         .await?;
                     if !assigned {
                         let _ = session
@@ -364,12 +377,15 @@ async fn handle_worker_startup_result(
                     })
                 }
                 Err(CodexErr::AgentLimitReached { .. }) => {
-                    let _ = db
-                        .mark_agent_job_item_pending(
-                            job_id,
-                            startup.item_id.as_str(),
-                            /*error_message*/ None,
-                        )
+                    let _ =
+                        db_ops::retry_locked("mark_agent_job_item_pending_after_limit", || async {
+                            db.mark_agent_job_item_pending(
+                                job_id,
+                                startup.item_id.as_str(),
+                                /*error_message*/ None,
+                            )
+                            .await
+                        })
                         .await?;
                     tracing::debug!(
                         job_id,
@@ -384,13 +400,18 @@ async fn handle_worker_startup_result(
                 }
                 Err(err) => {
                     let error_message = format!("failed to spawn worker: {err}");
-                    let _ = db
-                        .mark_agent_job_item_failed(
-                            job_id,
-                            startup.item_id.as_str(),
-                            error_message.as_str(),
-                        )
-                        .await?;
+                    let _ = db_ops::retry_locked(
+                        "mark_agent_job_item_failed_after_spawn_error",
+                        || async {
+                            db.mark_agent_job_item_failed(
+                                job_id,
+                                startup.item_id.as_str(),
+                                error_message.as_str(),
+                            )
+                            .await
+                        },
+                    )
+                    .await?;
                     tracing::warn!(
                         job_id,
                         item_id = startup.item_id,
@@ -410,9 +431,18 @@ async fn handle_worker_startup_result(
                 return Ok(StartupDrainResult::default());
             };
             let error_message = format!("worker startup task failed: {join_error}");
-            let _ = db
-                .mark_agent_job_item_failed(job_id, item.item_id.as_str(), error_message.as_str())
-                .await?;
+            let _ = db_ops::retry_locked(
+                "mark_agent_job_item_failed_after_startup_join_error",
+                || async {
+                    db.mark_agent_job_item_failed(
+                        job_id,
+                        item.item_id.as_str(),
+                        error_message.as_str(),
+                    )
+                    .await
+                },
+            )
+            .await?;
             tracing::warn!(
                 job_id,
                 item_id = item.item_id,
