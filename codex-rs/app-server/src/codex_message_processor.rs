@@ -3048,14 +3048,7 @@ impl CodexMessageProcessor {
                 ThreadGoalSetResponse { goal: goal.clone() },
             )
             .await;
-        self.outgoing
-            .send_server_notification(ServerNotification::ThreadGoalUpdated(
-                ThreadGoalUpdatedNotification {
-                    thread_id: thread_id.to_string(),
-                    goal,
-                },
-            ))
-            .await;
+        self.emit_thread_goal_updated_ordered(thread_id, goal).await;
     }
 
     async fn thread_goal_get(&self, request_id: ConnectionRequestId, params: ThreadGoalGetParams) {
@@ -3170,6 +3163,28 @@ impl CodexMessageProcessor {
         let Some(goal) = self.thread_goal_updated_notification_goal(thread_id).await else {
             return;
         };
+        self.emit_thread_goal_updated_ordered(thread_id, goal).await;
+    }
+
+    async fn emit_thread_goal_updated_ordered(&self, thread_id: ThreadId, goal: ThreadGoal) {
+        if self.thread_manager.get_thread(thread_id).await.is_ok() {
+            let listener_command_tx = {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let thread_state = thread_state.lock().await;
+                thread_state.listener_command_tx()
+            };
+            if let Some(listener_command_tx) = listener_command_tx {
+                let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalUpdated {
+                    goal: goal.clone(),
+                };
+                if listener_command_tx.send(command).is_ok() {
+                    return;
+                }
+                warn!(
+                    "failed to enqueue thread goal update for {thread_id}: listener command channel is closed"
+                );
+            }
+        }
         self.outgoing
             .send_server_notification(ServerNotification::ThreadGoalUpdated(
                 ThreadGoalUpdatedNotification {
@@ -4723,6 +4738,17 @@ impl CodexMessageProcessor {
                 return true;
             };
 
+            let emit_thread_goal_update = self.config.features.enabled(Feature::GoalMode);
+            let thread_goal_state_db = if emit_thread_goal_update {
+                if let Some(state_db) = existing_thread.state_db() {
+                    Some(state_db)
+                } else {
+                    open_state_db_for_direct_thread_lookup(&self.config).await
+                }
+            } else {
+                None
+            };
+
             let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
                 Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
@@ -4730,7 +4756,8 @@ impl CodexMessageProcessor {
                     config_snapshot,
                     instruction_sources,
                     thread_summary,
-                    emit_thread_goal_update: self.config.features.enabled(Feature::GoalMode),
+                    emit_thread_goal_update,
+                    thread_goal_state_db,
                 }),
             );
             if listener_command_tx.send(command).is_err() {
@@ -8773,6 +8800,16 @@ async fn handle_thread_listener_command(
             )
             .await;
         }
+        ThreadListenerCommand::EmitThreadGoalUpdated { goal } => {
+            outgoing
+                .send_server_notification(ServerNotification::ThreadGoalUpdated(
+                    ThreadGoalUpdatedNotification {
+                        thread_id: conversation_id.to_string(),
+                        goal,
+                    },
+                ))
+                .await;
+        }
         ThreadListenerCommand::ResolveServerRequest {
             request_id,
             completion_tx,
@@ -8926,7 +8963,7 @@ async fn handle_pending_thread_resume_request(
     )
     .await;
     if pending.emit_thread_goal_update {
-        if let Some(state_db) = conversation.state_db() {
+        if let Some(state_db) = pending.thread_goal_state_db {
             match state_db.get_thread_goal(conversation_id).await {
                 Ok(Some(goal)) => {
                     outgoing
