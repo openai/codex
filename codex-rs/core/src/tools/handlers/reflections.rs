@@ -6,11 +6,15 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_tools::REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME;
+use codex_tools::REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME;
 use codex_tools::REFLECTIONS_LIST_TOOL_NAME;
 use codex_tools::REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME;
+use codex_tools::REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME;
 use codex_tools::REFLECTIONS_READ_TOOL_NAME;
+use codex_tools::REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME;
 use codex_tools::REFLECTIONS_SEARCH_TOOL_NAME;
 use codex_tools::REFLECTIONS_WRITE_NOTE_TOOL_NAME;
+use codex_tools::REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
@@ -45,6 +49,26 @@ struct WriteNoteArgs {
     note_id: String,
     operation: String,
     content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SharedListArgs {
+    start: Option<usize>,
+    stop: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SharedReadArgs {
+    note_id: String,
+    start: Option<usize>,
+    stop: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SharedSearchArgs {
+    query: String,
+    start: Option<usize>,
+    stop: Option<usize>,
 }
 
 pub struct ReflectionsNewContextWindowHandler;
@@ -238,6 +262,106 @@ impl ToolHandler for ReflectionsWriteNoteHandler {
     }
 }
 
+pub struct ReflectionsListSharedNotesHandler;
+
+impl ToolHandler for ReflectionsListSharedNotesHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let args: SharedListArgs =
+            parse_function_args(&invocation, REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME)?;
+        let shared_notes_path = shared_notes_path(&invocation)?;
+        let output =
+            crate::reflections::list_shared_notes(&shared_notes_path, args.start, args.stop)
+                .await
+                .map_err(storage_error)?;
+        serialize_output(output)
+    }
+}
+
+pub struct ReflectionsReadSharedNoteHandler;
+
+impl ToolHandler for ReflectionsReadSharedNoteHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let args: SharedReadArgs =
+            parse_function_args(&invocation, REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME)?;
+        let shared_notes_path = shared_notes_path(&invocation)?;
+        let output = crate::reflections::read_shared_note(
+            &shared_notes_path,
+            &args.note_id,
+            args.start,
+            args.stop,
+        )
+        .await
+        .map_err(storage_error)?;
+        serialize_output(output)
+    }
+}
+
+pub struct ReflectionsSearchSharedNotesHandler;
+
+impl ToolHandler for ReflectionsSearchSharedNotesHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let args: SharedSearchArgs =
+            parse_function_args(&invocation, REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME)?;
+        let shared_notes_path = shared_notes_path(&invocation)?;
+        let output = crate::reflections::search_shared_notes(
+            &shared_notes_path,
+            &args.query,
+            args.start,
+            args.stop,
+        )
+        .await
+        .map_err(storage_error)?;
+        serialize_output(output)
+    }
+}
+
+pub struct ReflectionsWriteSharedNoteHandler;
+
+impl ToolHandler for ReflectionsWriteSharedNoteHandler {
+    type Output = FunctionToolOutput;
+
+    fn kind(&self) -> ToolKind {
+        ToolKind::Function
+    }
+
+    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        true
+    }
+
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let args: WriteNoteArgs =
+            parse_function_args(&invocation, REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME)?;
+        let shared_notes_path = shared_notes_path(&invocation)?;
+        let output = crate::reflections::write_shared_note(
+            &shared_notes_path,
+            &args.note_id,
+            &args.operation,
+            &args.content,
+        )
+        .await
+        .map_err(storage_error)?;
+        serialize_output(output)
+    }
+}
+
 fn parse_function_args<T>(
     invocation: &ToolInvocation,
     tool_name: &str,
@@ -278,6 +402,19 @@ async fn reflections_paths(
     })?;
     let sidecar_path = crate::reflections::sidecar_path_for_rollout(&rollout_path);
     Ok((sidecar_path, rollout_path))
+}
+
+fn shared_notes_path(invocation: &ToolInvocation) -> Result<PathBuf, FunctionCallError> {
+    invocation
+        .turn
+        .reflections_shared_notes_path
+        .as_ref()
+        .map(|path| path.as_path().to_path_buf())
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "Shared Reflections notes are unavailable in this thread.".to_string(),
+            )
+        })
 }
 
 fn storage_error(err: crate::reflections::StorageToolError) -> FunctionCallError {

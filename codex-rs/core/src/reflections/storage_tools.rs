@@ -1,5 +1,10 @@
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex as StdMutex;
 use std::time::SystemTime;
 
 use chrono::DateTime;
@@ -8,6 +13,7 @@ use chrono::Utc;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
+use tokio::sync::Mutex as AsyncMutex;
 
 use super::storage::WindowState;
 use super::storage::ensure_sidecar_dirs;
@@ -17,6 +23,7 @@ use super::transcript;
 use crate::RolloutRecorder;
 
 const NOTE_VERSIONS_FILE: &str = "note_versions.json";
+const SHARED_NOTE_VERSIONS_FILE: &str = ".versions.json";
 const WINDOW_ID_WIDTH: usize = 5;
 pub(crate) const MAX_NOTE_CHARS: usize = 65_536;
 const DEFAULT_LIST_WINDOW: usize = 50;
@@ -27,6 +34,9 @@ const DEFAULT_NOTE_READ_WINDOW: usize = 1000;
 const MAX_NOTE_READ_LINES: usize = 1000;
 const DEFAULT_SEARCH_WINDOW: usize = 20;
 const MAX_SEARCH_RESULTS: usize = 100;
+
+static NOTE_STORE_WRITE_LOCKS: LazyLock<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct RangeInfo {
@@ -144,48 +154,23 @@ pub(crate) async fn list_notes(
     start: Option<usize>,
     stop: Option<usize>,
 ) -> StorageToolResult<ListResponse> {
-    let selection = selection(start, stop, DEFAULT_LIST_WINDOW, MAX_LIST_ITEMS)?;
     ensure_sidecar_dirs(sidecar_path).await?;
-    let notes_path = sidecar_path.join("notes");
-    let mut entries = tokio::fs::read_dir(notes_path).await?;
-    let mut items = Vec::new();
-    while let Some(entry) = entries.next_entry().await? {
-        let file_type = entry.file_type().await?;
-        if !file_type.is_file() {
-            continue;
-        }
-        let note_id = entry.file_name().to_string_lossy().to_string();
-        if note_id.starts_with('.') || !valid_note_id(&note_id) {
-            continue;
-        }
-        let metadata = entry.metadata().await?;
-        let content = tokio::fs::read_to_string(entry.path())
-            .await
-            .unwrap_or_default();
-        items.push((
-            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-            note_id.clone(),
-            json!({
-                "kind": "note",
-                "id": note_id,
-                "updated_at": system_time_rfc3339(metadata.modified().ok()),
-                "content_chars": content.chars().count(),
-                "line_count": line_count(&content),
-            }),
-        ));
-    }
-    items.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
-    let items = items
-        .into_iter()
-        .map(|(_, _, value)| value)
-        .collect::<Vec<_>>();
-    let total = items.len();
-    let items = slice_items(items, selection);
-    Ok(ListResponse {
-        collection: "notes".to_string(),
-        items,
-        range: range_info(selection, total),
-    })
+    list_notes_in_store(&sidecar_path.join("notes"), "note", "notes", start, stop).await
+}
+
+pub(crate) async fn list_shared_notes(
+    shared_notes_path: &Path,
+    start: Option<usize>,
+    stop: Option<usize>,
+) -> StorageToolResult<ListResponse> {
+    list_notes_in_store(
+        shared_notes_path,
+        "shared_note",
+        "shared_notes",
+        start,
+        stop,
+    )
+    .await
 }
 
 pub(crate) async fn read_log(
@@ -224,36 +209,16 @@ pub(crate) async fn read_note(
     start: Option<usize>,
     stop: Option<usize>,
 ) -> StorageToolResult<ReadNoteResponse> {
-    reject_latest(id)?;
-    validate_note_id(id)?;
-    let selection = selection(start, stop, DEFAULT_NOTE_READ_WINDOW, MAX_NOTE_READ_LINES)?;
-    let path = note_path(sidecar_path, id);
-    let content = tokio::fs::read_to_string(&path).await.map_err(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            StorageToolError::Invalid(format!("Reflections note `{id}` was not found"))
-        } else {
-            StorageToolError::Io(err)
-        }
-    })?;
-    let lines = content.lines().collect::<Vec<_>>();
-    let total = lines.len();
-    let selected_content = if selection.start > total {
-        String::new()
-    } else {
-        let end = selection.stop.min(total);
-        let mut selected = lines[selection.start - 1..end].join("\n");
-        if !selected.is_empty() && content.ends_with('\n') {
-            selected.push('\n');
-        }
-        selected
-    };
-    Ok(ReadNoteResponse {
-        kind: "note",
-        id: id.to_string(),
-        content: selected_content.clone(),
-        content_chars: selected_content.chars().count(),
-        range: range_info(selection, total),
-    })
+    read_note_in_store(&sidecar_path.join("notes"), "note", id, start, stop).await
+}
+
+pub(crate) async fn read_shared_note(
+    shared_notes_path: &Path,
+    id: &str,
+    start: Option<usize>,
+    stop: Option<usize>,
+) -> StorageToolResult<ReadNoteResponse> {
+    read_note_in_store(shared_notes_path, "shared_note", id, start, stop).await
 }
 
 pub(crate) async fn search(
@@ -313,37 +278,15 @@ pub(crate) async fn search(
 
     if matches!(scope, "all" | "notes") {
         ensure_sidecar_dirs(sidecar_path).await?;
-        let mut entries = tokio::fs::read_dir(sidecar_path.join("notes")).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let file_type = entry.file_type().await?;
-            if !file_type.is_file() {
-                continue;
-            }
-            let note_id = entry.file_name().to_string_lossy().to_string();
-            if note_id.starts_with('.') || !valid_note_id(&note_id) {
-                continue;
-            }
-            let content = tokio::fs::read_to_string(entry.path())
-                .await
-                .unwrap_or_default();
-            for (line_index, line) in content.lines().enumerate() {
-                if line.to_ascii_lowercase().contains(&needle) {
-                    let line_number = line_index + 1;
-                    results.push(json!({
-                        "kind": "note",
-                        "note_id": note_id,
-                        "line": line_number,
-                        "snippet": snippet(line, query),
-                        "read": {
-                            "kind": "note",
-                            "id": note_id,
-                            "start": line_number,
-                            "stop": line_number,
-                        },
-                    }));
-                }
-            }
-        }
+        results.extend(
+            search_note_hits_in_store(
+                &sidecar_path.join("notes"),
+                "note",
+                query,
+                "reflections_read",
+            )
+            .await?,
+        );
     }
 
     let total = results.len();
@@ -356,8 +299,234 @@ pub(crate) async fn search(
     })
 }
 
+pub(crate) async fn search_shared_notes(
+    shared_notes_path: &Path,
+    query: &str,
+    start: Option<usize>,
+    stop: Option<usize>,
+) -> StorageToolResult<SearchResponse> {
+    search_notes_in_store(
+        shared_notes_path,
+        "shared_note",
+        query,
+        start,
+        stop,
+        "reflections_read_shared_note",
+    )
+    .await
+}
+
 pub(crate) async fn write_note(
     sidecar_path: &Path,
+    id: &str,
+    operation: &str,
+    content: &str,
+) -> StorageToolResult<WriteNoteResponse> {
+    ensure_sidecar_dirs(sidecar_path).await?;
+    write_note_in_store(
+        &sidecar_path.join("notes"),
+        &sidecar_path.join(NOTE_VERSIONS_FILE),
+        "note",
+        id,
+        operation,
+        content,
+    )
+    .await
+}
+
+pub(crate) async fn write_shared_note(
+    shared_notes_path: &Path,
+    id: &str,
+    operation: &str,
+    content: &str,
+) -> StorageToolResult<WriteNoteResponse> {
+    write_note_in_store(
+        shared_notes_path,
+        &shared_notes_path.join(SHARED_NOTE_VERSIONS_FILE),
+        "shared_note",
+        id,
+        operation,
+        content,
+    )
+    .await
+}
+
+async fn list_notes_in_store(
+    notes_dir: &Path,
+    kind: &'static str,
+    collection: &str,
+    start: Option<usize>,
+    stop: Option<usize>,
+) -> StorageToolResult<ListResponse> {
+    let selection = selection(start, stop, DEFAULT_LIST_WINDOW, MAX_LIST_ITEMS)?;
+    tokio::fs::create_dir_all(notes_dir).await?;
+    let mut entries = tokio::fs::read_dir(notes_dir).await?;
+    let mut items = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let file_type = entry.file_type().await?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let note_id = entry.file_name().to_string_lossy().to_string();
+        if note_id.starts_with('.') || !valid_note_id(&note_id) {
+            continue;
+        }
+        let metadata = entry.metadata().await?;
+        let content = tokio::fs::read_to_string(entry.path())
+            .await
+            .unwrap_or_default();
+        items.push((
+            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            note_id.clone(),
+            json!({
+                "kind": kind,
+                "id": note_id,
+                "updated_at": system_time_rfc3339(metadata.modified().ok()),
+                "content_chars": content.chars().count(),
+                "line_count": line_count(&content),
+            }),
+        ));
+    }
+    items.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    let items = items
+        .into_iter()
+        .map(|(_, _, value)| value)
+        .collect::<Vec<_>>();
+    let total = items.len();
+    let items = slice_items(items, selection);
+    Ok(ListResponse {
+        collection: collection.to_string(),
+        items,
+        range: range_info(selection, total),
+    })
+}
+
+async fn read_note_in_store(
+    notes_dir: &Path,
+    kind: &'static str,
+    id: &str,
+    start: Option<usize>,
+    stop: Option<usize>,
+) -> StorageToolResult<ReadNoteResponse> {
+    reject_latest(id)?;
+    validate_note_id(id)?;
+    let selection = selection(start, stop, DEFAULT_NOTE_READ_WINDOW, MAX_NOTE_READ_LINES)?;
+    let path = notes_dir.join(id);
+    let content = tokio::fs::read_to_string(&path).await.map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            StorageToolError::Invalid(format!("Reflections note `{id}` was not found"))
+        } else {
+            StorageToolError::Io(err)
+        }
+    })?;
+    let lines = content.lines().collect::<Vec<_>>();
+    let total = lines.len();
+    let selected_content = if selection.start > total {
+        String::new()
+    } else {
+        let end = selection.stop.min(total);
+        let mut selected = lines[selection.start - 1..end].join("\n");
+        if !selected.is_empty() && content.ends_with('\n') {
+            selected.push('\n');
+        }
+        selected
+    };
+    Ok(ReadNoteResponse {
+        kind,
+        id: id.to_string(),
+        content: selected_content.clone(),
+        content_chars: selected_content.chars().count(),
+        range: range_info(selection, total),
+    })
+}
+
+async fn search_notes_in_store(
+    notes_dir: &Path,
+    kind: &'static str,
+    query: &str,
+    start: Option<usize>,
+    stop: Option<usize>,
+    read_tool_name: &'static str,
+) -> StorageToolResult<SearchResponse> {
+    if query.is_empty() {
+        return Err(StorageToolError::Invalid(
+            "`query` is required and must not be empty".to_string(),
+        ));
+    }
+    let selection = selection(start, stop, DEFAULT_SEARCH_WINDOW, MAX_SEARCH_RESULTS)?;
+    let mut results = search_note_hits_in_store(notes_dir, kind, query, read_tool_name).await?;
+    let total = results.len();
+    results = slice_items(results, selection);
+    Ok(SearchResponse {
+        scope: if kind == "shared_note" {
+            "shared_notes"
+        } else {
+            "notes"
+        }
+        .to_string(),
+        query: query.to_string(),
+        results,
+        range: range_info(selection, total),
+    })
+}
+
+async fn search_note_hits_in_store(
+    notes_dir: &Path,
+    kind: &'static str,
+    query: &str,
+    read_tool_name: &'static str,
+) -> StorageToolResult<Vec<Value>> {
+    tokio::fs::create_dir_all(notes_dir).await?;
+    let needle = query.to_ascii_lowercase();
+    let mut entries = tokio::fs::read_dir(notes_dir).await?;
+    let mut results = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let file_type = entry.file_type().await?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let note_id = entry.file_name().to_string_lossy().to_string();
+        if note_id.starts_with('.') || !valid_note_id(&note_id) {
+            continue;
+        }
+        let content = tokio::fs::read_to_string(entry.path())
+            .await
+            .unwrap_or_default();
+        for (line_index, line) in content.lines().enumerate() {
+            if line.to_ascii_lowercase().contains(&needle) {
+                let line_number = line_index + 1;
+                let read = if kind == "shared_note" {
+                    json!({
+                        "tool": read_tool_name,
+                        "note_id": &note_id,
+                        "start": line_number,
+                        "stop": line_number,
+                    })
+                } else {
+                    json!({
+                        "kind": "note",
+                        "id": &note_id,
+                        "start": line_number,
+                        "stop": line_number,
+                    })
+                };
+                results.push(json!({
+                    "kind": kind,
+                    "note_id": &note_id,
+                    "line": line_number,
+                    "snippet": snippet(line, query),
+                    "read": read,
+                }));
+            }
+        }
+    }
+    Ok(results)
+}
+
+async fn write_note_in_store(
+    notes_dir: &Path,
+    version_file: &Path,
+    kind: &'static str,
     id: &str,
     operation: &str,
     content: &str,
@@ -368,8 +537,10 @@ pub(crate) async fn write_note(
             "Reflections note writes are limited to {MAX_NOTE_CHARS} characters"
         )));
     }
-    ensure_sidecar_dirs(sidecar_path).await?;
-    let path = note_path(sidecar_path, id);
+    tokio::fs::create_dir_all(notes_dir).await?;
+    let write_lock = note_store_write_lock(notes_dir);
+    let _guard = write_lock.lock().await;
+    let path = notes_dir.join(id);
     let existing = tokio::fs::read_to_string(&path).await;
     let existing = match existing {
         Ok(existing) => Some(existing),
@@ -408,9 +579,9 @@ pub(crate) async fn write_note(
         )));
     }
     write_atomic(&path, new_content.as_bytes()).await?;
-    let version = increment_note_version(sidecar_path, id).await?;
+    let version = increment_note_version(version_file, id).await?;
     Ok(WriteNoteResponse {
-        kind: "note",
+        kind,
         id: id.to_string(),
         operation: operation.to_string(),
         content_chars: content.chars().count(),
@@ -581,8 +752,14 @@ fn valid_note_id(id: &str) -> bool {
     chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
 }
 
-fn note_path(sidecar_path: &Path, id: &str) -> PathBuf {
-    sidecar_path.join("notes").join(id)
+fn note_store_write_lock(notes_dir: &Path) -> Arc<AsyncMutex<()>> {
+    let mut locks = NOTE_STORE_WRITE_LOCKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    locks
+        .entry(notes_dir.to_path_buf())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone()
 }
 
 fn line_count(content: &str) -> usize {
@@ -596,12 +773,12 @@ fn system_time_rfc3339(time: Option<SystemTime>) -> Option<String> {
     })
 }
 
-async fn increment_note_version(sidecar_path: &Path, id: &str) -> StorageToolResult<u64> {
-    let path = sidecar_path.join(NOTE_VERSIONS_FILE);
+async fn increment_note_version(path: &Path, id: &str) -> StorageToolResult<u64> {
     let mut versions = match tokio::fs::read_to_string(&path).await {
-        Ok(contents) => serde_json::from_str::<std::collections::BTreeMap<String, u64>>(&contents)
-            .unwrap_or_default(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => std::collections::BTreeMap::new(),
+        Ok(contents) => {
+            serde_json::from_str::<BTreeMap<String, u64>>(&contents).unwrap_or_default()
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
         Err(err) => return Err(StorageToolError::Io(err)),
     };
     let version = versions.get(id).copied().unwrap_or(0).saturating_add(1);
@@ -609,7 +786,7 @@ async fn increment_note_version(sidecar_path: &Path, id: &str) -> StorageToolRes
     let bytes = serde_json::to_vec_pretty(&versions).map_err(|err| {
         StorageToolError::Invalid(format!("failed to serialize note versions: {err}"))
     })?;
-    write_atomic(&path, &bytes).await?;
+    write_atomic(path, &bytes).await?;
     Ok(version)
 }
 
@@ -662,10 +839,14 @@ mod tests {
     use super::MAX_NOTE_CHARS;
     use super::list_logs;
     use super::list_notes;
+    use super::list_shared_notes;
     use super::read_log;
     use super::read_note;
+    use super::read_shared_note;
     use super::search;
+    use super::search_shared_notes;
     use super::write_note;
+    use super::write_shared_note;
     use crate::reflections::storage::sidecar_path_for_rollout;
     use crate::reflections::storage::write_window;
 
@@ -717,6 +898,64 @@ mod tests {
         .expect("create near-limit note");
         let result = write_note(&sidecar, "handoff", "append", "xx").await;
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_notes_use_shared_labels_limits_and_read_locators() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let shared_notes = temp.path().join("root.reflections").join("shared_notes");
+
+        let invalid = write_shared_note(&shared_notes, "../bad", "append", "content").await;
+        assert!(invalid.is_err());
+
+        write_shared_note(
+            &shared_notes,
+            "handoff",
+            "create_only",
+            "Current task: parser tests\n",
+        )
+        .await
+        .expect("create shared note");
+        let too_large_append = write_shared_note(
+            &shared_notes,
+            "handoff",
+            "append",
+            &"x".repeat(MAX_NOTE_CHARS),
+        )
+        .await;
+        assert!(too_large_append.is_err());
+
+        let listed = list_shared_notes(&shared_notes, Some(1), Some(50))
+            .await
+            .expect("list shared notes");
+        assert_eq!(listed.collection, "shared_notes");
+        assert_eq!(listed.items[0]["kind"], "shared_note");
+        assert_eq!(listed.items[0]["id"], "handoff");
+        assert!(listed.items[0].get("path").is_none());
+
+        let read = read_shared_note(&shared_notes, "handoff", Some(1), Some(1))
+            .await
+            .expect("read shared note");
+        assert_eq!(read.kind, "shared_note");
+        assert_eq!(read.content, "Current task: parser tests\n");
+
+        let latest = read_shared_note(&shared_notes, "latest", Some(1), Some(1)).await;
+        assert!(latest.is_err());
+
+        let search_result = search_shared_notes(&shared_notes, "parser tests", Some(1), Some(20))
+            .await
+            .expect("search shared notes");
+        assert_eq!(search_result.scope, "shared_notes");
+        assert_eq!(search_result.results[0]["kind"], "shared_note");
+        assert_eq!(search_result.results[0]["note_id"], "handoff");
+        assert_eq!(
+            search_result.results[0]["read"]["tool"],
+            "reflections_read_shared_note"
+        );
+        assert_eq!(search_result.results[0]["read"]["note_id"], "handoff");
+        assert_eq!(search_result.results[0]["read"]["start"], 1);
+
         Ok(())
     }
 
@@ -850,6 +1089,63 @@ mod tests {
                         .to_string(),
                     ),
                 }),
+                RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                    id: None,
+                    name: "reflections_write_shared_note".to_string(),
+                    namespace: None,
+                    arguments: serde_json::json!({
+                        "note_id": "team",
+                        "operation": "append",
+                        "content": "SECRET SHARED BODY"
+                    })
+                    .to_string(),
+                    call_id: "call-2".to_string(),
+                }),
+                RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                    call_id: "call-2".to_string(),
+                    output: FunctionCallOutputPayload::from_text(
+                        serde_json::json!({
+                            "kind": "shared_note",
+                            "id": "team",
+                            "operation": "append",
+                            "content_chars": 18,
+                            "total_content_chars": 18,
+                            "line_count": 1,
+                            "version": 1,
+                            "ok": true
+                        })
+                        .to_string(),
+                    ),
+                }),
+                RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                    id: None,
+                    name: "reflections_read_shared_note".to_string(),
+                    namespace: None,
+                    arguments: serde_json::json!({
+                        "note_id": "team",
+                        "start": 1,
+                        "stop": 1
+                    })
+                    .to_string(),
+                    call_id: "call-3".to_string(),
+                }),
+                RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                    call_id: "call-3".to_string(),
+                    output: FunctionCallOutputPayload::from_text(
+                        serde_json::json!({
+                            "kind": "shared_note",
+                            "id": "team",
+                            "content": "SECRET READ BODY",
+                            "content_chars": 16,
+                            "range": {
+                                "start": 1,
+                                "stop": 1,
+                                "total": 1
+                            }
+                        })
+                        .to_string(),
+                    ),
+                }),
             ],
         )
         .await?;
@@ -859,7 +1155,7 @@ mod tests {
             CompactionTrigger::Manual,
             Some(9500),
             1,
-            2,
+            6,
             String::new(),
         )
         .await?;
@@ -867,10 +1163,13 @@ mod tests {
         let read = read_log(&sidecar, &rollout, "cw00000", Some(1), Some(50))
             .await
             .expect("read log");
-        assert_eq!(read.entries.len(), 2);
+        assert_eq!(read.entries.len(), 6);
         assert!(read.entries[0].content.contains("\"content_chars\": 16"));
         assert!(!read.entries[0].content.contains("SECRET NOTE BODY"));
         assert!(!read.entries[1].content.contains("SECRET NOTE BODY"));
+        assert!(!read.entries[2].content.contains("SECRET SHARED BODY"));
+        assert!(!read.entries[3].content.contains("SECRET SHARED BODY"));
+        assert!(!read.entries[5].content.contains("SECRET READ BODY"));
         Ok(())
     }
 

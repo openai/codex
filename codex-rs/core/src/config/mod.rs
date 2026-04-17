@@ -627,6 +627,7 @@ pub struct ReflectionsConfig {
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub storage_tools_enabled: bool,
+    pub shared_notes_enabled: bool,
 }
 
 impl Default for ReflectionsConfig {
@@ -635,6 +636,7 @@ impl Default for ReflectionsConfig {
             usage_hint_enabled: true,
             usage_hint_text: None,
             storage_tools_enabled: true,
+            shared_notes_enabled: true,
         }
     }
 }
@@ -1421,11 +1423,16 @@ fn resolve_reflections_config(
         .and_then(|config| config.storage_tools_enabled)
         .or_else(|| base.and_then(|config| config.storage_tools_enabled))
         .unwrap_or(default.storage_tools_enabled);
+    let shared_notes_enabled = profile
+        .and_then(|config| config.shared_notes_enabled)
+        .or_else(|| base.and_then(|config| config.shared_notes_enabled))
+        .unwrap_or(default.shared_notes_enabled);
 
     ReflectionsConfig {
         usage_hint_enabled,
         usage_hint_text,
         storage_tools_enabled,
+        shared_notes_enabled,
     }
 }
 

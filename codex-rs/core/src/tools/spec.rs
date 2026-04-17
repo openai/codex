@@ -74,10 +74,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReflectionsGetContextRemainingHandler;
     use crate::tools::handlers::ReflectionsListHandler;
+    use crate::tools::handlers::ReflectionsListSharedNotesHandler;
     use crate::tools::handlers::ReflectionsNewContextWindowHandler;
     use crate::tools::handlers::ReflectionsReadHandler;
+    use crate::tools::handlers::ReflectionsReadSharedNoteHandler;
     use crate::tools::handlers::ReflectionsSearchHandler;
+    use crate::tools::handlers::ReflectionsSearchSharedNotesHandler;
     use crate::tools::handlers::ReflectionsWriteNoteHandler;
+    use crate::tools::handlers::ReflectionsWriteSharedNoteHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -221,6 +225,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ToolHandlerKind::ReflectionsList => {
                 builder.register_handler(handler.name, Arc::new(ReflectionsListHandler));
             }
+            ToolHandlerKind::ReflectionsListSharedNotes => {
+                builder.register_handler(handler.name, Arc::new(ReflectionsListSharedNotesHandler));
+            }
             ToolHandlerKind::ReflectionsNewContextWindow => {
                 builder
                     .register_handler(handler.name, Arc::new(ReflectionsNewContextWindowHandler));
@@ -228,8 +235,18 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ToolHandlerKind::ReflectionsRead => {
                 builder.register_handler(handler.name, Arc::new(ReflectionsReadHandler));
             }
+            ToolHandlerKind::ReflectionsReadSharedNote => {
+                builder.register_handler(handler.name, Arc::new(ReflectionsReadSharedNoteHandler));
+            }
             ToolHandlerKind::ReflectionsSearch => {
                 builder.register_handler(handler.name, Arc::new(ReflectionsSearchHandler));
+            }
+            ToolHandlerKind::ReflectionsSearchSharedNotes => {
+                builder
+                    .register_handler(handler.name, Arc::new(ReflectionsSearchSharedNotesHandler));
+            }
+            ToolHandlerKind::ReflectionsWriteSharedNote => {
+                builder.register_handler(handler.name, Arc::new(ReflectionsWriteSharedNoteHandler));
             }
             ToolHandlerKind::ReflectionsWriteNote => {
                 builder.register_handler(handler.name, Arc::new(ReflectionsWriteNoteHandler));

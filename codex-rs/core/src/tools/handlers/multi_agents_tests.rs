@@ -10,6 +10,9 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::ReflectionsReadSharedNoteHandler;
+use crate::tools::handlers::ReflectionsSearchSharedNotesHandler;
+use crate::tools::handlers::ReflectionsWriteSharedNoteHandler;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
@@ -46,6 +49,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -82,6 +86,99 @@ fn function_payload(args: serde_json::Value) -> ToolPayload {
 
 fn parse_agent_id(id: &str) -> ThreadId {
     ThreadId::from_string(id).expect("agent id should be valid")
+}
+
+#[tokio::test]
+async fn multi_agent_reflections_shared_notes_are_visible_across_turn_contexts() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let shared_notes_path =
+        AbsolutePathBuf::from_absolute_path(temp_dir.path().join("shared_notes"))
+            .expect("shared notes path should be absolute");
+    let (parent_session, mut parent_turn) = make_session_and_context().await;
+    parent_turn.reflections_shared_notes_path = Some(shared_notes_path.clone());
+    let parent_thread_id = ThreadId::new();
+    let (child_session, mut child_turn) = make_session_and_context().await;
+    child_turn.reflections_shared_notes_path = Some(shared_notes_path);
+    child_turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let parent_session = Arc::new(parent_session);
+    let child_session = Arc::new(child_session);
+    let parent_turn = Arc::new(parent_turn);
+    let child_turn = Arc::new(child_turn);
+
+    ReflectionsWriteSharedNoteHandler
+        .handle(invocation(
+            Arc::clone(&parent_session),
+            Arc::clone(&parent_turn),
+            "reflections_write_shared_note",
+            function_payload(json!({
+                "note_id": "handoff",
+                "operation": "create_only",
+                "content": "Parent progress: inspect parser tests\n"
+            })),
+        ))
+        .await
+        .expect("parent should write shared note");
+
+    let read_output = ReflectionsReadSharedNoteHandler
+        .handle(invocation(
+            Arc::clone(&child_session),
+            Arc::clone(&child_turn),
+            "reflections_read_shared_note",
+            function_payload(json!({
+                "note_id": "handoff",
+                "start": 1,
+                "stop": 1
+            })),
+        ))
+        .await
+        .expect("child should read shared note");
+    let (content, _) = expect_text_output(read_output);
+    let value: serde_json::Value =
+        serde_json::from_str(&content).expect("read output should be json");
+    assert_eq!(value["kind"], "shared_note");
+    assert_eq!(value["content"], "Parent progress: inspect parser tests\n");
+
+    ReflectionsWriteSharedNoteHandler
+        .handle(invocation(
+            Arc::clone(&child_session),
+            Arc::clone(&child_turn),
+            "reflections_write_shared_note",
+            function_payload(json!({
+                "note_id": "handoff",
+                "operation": "append",
+                "content": "Child progress: parser tests pass\n"
+            })),
+        ))
+        .await
+        .expect("child should append shared note");
+
+    let search_output = ReflectionsSearchSharedNotesHandler
+        .handle(invocation(
+            parent_session,
+            parent_turn,
+            "reflections_search_shared_notes",
+            function_payload(json!({
+                "query": "parser tests pass",
+                "start": 1,
+                "stop": 20
+            })),
+        ))
+        .await
+        .expect("parent should search shared notes");
+    let (content, _) = expect_text_output(search_output);
+    let value: serde_json::Value =
+        serde_json::from_str(&content).expect("search output should be json");
+    assert_eq!(value["results"][0]["kind"], "shared_note");
+    assert_eq!(
+        value["results"][0]["read"]["tool"],
+        "reflections_read_shared_note"
+    );
 }
 
 fn thread_manager() -> ThreadManager {

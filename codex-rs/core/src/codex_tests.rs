@@ -1931,6 +1931,7 @@ async fn set_rate_limits_retains_previous_credits() {
         inherited_shell_snapshot: None,
         user_shell_override: None,
         reflections_sidecar_path: None,
+        reflections_shared_notes_path: None,
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2034,6 +2035,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         inherited_shell_snapshot: None,
         user_shell_override: None,
         reflections_sidecar_path: None,
+        reflections_shared_notes_path: None,
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2316,6 +2318,51 @@ async fn build_test_config(codex_home: &Path) -> Config {
         .expect("load default test config")
 }
 
+#[tokio::test]
+async fn reflections_shared_notes_path_gate_allows_thread_spawn_without_collab_tools() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    config.compaction_strategy = CompactionStrategyConfig::Reflections;
+    config.reflections.storage_tools_enabled = true;
+    config.reflections.shared_notes_enabled = true;
+    let _ = config.features.disable(Feature::Collab);
+
+    assert!(!should_resolve_reflections_shared_notes_path(
+        &config,
+        &SessionSource::Cli
+    ));
+
+    let _ = config.features.enable(Feature::Collab);
+    assert!(should_resolve_reflections_shared_notes_path(
+        &config,
+        &SessionSource::Cli
+    ));
+
+    let _ = config.features.disable(Feature::Collab);
+    assert!(should_resolve_reflections_shared_notes_path(
+        &config,
+        &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        })
+    ));
+
+    config.reflections.storage_tools_enabled = false;
+    assert!(!should_resolve_reflections_shared_notes_path(
+        &config,
+        &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        })
+    ));
+}
+
 fn session_telemetry(
     conversation_id: ThreadId,
     config: &Config,
@@ -2387,6 +2434,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         inherited_shell_snapshot: None,
         user_shell_override: None,
         reflections_sidecar_path: None,
+        reflections_shared_notes_path: None,
     }
 }
 
@@ -2698,6 +2746,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         inherited_shell_snapshot: None,
         user_shell_override: None,
         reflections_sidecar_path: None,
+        reflections_shared_notes_path: None,
     };
 
     let (tx_event, _rx_event) = async_channel::unbounded();
@@ -2803,6 +2852,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         inherited_shell_snapshot: None,
         user_shell_override: None,
         reflections_sidecar_path: None,
+        reflections_shared_notes_path: None,
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -3652,6 +3702,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         inherited_shell_snapshot: None,
         user_shell_override: None,
         reflections_sidecar_path: None,
+        reflections_shared_notes_path: None,
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
     let model_info = ModelsManager::construct_model_info_offline_for_tests(

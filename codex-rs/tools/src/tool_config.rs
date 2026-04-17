@@ -107,6 +107,7 @@ pub struct ToolsConfig {
     pub reflections: bool,
     pub reflections_usage_hint_text: Option<String>,
     pub reflections_storage_tools: bool,
+    pub reflections_shared_notes: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
@@ -231,6 +232,7 @@ impl ToolsConfig {
             reflections: false,
             reflections_usage_hint_text: None,
             reflections_storage_tools: true,
+            reflections_shared_notes: true,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
@@ -265,10 +267,12 @@ impl ToolsConfig {
         reflections: bool,
         reflections_usage_hint_text: Option<String>,
         reflections_storage_tools: bool,
+        reflections_shared_notes: bool,
     ) -> Self {
         self.reflections = reflections;
         self.reflections_usage_hint_text = reflections_usage_hint_text;
         self.reflections_storage_tools = reflections_storage_tools;
+        self.reflections_shared_notes = reflections_shared_notes;
         self
     }
 

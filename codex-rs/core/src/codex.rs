@@ -666,6 +666,7 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             reflections_sidecar_path: None,
+            reflections_shared_notes_path: None,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -928,6 +929,7 @@ pub(crate) struct TurnContext {
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
     pub(crate) turn_skills: TurnSkillsContext,
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
+    pub(crate) reflections_shared_notes_path: Option<AbsolutePathBuf>,
 }
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
@@ -1052,6 +1054,7 @@ impl TurnContext {
             turn_metadata_state: self.turn_metadata_state.clone(),
             turn_skills: self.turn_skills.clone(),
             turn_timing_state: Arc::clone(&self.turn_timing_state),
+            reflections_shared_notes_path: self.reflections_shared_notes_path.clone(),
         }
     }
 
@@ -1213,6 +1216,7 @@ pub(crate) struct SessionConfiguration {
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     user_shell_override: Option<shell::Shell>,
     reflections_sidecar_path: Option<AbsolutePathBuf>,
+    reflections_shared_notes_path: Option<AbsolutePathBuf>,
 }
 
 impl SessionConfiguration {
@@ -1334,6 +1338,24 @@ impl SessionConfiguration {
             warn!("failed to add Reflections sidecar to sandbox policy: {err}");
         }
     }
+}
+
+fn should_resolve_reflections_shared_notes_path(
+    config: &Config,
+    session_source: &SessionSource,
+) -> bool {
+    if config.compaction_strategy != CompactionStrategyConfig::Reflections
+        || !config.reflections.storage_tools_enabled
+        || !config.reflections.shared_notes_enabled
+    {
+        return false;
+    }
+
+    config.features.enabled(Feature::Collab)
+        || matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        )
 }
 
 #[derive(Default, Clone)]
@@ -1586,6 +1608,12 @@ impl Session {
         let reflections_enabled = per_turn_config.compaction_strategy
             == CompactionStrategyConfig::Reflections
             && session_configuration.reflections_sidecar_path.is_some();
+        let shared_notes_available = reflections_enabled
+            && per_turn_config.reflections.storage_tools_enabled
+            && per_turn_config.reflections.shared_notes_enabled
+            && session_configuration
+                .reflections_shared_notes_path
+                .is_some();
         let reflections_usage_hint_text = if reflections_enabled
             && per_turn_config.reflections.usage_hint_enabled
         {
@@ -1602,6 +1630,7 @@ impl Session {
                         sidecar_path.as_path(),
                         per_turn_config.reflections.usage_hint_text.as_deref(),
                         per_turn_config.reflections.storage_tools_enabled,
+                        shared_notes_available,
                     )
                 })
         } else {
@@ -1632,6 +1661,7 @@ impl Session {
             reflections_enabled,
             reflections_usage_hint_text,
             per_turn_config.reflections.storage_tools_enabled,
+            shared_notes_available,
         )
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
@@ -1691,6 +1721,9 @@ impl Session {
             turn_metadata_state,
             turn_skills: TurnSkillsContext::new(skills_outcome),
             turn_timing_state: Arc::new(TurnTimingState::default()),
+            reflections_shared_notes_path: session_configuration
+                .reflections_shared_notes_path
+                .clone(),
         }
     }
 
@@ -1857,6 +1890,21 @@ impl Session {
         {
             session_configuration.reflections_sidecar_path = Some(sidecar_path);
             session_configuration.add_reflections_sidecar_to_sandbox_policies();
+        }
+        if should_resolve_reflections_shared_notes_path(
+            config.as_ref(),
+            &session_configuration.session_source,
+        ) && let Some(rollout_path) = rollout_path.as_ref()
+        {
+            session_configuration.reflections_shared_notes_path =
+                crate::reflections::resolve_reflections_shared_notes_path(
+                    config.codex_home.as_path(),
+                    rollout_path.as_path(),
+                    conversation_id,
+                    &session_configuration.session_source,
+                )
+                .await
+                .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
         }
 
         let mut post_session_configured_events = Vec::<Event>::new();
@@ -2445,9 +2493,13 @@ impl Session {
         }
 
         let remaining_tokens = auto_compact_limit.saturating_sub(total_usage_tokens).max(0);
+        let shared_notes_available = turn_context.reflections_shared_notes_path.is_some()
+            && turn_context.config.reflections.storage_tools_enabled
+            && turn_context.config.reflections.shared_notes_enabled;
         let reminder = crate::reflections::near_limit_reminder(
             Some(remaining_tokens),
             turn_context.config.reflections.storage_tools_enabled,
+            shared_notes_available,
         );
         self.record_conversation_items(turn_context, std::slice::from_ref(&reminder))
             .await;
@@ -2803,6 +2855,7 @@ impl Session {
                     sidecar_path.as_path().display()
                 );
                 session_configuration.reflections_sidecar_path = None;
+                session_configuration.reflections_shared_notes_path = None;
             }
         }
         {
@@ -6204,6 +6257,7 @@ async fn spawn_review_thread(
         turn_metadata_state,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
+        reflections_shared_notes_path: parent_turn_context.reflections_shared_notes_path.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.

@@ -3,10 +3,14 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_tools::REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME;
 use codex_tools::REFLECTIONS_LIST_TOOL_NAME;
+use codex_tools::REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME;
 use codex_tools::REFLECTIONS_READ_TOOL_NAME;
+use codex_tools::REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME;
 use codex_tools::REFLECTIONS_SEARCH_TOOL_NAME;
 use codex_tools::REFLECTIONS_WRITE_NOTE_TOOL_NAME;
+use codex_tools::REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
@@ -459,8 +463,12 @@ pub(crate) fn is_reflections_storage_tool(tool: &str) -> bool {
     matches!(
         tool,
         REFLECTIONS_LIST_TOOL_NAME
+            | REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME
             | REFLECTIONS_READ_TOOL_NAME
+            | REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME
             | REFLECTIONS_SEARCH_TOOL_NAME
+            | REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME
+            | REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME
             | REFLECTIONS_WRITE_NOTE_TOOL_NAME
     )
 }
@@ -495,7 +503,7 @@ pub(super) fn reflections_storage_tool_call_metadata(
     arguments: &Value,
 ) -> Value {
     match tool {
-        REFLECTIONS_WRITE_NOTE_TOOL_NAME => json!({
+        REFLECTIONS_WRITE_NOTE_TOOL_NAME | REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME => json!({
             "tool_name": tool,
             "call_id": call_id,
             "note_id": arguments.get("note_id"),
@@ -515,10 +523,23 @@ pub(super) fn reflections_storage_tool_call_metadata(
             "start": arguments.get("start"),
             "stop": arguments.get("stop"),
         }),
+        REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME => json!({
+            "tool_name": tool,
+            "call_id": call_id,
+            "note_id": arguments.get("note_id"),
+            "start": arguments.get("start"),
+            "stop": arguments.get("stop"),
+        }),
         REFLECTIONS_LIST_TOOL_NAME => json!({
             "tool_name": tool,
             "call_id": call_id,
             "collection": arguments.get("collection"),
+            "start": arguments.get("start"),
+            "stop": arguments.get("stop"),
+        }),
+        REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME => json!({
+            "tool_name": tool,
+            "call_id": call_id,
             "start": arguments.get("start"),
             "stop": arguments.get("stop"),
         }),
@@ -528,6 +549,13 @@ pub(super) fn reflections_storage_tool_call_metadata(
             "scope": arguments.get("scope"),
             "query": arguments.get("query"),
             "log_id": arguments.get("log_id"),
+            "start": arguments.get("start"),
+            "stop": arguments.get("stop"),
+        }),
+        REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME => json!({
+            "tool_name": tool,
+            "call_id": call_id,
+            "query": arguments.get("query"),
             "start": arguments.get("start"),
             "stop": arguments.get("stop"),
         }),
@@ -572,7 +600,7 @@ fn reflections_storage_output_value_metadata(
     value: &Value,
 ) -> Value {
     match tool {
-        REFLECTIONS_WRITE_NOTE_TOOL_NAME => json!({
+        REFLECTIONS_WRITE_NOTE_TOOL_NAME | REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME => json!({
             "tool_name": tool,
             "call_id": call_id,
             "note_id": value.get("id"),
@@ -598,6 +626,16 @@ fn reflections_storage_output_value_metadata(
             "success": success,
             "error": error,
         }),
+        REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME => json!({
+            "tool_name": tool,
+            "call_id": call_id,
+            "note_id": value.get("id"),
+            "start": value.pointer("/range/start"),
+            "stop": value.pointer("/range/stop"),
+            "content_chars": value.get("content_chars"),
+            "success": success,
+            "error": error,
+        }),
         REFLECTIONS_LIST_TOOL_NAME => json!({
             "tool_name": tool,
             "call_id": call_id,
@@ -611,7 +649,34 @@ fn reflections_storage_output_value_metadata(
             "success": success,
             "error": error,
         }),
+        REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME => json!({
+            "tool_name": tool,
+            "call_id": call_id,
+            "collection": value.get("collection"),
+            "start": value.pointer("/range/start"),
+            "stop": value.pointer("/range/stop"),
+            "returned_items": value
+                .get("items")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            "success": success,
+            "error": error,
+        }),
         REFLECTIONS_SEARCH_TOOL_NAME => json!({
+            "tool_name": tool,
+            "call_id": call_id,
+            "scope": value.get("scope"),
+            "query": value.get("query"),
+            "start": value.pointer("/range/start"),
+            "stop": value.pointer("/range/stop"),
+            "returned_results": value
+                .get("results")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            "success": success,
+            "error": error,
+        }),
+        REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME => json!({
             "tool_name": tool,
             "call_id": call_id,
             "scope": value.get("scope"),

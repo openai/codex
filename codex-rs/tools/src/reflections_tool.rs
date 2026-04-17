@@ -10,6 +10,10 @@ pub const REFLECTIONS_LIST_TOOL_NAME: &str = "reflections_list";
 pub const REFLECTIONS_READ_TOOL_NAME: &str = "reflections_read";
 pub const REFLECTIONS_SEARCH_TOOL_NAME: &str = "reflections_search";
 pub const REFLECTIONS_WRITE_NOTE_TOOL_NAME: &str = "reflections_write_note";
+pub const REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME: &str = "reflections_list_shared_notes";
+pub const REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME: &str = "reflections_read_shared_note";
+pub const REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME: &str = "reflections_search_shared_notes";
+pub const REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME: &str = "reflections_write_shared_note";
 
 pub fn create_reflections_new_context_window_tool(
     usage_hint: Option<&str>,
@@ -200,6 +204,138 @@ pub fn create_reflections_write_note_tool() -> ToolSpec {
                     "content".to_string(),
                     JsonSchema::string(Some(
                         "UTF-8 note content. The individual write and final note are each limited to 65,536 characters."
+                            .to_string(),
+                    )),
+                ),
+            ]),
+            vec!["note_id", "operation", "content"],
+        ),
+        output_schema: None,
+    })
+}
+
+pub fn create_reflections_list_shared_notes_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME.to_string(),
+        description: "Lists shared Reflections notes visible to agents in the same agent tree using backend-neutral note IDs. Use this to discover coordination notes before reading them.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: object(
+            BTreeMap::from([
+                (
+                    "start".to_string(),
+                    JsonSchema::integer(Some(
+                        "1-based inclusive start position. Defaults to 1.".to_string(),
+                    )),
+                ),
+                (
+                    "stop".to_string(),
+                    JsonSchema::integer(Some(
+                        "1-based inclusive stop position. Defaults to 50 and returns at most 200 items.".to_string(),
+                    )),
+                ),
+            ]),
+            Vec::new(),
+        ),
+        output_schema: None,
+    })
+}
+
+pub fn create_reflections_read_shared_note_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME.to_string(),
+        description: "Reads a shared Reflections note by explicit note ID. Shared notes are for coordination across agents in the same agent tree. The `latest` alias is not supported.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: object(
+            BTreeMap::from([
+                (
+                    "note_id".to_string(),
+                    JsonSchema::string(Some(
+                        "Shared note slug matching ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ with no `..`."
+                            .to_string(),
+                    )),
+                ),
+                (
+                    "start".to_string(),
+                    JsonSchema::integer(Some(
+                        "1-based inclusive start line. Defaults to 1.".to_string(),
+                    )),
+                ),
+                (
+                    "stop".to_string(),
+                    JsonSchema::integer(Some(
+                        "1-based inclusive stop line. Defaults to 1000 and returns at most 1000 lines."
+                            .to_string(),
+                    )),
+                ),
+            ]),
+            vec!["note_id"],
+        ),
+        output_schema: None,
+    })
+}
+
+pub fn create_reflections_search_shared_notes_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME.to_string(),
+        description: "Searches shared Reflections notes visible to agents in the same agent tree. Search results include a one-call locator for `reflections_read_shared_note`.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: object(
+            BTreeMap::from([
+                (
+                    "query".to_string(),
+                    JsonSchema::string(Some(
+                        "Case-insensitive literal text to search for.".to_string(),
+                    )),
+                ),
+                (
+                    "start".to_string(),
+                    JsonSchema::integer(Some(
+                        "1-based inclusive start result position. Defaults to 1.".to_string(),
+                    )),
+                ),
+                (
+                    "stop".to_string(),
+                    JsonSchema::integer(Some(
+                        "1-based inclusive stop result position. Defaults to 20 and returns at most 100 results."
+                            .to_string(),
+                    )),
+                ),
+            ]),
+            vec!["query"],
+        ),
+        output_schema: None,
+    })
+}
+
+pub fn create_reflections_write_shared_note_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME.to_string(),
+        description: "Creates, appends to, or replaces a shared Reflections note visible to agents in the same agent tree. Shared notes are for coordination state that other agents should see. Note IDs are simple slugs, not file paths. A single note can contain at most 65,536 characters after the write.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: object(
+            BTreeMap::from([
+                (
+                    "note_id".to_string(),
+                    JsonSchema::string(Some(
+                        "Shared note slug matching ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ with no `..`."
+                            .to_string(),
+                    )),
+                ),
+                (
+                    "operation".to_string(),
+                    JsonSchema::string_enum(
+                        vec![json!("create_only"), json!("append"), json!("replace")],
+                        Some("How to write the shared note.".to_string()),
+                    ),
+                ),
+                (
+                    "content".to_string(),
+                    JsonSchema::string(Some(
+                        "UTF-8 note content. The individual write and final shared note are each limited to 65,536 characters."
                             .to_string(),
                     )),
                 ),

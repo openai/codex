@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_analytics::CompactionTrigger;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -11,6 +14,7 @@ use tokio::io::AsyncWriteExt;
 const STATE_SCHEMA: &str = "reflections.state.v1";
 const TRANSCRIPT_FILE: &str = "transcript.md";
 const WINDOW_DIR_WIDTH: usize = 5;
+const MAX_SHARED_NOTES_PARENT_DEPTH: usize = 64;
 pub(crate) const WINDOW_DIR_PATTERN: &str = "cwNNNNN";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +55,57 @@ pub(crate) async fn ensure_sidecar_dirs(sidecar_path: &Path) -> std::io::Result<
     tokio::fs::create_dir_all(sidecar_path).await?;
     tokio::fs::create_dir_all(sidecar_path.join("notes")).await?;
     tokio::fs::create_dir_all(sidecar_path.join("logs")).await
+}
+
+pub(crate) async fn resolve_reflections_shared_notes_path(
+    codex_home: &Path,
+    current_rollout_path: &Path,
+    current_thread_id: ThreadId,
+    session_source: &SessionSource,
+) -> Option<PathBuf> {
+    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id, ..
+    }) = session_source
+    else {
+        return Some(sidecar_path_for_rollout(current_rollout_path).join("shared_notes"));
+    };
+
+    let mut next_parent_thread_id = *parent_thread_id;
+    let mut seen_thread_ids = std::collections::HashSet::new();
+    seen_thread_ids.insert(current_thread_id.to_string());
+
+    for _ in 0..MAX_SHARED_NOTES_PARENT_DEPTH {
+        let parent_thread_id = next_parent_thread_id.to_string();
+        if !seen_thread_ids.insert(parent_thread_id.clone()) {
+            return None;
+        }
+        let parent_rollout_path =
+            crate::rollout::find_thread_path_by_id_str(codex_home, &parent_thread_id)
+                .await
+                .ok()??;
+        let parent_session_meta =
+            crate::rollout::read_session_meta_line(parent_rollout_path.as_path())
+                .await
+                .ok()?;
+        match parent_session_meta.meta.source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) => {
+                next_parent_thread_id = parent_thread_id;
+            }
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Custom(_)
+            | SessionSource::SubAgent(_)
+            | SessionSource::Unknown => {
+                return Some(sidecar_path_for_rollout(&parent_rollout_path).join("shared_notes"));
+            }
+        }
+    }
+
+    None
 }
 
 pub(crate) async fn write_window(
@@ -164,10 +219,20 @@ fn trigger_label(trigger: CompactionTrigger) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::resolve_reflections_shared_notes_path;
     use super::sidecar_path_for_rollout;
     use super::write_window;
     use codex_analytics::CompactionTrigger;
+    use codex_protocol::ThreadId;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn write_window_allocates_transcript_and_state() -> std::io::Result<()> {
@@ -209,5 +274,148 @@ mod tests {
         assert!(state.contains("\"rollout_start_line\": 1"));
         assert!(state.contains("\"rollout_end_line\": 2"));
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_notes_resolve_to_current_sidecar_for_root_thread() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let thread_id = ThreadId::new();
+        let rollout = temp.path().join(format!(
+            "sessions/2026/04/16/rollout-2026-04-16T00-00-00-{thread_id}.jsonl"
+        ));
+
+        let shared_notes = resolve_reflections_shared_notes_path(
+            temp.path(),
+            &rollout,
+            thread_id,
+            &SessionSource::Cli,
+        )
+        .await
+        .expect("root shared notes should resolve");
+
+        assert_eq!(
+            shared_notes,
+            sidecar_path_for_rollout(&rollout).join("shared_notes")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_notes_resolve_to_root_sidecar_for_descendants() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root_id = ThreadId::new();
+        let child_id = ThreadId::new();
+        let grandchild_id = ThreadId::new();
+        let root_rollout = write_minimal_rollout(temp.path(), root_id, SessionSource::Cli)?;
+        let child_rollout =
+            write_minimal_rollout(temp.path(), child_id, thread_spawn_source(root_id, 1))?;
+        let grandchild_rollout = temp.path().join(format!(
+            "sessions/2026/04/16/rollout-2026-04-16T00-02-00-{grandchild_id}.jsonl"
+        ));
+
+        let child_shared_notes = resolve_reflections_shared_notes_path(
+            temp.path(),
+            &child_rollout,
+            child_id,
+            &thread_spawn_source(root_id, 1),
+        )
+        .await
+        .expect("child shared notes should resolve");
+        let grandchild_shared_notes = resolve_reflections_shared_notes_path(
+            temp.path(),
+            &grandchild_rollout,
+            grandchild_id,
+            &thread_spawn_source(child_id, 2),
+        )
+        .await
+        .expect("grandchild shared notes should resolve");
+
+        let expected = sidecar_path_for_rollout(&root_rollout).join("shared_notes");
+        assert_eq!(child_shared_notes, expected);
+        assert_eq!(grandchild_shared_notes, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_notes_resolution_failure_returns_none() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let current_id = ThreadId::new();
+        let missing_parent_id = ThreadId::new();
+        let rollout = temp.path().join("rollout.jsonl");
+
+        let shared_notes = resolve_reflections_shared_notes_path(
+            temp.path(),
+            &rollout,
+            current_id,
+            &thread_spawn_source(missing_parent_id, 1),
+        )
+        .await;
+
+        assert_eq!(shared_notes, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_notes_resolution_cycle_returns_none() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let current_id = ThreadId::new();
+        let parent_id = ThreadId::new();
+        write_minimal_rollout(temp.path(), parent_id, thread_spawn_source(current_id, 1))?;
+        let rollout = temp.path().join("rollout.jsonl");
+
+        let shared_notes = resolve_reflections_shared_notes_path(
+            temp.path(),
+            &rollout,
+            current_id,
+            &thread_spawn_source(parent_id, 1),
+        )
+        .await;
+
+        assert_eq!(shared_notes, None);
+        Ok(())
+    }
+
+    fn thread_spawn_source(parent_thread_id: ThreadId, depth: i32) -> SessionSource {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        })
+    }
+
+    fn write_minimal_rollout(
+        codex_home: &Path,
+        thread_id: ThreadId,
+        source: SessionSource,
+    ) -> std::io::Result<PathBuf> {
+        let sessions_dir = codex_home.join("sessions/2026/04/16");
+        std::fs::create_dir_all(&sessions_dir)?;
+        let rollout = sessions_dir.join(format!("rollout-2026-04-16T00-00-00-{thread_id}.jsonl"));
+        let line = RolloutLine {
+            timestamp: "2026-04-16T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: thread_id,
+                    forked_from_id: None,
+                    timestamp: "2026-04-16T00:00:00Z".to_string(),
+                    cwd: codex_home.to_path_buf(),
+                    originator: "test".to_string(),
+                    cli_version: "test".to_string(),
+                    source,
+                    agent_nickname: None,
+                    agent_role: None,
+                    agent_path: None,
+                    model_provider: None,
+                    base_instructions: None,
+                    dynamic_tools: None,
+                    memory_mode: None,
+                },
+                git: None,
+            }),
+        };
+        std::fs::write(&rollout, format!("{}\n", serde_json::to_string(&line)?))?;
+        Ok(rollout)
     }
 }

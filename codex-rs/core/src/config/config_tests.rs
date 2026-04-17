@@ -6317,6 +6317,7 @@ async fn reflections_config_from_strategy_and_feature_table() -> std::io::Result
 usage_hint_enabled = false
 usage_hint_text = "Custom recovery guidance."
 storage_tools_enabled = false
+shared_notes_enabled = false
 "#,
     )?;
 
@@ -6336,6 +6337,7 @@ storage_tools_enabled = false
         Some("Custom recovery guidance.")
     );
     assert!(!config.reflections.storage_tools_enabled);
+    assert!(!config.reflections.shared_notes_enabled);
 
     Ok(())
 }
@@ -6359,6 +6361,7 @@ usage_hint_enabled = true
         .await?;
 
     assert!(config.reflections.storage_tools_enabled);
+    assert!(config.reflections.shared_notes_enabled);
 
     Ok(())
 }
@@ -6375,6 +6378,7 @@ compaction_strategy = "reflections"
 usage_hint_enabled = true
 usage_hint_text = "base hint"
 storage_tools_enabled = true
+shared_notes_enabled = true
 
 [profiles.default_compaction]
 compaction_strategy = "default"
@@ -6383,6 +6387,7 @@ compaction_strategy = "default"
 usage_hint_enabled = false
 usage_hint_text = "profile hint"
 storage_tools_enabled = false
+shared_notes_enabled = false
 "#,
     )?;
 
@@ -6402,6 +6407,7 @@ storage_tools_enabled = false
         Some("profile hint")
     );
     assert!(!config.reflections.storage_tools_enabled);
+    assert!(!config.reflections.shared_notes_enabled);
 
     Ok(())
 }

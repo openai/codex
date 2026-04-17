@@ -33,14 +33,19 @@ pub(crate) use prompt::near_limit_reminder;
 pub(crate) use prompt::near_limit_reminder_threshold;
 pub(crate) use prompt::usage_hint;
 pub(crate) use storage::ensure_sidecar_dirs;
+pub(crate) use storage::resolve_reflections_shared_notes_path;
 pub(crate) use storage::sidecar_path_for_rollout;
 pub(crate) use storage_tools::StorageToolError;
 pub(crate) use storage_tools::list_logs;
 pub(crate) use storage_tools::list_notes;
+pub(crate) use storage_tools::list_shared_notes;
 pub(crate) use storage_tools::read_log;
 pub(crate) use storage_tools::read_note;
+pub(crate) use storage_tools::read_shared_note;
 pub(crate) use storage_tools::search;
+pub(crate) use storage_tools::search_shared_notes;
 pub(crate) use storage_tools::write_note;
+pub(crate) use storage_tools::write_shared_note;
 
 pub(crate) async fn run_reflections_compact_task(
     sess: Arc<Session>,
@@ -140,6 +145,9 @@ async fn run_reflections_compact_task_inner_impl(
         &window.logs_path,
         &window.notes_path,
         turn_context.config.reflections.storage_tools_enabled,
+        turn_context.reflections_shared_notes_path.is_some()
+            && turn_context.config.reflections.storage_tools_enabled
+            && turn_context.config.reflections.shared_notes_enabled,
     );
     let mut new_history = vec![ResponseItem::Message {
         id: None,

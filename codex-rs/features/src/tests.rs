@@ -367,6 +367,7 @@ fn reflections_feature_config_deserializes_table_without_feature_toggle() {
 usage_hint_enabled = false
 usage_hint_text = "Custom recovery guidance."
 storage_tools_enabled = false
+shared_notes_enabled = false
 "#,
     )
     .expect("features table should deserialize");
@@ -378,6 +379,7 @@ storage_tools_enabled = false
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom recovery guidance.".to_string()),
             storage_tools_enabled: Some(false),
+            shared_notes_enabled: Some(false),
         })
     );
 }

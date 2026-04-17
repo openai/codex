@@ -636,7 +636,8 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
 #[test]
 fn reflections_tools_require_config_flag() {
     let model_info = model_info();
-    let features = Features::with_defaults();
+    let mut features = Features::with_defaults();
+    features.disable(Feature::Collab);
     let available_models = Vec::new();
     let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -660,11 +661,16 @@ fn reflections_tools_require_config_flag() {
     assert_lacks_tool_name(&tools, REFLECTIONS_READ_TOOL_NAME);
     assert_lacks_tool_name(&tools, REFLECTIONS_SEARCH_TOOL_NAME);
     assert_lacks_tool_name(&tools, REFLECTIONS_WRITE_NOTE_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME);
 
     let reflections_tools_config = default_tools_config.clone().with_reflections(
         true,
         Some("Custom Reflections hint.".to_string()),
         /*reflections_storage_tools*/ true,
+        /*reflections_shared_notes*/ false,
     );
     let (tools, handlers) = build_specs(
         &reflections_tools_config,
@@ -683,6 +689,10 @@ fn reflections_tools_require_config_flag() {
             REFLECTIONS_WRITE_NOTE_TOOL_NAME,
         ],
     );
+    assert_lacks_tool_name(&tools, REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME);
     assert!(handlers.contains(&ToolHandlerSpec {
         name: ToolName::plain(REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME),
         kind: ToolHandlerKind::ReflectionsNewContextWindow,
@@ -718,6 +728,7 @@ fn reflections_tools_require_config_flag() {
         true,
         Some("Custom Reflections hint.".to_string()),
         /*reflections_storage_tools*/ false,
+        /*reflections_shared_notes*/ true,
     );
     let (tools, handlers) = build_specs(
         &path_based_reflections_tools_config,
@@ -748,6 +759,121 @@ fn reflections_tools_require_config_flag() {
         panic!("{REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME} should be a function tool");
     };
     assert!(description.contains("under the Reflections notes directory"));
+}
+
+#[test]
+fn reflections_shared_note_tools_require_reflections_storage_and_availability() {
+    let model_info = model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    let available_models = Vec::new();
+    let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let disabled_by_storage = default_tools_config.clone().with_reflections(
+        true, None, /*reflections_storage_tools*/ false,
+        /*reflections_shared_notes*/ true,
+    );
+    let (tools, _) = build_specs(
+        &disabled_by_storage,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_lacks_tool_name(&tools, REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME);
+
+    let disabled_by_config = default_tools_config.clone().with_reflections(
+        true, None, /*reflections_storage_tools*/ true,
+        /*reflections_shared_notes*/ false,
+    );
+    let (tools, _) = build_specs(
+        &disabled_by_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_lacks_tool_name(&tools, REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME);
+
+    let mut no_collab_features = Features::with_defaults();
+    no_collab_features.disable(Feature::Collab);
+    let no_collab_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &no_collab_features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_reflections(
+        true, None, /*reflections_storage_tools*/ true, /*reflections_shared_notes*/ true,
+    );
+    let (tools, _) = build_specs(
+        &no_collab_tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_lacks_tool_name(&tools, "spawn_agent");
+    assert_contains_tool_names(
+        &tools,
+        &[
+            REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME,
+            REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME,
+            REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME,
+            REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME,
+        ],
+    );
+
+    let enabled = default_tools_config.with_reflections(
+        true, None, /*reflections_storage_tools*/ true, /*reflections_shared_notes*/ true,
+    );
+    let (tools, handlers) = build_specs(
+        &enabled,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_contains_tool_names(
+        &tools,
+        &[
+            REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME,
+            REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME,
+            REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME,
+            REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME,
+        ],
+    );
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_LIST_SHARED_NOTES_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsListSharedNotes,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_READ_SHARED_NOTE_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsReadSharedNote,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_SEARCH_SHARED_NOTES_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsSearchSharedNotes,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_WRITE_SHARED_NOTE_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsWriteSharedNote,
+    }));
 }
 
 #[test]
