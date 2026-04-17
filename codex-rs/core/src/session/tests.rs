@@ -2945,11 +2945,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        Some(Arc::new(
-            codex_exec_server::Environment::create(/*exec_server_url*/ None)
-                .await
-                .expect("create environment"),
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default()),
         /*analytics_events_client*/ None,
     )
     .await;
@@ -3047,7 +3043,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(/*exec_server_url*/ None)
-            .await
             .expect("create environment"),
     );
 
@@ -3107,7 +3102,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default()),
         environment: Some(Arc::clone(&environment)),
+        allows_agent_environment_access: true,
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3141,6 +3138,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_info,
         &models_manager,
         /*network*/ None,
+        /*allows_agent_environment_access*/ true,
         Some(environment),
         "turn_id".to_string(),
         Arc::clone(&js_repl),
@@ -3262,11 +3260,7 @@ async fn make_session_with_config_and_rx(
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
-        Some(Arc::new(
-            codex_exec_server::Environment::create(/*exec_server_url*/ None)
-                .await
-                .expect("create environment"),
-        )),
+        Arc::new(codex_exec_server::EnvironmentManager::default()),
         /*analytics_events_client*/ None,
     )
     .await?;
@@ -4138,7 +4132,6 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let network_approval = Arc::new(NetworkApprovalService::default());
     let environment = Arc::new(
         codex_exec_server::Environment::create(/*exec_server_url*/ None)
-            .await
             .expect("create environment"),
     );
 
@@ -4198,7 +4191,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default()),
         environment: Some(Arc::clone(&environment)),
+        allows_agent_environment_access: true,
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -4232,6 +4227,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         model_info,
         &models_manager,
         /*network*/ None,
+        /*allows_agent_environment_access*/ true,
         Some(environment),
         "turn_id".to_string(),
         Arc::clone(&js_repl),

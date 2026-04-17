@@ -750,7 +750,9 @@ mod tests {
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),
             log_db: None,
-            environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            environment_manager: Arc::new(EnvironmentManager::from_exec_server_url(
+                codex_exec_server::EnvironmentManagerArgs::default(),
+            )),
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,

@@ -989,9 +989,11 @@ mod tests {
             ),
             feedback: codex_feedback::CodexFeedback::new(),
             log_db: None,
-            environment_manager: Arc::new(codex_app_server_client::EnvironmentManager::new(
-                /*exec_server_url*/ None,
-            )),
+            environment_manager: Arc::new(
+                codex_app_server_client::EnvironmentManager::from_exec_server_url(
+                    codex_app_server_client::EnvironmentManagerArgs::default(),
+                ),
+            ),
             config_warnings: Vec::new(),
             session_source: SessionSource::Cli,
             enable_codex_api_key_env: false,

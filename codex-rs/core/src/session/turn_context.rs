@@ -345,6 +345,7 @@ impl Session {
         model_info: ModelInfo,
         models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
+        allows_agent_environment_access: bool,
         environment: Option<Arc<Environment>>,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
@@ -381,7 +382,7 @@ impl Session {
         )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_has_environment(environment.is_some())
+        .with_has_environment(allows_agent_environment_access)
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -576,6 +577,7 @@ impl Session {
                     )
                     .then(|| started_proxy.proxy())
                 }),
+            self.services.allows_agent_environment_access,
             self.services.environment.clone(),
             sub_id,
             Arc::clone(&self.js_repl),

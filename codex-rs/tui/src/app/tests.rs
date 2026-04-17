@@ -3576,7 +3576,9 @@ async fn make_test_app() -> App {
         backtrack_render_pending: false,
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
-        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        environment_manager: Arc::new(EnvironmentManager::from_exec_server_url(
+            codex_exec_server::EnvironmentManagerArgs::default(),
+        )),
         remote_app_server_url: None,
         remote_app_server_auth_token: None,
         pending_update_action: None,
@@ -3633,7 +3635,9 @@ async fn make_test_app_with_channels() -> (
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
-            environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            environment_manager: Arc::new(EnvironmentManager::from_exec_server_url(
+                codex_exec_server::EnvironmentManagerArgs::default(),
+            )),
             remote_app_server_url: None,
             remote_app_server_auth_token: None,
             pending_update_action: None,

@@ -5677,27 +5677,17 @@ impl CodexMessageProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => {
+        let environment_manager = self.thread_manager.environment_manager();
+        let runtime_environment = match environment_manager.default_environment() {
+            Some(environment) => {
                 // Status listing has no turn cwd. This fallback is used only
                 // by executor-backed stdio MCPs whose config omits `cwd`.
                 McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
             }
-            Ok(None) => McpRuntimeEnvironment::new(
-                Arc::new(codex_exec_server::Environment::default()),
+            None => McpRuntimeEnvironment::new(
+                environment_manager.local_environment(),
                 config.cwd.to_path_buf(),
             ),
-            Err(err) => {
-                // TODO(aibrahim): Investigate degrading MCP status listing when
-                // executor environment creation fails.
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to create environment: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request, error).await;
-                return;
-            }
         };
 
         tokio::spawn(async move {
@@ -5856,25 +5846,15 @@ impl CodexMessageProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let runtime_environment = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => {
-                // Resource reads without a thread have no turn cwd. This fallback
-                // is used only by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            Ok(None) => McpRuntimeEnvironment::new(
-                Arc::new(codex_exec_server::Environment::default()),
-                config.cwd.to_path_buf(),
-            ),
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to create environment: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
+        let runtime_environment = {
+            let environment = self
+                .thread_manager
+                .environment_manager()
+                .default_environment()
+                .unwrap_or_else(|| Arc::new(codex_exec_server::Environment::default()));
+            // Resource reads without a thread have no turn cwd. This fallback
+            // is used only by executor-backed stdio MCPs whose config omits `cwd`.
+            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
         };
 
         tokio::spawn(async move {
@@ -6461,23 +6441,11 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let fs = match self.thread_manager.environment_manager().current().await {
-            Ok(Some(environment)) => Some(environment.get_filesystem()),
-            Ok(None) => None,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to create environment: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
+        let fs = self
+            .thread_manager
+            .environment_manager()
+            .default_environment()
+            .map(|environment| environment.get_filesystem());
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
