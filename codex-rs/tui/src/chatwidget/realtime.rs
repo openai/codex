@@ -133,13 +133,6 @@ impl ChatWidget {
     }
 
     #[cfg(test)]
-    pub(super) fn pending_steer_compare_key_from_item(
-        item: &codex_protocol::items::UserMessageItem,
-    ) -> PendingSteerCompareKey {
-        Self::pending_steer_compare_key_from_items(&item.content)
-    }
-
-    #[cfg(test)]
     pub(super) fn rendered_user_message_event_from_inputs(
         items: &[UserInput],
     ) -> RenderedUserMessageEvent {

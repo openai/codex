@@ -2424,7 +2424,8 @@ impl ChatWidget {
         self.unified_exec_wait_streak = None;
         self.request_redraw();
 
-        let had_unacknowledged_pending_steers = self.queue_unacknowledged_pending_steers();
+        let had_unacknowledged_pending_steers =
+            !from_replay && self.queue_unacknowledged_pending_steers();
         self.refresh_pending_input_preview();
 
         if !from_replay
@@ -2547,6 +2548,42 @@ impl ChatWidget {
         }
         self.refresh_pending_input_preview();
         self.request_redraw();
+    }
+
+    fn on_user_message_event_reconciling_pending_steer(
+        &mut self,
+        event: UserMessageEvent,
+        compare_key: PendingSteerCompareKey,
+    ) {
+        let rendered = Self::rendered_user_message_event_from_event(&event);
+        if self
+            .pending_steers
+            .front()
+            .is_some_and(|pending| pending.compare_key == compare_key)
+        {
+            if let Some(pending) = self.pending_steers.pop_front() {
+                self.refresh_pending_input_preview();
+                let pending_event = UserMessageEvent {
+                    message: pending.user_message.text,
+                    images: Some(pending.user_message.remote_image_urls),
+                    local_images: pending
+                        .user_message
+                        .local_images
+                        .into_iter()
+                        .map(|image| image.path)
+                        .collect(),
+                    text_elements: pending.user_message.text_elements,
+                };
+                self.on_user_message_event(pending_event);
+            } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
+                tracing::warn!(
+                    "pending steer matched compare key but queue was empty when rendering committed user message"
+                );
+                self.on_user_message_event(event);
+            }
+        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
+            self.on_user_message_event(event);
+        }
     }
 
     fn pop_next_queued_user_message(&mut self) -> Option<UserMessage> {
@@ -5779,42 +5816,8 @@ impl ChatWidget {
                 else {
                     unreachable!("user message item should convert to a user message event");
                 };
-                if from_replay {
-                    self.on_user_message_event(event);
-                } else {
-                    let rendered = Self::rendered_user_message_event_from_event(&event);
-                    let compare_key =
-                        Self::pending_steer_compare_key_from_items(&user_message.content);
-                    if self
-                        .pending_steers
-                        .front()
-                        .is_some_and(|pending| pending.compare_key == compare_key)
-                    {
-                        if let Some(pending) = self.pending_steers.pop_front() {
-                            self.refresh_pending_input_preview();
-                            let pending_event = UserMessageEvent {
-                                message: pending.user_message.text,
-                                images: Some(pending.user_message.remote_image_urls),
-                                local_images: pending
-                                    .user_message
-                                    .local_images
-                                    .into_iter()
-                                    .map(|image| image.path)
-                                    .collect(),
-                                text_elements: pending.user_message.text_elements,
-                            };
-                            self.on_user_message_event(pending_event);
-                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
-                        {
-                            tracing::warn!(
-                                "pending steer matched compare key but queue was empty when rendering committed user message"
-                            );
-                            self.on_user_message_event(event);
-                        }
-                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
-                        self.on_user_message_event(event);
-                    }
-                }
+                let compare_key = Self::pending_steer_compare_key_from_items(&user_message.content);
+                self.on_user_message_event_reconciling_pending_steer(event, compare_key);
             }
             ThreadItem::AgentMessage {
                 id,
@@ -6237,6 +6240,8 @@ impl ChatWidget {
                     }
                 } else if from_replay {
                     self.last_non_retry_error = None;
+                    self.finalize_turn();
+                    self.request_redraw();
                 } else {
                     self.last_non_retry_error = Some((
                         notification.turn_id.clone(),
@@ -6763,10 +6768,12 @@ impl ChatWidget {
                 message,
                 codex_error_info,
             }) => {
-                if from_replay
-                    || codex_error_info
-                        .as_ref()
-                        .is_some_and(|info| self.handle_steer_rejected_error(info))
+                if from_replay {
+                    self.finalize_turn();
+                    self.request_redraw();
+                } else if codex_error_info
+                    .as_ref()
+                    .is_some_and(|info| self.handle_steer_rejected_error(info))
                 {
                 } else if let Some(kind) = codex_error_info
                     .as_ref()
@@ -6933,41 +6940,12 @@ impl ChatWidget {
             }
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
-                if !from_replay && let codex_protocol::items::TurnItem::UserMessage(item) = &item {
+                if let codex_protocol::items::TurnItem::UserMessage(item) = &item {
                     let EventMsg::UserMessage(event) = item.as_legacy_event() else {
                         unreachable!("user message item should convert to a legacy user message");
                     };
-                    let rendered = Self::rendered_user_message_event_from_event(&event);
-                    let compare_key = Self::pending_steer_compare_key_from_item(item);
-                    if self
-                        .pending_steers
-                        .front()
-                        .is_some_and(|pending| pending.compare_key == compare_key)
-                    {
-                        if let Some(pending) = self.pending_steers.pop_front() {
-                            self.refresh_pending_input_preview();
-                            let pending_event = UserMessageEvent {
-                                message: pending.user_message.text,
-                                images: Some(pending.user_message.remote_image_urls),
-                                local_images: pending
-                                    .user_message
-                                    .local_images
-                                    .into_iter()
-                                    .map(|image| image.path)
-                                    .collect(),
-                                text_elements: pending.user_message.text_elements,
-                            };
-                            self.on_user_message_event(pending_event);
-                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
-                        {
-                            tracing::warn!(
-                                "pending steer matched compare key but queue was empty when rendering committed user message"
-                            );
-                            self.on_user_message_event(event);
-                        }
-                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
-                        self.on_user_message_event(event);
-                    }
+                    let compare_key = Self::pending_steer_compare_key_from_items(&item.content);
+                    self.on_user_message_event_reconciling_pending_steer(event, compare_key);
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());

@@ -468,6 +468,62 @@ async fn unacknowledged_pending_steer_is_retried_as_follow_up_when_turn_complete
 }
 
 #[tokio::test]
+async fn replayed_user_message_commit_clears_pending_steer_without_retry() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("already committed".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected running-turn steer submit, got {other:?}"),
+    }
+    assert_eq!(chat.pending_steers.len(), 1);
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "older-turn".to_string(),
+            items: Vec::new(),
+            status: AppServerTurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }],
+        ReplayKind::ThreadSnapshot,
+    );
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_no_submit_op(&mut op_rx);
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "turn-with-commit".to_string(),
+            items: vec![AppServerThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                content: vec![AppServerUserInput::Text {
+                    text: "already committed".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            }],
+            status: AppServerTurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }],
+        ReplayKind::ThreadSnapshot,
+    );
+
+    assert!(chat.pending_steers.is_empty());
+    assert!(chat.rejected_steers_queue.is_empty());
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn steer_enter_uses_pending_steers_while_final_answer_stream_is_active() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
