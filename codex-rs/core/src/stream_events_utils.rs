@@ -8,12 +8,12 @@ use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::memories::citations::get_thread_id_from_citations;
 use crate::memories::citations::parse_memory_citation;
 use crate::parse_turn_item;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::error::CodexErr;

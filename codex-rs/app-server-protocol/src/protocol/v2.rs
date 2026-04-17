@@ -381,7 +381,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
     }
 );
 
@@ -1033,6 +1033,11 @@ pub struct ExternalAgentConfigImportParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportCompletedNotification {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

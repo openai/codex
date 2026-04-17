@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent_identity::RegisteredAgentTask;
-use crate::codex::make_session_configuration_for_tests;
+use crate::session::tests::make_session_configuration_for_tests;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use pretty_assertions::assert_eq;

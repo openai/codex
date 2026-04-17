@@ -148,6 +148,8 @@ pub enum Feature {
     Apps,
     /// Enable the tool_search tool for apps.
     ToolSearch,
+    /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
+    ToolSearchAlwaysDeferMcpTools,
     /// Expose placeholder tools for unavailable historical tool calls.
     UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
@@ -817,6 +819,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "tool_search",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ToolSearchAlwaysDeferMcpTools,
+        key: "tool_search_always_defer_mcp_tools",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::UnavailableDummyTools,
