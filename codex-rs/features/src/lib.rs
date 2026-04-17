@@ -91,6 +91,8 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
+    /// Stream structured progress while apply_patch input is being generated.
+    ApplyPatchStreamingEvents,
     /// Allow exec tools to request additional permissions while staying sandboxed.
     ExecPermissionApprovals,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
@@ -717,6 +719,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ApplyPatchStreamingEvents,
+        key: "apply_patch_streaming_events",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

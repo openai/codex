@@ -6650,6 +6650,7 @@ impl ChatWidget {
             | EventMsg::PlanDelta(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::TerminalInteraction(_)
+            | EventMsg::PatchApplyUpdated(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
             _ => {
                 tracing::trace!("handle_codex_event: {:?}", msg);
@@ -6865,6 +6866,7 @@ impl ChatWidget {
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
+            | EventMsg::PatchApplyUpdated(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
