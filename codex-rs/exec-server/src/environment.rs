@@ -42,17 +42,9 @@ impl Default for EnvironmentManager {
 impl EnvironmentManager {
     /// Builds a manager from process environment variables.
     pub fn from_env() -> Self {
-        Self::from_env_with_runtime_paths(/*local_runtime_paths*/ None)
-    }
-
-    /// Builds a manager from process environment variables and local runtime
-    /// paths used when creating local filesystem helpers.
-    pub fn from_env_with_runtime_paths(
-        local_runtime_paths: Option<ExecServerRuntimePaths>,
-    ) -> Self {
         Self::new(EnvironmentManagerArgs {
             exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
-            local_runtime_paths,
+            local_runtime_paths: None,
         })
     }
 
