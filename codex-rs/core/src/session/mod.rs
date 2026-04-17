@@ -892,7 +892,10 @@ impl Session {
         let Some(started_proxy) = self.services.network_proxy.as_ref() else {
             return;
         };
-        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let Ok(_refresh_guard) = self.managed_network_proxy_refresh_lock.acquire().await else {
+            error!("managed network proxy refresh semaphore closed");
+            return;
+        };
         let session_configuration = {
             let state = self.state.lock().await;
             state.session_configuration.clone()
@@ -1750,7 +1753,11 @@ impl Session {
         amendment: &NetworkPolicyAmendment,
         network_approval_context: &NetworkApprovalContext,
     ) -> anyhow::Result<()> {
-        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let _refresh_guard = self
+            .managed_network_proxy_refresh_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("managed network proxy refresh semaphore closed"))?;
         let host =
             Self::validated_network_policy_amendment_host(amendment, network_approval_context)?;
         let codex_home = self

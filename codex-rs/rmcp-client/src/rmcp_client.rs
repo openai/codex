@@ -62,6 +62,7 @@ use serde_json::Value;
 use sse_stream::Sse;
 use sse_stream::SseStream;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio::time;
 use tracing::warn;
@@ -494,7 +495,7 @@ pub struct RmcpClient {
     state: Mutex<ClientState>,
     transport_recipe: TransportRecipe,
     initialize_context: Mutex<Option<InitializeContext>>,
-    session_recovery_lock: Mutex<()>,
+    session_recovery_lock: Semaphore,
     elicitation_pause_state: ElicitationPauseState,
 }
 
@@ -521,7 +522,7 @@ impl RmcpClient {
             }),
             transport_recipe,
             initialize_context: Mutex::new(None),
-            session_recovery_lock: Mutex::new(()),
+            session_recovery_lock: Semaphore::new(1),
             elicitation_pause_state: ElicitationPauseState::new(),
         })
     }
@@ -550,7 +551,7 @@ impl RmcpClient {
             }),
             transport_recipe,
             initialize_context: Mutex::new(None),
-            session_recovery_lock: Mutex::new(()),
+            session_recovery_lock: Semaphore::new(1),
             elicitation_pause_state: ElicitationPauseState::new(),
         })
     }
@@ -1097,7 +1098,11 @@ impl RmcpClient {
         &self,
         failed_service: &Arc<RunningService<RoleClient, ElicitationClientService>>,
     ) -> Result<()> {
-        let _recovery_guard = self.session_recovery_lock.lock().await;
+        let _recovery_guard = self
+            .session_recovery_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow!("MCP client recovery semaphore closed"))?;
 
         {
             let guard = self.state.lock().await;

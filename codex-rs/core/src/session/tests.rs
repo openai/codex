@@ -108,6 +108,7 @@ use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -3021,7 +3022,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
-        managed_network_proxy_refresh_lock: Mutex::new(()),
+        managed_network_proxy_refresh_lock: Semaphore::new(1),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -3984,7 +3985,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
-        managed_network_proxy_refresh_lock: Mutex::new(()),
+        managed_network_proxy_refresh_lock: Semaphore::new(1),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),

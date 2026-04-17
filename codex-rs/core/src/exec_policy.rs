@@ -27,6 +27,7 @@ use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
 use codex_shell_command::is_safe_command::is_known_safe_command;
 use thiserror::Error;
 use tokio::fs;
+use tokio::sync::Semaphore;
 use tokio::task::spawn_blocking;
 use tracing::instrument;
 
@@ -190,7 +191,7 @@ pub enum ExecPolicyUpdateError {
 
 pub(crate) struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
-    update_lock: tokio::sync::Mutex<()>,
+    update_lock: Semaphore,
 }
 
 pub(crate) struct ExecApprovalRequest<'a> {
@@ -206,7 +207,7 @@ impl ExecPolicyManager {
     pub(crate) fn new(policy: Arc<Policy>) -> Self {
         Self {
             policy: ArcSwap::from(policy),
-            update_lock: tokio::sync::Mutex::new(()),
+            update_lock: Semaphore::new(1),
         }
     }
 
@@ -324,7 +325,15 @@ impl ExecPolicyManager {
         codex_home: &Path,
         amendment: &ExecPolicyAmendment,
     ) -> Result<(), ExecPolicyUpdateError> {
-        let _update_guard = self.update_lock.lock().await;
+        let _update_guard =
+            self.update_lock
+                .acquire()
+                .await
+                .map_err(|_| ExecPolicyUpdateError::AddRule {
+                    source: ExecPolicyRuleError::InvalidRule(
+                        "exec policy update semaphore closed".to_string(),
+                    ),
+                })?;
         let policy_path = default_policy_path(codex_home);
         spawn_blocking({
             let policy_path = policy_path.clone();
@@ -369,7 +378,15 @@ impl ExecPolicyManager {
         decision: Decision,
         justification: Option<String>,
     ) -> Result<(), ExecPolicyUpdateError> {
-        let _update_guard = self.update_lock.lock().await;
+        let _update_guard =
+            self.update_lock
+                .acquire()
+                .await
+                .map_err(|_| ExecPolicyUpdateError::AddRule {
+                    source: ExecPolicyRuleError::InvalidRule(
+                        "exec policy update semaphore closed".to_string(),
+                    ),
+                })?;
         let policy_path = default_policy_path(codex_home);
         let host = host.to_string();
         spawn_blocking({
