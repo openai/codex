@@ -200,6 +200,82 @@ async fn goal_slash_command_records_original_command_in_history() {
 }
 
 #[tokio::test]
+async fn goal_slash_command_preserves_attached_images() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    let remote_url = "https://example.com/goal.png".to_string();
+    let local_image = PathBuf::from("/tmp/goal-local.png");
+    let placeholder = "[Image #2]";
+    let command = format!("/goal describe {placeholder}");
+    let placeholder_start = command.find(placeholder).expect("placeholder in command");
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    chat.bottom_pane.set_composer_text(
+        command,
+        vec![TextElement::new(
+            (placeholder_start..placeholder_start + placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )],
+        vec![local_image.clone()],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            assert_eq!(items.len(), 3);
+            assert_eq!(
+                items[0],
+                UserInput::Image {
+                    image_url: remote_url
+                }
+            );
+            assert_eq!(items[1], UserInput::LocalImage { path: local_image });
+            let UserInput::Text { text, .. } = &items[2] else {
+                panic!("expected parser prompt text, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn goal_slash_command_keeps_draft_when_model_is_unavailable() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_model("");
+    let placeholder = "[Image #2]";
+    let command = format!("/goal write a cat poem about {placeholder}");
+    let placeholder_start = command.find(placeholder).expect("placeholder in command");
+    let remote_url = "https://example.com/goal-draft.png".to_string();
+    let local_image = PathBuf::from("/tmp/goal-draft-local.png");
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    chat.bottom_pane.set_composer_text(
+        command.clone(),
+        vec![TextElement::new(
+            (placeholder_start..placeholder_start + placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )],
+        vec![local_image.clone()],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(chat.bottom_pane.composer_text(), command);
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![local_image]
+    );
+}
+
+#[tokio::test]
 async fn queued_goal_slash_command_records_original_command_in_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);

@@ -1060,7 +1060,13 @@ pub(crate) struct UserMessage {
 #[derive(Clone, Debug, PartialEq)]
 enum UserMessageHistoryRecord {
     UserMessageText,
-    Override(String),
+    Override(UserMessageHistoryOverride),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct UserMessageHistoryOverride {
+    text: String,
+    text_elements: Vec<TextElement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1295,9 +1301,11 @@ fn user_message_for_restore(
     history_record: &UserMessageHistoryRecord,
 ) -> UserMessage {
     match history_record {
-        UserMessageHistoryRecord::Override(history_text) if !history_text.is_empty() => {
-            history_text.clone().into()
-        }
+        UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => UserMessage {
+            text: history.text.clone(),
+            text_elements: history.text_elements.clone(),
+            ..message
+        },
         UserMessageHistoryRecord::Override(_) | UserMessageHistoryRecord::UserMessageText => {
             message
         }
@@ -1309,8 +1317,8 @@ fn user_message_preview_text(
     history_record: Option<&UserMessageHistoryRecord>,
 ) -> String {
     match history_record {
-        Some(UserMessageHistoryRecord::Override(history_text)) if !history_text.is_empty() => {
-            history_text.clone()
+        Some(UserMessageHistoryRecord::Override(history)) if !history.text.is_empty() => {
+            history.text.clone()
         }
         Some(UserMessageHistoryRecord::Override(_))
         | Some(UserMessageHistoryRecord::UserMessageText)
@@ -1347,8 +1355,8 @@ fn merge_user_messages_with_history_record(
         let history_text = messages
             .iter()
             .filter_map(|(message, record)| match record {
-                UserMessageHistoryRecord::Override(history_text) if !history_text.is_empty() => {
-                    Some(history_text.clone())
+                UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
+                    Some(history.text.clone())
                 }
                 UserMessageHistoryRecord::Override(_) if message.text.is_empty() => None,
                 UserMessageHistoryRecord::Override(_)
@@ -1366,7 +1374,10 @@ fn merge_user_messages_with_history_record(
             })
             .collect::<Vec<_>>()
             .join("\n");
-        UserMessageHistoryRecord::Override(history_text)
+        UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+            text: history_text,
+            text_elements: Vec::new(),
+        })
     };
     let messages = messages
         .into_iter()
@@ -5607,14 +5618,39 @@ impl ChatWidget {
         &mut self,
         user_message: UserMessage,
         history_record: UserMessageHistoryRecord,
-    ) {
+    ) -> bool {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
             self.queued_user_message_history_records
                 .push_front(history_record);
             self.refresh_pending_input_preview();
-            return;
+            return true;
+        }
+        if user_message.text.is_empty()
+            && user_message.local_images.is_empty()
+            && user_message.remote_image_urls.is_empty()
+        {
+            return false;
+        }
+        if (!user_message.local_images.is_empty() || !user_message.remote_image_urls.is_empty())
+            && !self.current_model_supports_images()
+        {
+            let UserMessage {
+                text,
+                text_elements,
+                local_images,
+                mention_bindings,
+                remote_image_urls,
+            } = user_message_for_restore(user_message, &history_record);
+            self.restore_blocked_image_submission(
+                text,
+                text_elements,
+                local_images,
+                mention_bindings,
+                remote_image_urls,
+            );
+            return false;
         }
         let UserMessage {
             text,
@@ -5623,21 +5659,6 @@ impl ChatWidget {
             text_elements,
             mention_bindings,
         } = user_message;
-        if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
-            return;
-        }
-        if (!local_images.is_empty() || !remote_image_urls.is_empty())
-            && !self.current_model_supports_images()
-        {
-            self.restore_blocked_image_submission(
-                text,
-                text_elements,
-                local_images,
-                mention_bindings,
-                remote_image_urls,
-            );
-            return;
-        }
 
         let render_in_history = !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
@@ -5652,10 +5673,10 @@ impl ChatWidget {
                         Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
                     ),
                 )));
-                return;
+                return false;
             }
             self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
-            return;
+            return true;
         }
 
         for image_url in &remote_image_urls {
@@ -5788,7 +5809,17 @@ impl ChatWidget {
             self.add_error_message(
                 "Thread model is unavailable. Wait for the thread to finish syncing or choose a model before sending input.".to_string(),
             );
-            return;
+            self.restore_user_message_to_composer(user_message_for_restore(
+                UserMessage {
+                    text,
+                    local_images,
+                    remote_image_urls,
+                    text_elements,
+                    mention_bindings,
+                },
+                &history_record,
+            ));
+            return false;
         }
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
@@ -5829,7 +5860,7 @@ impl ChatWidget {
         );
 
         if !self.submit_op(op) {
-            return;
+            return false;
         }
 
         // Persist the submitted text to cross-session message history. Mentions are encoded into
@@ -5845,8 +5876,8 @@ impl ChatWidget {
                     .collect::<Vec<_>>();
                 Some(encode_history_mentions(&text, &encoded_mentions))
             }
-            UserMessageHistoryRecord::Override(history_text) if !history_text.is_empty() => {
-                Some(history_text.clone())
+            UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
+                Some(history.text.clone())
             }
             UserMessageHistoryRecord::UserMessageText | UserMessageHistoryRecord::Override(_) => {
                 None
@@ -5919,6 +5950,7 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
+        true
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.

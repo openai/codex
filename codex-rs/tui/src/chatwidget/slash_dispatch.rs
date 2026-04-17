@@ -504,6 +504,14 @@ impl ChatWidget {
                 else {
                     return;
                 };
+                let mut history_text = "/goal ".to_string();
+                let mut history_text_elements = Vec::new();
+                append_text_with_rebased_elements(
+                    &mut history_text,
+                    &mut history_text_elements,
+                    &prepared_args,
+                    prepared_elements.clone(),
+                );
                 let prompt_prefix = "Set the current thread goal to the following long-running objective, extracting any explicit token budget from it, then continue working toward it:\n\n";
                 let mut prompt = String::from(prompt_prefix);
                 let mut prompt_elements = Vec::new();
@@ -513,18 +521,27 @@ impl ChatWidget {
                     &prepared_args,
                     prepared_elements,
                 );
+                let local_images = self
+                    .bottom_pane
+                    .take_recent_submission_images_with_placeholders();
+                let remote_image_urls = self.take_remote_image_urls();
                 let user_message = UserMessage {
                     text: prompt,
-                    local_images: Vec::new(),
-                    remote_image_urls: Vec::new(),
+                    local_images,
+                    remote_image_urls,
                     text_elements: prompt_elements,
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                 };
-                self.submit_user_message_with_history_record(
+                let submitted = self.submit_user_message_with_history_record(
                     user_message,
-                    UserMessageHistoryRecord::Override(format!("/goal {prepared_args}")),
+                    UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+                        text: history_text,
+                        text_elements: history_text_elements,
+                    }),
                 );
-                self.bottom_pane.drain_pending_submission_state();
+                if submitted {
+                    self.bottom_pane.drain_pending_submission_state();
+                }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
