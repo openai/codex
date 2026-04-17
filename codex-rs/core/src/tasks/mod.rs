@@ -413,7 +413,7 @@ impl Session {
     }
 
     pub(crate) async fn abort_all_tasks_without_restart(self: &Arc<Self>, reason: TurnAbortReason) {
-        let turn_contexts: Vec<_> = {
+        let active_tasks: Vec<_> = {
             let active = self.active_turn.lock().await;
             active
                 .as_ref()
@@ -421,13 +421,22 @@ impl Session {
                     active_turn
                         .tasks
                         .values()
-                        .map(|task| Arc::clone(&task.turn_context))
+                        .map(|task| {
+                            (
+                                Arc::clone(&task.turn_context),
+                                task.cancellation_token.clone(),
+                            )
+                        })
                         .collect()
                 })
                 .unwrap_or_default()
         };
 
-        for turn_context in turn_contexts {
+        for (_, cancellation_token) in &active_tasks {
+            cancellation_token.cancel();
+        }
+
+        for (turn_context, _) in active_tasks {
             if let Err(err) = self
                 .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
                 .await
@@ -483,15 +492,14 @@ impl Session {
                     self.handle_task_abort(task, reason.clone()).await;
                 }
             }
+            if let Some(task) = current_task {
+                self.handle_current_task_abort(task, reason.clone()).await;
+            }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             turn_state.lock().await.clear_pending();
             let mut active = self.active_turn.lock().await;
             *active = None;
-            drop(active);
-            if let Some(task) = current_task {
-                self.handle_current_task_abort(task, reason.clone()).await;
-            }
         }
 
         if reason == TurnAbortReason::Interrupted
@@ -672,9 +680,6 @@ impl Session {
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
-        if task.cancellation_token.is_cancelled() {
-            return;
-        }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
@@ -733,15 +738,17 @@ impl Session {
         reason: TurnAbortReason,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
-        if task.cancellation_token.is_cancelled() {
-            return;
-        }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting current running task");
         task.cancellation_token.cancel();
         task.turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
+        let session_task = Arc::clone(&task.task);
+        let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
+        session_task
+            .abort(session_ctx, Arc::clone(&task.turn_context))
+            .await;
 
         let (completed_at, duration_ms) = task
             .turn_context
@@ -755,6 +762,7 @@ impl Session {
             duration_ms,
         });
         self.send_event(task.turn_context.as_ref(), event).await;
+        task.handle.abort();
     }
 }
 
