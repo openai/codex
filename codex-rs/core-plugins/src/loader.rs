@@ -14,6 +14,7 @@ use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
+use codex_exec_server::ExecutorPath;
 use codex_exec_server::LOCAL_FS;
 use codex_plugin::AppConnectorId;
 use codex_plugin::LoadedPlugin;
@@ -532,9 +533,8 @@ pub async fn load_plugin_skills(
     let roots = plugin_skill_roots(plugin_root, manifest_paths)
         .into_iter()
         .map(|path| SkillRoot {
-            path,
+            path: ExecutorPath::new(Arc::clone(&LOCAL_FS), path),
             scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
         })
         .collect::<Vec<_>>();
     let outcome = load_skills_from_roots(roots).await;

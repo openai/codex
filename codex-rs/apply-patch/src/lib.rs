@@ -12,6 +12,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorPathRef;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::RemoveOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -224,7 +225,8 @@ pub async fn apply_hunks(
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Result<(), ApplyPatchError> {
     // Delegate to a helper that applies each hunk to the filesystem.
-    match apply_hunks_to_files(hunks, cwd, fs, sandbox).await {
+    let cwd = ExecutorPathRef::new(fs, cwd.clone());
+    match apply_hunks_to_files(hunks, &cwd, sandbox).await {
         Ok(affected) => {
             print_summary(&affected, stdout).map_err(ApplyPatchError::from)?;
             Ok(())
@@ -258,8 +260,7 @@ pub struct AffectedPaths {
 /// Returns an error if the patch could not be applied.
 async fn apply_hunks_to_files(
     hunks: &[Hunk],
-    cwd: &AbsolutePathBuf,
-    fs: &dyn ExecutorFileSystem,
+    cwd: &ExecutorPathRef<'_>,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> anyhow::Result<AffectedPaths> {
     if hunks.is_empty() {
@@ -271,82 +272,71 @@ async fn apply_hunks_to_files(
     let mut deleted: Vec<PathBuf> = Vec::new();
     for hunk in hunks {
         let affected_path = hunk.path().to_path_buf();
-        let path_abs = hunk.resolve_path(cwd);
+        let path = cwd.with_path(hunk.resolve_path(cwd.path()));
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                write_file_with_missing_parent_retry(
-                    fs,
-                    &path_abs,
-                    contents.clone().into_bytes(),
-                    sandbox,
-                )
-                .await?;
+                write_file_with_missing_parent_retry(&path, contents.clone().into_bytes(), sandbox)
+                    .await?;
                 added.push(affected_path);
             }
             Hunk::DeleteFile { .. } => {
                 let result: io::Result<()> = async {
-                    let metadata = fs.get_metadata(&path_abs, sandbox).await?;
+                    let path_access = path.with_sandbox(sandbox);
+                    let metadata = path_access.get_metadata().await?;
                     if metadata.is_directory {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidInput,
                             "path is a directory",
                         ));
                     }
-                    fs.remove(
-                        &path_abs,
-                        RemoveOptions {
+                    path_access
+                        .remove(RemoveOptions {
                             recursive: false,
                             force: false,
-                        },
-                        sandbox,
-                    )
-                    .await
+                        })
+                        .await
                 }
                 .await;
-                result.with_context(|| format!("Failed to delete file {}", path_abs.display()))?;
+                result.with_context(|| format!("Failed to delete file {}", path.display()))?;
                 deleted.push(affected_path);
             }
             Hunk::UpdateFile {
                 move_path, chunks, ..
             } => {
                 let AppliedPatch { new_contents, .. } =
-                    derive_new_contents_from_chunks(&path_abs, chunks, fs, sandbox).await?;
+                    derive_new_contents_from_chunks(&path, chunks, sandbox).await?;
                 if let Some(dest) = move_path {
-                    let dest_abs = AbsolutePathBuf::resolve_path_against_base(dest, cwd);
-                    write_file_with_missing_parent_retry(
-                        fs,
-                        &dest_abs,
-                        new_contents.into_bytes(),
-                        sandbox,
-                    )
-                    .await?;
+                    let dest = cwd.with_path(AbsolutePathBuf::resolve_path_against_base(
+                        dest,
+                        cwd.path().as_path(),
+                    ));
+                    write_file_with_missing_parent_retry(&dest, new_contents.into_bytes(), sandbox)
+                        .await?;
                     let result: io::Result<()> = async {
-                        let metadata = fs.get_metadata(&path_abs, sandbox).await?;
+                        let path_access = path.with_sandbox(sandbox);
+                        let metadata = path_access.get_metadata().await?;
                         if metadata.is_directory {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidInput,
                                 "path is a directory",
                             ));
                         }
-                        fs.remove(
-                            &path_abs,
-                            RemoveOptions {
+                        path_access
+                            .remove(RemoveOptions {
                                 recursive: false,
                                 force: false,
-                            },
-                            sandbox,
-                        )
-                        .await
+                            })
+                            .await
                     }
                     .await;
-                    result.with_context(|| {
-                        format!("Failed to remove original {}", path_abs.display())
-                    })?;
+                    result
+                        .with_context(|| format!("Failed to remove original {}", path.display()))?;
                     modified.push(affected_path);
                 } else {
-                    fs.write_file(&path_abs, new_contents.into_bytes(), sandbox)
+                    path.with_sandbox(sandbox)
+                        .write_file(new_contents.into_bytes())
                         .await
-                        .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+                        .with_context(|| format!("Failed to write file {}", path.display()))?;
                     modified.push(affected_path);
                 }
             }
@@ -360,36 +350,33 @@ async fn apply_hunks_to_files(
 }
 
 async fn write_file_with_missing_parent_retry(
-    fs: &dyn ExecutorFileSystem,
-    path_abs: &AbsolutePathBuf,
+    path: &ExecutorPathRef<'_>,
     contents: Vec<u8>,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> anyhow::Result<()> {
-    match fs.write_file(path_abs, contents.clone(), sandbox).await {
+    match path
+        .with_sandbox(sandbox)
+        .write_file(contents.clone())
+        .await
+    {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent_abs) = path_abs.parent() {
-                fs.create_directory(
-                    &parent_abs,
-                    CreateDirectoryOptions { recursive: true },
-                    sandbox,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to create parent directories for {}",
-                        path_abs.display()
-                    )
-                })?;
+            if let Some(parent) = path.parent() {
+                parent
+                    .with_sandbox(sandbox)
+                    .create_directory(CreateDirectoryOptions { recursive: true })
+                    .await
+                    .with_context(|| {
+                        format!("Failed to create parent directories for {}", path.display())
+                    })?;
             }
-            fs.write_file(path_abs, contents, sandbox)
+            path.with_sandbox(sandbox)
+                .write_file(contents)
                 .await
-                .with_context(|| format!("Failed to write file {}", path_abs.display()))?;
+                .with_context(|| format!("Failed to write file {}", path.display()))?;
             Ok(())
         }
-        Err(err) => {
-            Err(err).with_context(|| format!("Failed to write file {}", path_abs.display()))
-        }
+        Err(err) => Err(err).with_context(|| format!("Failed to write file {}", path.display())),
     }
 }
 
@@ -401,17 +388,20 @@ struct AppliedPatch {
 /// Return *only* the new file contents (joined into a single `String`) after
 /// applying the chunks to the file at `path`.
 async fn derive_new_contents_from_chunks(
-    path_abs: &AbsolutePathBuf,
+    path: &ExecutorPathRef<'_>,
     chunks: &[UpdateFileChunk],
-    fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs.read_file_text(path_abs, sandbox).await.map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!("Failed to read file to update {}", path_abs.display()),
-            source: err,
-        })
-    })?;
+    let original_contents = path
+        .with_sandbox(sandbox)
+        .read_file_text()
+        .await
+        .map_err(|err| {
+            ApplyPatchError::IoError(IoError {
+                context: format!("Failed to read file to update {}", path.display()),
+                source: err,
+            })
+        })?;
 
     let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
 
@@ -421,7 +411,7 @@ async fn derive_new_contents_from_chunks(
         original_lines.pop();
     }
 
-    let replacements = compute_replacements(&original_lines, path_abs.as_path(), chunks)?;
+    let replacements = compute_replacements(&original_lines, path.path().as_path(), chunks)?;
     let new_lines = apply_replacements(original_lines, &replacements);
     let mut new_lines = new_lines;
     if !new_lines.last().is_some_and(String::is_empty) {
@@ -568,7 +558,8 @@ pub async fn unified_diff_from_chunks(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
-    unified_diff_from_chunks_with_context(path_abs, chunks, /*context*/ 1, fs, sandbox).await
+    let path = ExecutorPathRef::new(fs, path_abs.clone());
+    unified_diff_from_chunks_at(&path, chunks, sandbox).await
 }
 
 pub async fn unified_diff_from_chunks_with_context(
@@ -578,10 +569,28 @@ pub async fn unified_diff_from_chunks_with_context(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
+    let path = ExecutorPathRef::new(fs, path_abs.clone());
+    unified_diff_from_chunks_with_context_at(&path, chunks, context, sandbox).await
+}
+
+pub async fn unified_diff_from_chunks_at(
+    path: &ExecutorPathRef<'_>,
+    chunks: &[UpdateFileChunk],
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
+    unified_diff_from_chunks_with_context_at(path, chunks, /*context*/ 1, sandbox).await
+}
+
+pub async fn unified_diff_from_chunks_with_context_at(
+    path: &ExecutorPathRef<'_>,
+    chunks: &[UpdateFileChunk],
+    context: usize,
+    sandbox: Option<&FileSystemSandboxContext>,
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     let AppliedPatch {
         original_contents,
         new_contents,
-    } = derive_new_contents_from_chunks(path_abs, chunks, fs, sandbox).await?;
+    } = derive_new_contents_from_chunks(path, chunks, sandbox).await?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
     Ok(ApplyPatchFileUpdate {

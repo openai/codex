@@ -5,6 +5,8 @@ use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorPath;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -83,9 +85,9 @@ impl SkillsManager {
     /// Load skills for an already-constructed [`Config`], avoiding any additional config-layer
     /// loading.
     ///
-    /// This path uses a cache keyed by the effective skill-relevant config state rather than just
-    /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
-    /// to share a directory.
+    /// This path uses a cache keyed by the effective skill-relevant config state for local
+    /// filesystem roots. Executor-backed roots skip that cache because an absolute path alone is
+    /// not a stable executor identity.
     pub async fn skills_for_config(
         &self,
         input: &SkillsLoadInput,
@@ -93,17 +95,27 @@ impl SkillsManager {
     ) -> SkillLoadOutcome {
         let roots = self.skill_roots_for_config(input, fs).await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
-        let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
-        if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
-            return outcome;
-        }
+        let use_config_cache = roots
+            .iter()
+            .all(|root| root.path.is_same_file_system(&LOCAL_FS));
+        let cache_key = if use_config_cache {
+            let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
+            if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
+                return outcome;
+            }
+            Some(cache_key)
+        } else {
+            None
+        };
 
         let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
-        let mut cache = self
-            .cache_by_config
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cache_key, outcome.clone());
+        if let Some(cache_key) = cache_key {
+            let mut cache = self
+                .cache_by_config
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache.insert(cache_key, outcome.clone());
+        }
         outcome
     }
 
@@ -142,7 +154,9 @@ impl SkillsManager {
         extra_user_roots: &[AbsolutePathBuf],
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
-        let use_cwd_cache = fs.is_some();
+        // The cwd cache key is only an absolute path, so it is safe for the
+        // process-local filesystem but ambiguous across executor filesystems.
+        let use_cwd_cache = fs.as_ref().is_some_and(|fs| Arc::ptr_eq(fs, &*LOCAL_FS));
         if use_cwd_cache
             && !force_reload
             && let Some(outcome) = self.cached_outcome_for_cwd(&input.cwd)
@@ -165,9 +179,8 @@ impl SkillsManager {
                 normalize_extra_user_roots(extra_user_roots)
                     .into_iter()
                     .map(|path| SkillRoot {
-                        path,
+                        path: ExecutorPath::new(Arc::clone(&fs), path),
                         scope: SkillScope::User,
-                        file_system: Arc::clone(&fs),
                     }),
             );
         }
@@ -279,7 +292,7 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (root.path.clone(), scope_rank)
+                (root.path.path().clone(), scope_rank)
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),

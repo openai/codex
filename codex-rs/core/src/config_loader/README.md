@@ -11,6 +11,8 @@ This module is the canonical place to **load and describe Codex configuration la
 Exported from `codex_core::config_loader`:
 
 - `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, overrides, cloud_requirements) -> ConfigLayerStack`
+- `load_config_layers_state_with_file_systems(file_systems, codex_home, cwd_opt, cli_overrides, overrides, cloud_requirements) -> ConfigLayerStack`
+  - Use this when local config files and project config files live on different executor filesystems.
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`

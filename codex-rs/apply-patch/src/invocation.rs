@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorPathRef;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tree_sitter::Parser;
 use tree_sitter::Query;
@@ -20,7 +21,7 @@ use crate::MaybeApplyPatchVerified;
 use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
-use crate::unified_diff_from_chunks;
+use crate::unified_diff_from_chunks_at;
 use std::str::Utf8Error;
 use tree_sitter::LanguageError;
 
@@ -162,16 +163,16 @@ pub async fn maybe_parse_apply_patch_verified(
                 .unwrap_or_else(|| cwd.clone());
             let mut changes = HashMap::new();
             for hunk in hunks {
-                let path = hunk.resolve_path(&effective_cwd);
+                let path = ExecutorPathRef::new(fs, hunk.resolve_path(&effective_cwd));
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
                         changes.insert(
-                            path.into_path_buf(),
+                            path.to_path_buf(),
                             ApplyPatchFileChange::Add { content: contents },
                         );
                     }
                     Hunk::DeleteFile { .. } => {
-                        let content = match fs.read_file_text(&path, sandbox).await {
+                        let content = match path.with_sandbox(sandbox).read_file_text().await {
                             Ok(content) => content,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(
@@ -182,10 +183,8 @@ pub async fn maybe_parse_apply_patch_verified(
                                 );
                             }
                         };
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Delete { content },
-                        );
+                        changes
+                            .insert(path.to_path_buf(), ApplyPatchFileChange::Delete { content });
                     }
                     Hunk::UpdateFile {
                         move_path, chunks, ..
@@ -193,14 +192,14 @@ pub async fn maybe_parse_apply_patch_verified(
                         let ApplyPatchFileUpdate {
                             unified_diff,
                             content: contents,
-                        } = match unified_diff_from_chunks(&path, &chunks, fs, sandbox).await {
+                        } = match unified_diff_from_chunks_at(&path, &chunks, sandbox).await {
                             Ok(diff) => diff,
                             Err(e) => {
                                 return MaybeApplyPatchVerified::CorrectnessError(e);
                             }
                         };
                         changes.insert(
-                            path.into_path_buf(),
+                            path.to_path_buf(),
                             ApplyPatchFileChange::Update {
                                 unified_diff,
                                 move_path: move_path.map(|p| effective_cwd.join(p).into_path_buf()),

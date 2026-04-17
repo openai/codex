@@ -9,6 +9,7 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::TrackEventsContext;
+use codex_exec_server::ExecutorPath;
 use codex_exec_server::LOCAL_FS;
 use codex_instructions::SkillInstructions;
 use codex_otel::SessionTelemetry;
@@ -41,13 +42,12 @@ pub async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        let fs = loaded_skills
-            .and_then(|outcome| outcome.file_system_for_skill(skill))
-            .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        match fs
-            .read_file_text(&skill.path_to_skills_md, /*sandbox*/ None)
-            .await
-        {
+        let source = loaded_skills
+            .and_then(|outcome| outcome.source_for_skill(skill))
+            .unwrap_or_else(|| {
+                ExecutorPath::new(Arc::clone(&LOCAL_FS), skill.path_to_skills_md.clone())
+            });
+        match source.unsandboxed().read_file_text().await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {

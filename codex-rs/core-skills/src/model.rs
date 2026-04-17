@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
-use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorPath;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -89,7 +89,7 @@ pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
     pub disabled_paths: HashSet<AbsolutePathBuf>,
-    pub(crate) file_systems_by_skill_path: SkillFileSystemsByPath,
+    pub(crate) sources_by_skill_path: SkillSourcesByPath,
     pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
     pub(crate) implicit_skills_by_doc_path: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
 }
@@ -117,29 +117,25 @@ impl SkillLoadOutcome {
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
 
-    pub(crate) fn file_system_for_skill(
-        &self,
-        skill: &SkillMetadata,
-    ) -> Option<Arc<dyn ExecutorFileSystem>> {
-        self.file_systems_by_skill_path
-            .get(&skill.path_to_skills_md)
+    pub(crate) fn source_for_skill(&self, skill: &SkillMetadata) -> Option<ExecutorPath> {
+        self.sources_by_skill_path.get(&skill.path_to_skills_md)
     }
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct SkillFileSystemsByPath {
-    values: Arc<HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>>,
+pub(crate) struct SkillSourcesByPath {
+    values: Arc<HashMap<AbsolutePathBuf, ExecutorPath>>,
 }
 
-impl SkillFileSystemsByPath {
-    pub(crate) fn new(values: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>) -> Self {
+impl SkillSourcesByPath {
+    pub(crate) fn new(values: HashMap<AbsolutePathBuf, ExecutorPath>) -> Self {
         Self {
             values: Arc::new(values),
         }
     }
 
-    fn get(&self, path: &AbsolutePathBuf) -> Option<Arc<dyn ExecutorFileSystem>> {
-        self.values.get(path).map(Arc::clone)
+    fn get(&self, path: &AbsolutePathBuf) -> Option<ExecutorPath> {
+        self.values.get(path).cloned()
     }
 
     fn retain_paths(&mut self, paths: &HashSet<AbsolutePathBuf>) {
@@ -147,15 +143,15 @@ impl SkillFileSystemsByPath {
             self.values
                 .iter()
                 .filter(|(path, _)| paths.contains(*path))
-                .map(|(path, fs)| (path.clone(), Arc::clone(fs)))
+                .map(|(path, source)| (path.clone(), source.clone()))
                 .collect(),
         );
     }
 }
 
-impl fmt::Debug for SkillFileSystemsByPath {
+impl fmt::Debug for SkillSourcesByPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SkillFileSystemsByPath")
+        f.debug_struct("SkillSourcesByPath")
             .field("len", &self.values.len())
             .finish()
     }
@@ -173,9 +169,7 @@ pub fn filter_skill_load_outcome_for_product(
         .iter()
         .map(|skill| skill.path_to_skills_md.clone())
         .collect();
-    outcome
-        .file_systems_by_skill_path
-        .retain_paths(&retained_paths);
+    outcome.sources_by_skill_path.retain_paths(&retained_paths);
     outcome.implicit_skills_by_scripts_dir = Arc::new(
         outcome
             .implicit_skills_by_scripts_dir

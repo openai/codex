@@ -1,3 +1,4 @@
+use codex_exec_server::ExecutorPath;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -95,35 +96,29 @@ impl ToolHandler for ViewImageHandler {
         let sandbox = environment
             .is_remote()
             .then(|| turn.file_system_sandbox_context(/*additional_permissions*/ None));
+        let image_path = ExecutorPath::new(environment.get_filesystem(), abs_path);
+        let image_file = image_path.with_sandbox(sandbox.as_ref());
 
-        let metadata = environment
-            .get_filesystem()
-            .get_metadata(&abs_path, sandbox.as_ref())
-            .await
-            .map_err(|error| {
-                FunctionCallError::RespondToModel(format!(
-                    "unable to locate image at `{}`: {error}",
-                    abs_path.display()
-                ))
-            })?;
+        let metadata = image_file.get_metadata().await.map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "unable to locate image at `{}`: {error}",
+                image_path.display()
+            ))
+        })?;
 
         if !metadata.is_file {
             return Err(FunctionCallError::RespondToModel(format!(
                 "image path `{}` is not a file",
-                abs_path.display()
+                image_path.display()
             )));
         }
-        let file_bytes = environment
-            .get_filesystem()
-            .read_file(&abs_path, sandbox.as_ref())
-            .await
-            .map_err(|error| {
-                FunctionCallError::RespondToModel(format!(
-                    "unable to read image at `{}`: {error}",
-                    abs_path.display()
-                ))
-            })?;
-        let event_path = abs_path.clone();
+        let file_bytes = image_file.read_file().await.map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "unable to read image at `{}`: {error}",
+                image_path.display()
+            ))
+        })?;
+        let event_path = image_path.path().clone();
 
         let can_request_original_detail = can_request_original_image_detail(&turn.model_info);
         let use_original_detail =
@@ -135,11 +130,11 @@ impl ToolHandler for ViewImageHandler {
         };
         let image_detail = use_original_detail.then_some(ImageDetail::Original);
 
-        let image =
-            load_for_prompt_bytes(abs_path.as_path(), file_bytes, image_mode).map_err(|error| {
+        let image = load_for_prompt_bytes(image_path.path().as_path(), file_bytes, image_mode)
+            .map_err(|error| {
                 FunctionCallError::RespondToModel(format!(
                     "unable to process image at `{}`: {error}",
-                    abs_path.display()
+                    image_path.display()
                 ))
             })?;
         let image_url = image.into_data_url();

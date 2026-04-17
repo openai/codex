@@ -5,6 +5,7 @@ use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::ConfigToml;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorPathRef;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
@@ -70,13 +71,10 @@ pub(crate) async fn load_agent_roles(
         }
 
         if let Some(config_folder) = layer.config_folder() {
-            for (role_name, role) in discover_agent_roles_in_dir(
-                fs,
-                &config_folder.join("agents"),
-                &declared_role_files,
-                startup_warnings,
-            )
-            .await?
+            let agents_dir = ExecutorPathRef::new(fs, config_folder.join("agents"));
+            for (role_name, role) in
+                discover_agent_roles_in_dir(&agents_dir, &declared_role_files, startup_warnings)
+                    .await?
             {
                 if layer_roles.contains_key(&role_name) {
                     push_agent_role_warning(
@@ -150,8 +148,9 @@ async fn read_declared_role(
     let mut role_name = declared_role_name.to_string();
     if let Some(config_file) = role.config_file.as_deref() {
         let config_file = AbsolutePathBuf::from_absolute_path(config_file)?;
+        let config_file = ExecutorPathRef::new(fs, config_file);
         let parsed_file =
-            read_resolved_agent_role_file(fs, &config_file, Some(declared_role_name)).await?;
+            read_resolved_agent_role_file(&config_file, Some(declared_role_name)).await?;
         role_name = parsed_file.role_name;
         role.description = parsed_file.description.or(role.description);
         role.nickname_candidates = parsed_file.nickname_candidates.or(role.nickname_candidates);
@@ -191,7 +190,10 @@ async fn agent_role_config_from_toml(
         .as_ref()
         .map(AbsolutePathBuf::from_absolute_path)
         .transpose()?;
-    validate_agent_role_config_file(fs, role_name, config_file.as_ref()).await?;
+    let config_file_for_validation = config_file
+        .as_ref()
+        .map(|config_file| ExecutorPathRef::new(fs, config_file.clone()));
+    validate_agent_role_config_file(role_name, config_file_for_validation.as_ref()).await?;
     let description = normalize_agent_role_description(
         &format!("agents.{role_name}.description"),
         role.description.as_deref(),
@@ -309,16 +311,15 @@ pub(crate) fn parse_agent_role_file_contents(
 }
 
 async fn read_resolved_agent_role_file(
-    fs: &dyn ExecutorFileSystem,
-    path: &AbsolutePathBuf,
+    path: &ExecutorPathRef<'_>,
     role_name_hint: Option<&str>,
 ) -> std::io::Result<ResolvedAgentRoleFile> {
-    let contents = fs.read_file_text(path, /*sandbox*/ None).await?;
+    let contents = path.unsandboxed().read_file_text().await?;
     let config_base_dir = path.parent().unwrap_or_else(|| path.clone());
     parse_agent_role_file_contents(
         &contents,
-        path.as_path(),
-        config_base_dir.as_path(),
+        path.path().as_path(),
+        config_base_dir.path().as_path(),
         role_name_hint,
     )
 }
@@ -377,23 +378,23 @@ fn validate_agent_role_file_developer_instructions(
 }
 
 async fn validate_agent_role_config_file(
-    fs: &dyn ExecutorFileSystem,
     role_name: &str,
-    config_file: Option<&AbsolutePathBuf>,
+    config_file: Option<&ExecutorPathRef<'_>>,
 ) -> std::io::Result<()> {
     let Some(config_file) = config_file else {
         return Ok(());
     };
 
-    let metadata = fs
-        .get_metadata(config_file, /*sandbox*/ None)
+    let metadata = config_file
+        .unsandboxed()
+        .get_metadata()
         .await
         .map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
                     "agents.{role_name}.config_file must point to an existing file at {}: {e}",
-                    config_file.as_path().display()
+                    config_file.display()
                 ),
             )
         })?;
@@ -404,7 +405,7 @@ async fn validate_agent_role_config_file(
             std::io::ErrorKind::InvalidInput,
             format!(
                 "agents.{role_name}.config_file must point to a file: {}",
-                config_file.as_path().display()
+                config_file.display()
             ),
         ))
     }
@@ -463,19 +464,18 @@ fn normalize_agent_role_nickname_candidates(
 }
 
 async fn discover_agent_roles_in_dir(
-    fs: &dyn ExecutorFileSystem,
-    agents_dir: &AbsolutePathBuf,
+    agents_dir: &ExecutorPathRef<'_>,
     declared_role_files: &BTreeSet<PathBuf>,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
     let mut roles = BTreeMap::new();
 
-    for agent_file in collect_agent_role_files(fs, agents_dir).await? {
-        if declared_role_files.contains(agent_file.as_path()) {
+    for agent_file in collect_agent_role_files(agents_dir).await? {
+        if declared_role_files.contains(agent_file.path().as_path()) {
             continue;
         }
         let parsed_file =
-            match read_resolved_agent_role_file(fs, &agent_file, /*role_name_hint*/ None).await {
+            match read_resolved_agent_role_file(&agent_file, /*role_name_hint*/ None).await {
                 Ok(parsed_file) => parsed_file,
                 Err(err) => {
                     push_agent_role_warning(startup_warnings, err);
@@ -490,7 +490,7 @@ async fn discover_agent_roles_in_dir(
                     std::io::ErrorKind::InvalidInput,
                     format!(
                         "duplicate agent role name `{role_name}` discovered in {}",
-                        agents_dir.as_path().display()
+                        agents_dir.display()
                     ),
                 ),
             );
@@ -509,14 +509,13 @@ async fn discover_agent_roles_in_dir(
     Ok(roles)
 }
 
-async fn collect_agent_role_files(
-    fs: &dyn ExecutorFileSystem,
-    dir: &AbsolutePathBuf,
-) -> std::io::Result<Vec<AbsolutePathBuf>> {
+async fn collect_agent_role_files<'fs>(
+    dir: &ExecutorPathRef<'fs>,
+) -> std::io::Result<Vec<ExecutorPathRef<'fs>>> {
     let mut files = Vec::new();
     let mut dirs = vec![dir.clone()];
     while let Some(dir) = dirs.pop() {
-        let entries = match fs.read_directory(&dir, /*sandbox*/ None).await {
+        let entries = match dir.unsandboxed().read_directory().await {
             Ok(entries) => entries,
             Err(err) if err.kind() == ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
@@ -530,6 +529,7 @@ async fn collect_agent_role_files(
             }
             if entry.is_file
                 && path
+                    .path()
                     .as_path()
                     .extension()
                     .is_some_and(|extension| extension == "toml")
@@ -539,6 +539,6 @@ async fn collect_agent_role_files(
         }
     }
 
-    files.sort();
+    files.sort_by(|a, b| a.path().cmp(b.path()));
     Ok(files)
 }
