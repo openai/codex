@@ -6833,6 +6833,57 @@ async fn budget_limited_accounting_aborts_active_turn_before_returning() -> anyh
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_delta_budget_limited_accounting_aborts_active_turn() -> anyhow::Result<()> {
+    let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: Some(Some(1_000)),
+        },
+    )
+    .await?;
+    while rx.try_recv().is_ok() {}
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: None,
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::BudgetLimited),
+            token_budget: None,
+        },
+    )
+    .await?;
+    while rx.try_recv().is_ok() {}
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+
+    let mut saw_budget_limited_abort = false;
+    while let Ok(event) = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await?
+    {
+        if let EventMsg::TurnAborted(event) = event.msg {
+            saw_budget_limited_abort = event.reason == TurnAbortReason::BudgetLimited;
+            break;
+        }
+    }
+
+    assert!(saw_budget_limited_abort);
+    assert!(!sess.has_active_turn().await);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn budget_only_update_that_stops_goal_keeps_accounting_current_turn() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;

@@ -296,6 +296,21 @@ impl Session {
             initial_response_items,
             InitialResponseItems::IncludeNextTurnQueue
         );
+        let mut active = self.active_turn.lock().await;
+        let skip_reason = match active.as_mut() {
+            None => Some("skipping task start because the turn was interrupted during startup"),
+            Some(turn) if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.tasks.is_empty() => {
+                Some("skipping task start because another turn replaced the startup turn")
+            }
+            Some(_) => None,
+        };
+        if let Some(reason) = skip_reason {
+            drop(active);
+            debug!("{reason}");
+            return;
+        }
+        drop(active);
+
         let queued_response_items = match initial_response_items {
             InitialResponseItems::IncludeNextTurnQueue => {
                 self.take_queued_response_items_for_next_turn().await
@@ -303,7 +318,7 @@ impl Session {
             InitialResponseItems::Direct(items) => items,
         };
         let mailbox_items = if include_next_turn_queue {
-            self.get_pending_input().await
+            self.get_pending_input_for_turn_state(&turn_state).await
         } else {
             Vec::new()
         };
