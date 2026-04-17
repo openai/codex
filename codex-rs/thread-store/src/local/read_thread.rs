@@ -32,11 +32,11 @@ pub(super) async fn read_thread(
     {
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
         if params.include_history {
-            let path = resolve_rollout_path(store, thread_id, /*include_archived*/ false)
-                .await?
-                .ok_or_else(|| ThreadStoreError::Internal {
+            let Some(path) = thread.rollout_path.clone() else {
+                return Err(ThreadStoreError::Internal {
                     message: format!("failed to locate rollout for thread {thread_id}"),
-                })?;
+                });
+            };
             let items = load_history_items(&path).await?;
             thread.history = Some(StoredThreadHistory { thread_id, items });
         }
@@ -744,6 +744,53 @@ mod tests {
         assert_eq!(thread.thread_id, thread_id);
         assert_eq!(thread.preview, "Archived SQLite preview");
         assert!(thread.archived_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn read_thread_sqlite_fallback_loads_archived_history() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let store = LocalThreadStore::new(config.clone());
+        let uuid = Uuid::from_u128(219);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let archived_path = write_archived_session_file(home.path(), "2025-01-03T12-00-00", uuid)
+            .expect("archived session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            archived_path.clone(),
+            Utc::now(),
+            SessionSource::Cli,
+        );
+        builder.archived_at = Some(Utc::now());
+        let mut metadata = builder.build(config.model_provider_id.as_str());
+        metadata.first_user_message = Some("Archived SQLite preview".to_string());
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: true,
+            })
+            .await
+            .expect("read archived thread");
+
+        assert_eq!(thread.thread_id, thread_id);
+        assert_eq!(thread.rollout_path, Some(archived_path));
+        assert_eq!(thread.preview, "Archived SQLite preview");
+        assert!(thread.archived_at.is_some());
+        let history = thread.history.expect("history should load");
+        assert_eq!(history.thread_id, thread_id);
+        assert_eq!(history.items.len(), 2);
     }
 
     #[tokio::test]
