@@ -162,8 +162,11 @@ impl CodexThread {
         self.codex.session.services.environment.clone()
     }
 
-    pub(crate) fn selected_environments(&self) -> Vec<std::sync::Arc<Environment>> {
-        self.codex.session.services.environments.clone()
+    pub(crate) async fn update_environments(
+        &self,
+        environments: Vec<SessionEnvironment>,
+    ) -> ConstraintResult<()> {
+        self.codex.update_environments(environments).await
     }
 
     pub(crate) async fn environments(&self) -> Vec<SessionEnvironment> {

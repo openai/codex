@@ -88,10 +88,11 @@ pub(crate) struct SessionConfiguration {
     pub(super) user_shell_override: Option<shell::Shell>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct SessionEnvironment {
     pub(crate) environment_id: String,
-    pub(crate) cwd: Option<AbsolutePathBuf>,
+    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) environment: Arc<Environment>,
 }
 
 impl SessionConfiguration {
@@ -163,16 +164,7 @@ impl SessionConfiguration {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
         if let Some(environments) = updates.environments.as_ref() {
-            next_configuration.environments = environments
-                .iter()
-                .map(|environment| SessionEnvironment {
-                    environment_id: environment.environment_id.clone(),
-                    cwd: environment
-                        .cwd
-                        .as_ref()
-                        .map(|cwd| self.normalize_session_environment_cwd(cwd, &self.cwd)),
-                })
-                .collect();
+            next_configuration.environments = environments.clone();
         }
 
         let absolute_cwd = if let Some(cwd) = updates.cwd.as_ref() {
@@ -181,7 +173,7 @@ impl SessionConfiguration {
             next_configuration
                 .environments
                 .first()
-                .and_then(|environment| environment.cwd.clone())
+                .map(|environment| environment.cwd.clone())
                 .unwrap_or_else(|| self.cwd.clone())
         };
 
@@ -215,7 +207,7 @@ impl SessionConfiguration {
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
-    pub(crate) environments: Option<Vec<codex_protocol::protocol::TurnEnvironment>>,
+    pub(crate) environments: Option<Vec<SessionEnvironment>>,
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
@@ -253,8 +245,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
-        environments: Vec<Arc<Environment>>,
-        environment: Option<Arc<Environment>>,
+        environments: Vec<SessionEnvironment>,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -708,8 +699,9 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environments,
-            environment,
+            environment: environments
+                .first()
+                .map(|environment| Arc::clone(&environment.environment)),
         };
         services
             .model_client

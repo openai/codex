@@ -2275,7 +2275,6 @@ impl CodexMessageProcessor {
             environments,
             persist_extended_history,
         } = params;
-        let environment_fallback_cwd = cwd.clone();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2326,9 +2325,7 @@ impl CodexMessageProcessor {
                         .into_iter()
                         .map(|environment| codex_protocol::protocol::TurnEnvironment {
                             environment_id: environment.environment_id,
-                            cwd: environment
-                                .cwd
-                                .or_else(|| environment_fallback_cwd.clone().map(Into::into)),
+                            cwd: Some(environment.cwd.into_path_buf()),
                         })
                         .collect()
                 }),
@@ -6809,7 +6806,7 @@ impl CodexMessageProcessor {
             self.outgoing.send_error(request_id, error).await;
             return;
         }
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
+        let (thread_id, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.track_error_response(&request_id, &error, /*error_type*/ None);
@@ -6855,26 +6852,33 @@ impl CodexMessageProcessor {
         let environments = environments.map(|environments| {
             environments
                 .into_iter()
-                .enumerate()
-                .map(
-                    |(index, environment)| codex_protocol::protocol::TurnEnvironment {
-                        environment_id: environment.environment_id,
-                        cwd: if index == 0 {
-                            environment.cwd.or_else(|| cwd.clone())
-                        } else {
-                            environment.cwd
-                        },
-                    },
-                )
+                .map(|environment| codex_protocol::protocol::TurnEnvironment {
+                    environment_id: environment.environment_id,
+                    cwd: Some(environment.cwd.into_path_buf()),
+                })
                 .collect::<Vec<_>>()
         });
+        if let Some(environments) = environments.as_ref() {
+            let fallback_cwd = thread.config_snapshot().await.cwd;
+            if let Err(err) = self
+                .thread_manager
+                .update_thread_environments(thread_id, &fallback_cwd, environments)
+                .await
+            {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to update environments: {err}"),
+                )
+                .await;
+                return;
+            }
+        }
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> =
             input.into_iter().map(V2UserInput::into_core).collect();
 
-        let has_any_overrides = environments.is_some()
-            || cwd.is_some()
+        let has_any_overrides = cwd.is_some()
             || approval_policy.is_some()
             || approvals_reviewer.is_some()
             || sandbox_policy.is_some()
@@ -6892,7 +6896,7 @@ impl CodexMessageProcessor {
                     &request_id,
                     thread.as_ref(),
                     Op::OverrideTurnContext {
-                        environments,
+                        environments: None,
                         cwd,
                         approval_policy: approval_policy.map(AskForApproval::to_core),
                         approvals_reviewer: approvals_reviewer

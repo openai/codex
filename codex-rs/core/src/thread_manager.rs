@@ -4,10 +4,12 @@ use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
+use crate::codex::SessionEnvironment;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
+use crate::path_utils::normalize_for_native_workdir;
 use crate::plugins::PluginsManager;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
@@ -18,7 +20,6 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
-use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -369,6 +370,32 @@ impl ThreadManager {
 
     pub fn environment_manager(&self) -> Arc<EnvironmentManager> {
         self.state.environment_manager.clone()
+    }
+
+    pub(crate) async fn resolve_turn_environments(
+        &self,
+        fallback_cwd: &AbsolutePathBuf,
+        environments: &[codex_protocol::protocol::TurnEnvironment],
+    ) -> CodexResult<Vec<SessionEnvironment>> {
+        self.state
+            .resolve_environments(fallback_cwd, environments)
+            .await
+    }
+
+    pub async fn update_thread_environments(
+        &self,
+        thread_id: ThreadId,
+        fallback_cwd: &AbsolutePathBuf,
+        environments: &[codex_protocol::protocol::TurnEnvironment],
+    ) -> CodexResult<()> {
+        let resolved_environments = self
+            .resolve_turn_environments(fallback_cwd, environments)
+            .await?;
+        let thread = self.get_thread(thread_id).await?;
+        thread
+            .update_environments(resolved_environments)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to update environments: {err}")))
     }
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
@@ -908,7 +935,7 @@ impl ThreadManagerState {
     async fn inherited_environments_for_source(
         &self,
         session_source: &SessionSource,
-    ) -> Option<Vec<codex_protocol::protocol::TurnEnvironment>> {
+    ) -> Option<Vec<SessionEnvironment>> {
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         }) = session_source
@@ -922,25 +949,31 @@ impl ThreadManagerState {
         if environments.is_empty() {
             None
         } else {
-            Some(
-                environments
-                    .into_iter()
-                    .map(|environment| codex_protocol::protocol::TurnEnvironment {
-                        environment_id: environment.environment_id,
-                        cwd: environment.cwd.map(Into::into),
-                    })
-                    .collect(),
-            )
+            Some(environments)
         }
     }
 
     async fn resolve_environments(
         &self,
+        fallback_cwd: &AbsolutePathBuf,
         environments: &[codex_protocol::protocol::TurnEnvironment],
-    ) -> CodexResult<Vec<Arc<Environment>>> {
+    ) -> CodexResult<Vec<SessionEnvironment>> {
         let mut resolved = Vec::with_capacity(environments.len());
         for environment in environments {
-            let environment = self
+            let cwd = environment
+                .cwd
+                .as_ref()
+                .map(|cwd| {
+                    AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
+                        cwd.as_path(),
+                    ))
+                    .unwrap_or_else(|err| {
+                        warn!("failed to normalize startup environment cwd: {cwd:?}: {err}");
+                        fallback_cwd.clone()
+                    })
+                })
+                .unwrap_or_else(|| fallback_cwd.clone());
+            let resolved_environment = self
                 .environment_manager
                 .environment(Some(environment.environment_id.as_str()))
                 .await
@@ -951,7 +984,11 @@ impl ThreadManagerState {
                         environment.environment_id
                     ))
                 })?;
-            resolved.push(environment);
+            resolved.push(SessionEnvironment {
+                environment_id: environment.environment_id.clone(),
+                cwd,
+                environment: resolved_environment,
+            });
         }
         Ok(resolved)
     }
@@ -976,14 +1013,16 @@ impl ThreadManagerState {
         let effective_environments = if let Some(environments) =
             environments.filter(|environments| !environments.is_empty())
         {
-            environments
+            self.resolve_environments(&config.cwd, &environments)
+                .await?
         } else if let Some(environments) = self
             .inherited_environments_for_source(&session_source)
             .await
         {
             environments
         } else {
-            self.environment_manager
+            let default_environments = self
+                .environment_manager
                 .default_config()
                 .map(|environment| {
                     vec![codex_protocol::protocol::TurnEnvironment {
@@ -991,10 +1030,13 @@ impl ThreadManagerState {
                         cwd: None,
                     }]
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            self.resolve_environments(&config.cwd, &default_environments)
+                .await?
         };
-        let resolved_environments = self.resolve_environments(&effective_environments).await?;
-        let environment = resolved_environments.first().cloned();
+        let environment = effective_environments
+            .first()
+            .map(|environment| Arc::clone(&environment.environment));
         let watch_registration = match environment.as_ref() {
             Some(environment) if !environment.is_remote() => {
                 self.skills_watcher
@@ -1014,7 +1056,6 @@ impl ThreadManagerState {
             config,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
-            resolved_environments,
             environments: effective_environments,
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),

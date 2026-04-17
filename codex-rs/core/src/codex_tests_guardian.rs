@@ -438,15 +438,16 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         .await
         .expect("resolve local environment")
         .expect("local environment");
+    let cwd = config.cwd.clone();
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
-        resolved_environments: vec![environment],
-        environments: vec![codex_protocol::protocol::TurnEnvironment {
+        environments: vec![SessionEnvironment {
             environment_id: "local".to_string(),
-            cwd: None,
+            cwd,
+            environment,
         }],
         skills_manager,
         plugins_manager,

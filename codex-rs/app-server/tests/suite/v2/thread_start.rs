@@ -28,6 +28,7 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -185,7 +186,7 @@ async fn thread_start_accepts_explicit_local_environment_when_default_is_remote(
         .send_thread_start_request(ThreadStartParams {
             environments: Some(vec![ThreadEnvironmentParams {
                 environment_id: "local".to_string(),
-                cwd: None,
+                cwd: AbsolutePathBuf::from_absolute_path_checked(codex_home.path())?,
             }]),
             ..Default::default()
         })
@@ -245,7 +246,7 @@ async fn thread_start_rejects_explicit_remote_environment_when_not_configured() 
         .send_thread_start_request(ThreadStartParams {
             environments: Some(vec![ThreadEnvironmentParams {
                 environment_id: "remote".to_string(),
-                cwd: None,
+                cwd: AbsolutePathBuf::from_absolute_path_checked(codex_home.path())?,
             }]),
             ..Default::default()
         })
@@ -283,7 +284,7 @@ async fn thread_start_rejects_explicit_environment_when_disabled() -> Result<()>
         .send_thread_start_request(ThreadStartParams {
             environments: Some(vec![ThreadEnvironmentParams {
                 environment_id: "local".to_string(),
-                cwd: None,
+                cwd: AbsolutePathBuf::from_absolute_path_checked(codex_home.path())?,
             }]),
             ..Default::default()
         })

@@ -12893,16 +12893,14 @@
       "ThreadEnvironmentParams": {
         "properties": {
           "cwd": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "environmentId": {
             "type": "string"
           }
         },
         "required": [
+          "cwd",
           "environmentId"
         ],
         "type": "object"
@@ -12946,10 +12944,7 @@
             ]
           },
           "cwd": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "developerInstructions": {
             "type": [
@@ -15182,6 +15177,7 @@
           }
         },
         "required": [
+          "cwd",
           "environmentId"
         ],
         "type": "object"

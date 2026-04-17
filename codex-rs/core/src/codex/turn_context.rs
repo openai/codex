@@ -538,9 +538,11 @@ impl Session {
             .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let fs = self
-            .services
-            .environment
+        let environment = session_configuration
+            .environments
+            .first()
+            .map(|environment| Arc::clone(&environment.environment));
+        let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
         let skills_outcome = Arc::new(
@@ -570,7 +572,7 @@ impl Session {
                     )
                     .then(|| started_proxy.proxy())
                 }),
-            self.services.environment.clone(),
+            environment,
             sub_id,
             Arc::clone(&self.js_repl),
             skills_outcome,

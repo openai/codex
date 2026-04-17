@@ -380,16 +380,14 @@
     "TurnEnvironmentParams": {
       "properties": {
         "cwd": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "environmentId": {
           "type": "string"
         }
       },
       "required": [
+        "cwd",
         "environmentId"
       ],
       "type": "object"

@@ -1042,7 +1042,10 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::OverrideTurnContext {
-                    environments,
+                    // Environment ids are resolved by ThreadManager before
+                    // they are applied to session state. The session does
+                    // not own an EnvironmentManager.
+                    environments: _,
                     cwd,
                     approval_policy,
                     approvals_reviewer,
@@ -1069,7 +1072,7 @@ pub(super) async fn submission_loop(
                         &sess,
                         sub.id.clone(),
                         SessionSettingsUpdate {
-                            environments,
+                            environments: None,
                             cwd,
                             approval_policy,
                             approvals_reviewer,

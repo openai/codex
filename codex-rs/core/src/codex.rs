@@ -377,8 +377,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
-    pub(crate) resolved_environments: Vec<Arc<Environment>>,
-    pub(crate) environments: Vec<codex_protocol::protocol::TurnEnvironment>,
+    pub(crate) environments: Vec<SessionEnvironment>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
@@ -431,7 +430,6 @@ impl Codex {
             mut config,
             auth_manager,
             models_manager,
-            resolved_environments,
             environments,
             skills_manager,
             plugins_manager,
@@ -452,7 +450,9 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let environment = resolved_environments.first().cloned();
+        let environment = environments
+            .first()
+            .map(|environment| Arc::clone(&environment.environment));
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
@@ -614,21 +614,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
-            environments: environments
-                .into_iter()
-                .map(|environment| SessionEnvironment {
-                    environment_id: environment.environment_id,
-                    cwd: environment.cwd.as_ref().map(|cwd| {
-                        AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
-                            cwd.as_path(),
-                        ))
-                        .unwrap_or_else(|err| {
-                            warn!("failed to normalize startup environment cwd: {cwd:?}: {err}");
-                            config.cwd.clone()
-                        })
-                    }),
-                })
-                .collect(),
+            environments: environments.clone(),
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
@@ -654,8 +640,7 @@ impl Codex {
             mcp_manager.clone(),
             skills_watcher,
             agent_control,
-            resolved_environments,
-            environment,
+            environments,
             analytics_events_client,
         )
         .await
@@ -767,6 +752,18 @@ impl Codex {
             .update_settings(SessionSettingsUpdate {
                 app_server_client_name,
                 app_server_client_version,
+                ..Default::default()
+            })
+            .await
+    }
+
+    pub(crate) async fn update_environments(
+        &self,
+        environments: Vec<SessionEnvironment>,
+    ) -> ConstraintResult<()> {
+        self.session
+            .update_settings(SessionSettingsUpdate {
+                environments: Some(environments),
                 ..Default::default()
             })
             .await

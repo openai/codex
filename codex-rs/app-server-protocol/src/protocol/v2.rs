@@ -2723,8 +2723,8 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub session_start_source: Option<ThreadStartSource>,
     /// Optional ordered environments to use for this thread. For now only the
-    /// first entry is used. When omitted or empty, the default environment is
-    /// used.
+    /// first entry is used. Each entry carries its execution cwd. When omitted
+    /// or empty, the default environment is used.
     #[ts(optional = nullable)]
     pub environments: Option<Vec<ThreadEnvironmentParams>>,
     #[experimental("thread/start.dynamicTools")]
@@ -2747,22 +2747,20 @@ pub struct ThreadStartParams {
     pub persist_extended_history: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadEnvironmentParams {
     pub environment_id: String,
-    #[ts(optional = nullable)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: AbsolutePathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnEnvironmentParams {
     pub environment_id: String,
-    #[ts(optional = nullable)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: AbsolutePathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -4294,8 +4292,8 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub collaboration_mode: Option<CollaborationMode>,
 
-    /// Optional ordered environment ids with per-environment cwd overrides for
-    /// this turn. For now only the first entry is used to drive execution.
+    /// Optional ordered environments to use for this turn. For now only the
+    /// first entry is used to drive execution.
     #[ts(optional = nullable)]
     pub environments: Option<Vec<TurnEnvironmentParams>>,
 }
