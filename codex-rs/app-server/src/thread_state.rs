@@ -1,6 +1,7 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -8,6 +9,7 @@ use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
+use codex_rollout::state_db::StateDbHandle;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -32,6 +34,7 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) instruction_sources: Vec<AbsolutePathBuf>,
     pub(crate) thread_summary: codex_app_server_protocol::Thread,
     pub(crate) emit_thread_goal_update: bool,
+    pub(crate) thread_goal_state_db: Option<StateDbHandle>,
     pub(crate) continue_goal_if_idle: bool,
 }
 
@@ -39,6 +42,10 @@ pub(crate) struct PendingThreadResumeRequest {
 pub(crate) enum ThreadListenerCommand {
     // SendThreadResumeResponse is used to resume an already running thread by sending the thread's history to the client and atomically subscribing for new updates.
     SendThreadResumeResponse(Box<PendingThreadResumeRequest>),
+    // EmitThreadGoalUpdated is used to order app-server goal updates with running-thread resume responses.
+    EmitThreadGoalUpdated {
+        goal: ThreadGoal,
+    },
     // ResolveServerRequest is used to notify the client that the request has been resolved.
     // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.
     ResolveServerRequest {
