@@ -104,6 +104,18 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
         codex_api::ResponseEvent::OutputTextDelta(delta) => {
             json!({ "type": "response.output_text.delta", "delta": delta })
         }
+        codex_api::ResponseEvent::ToolCallInputDelta {
+            item_id,
+            call_id,
+            delta,
+        } => {
+            json!({
+                "type": "response.tool_call_input.delta",
+                "item_id": item_id,
+                "call_id": call_id,
+                "delta": delta,
+            })
+        }
         codex_api::ResponseEvent::ReasoningSummaryDelta {
             delta,
             summary_index,
@@ -213,6 +225,24 @@ mod tests {
                 "type": "response.reasoning_text.delta",
                 "delta": "detail",
                 "content_index": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn tool_call_input_delta_uses_responses_event_name() {
+        let delta = response_event_to_json(codex_api::ResponseEvent::ToolCallInputDelta {
+            item_id: "item-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            delta: "patch".to_string(),
+        });
+        assert_eq!(
+            delta,
+            json!({
+                "type": "response.tool_call_input.delta",
+                "item_id": "item-1",
+                "call_id": "call-1",
+                "delta": "patch",
             })
         );
     }
