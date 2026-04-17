@@ -3589,6 +3589,14 @@ pub struct PluginDetail {
     pub skills: Vec<SkillSummary>,
     pub apps: Vec<AppSummary>,
     pub mcp_servers: Vec<String>,
+    pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum PluginDetailsUnavailableReason {
+    InstallRequiredForRemoteSource,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

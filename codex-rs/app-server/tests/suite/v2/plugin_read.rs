@@ -19,6 +19,8 @@ use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PluginAuthPolicy;
+use codex_app_server_protocol::PluginDetailsUnavailableReason;
+use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
@@ -259,6 +261,163 @@ enabled = true
     assert_eq!(response.plugin.apps[0].needs_auth, true);
     assert_eq!(response.plugin.mcp_servers.len(), 1);
     assert_eq!(response.plugin.mcp_servers[0], "demo");
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_returns_install_required_for_uninstalled_git_source() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_plugins_enabled_config(&codex_home)?;
+    let repo_root = TempDir::new()?;
+    let missing_remote_repo = repo_root.path().join("missing-remote-plugin-repo");
+    let missing_remote_repo_url = url::Url::from_directory_path(&missing_remote_repo)
+        .unwrap()
+        .to_string();
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        format!(
+            r#"{{
+  "name": "debug",
+  "plugins": [
+    {{
+      "name": "toolkit",
+      "source": {{
+        "source": "git-subdir",
+        "url": "{missing_remote_repo_url}",
+        "path": "plugins/toolkit"
+      }}
+    }}
+  ]
+}}"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.path().join(".agents/plugins/marketplace.json"),
+            )?,
+            plugin_name: "toolkit".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    assert_eq!(
+        response.plugin.details_unavailable_reason,
+        Some(PluginDetailsUnavailableReason::InstallRequiredForRemoteSource)
+    );
+    assert!(!response.plugin.summary.installed);
+    assert!(response.plugin.skills.is_empty());
+    assert!(response.plugin.apps.is_empty());
+    assert!(response.plugin.mcp_servers.is_empty());
+    assert!(
+        !codex_home
+            .path()
+            .join("plugins/.marketplace-plugin-source-staging")
+            .exists()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_returns_full_details_after_git_source_install() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_plugins_enabled_config(&codex_home)?;
+    let repo_root = TempDir::new()?;
+    let remote_repo = TempDir::new()?;
+    let remote_repo_url = url::Url::from_directory_path(remote_repo.path())
+        .unwrap()
+        .to_string();
+    let remote_plugin_root = remote_repo.path().join("plugins/toolkit");
+    std::fs::create_dir_all(remote_plugin_root.join(".codex-plugin"))?;
+    std::fs::create_dir_all(remote_plugin_root.join("skills/search"))?;
+    std::fs::write(
+        remote_plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "toolkit",
+  "description": "Remote toolkit plugin"
+}"#,
+    )?;
+    std::fs::write(
+        remote_plugin_root.join("skills/search/SKILL.md"),
+        "---\nname: search\ndescription: search remote data\n---\n",
+    )?;
+    std::fs::write(
+        remote_plugin_root.join(".mcp.json"),
+        r#"{"mcpServers":{"toolkit":{"command":"toolkit-mcp"}}}"#,
+    )?;
+    init_git_repo(remote_repo.path());
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        format!(
+            r#"{{
+  "name": "debug",
+  "plugins": [
+    {{
+      "name": "toolkit",
+      "source": {{
+        "source": "git-subdir",
+        "url": "{remote_repo_url}",
+        "path": "plugins/toolkit"
+      }}
+    }}
+  ]
+}}"#
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+    let install_request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path: marketplace_path.clone(),
+            plugin_name: "toolkit".to_string(),
+            force_remote_sync: false,
+        })
+        .await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(install_request_id)),
+    )
+    .await??;
+
+    let read_request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path,
+            plugin_name: "toolkit".to_string(),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    assert_eq!(response.plugin.details_unavailable_reason, None);
+    assert!(response.plugin.summary.installed);
+    assert_eq!(
+        response.plugin.description.as_deref(),
+        Some("Remote toolkit plugin")
+    );
+    assert_eq!(response.plugin.skills.len(), 1);
+    assert_eq!(response.plugin.skills[0].name, "toolkit:search");
+    assert_eq!(response.plugin.mcp_servers, vec!["toolkit".to_string()]);
     Ok(())
 }
 
@@ -547,6 +706,31 @@ plugins = true
 "#,
     )?;
     Ok(())
+}
+
+fn init_git_repo(repo: &std::path::Path) {
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "codex-test@example.com"]);
+    run_git(repo, &["config", "user.name", "Codex Test"]);
+    run_git(repo, &["add", "."]);
+    run_git(repo, &["commit", "-m", "initial"]);
+}
+
+fn run_git(repo: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .unwrap_or_else(|err| panic!("git should run: {err}"));
+    assert!(
+        output.status.success(),
+        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
+        repo.display(),
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[derive(Clone)]
