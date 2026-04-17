@@ -1737,6 +1737,7 @@ impl App {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
                 tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
+                return Err(err);
             }
             Err(_) => {
                 tracing::warn!("timed out unsubscribing thread {thread_id}");
