@@ -212,7 +212,7 @@ fn find_marketplace_plugin_normalizes_relative_git_source_urls_to_marketplace_ro
     for source_url in ["./remotes/toolkit.git", ".\\remotes\\toolkit.git"] {
         let tmp = tempdir().unwrap();
         let repo_root = tmp.path().join("repo");
-        let remote_repo = repo_root.join("remotes/toolkit.git");
+        let remote_repo = repo_root.join("remotes").join("toolkit.git");
         fs::create_dir_all(repo_root.join(".git")).unwrap();
         fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
         fs::create_dir_all(&remote_repo).unwrap();
