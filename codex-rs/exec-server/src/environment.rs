@@ -20,8 +20,23 @@ const REMOTE_ENVIRONMENT_ID: &str = "remote";
 type EnvironmentId = String;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct EnvironmentConfig {
+pub struct EnvironmentConfig {
+    id: EnvironmentId,
     exec_server_url: Option<String>,
+}
+
+impl EnvironmentConfig {
+    pub fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    pub fn exec_server_url(&self) -> Option<&str> {
+        self.exec_server_url.as_deref()
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.exec_server_url.is_some()
+    }
 }
 
 /// Lazily creates and caches the active environment for a session.
@@ -30,7 +45,7 @@ struct EnvironmentConfig {
 /// and follow-up turns preserve an explicit disabled state.
 #[derive(Debug)]
 pub struct EnvironmentManager {
-    default_environment_id: Option<EnvironmentId>,
+    current_environment_id: Option<EnvironmentId>,
     environment_configs: HashMap<EnvironmentId, EnvironmentConfig>,
     environment_cache: HashMap<EnvironmentId, Arc<OnceCell<Arc<Environment>>>>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
@@ -54,10 +69,10 @@ impl EnvironmentManager {
         exec_server_url: Option<String>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let (default_environment_id, environment_configs) =
+        let (current_environment_id, environment_configs) =
             bootstrap_environment_set(exec_server_url);
         Self {
-            default_environment_id,
+            current_environment_id,
             environment_cache: build_environment_cache(&environment_configs),
             environment_configs,
             local_runtime_paths,
@@ -80,41 +95,30 @@ impl EnvironmentManager {
         )
     }
 
-    pub fn with_default_environment_id(&self, default_environment_id: Option<String>) -> Self {
-        let default_environment_id = default_environment_id
+    pub(crate) fn with_current_id(&self, current_environment_id: Option<String>) -> Self {
+        let current_environment_id = current_environment_id
             .filter(|environment_id| self.environment_configs.contains_key(environment_id));
         Self {
-            default_environment_id,
+            current_environment_id,
             environment_configs: self.environment_configs.clone(),
             environment_cache: self.environment_cache.clone(),
             local_runtime_paths: self.local_runtime_paths.clone(),
         }
     }
 
-    pub fn default_environment_id(&self) -> Option<&str> {
-        self.default_environment_id.as_deref()
-    }
-
-    /// Returns the remote exec-server URL when one is configured.
-    pub fn exec_server_url(&self) -> Option<&str> {
-        self.default_environment_id
+    pub fn current_config(&self) -> Option<&EnvironmentConfig> {
+        self.current_environment_id
             .as_ref()
             .and_then(|environment_id| self.environment_configs.get(environment_id))
-            .and_then(|config| config.exec_server_url.as_deref())
-    }
-
-    /// Returns true when this manager is configured to use a remote exec server.
-    pub fn is_remote(&self) -> bool {
-        self.exec_server_url().is_some()
     }
 
     fn is_disabled(&self) -> bool {
-        self.default_environment_id.is_none() && self.environment_configs.is_empty()
+        self.current_environment_id.is_none() && self.environment_configs.is_empty()
     }
 
     /// Returns the cached environment, creating it on first access.
     pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
-        match self.default_environment_id.as_deref() {
+        match self.current_environment_id.as_deref() {
             Some(environment_id) => self.environment_by_id(environment_id).await.map(Some),
             None => Ok(None),
         }
@@ -309,6 +313,7 @@ fn bootstrap_environment_set(
     let mut environment_configs = HashMap::from([(
         LOCAL_ENVIRONMENT_ID.to_string(),
         EnvironmentConfig {
+            id: LOCAL_ENVIRONMENT_ID.to_string(),
             exec_server_url: None,
         },
     )]);
@@ -316,6 +321,7 @@ fn bootstrap_environment_set(
         environment_configs.insert(
             REMOTE_ENVIRONMENT_ID.to_string(),
             EnvironmentConfig {
+                id: REMOTE_ENVIRONMENT_ID.to_string(),
                 exec_server_url: Some(exec_server_url),
             },
         );
@@ -360,43 +366,78 @@ mod tests {
     fn environment_manager_normalizes_empty_url() {
         let manager = EnvironmentManager::new(Some(String::new()));
 
-        assert_eq!(manager.default_environment_id(), Some("local"));
-        assert_eq!(manager.exec_server_url(), None);
-        assert!(!manager.is_remote());
+        assert_eq!(
+            manager.current_config().map(EnvironmentConfig::id),
+            Some("local")
+        );
+        assert_eq!(
+            manager
+                .current_config()
+                .and_then(EnvironmentConfig::exec_server_url),
+            None
+        );
+        assert!(
+            !manager
+                .current_config()
+                .is_some_and(EnvironmentConfig::is_remote)
+        );
     }
 
     #[test]
     fn environment_manager_treats_none_value_as_disabled() {
         let manager = EnvironmentManager::new(Some("none".to_string()));
 
-        assert_eq!(manager.default_environment_id(), None);
-        assert_eq!(manager.exec_server_url(), None);
-        assert!(!manager.is_remote());
+        assert_eq!(manager.current_config().map(EnvironmentConfig::id), None);
+        assert_eq!(
+            manager
+                .current_config()
+                .and_then(EnvironmentConfig::exec_server_url),
+            None
+        );
+        assert!(
+            !manager
+                .current_config()
+                .is_some_and(EnvironmentConfig::is_remote)
+        );
     }
 
     #[test]
     fn environment_manager_reports_remote_url() {
         let manager = EnvironmentManager::new(Some("ws://127.0.0.1:8765".to_string()));
 
-        assert!(manager.is_remote());
-        assert_eq!(manager.exec_server_url(), Some("ws://127.0.0.1:8765"));
+        assert!(
+            manager
+                .current_config()
+                .is_some_and(EnvironmentConfig::is_remote)
+        );
+        assert_eq!(
+            manager
+                .current_config()
+                .and_then(EnvironmentConfig::exec_server_url),
+            Some("ws://127.0.0.1:8765")
+        );
     }
 
     #[test]
     fn environment_manager_bootstraps_local_and_remote_entries() {
         let manager = EnvironmentManager::new(Some("ws://127.0.0.1:8765".to_string()));
 
-        assert_eq!(manager.default_environment_id(), Some("remote"));
+        assert_eq!(
+            manager.current_config().map(EnvironmentConfig::id),
+            Some("remote")
+        );
         assert_eq!(manager.environment_configs.len(), 2);
         assert_eq!(
             manager.environment_configs.get("local"),
             Some(&EnvironmentConfig {
+                id: "local".to_string(),
                 exec_server_url: None
             })
         );
         assert_eq!(
             manager.environment_configs.get("remote"),
             Some(&EnvironmentConfig {
+                id: "remote".to_string(),
                 exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
             })
         );
@@ -436,7 +477,7 @@ mod tests {
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
         assert_eq!(
             manager
-                .with_default_environment_id(Some("local".to_string()))
+                .with_current_id(Some("local".to_string()))
                 .local_runtime_paths,
             Some(runtime_paths)
         );

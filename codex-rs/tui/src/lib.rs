@@ -630,7 +630,9 @@ fn config_cwd_for_app_server_target(
     app_server_target: &AppServerTarget,
     environment_manager: &EnvironmentManager,
 ) -> std::io::Result<Option<AbsolutePathBuf>> {
-    if environment_manager.is_remote()
+    if environment_manager
+        .current_config()
+        .is_some_and(codex_exec_server::EnvironmentConfig::is_remote)
         || matches!(app_server_target, AppServerTarget::Remote { .. })
     {
         return Ok(None);

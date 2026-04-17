@@ -2017,7 +2017,12 @@ mod tests {
             &runtime_args.environment_manager,
             &environment_manager
         ));
-        assert!(runtime_args.environment_manager.is_remote());
+        assert!(
+            runtime_args
+                .environment_manager
+                .current_config()
+                .is_some_and(codex_exec_server::EnvironmentConfig::is_remote)
+        );
     }
 
     #[tokio::test]

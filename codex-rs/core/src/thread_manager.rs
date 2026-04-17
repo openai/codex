@@ -983,7 +983,8 @@ impl ThreadManagerState {
             })
             .unwrap_or_else(|| {
                 environment_manager
-                    .default_environment_id()
+                    .current_config()
+                    .map(codex_exec_server::EnvironmentConfig::id)
                     .map(|environment_id| {
                         vec![codex_protocol::protocol::TurnEnvironment {
                             environment_id: environment_id.to_string(),
@@ -995,9 +996,8 @@ impl ThreadManagerState {
         let selected_environment_id = effective_environments
             .first()
             .map(|environment| environment.environment_id.clone());
-        let selected_environment_manager = Arc::new(
-            environment_manager.with_default_environment_id(selected_environment_id.clone()),
-        );
+        let selected_environment_manager =
+            Arc::new(environment_manager.with_current_id(selected_environment_id.clone()));
         let environment = environment_manager
             .environment(selected_environment_id.as_deref())
             .await
