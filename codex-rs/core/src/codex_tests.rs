@@ -5633,7 +5633,7 @@ async fn interrupt_clears_queued_response_items_for_next_turn() {
 }
 
 #[tokio::test]
-async fn interrupt_without_active_turn_clears_queued_response_items_for_next_turn() {
+async fn interrupt_without_active_turn_preserves_queued_response_items_without_active_goal() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let queued_item = ResponseInputItem::Message {
         role: "developer".to_string(),
@@ -5648,7 +5648,7 @@ async fn interrupt_without_active_turn_clears_queued_response_items_for_next_tur
 
     sess.interrupt_task().await;
 
-    assert!(!sess.has_queued_response_items_for_next_turn().await);
+    assert!(sess.has_queued_response_items_for_next_turn().await);
 }
 
 #[tokio::test]
@@ -5813,6 +5813,12 @@ async fn goal_continuation_refreshes_stale_cached_status() -> anyhow::Result<()>
 #[tokio::test]
 async fn interrupt_without_active_turn_pauses_active_goal() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let queued_item = ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "continue the active goal".to_string(),
+        }],
+    };
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
@@ -5822,6 +5828,8 @@ async fn interrupt_without_active_turn_pauses_active_goal() -> anyhow::Result<()
         },
     )
     .await?;
+    sess.queue_response_items_for_next_turn(vec![queued_item])
+        .await;
 
     sess.interrupt_task().await;
 
@@ -5833,6 +5841,7 @@ async fn interrupt_without_active_turn_pauses_active_goal() -> anyhow::Result<()
         codex_protocol::protocol::ThreadGoalStatus::Paused,
         goal.status
     );
+    assert!(!sess.has_queued_response_items_for_next_turn().await);
 
     Ok(())
 }
