@@ -291,13 +291,37 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
+        let include_next_turn_queue = matches!(
+            initial_response_items,
+            InitialResponseItems::IncludeNextTurnQueue
+        );
         let queued_response_items = match initial_response_items {
             InitialResponseItems::IncludeNextTurnQueue => {
                 self.take_queued_response_items_for_next_turn().await
             }
             InitialResponseItems::Direct(items) => items,
         };
-        let mailbox_items = self.get_pending_input().await;
+        let mailbox_items = if include_next_turn_queue {
+            self.get_pending_input().await
+        } else {
+            Vec::new()
+        };
+
+        let mut active = self.active_turn.lock().await;
+        let skip_reason = match active.as_mut() {
+            None => Some("skipping task start because the turn was interrupted during startup"),
+            Some(turn) if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.tasks.is_empty() => {
+                Some("skipping task start because another turn replaced the startup turn")
+            }
+            Some(_) => None,
+        };
+        if let Some(reason) = skip_reason {
+            drop(active);
+            self.requeue_drained_startup_input(queued_response_items, mailbox_items)
+                .await;
+            debug!("{reason}");
+            return;
+        }
         {
             let mut turn_state = turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
@@ -308,16 +332,10 @@ impl Session {
                 turn_state.push_pending_input(item);
             }
         }
-
-        let mut active = self.active_turn.lock().await;
         let Some(turn) = active.as_mut() else {
             debug!("skipping task start because the turn was interrupted during startup");
             return;
         };
-        if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.tasks.is_empty() {
-            debug!("skipping task start because another turn replaced the startup turn");
-            return;
-        }
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         let ctx = Arc::clone(&turn_context);
@@ -383,6 +401,20 @@ impl Session {
         turn.add_task(running_task);
         drop(active);
         let _ = task_start_tx.send(());
+    }
+
+    async fn requeue_drained_startup_input(
+        &self,
+        mut queued_response_items: Vec<ResponseInputItem>,
+        mailbox_items: Vec<ResponseInputItem>,
+    ) {
+        if queued_response_items.is_empty() && mailbox_items.is_empty() {
+            return;
+        }
+
+        queued_response_items.extend(mailbox_items);
+        self.requeue_response_items_for_next_turn_front(queued_response_items)
+            .await;
     }
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
