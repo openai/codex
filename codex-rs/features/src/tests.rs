@@ -42,8 +42,8 @@ fn default_enabled_features_are_stable() {
 }
 
 #[test]
-fn use_legacy_landlock_is_stable_and_disabled_by_default() {
-    assert_eq!(Feature::UseLegacyLandlock.stage(), Stage::Stable);
+fn use_legacy_landlock_is_deprecated_and_disabled_by_default() {
+    assert_eq!(Feature::UseLegacyLandlock.stage(), Stage::Deprecated);
     assert_eq!(Feature::UseLegacyLandlock.default_enabled(), false);
 }
 
@@ -92,7 +92,7 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     let stage = spec.stage;
 
     assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("Guardian Approvals"));
+    assert_eq!(stage.experimental_menu_name(), Some("Auto-review"));
     assert_eq!(
         stage.experimental_menu_description().map(str::to_owned),
         Some(
@@ -164,6 +164,28 @@ fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
 fn image_generation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ImageGeneration.stage(), Stage::Stable);
     assert_eq!(Feature::ImageGeneration.default_enabled(), true);
+}
+
+#[test]
+fn use_legacy_landlock_config_records_deprecation_notice() {
+    let mut entries = BTreeMap::new();
+    entries.insert("use_legacy_landlock".to_string(), true);
+
+    let mut features = Features::with_defaults();
+    features.apply_map(&entries);
+
+    let usages = features.legacy_feature_usages().collect::<Vec<_>>();
+    assert_eq!(usages.len(), 1);
+    assert_eq!(usages[0].alias, "features.use_legacy_landlock");
+    assert_eq!(usages[0].feature, Feature::UseLegacyLandlock);
+    assert_eq!(
+        usages[0].summary,
+        "`[features].use_legacy_landlock` is deprecated and will be removed soon."
+    );
+    assert_eq!(
+        usages[0].details.as_deref(),
+        Some("Remove this setting to stop opting into the legacy Linux sandbox behavior.")
+    );
 }
 
 #[test]

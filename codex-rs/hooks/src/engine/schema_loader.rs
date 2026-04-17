@@ -6,6 +6,8 @@ use serde_json::Value;
 pub(crate) struct GeneratedHookSchemas {
     pub post_tool_use_command_input: Value,
     pub post_tool_use_command_output: Value,
+    pub permission_request_command_input: Value,
+    pub permission_request_command_output: Value,
     pub pre_tool_use_command_input: Value,
     pub pre_tool_use_command_output: Value,
     pub session_start_command_input: Value,
@@ -26,6 +28,14 @@ pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
         post_tool_use_command_output: parse_json_schema(
             "post-tool-use.command.output",
             include_str!("../../schema/generated/post-tool-use.command.output.schema.json"),
+        ),
+        permission_request_command_input: parse_json_schema(
+            "permission-request.command.input",
+            include_str!("../../schema/generated/permission-request.command.input.schema.json"),
+        ),
+        permission_request_command_output: parse_json_schema(
+            "permission-request.command.output",
+            include_str!("../../schema/generated/permission-request.command.output.schema.json"),
         ),
         pre_tool_use_command_input: parse_json_schema(
             "pre-tool-use.command.input",
@@ -78,6 +88,8 @@ mod tests {
 
         assert_eq!(schemas.post_tool_use_command_input["type"], "object");
         assert_eq!(schemas.post_tool_use_command_output["type"], "object");
+        assert_eq!(schemas.permission_request_command_input["type"], "object");
+        assert_eq!(schemas.permission_request_command_output["type"], "object");
         assert_eq!(schemas.pre_tool_use_command_input["type"], "object");
         assert_eq!(schemas.pre_tool_use_command_output["type"], "object");
         assert_eq!(schemas.session_start_command_input["type"], "object");

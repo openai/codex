@@ -6,7 +6,7 @@ import type { GuardianRiskLevel } from "./GuardianRiskLevel";
 import type { GuardianUserAuthorization } from "./GuardianUserAuthorization";
 
 /**
- * [UNSTABLE] Temporary guardian approval review payload used by
+ * [UNSTABLE] Temporary approval auto-review payload used by
  * `item/autoApprovalReview/*` notifications. This shape is expected to change
  * soon.
  */

@@ -1,6 +1,6 @@
-use crate::codex::PreviousTurnSettings;
-use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
+use crate::session::PreviousTurnSettings;
+use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
 use codex_features::Feature;

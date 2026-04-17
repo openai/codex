@@ -296,6 +296,123 @@ async fn import_home_skips_empty_config_migration() {
 }
 
 #[tokio::test]
+async fn import_local_plugins_returns_completed_status() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    let marketplace_root = external_agent_home.join("my-marketplace");
+    let plugin_root = marketplace_root.join("plugins").join("cloudflare");
+    fs::create_dir_all(marketplace_root.join(".claude-plugin"))
+        .expect("create marketplace manifest dir");
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
+    fs::create_dir_all(&codex_home).expect("create codex home");
+
+    fs::write(
+        external_agent_home.join("settings.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "enabledPlugins": {
+                "cloudflare@my-plugins": true
+            },
+            "extraKnownMarketplaces": {
+                "my-plugins": {
+                    "source": "local",
+                    "path": marketplace_root
+                }
+            }
+        }))
+        .expect("serialize settings"),
+    )
+    .expect("write settings");
+    fs::write(
+        marketplace_root
+            .join(".claude-plugin")
+            .join("marketplace.json"),
+        r#"{
+          "name": "my-plugins",
+          "plugins": [
+            {
+              "name": "cloudflare",
+              "source": "./plugins/cloudflare"
+            }
+          ]
+        }"#,
+    )
+    .expect("write marketplace manifest");
+    fs::write(
+        plugin_root.join(".codex-plugin").join("plugin.json"),
+        r#"{"name":"cloudflare","version":"0.1.0"}"#,
+    )
+    .expect("write plugin manifest");
+
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: String::new(),
+            cwd: None,
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "my-plugins".to_string(),
+                    plugin_names: vec!["cloudflare".to_string()],
+                }],
+            }),
+        }])
+        .await
+        .expect("import");
+
+    assert_eq!(outcome, Vec::<PendingPluginImport>::new());
+    let config = fs::read_to_string(codex_home.join("config.toml")).expect("read config");
+    assert!(config.contains(r#"[plugins."cloudflare@my-plugins"]"#));
+    assert!(config.contains("enabled = true"));
+}
+
+#[tokio::test]
+async fn import_git_plugins_returns_pending_async_status() {
+    let (_root, external_agent_home, codex_home) = fixture_paths();
+    fs::create_dir_all(&external_agent_home).expect("create external agent home");
+    fs::write(
+        external_agent_home.join("settings.json"),
+        r#"{
+          "enabledPlugins": {
+            "formatter@acme-tools": true
+          },
+          "extraKnownMarketplaces": {
+            "acme-tools": {
+              "source": "owner/debug-marketplace"
+            }
+          }
+        }"#,
+    )
+    .expect("write settings");
+
+    let outcome = service_for_paths(external_agent_home, codex_home.clone())
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Plugins,
+            description: String::new(),
+            cwd: None,
+            details: Some(MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["formatter".to_string()],
+                }],
+            }),
+        }])
+        .await
+        .expect("import");
+
+    assert_eq!(
+        outcome,
+        vec![PendingPluginImport {
+            cwd: None,
+            details: MigrationDetails {
+                plugins: vec![PluginsMigration {
+                    marketplace_name: "acme-tools".to_string(),
+                    plugin_names: vec!["formatter".to_string()],
+                }],
+            },
+        }]
+    );
+    assert!(!codex_home.join("config.toml").exists());
+}
+
+#[tokio::test]
 async fn detect_home_skips_config_when_target_already_has_supported_fields() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     fs::create_dir_all(&external_agent_home).expect("create external agent home");
