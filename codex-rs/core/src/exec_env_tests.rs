@@ -171,9 +171,18 @@ fn test_inherit_all_with_default_excludes() {
 #[cfg(target_os = "windows")]
 fn test_core_inherit_respects_case_insensitive_names_on_windows() {
     let vars = make_vars(&[
+        ("AppData", "C:\\Users\\coder\\AppData\\Roaming"),
+        ("ComSpec", "C:\\Windows\\System32\\cmd.exe"),
+        ("HomeDrive", "C:"),
+        ("HomePath", "\\Users\\coder"),
+        ("LocalAppData", "C:\\Users\\coder\\AppData\\Local"),
         ("Path", "C:\\Windows\\System32"),
         ("PathExt", ".COM;.EXE;.BAT;.CMD"),
+        ("ProgramFiles", "C:\\Program Files"),
+        ("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+        ("SystemRoot", "C:\\Windows"),
         ("TEMP", "C:\\Temp"),
+        ("UserProfile", "C:\\Users\\coder"),
         ("FOO", "bar"),
     ]);
 
@@ -186,11 +195,68 @@ fn test_core_inherit_respects_case_insensitive_names_on_windows() {
     let thread_id = ThreadId::new();
     let result = populate_env(vars, &policy, Some(thread_id));
     let mut expected: HashMap<String, String> = hashmap! {
+        "AppData".to_string() => "C:\\Users\\coder\\AppData\\Roaming".to_string(),
+        "ComSpec".to_string() => "C:\\Windows\\System32\\cmd.exe".to_string(),
+        "HomeDrive".to_string() => "C:".to_string(),
+        "HomePath".to_string() => "\\Users\\coder".to_string(),
+        "LocalAppData".to_string() => "C:\\Users\\coder\\AppData\\Local".to_string(),
         "Path".to_string() => "C:\\Windows\\System32".to_string(),
         "PathExt".to_string() => ".COM;.EXE;.BAT;.CMD".to_string(),
+        "ProgramFiles".to_string() => "C:\\Program Files".to_string(),
+        "ProgramFiles(x86)".to_string() => "C:\\Program Files (x86)".to_string(),
+        "SystemRoot".to_string() => "C:\\Windows".to_string(),
         "TEMP".to_string() => "C:\\Temp".to_string(),
+        "UserProfile".to_string() => "C:\\Users\\coder".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn test_core_inherit_keeps_windows_profile_and_system_env() {
+    let vars = make_vars(&[
+        ("APPDATA", "C:\\Users\\coder\\AppData\\Roaming"),
+        ("ComSpec", "C:\\Windows\\System32\\cmd.exe"),
+        ("HOME", "C:\\Users\\coder"),
+        ("HOMEDRIVE", "C:"),
+        ("HOMEPATH", "\\Users\\coder"),
+        ("LOCALAPPDATA", "C:\\Users\\coder\\AppData\\Local"),
+        ("ProgramData", "C:\\ProgramData"),
+        ("ProgramFiles", "C:\\Program Files"),
+        ("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+        ("ProgramW6432", "C:\\Program Files"),
+        ("SystemRoot", "C:\\Windows"),
+        ("USERNAME", "coder"),
+        ("USERPROFILE", "C:\\Users\\coder"),
+        ("windir", "C:\\Windows"),
+    ]);
+
+    let policy = ShellEnvironmentPolicy {
+        inherit: ShellEnvironmentPolicyInherit::Core,
+        ignore_default_excludes: true,
+        ..Default::default()
+    };
+
+    let result = populate_env(vars, &policy, None);
+
+    let expected: HashMap<String, String> = hashmap! {
+        "APPDATA".to_string() => "C:\\Users\\coder\\AppData\\Roaming".to_string(),
+        "ComSpec".to_string() => "C:\\Windows\\System32\\cmd.exe".to_string(),
+        "HOME".to_string() => "C:\\Users\\coder".to_string(),
+        "HOMEDRIVE".to_string() => "C:".to_string(),
+        "HOMEPATH".to_string() => "\\Users\\coder".to_string(),
+        "LOCALAPPDATA".to_string() => "C:\\Users\\coder\\AppData\\Local".to_string(),
+        "ProgramData".to_string() => "C:\\ProgramData".to_string(),
+        "ProgramFiles".to_string() => "C:\\Program Files".to_string(),
+        "ProgramFiles(x86)".to_string() => "C:\\Program Files (x86)".to_string(),
+        "ProgramW6432".to_string() => "C:\\Program Files".to_string(),
+        "SystemRoot".to_string() => "C:\\Windows".to_string(),
+        "USERNAME".to_string() => "coder".to_string(),
+        "USERPROFILE".to_string() => "C:\\Users\\coder".to_string(),
+        "windir".to_string() => "C:\\Windows".to_string(),
+    };
 
     assert_eq!(result, expected);
 }
