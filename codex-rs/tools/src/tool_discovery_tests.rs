@@ -70,69 +70,100 @@ fn create_tool_search_tool_deduplicates_and_renders_enabled_sources() {
 
 #[test]
 fn create_tool_suggest_tool_uses_plugin_summary_fallback() {
+    let tool = create_tool_suggest_tool(&[
+        ToolSuggestEntry {
+            id: "slack@openai-curated".to_string(),
+            name: "Slack".to_string(),
+            description: None,
+            tool_type: DiscoverableToolType::Connector,
+            has_skills: false,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        },
+        ToolSuggestEntry {
+            id: "github".to_string(),
+            name: "GitHub".to_string(),
+            description: None,
+            tool_type: DiscoverableToolType::Plugin,
+            has_skills: true,
+            mcp_server_names: vec!["github-mcp".to_string()],
+            app_connector_ids: vec!["github-app".to_string()],
+        },
+    ]);
+    let ToolSpec::Function(ResponsesApiTool {
+        name,
+        description,
+        strict,
+        defer_loading,
+        parameters,
+        output_schema,
+    }) = tool
+    else {
+        panic!("expected function tool");
+    };
+
+    assert_eq!(name, "tool_suggest");
+    assert!(!strict);
+    assert_eq!(defer_loading, None);
+    assert_eq!(output_schema, None);
+    assert!(
+        description.contains(
+            "You've already tried to find a matching available tool for the user's request"
+        )
+    );
+    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains("There are two types of allowed suggestions:"));
+    assert!(description.contains("tool_type = \"plugin\", action_type = \"install\""));
+    assert!(description.contains("tool_type = \"connector\", action_type = \"install\""));
+    assert!(
+        description.contains("- GitHub (id: `github`, type: plugin, action: install): skills; MCP servers: github-mcp; app connectors: github-app")
+    );
+    assert!(
+        description.contains("- Slack (id: `slack@openai-curated`, type: connector, action: install): No description provided.")
+    );
+    assert!(description.contains("placeholders like `placeholder`"));
+
     assert_eq!(
-        create_tool_suggest_tool(&[
-            ToolSuggestEntry {
-                id: "slack@openai-curated".to_string(),
-                name: "Slack".to_string(),
-                description: None,
-                tool_type: DiscoverableToolType::Connector,
-                has_skills: false,
-                mcp_server_names: Vec::new(),
-                app_connector_ids: Vec::new(),
-            },
-            ToolSuggestEntry {
-                id: "github".to_string(),
-                name: "GitHub".to_string(),
-                description: None,
-                tool_type: DiscoverableToolType::Plugin,
-                has_skills: true,
-                mcp_server_names: vec!["github-mcp".to_string()],
-                app_connector_ids: vec!["github-app".to_string()],
-            },
-        ]),
-        ToolSpec::Function(ResponsesApiTool {
-            name: "tool_suggest".to_string(),
-            description: "# Tool suggestion discovery\n\nSuggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin, when the user clearly wants a tool that is listed below in the discoverable tools but is not already available to you and cannot be found through tool search.\n\nThere are two types of allowed suggestions:\n1. Suggest a plugin needed in the context that explicitly and unambiguously fits the user intent but is not installed, tool_type = \"plugin\", action_type = \"install\"\n2. Suggest a connector needed in the context but not installed (even when its plugin is installed), tool_type = \"connector\", action_type = \"install\"\n\nTool suggestions should only use the discoverable tools listed here. DO NOT explore or recommend tools that are not on this list.\n\nDiscoverable tools:\n- GitHub (id: `github`, type: plugin, action: install): skills; MCP servers: github-mcp; app connectors: github-app\n- Slack (id: `slack@openai-curated`, type: connector, action: install): No description provided.\n\nWorkflow:\n\n1. Ensure all possible means have been exhausted to find an existing available tool but none of them matches the request intent. If tool search is available, tool search should happen before tool suggestion.\n2. If no available or searchable tool is found, match the user's intent against the discoverable tools list above. Decide if any of the discoverable tools match the user intent explicitly and unambiguously. Suggest a tool only when it qualifies all the conditions.\n3. If suggestion happened and the flow completed:\n   - if the user finished the install or enable flow, continue by searching again or using the newly available tool\n   - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks for it.".to_string(),
-            strict: false,
-            defer_loading: None,
-            parameters: JsonSchema::object(BTreeMap::from([
-                    (
-                        "action_type".to_string(),
-                        JsonSchema::string(Some(
-                                "Suggested action for the tool. Use \"install\" or \"enable\"."
-                                    .to_string(),
-                            ),),
-                    ),
-                    (
-                        "suggest_reason".to_string(),
-                        JsonSchema::string(Some(
-                                "Concise one-line user-facing reason why this tool can help with the current request, must not be empty and must not be a placeholder."
-                                    .to_string(),
-                            ),),
-                    ),
-                    (
-                        "tool_id".to_string(),
-                        JsonSchema::string(Some(
-                                "Connector or plugin id to suggest. Must be one of the discoverable tool ids."
-                                    .to_string(),
-                            ),),
-                    ),
-                    (
-                        "tool_type".to_string(),
-                        JsonSchema::string(Some(
-                                "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
-                                    .to_string(),
-                            ),),
-                    ),
-                ]), Some(vec![
-                    "tool_type".to_string(),
+        parameters,
+        JsonSchema::object(
+            BTreeMap::from([
+                (
                     "action_type".to_string(),
-                    "tool_id".to_string(),
+                    JsonSchema::string(Some(
+                        "Suggested action for the tool. Use \"install\" or \"enable\"."
+                            .to_string(),
+                    )),
+                ),
+                (
                     "suggest_reason".to_string(),
-                ]), Some(false.into())),
-            output_schema: None,
-        })
+                    JsonSchema::string(Some(
+                        "Concise one-line user-facing reason why this tool can help with the current request, must not be empty and must not be a placeholder."
+                            .to_string(),
+                    )),
+                ),
+                (
+                    "tool_id".to_string(),
+                    JsonSchema::string(Some(
+                        "Connector or plugin id to suggest. Must be one of the discoverable tool ids."
+                            .to_string(),
+                    )),
+                ),
+                (
+                    "tool_type".to_string(),
+                    JsonSchema::string(Some(
+                        "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
+                            .to_string(),
+                    )),
+                ),
+            ]),
+            Some(vec![
+                "tool_type".to_string(),
+                "action_type".to_string(),
+                "tool_id".to_string(),
+                "suggest_reason".to_string(),
+            ]),
+            Some(false.into()),
+        )
     );
 }
 
