@@ -30,14 +30,20 @@ use crate::local_file_system::current_sandbox_cwd;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
+const FS_HELPER_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP"];
+
 #[derive(Clone, Debug)]
 pub(crate) struct FileSystemSandboxRunner {
     runtime_paths: ExecServerRuntimePaths,
+    helper_env: HashMap<String, String>,
 }
 
 impl FileSystemSandboxRunner {
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
-        Self { runtime_paths }
+        Self {
+            runtime_paths,
+            helper_env: helper_env(),
+        }
     }
 
     pub(crate) async fn run(
@@ -88,7 +94,7 @@ impl FileSystemSandboxRunner {
             program: helper.as_path().as_os_str().to_owned(),
             args: vec![CODEX_FS_HELPER_ARG1.to_string()],
             cwd: cwd.clone(),
-            env: HashMap::new(),
+            env: self.helper_env.clone(),
             additional_permissions: Some(
                 self.helper_permissions(sandbox_context.additional_permissions.as_ref()),
             ),
@@ -205,6 +211,26 @@ fn normalize_top_level_alias(path: AbsolutePathBuf) -> AbsolutePathBuf {
     path
 }
 
+fn helper_env() -> HashMap<String, String> {
+    helper_env_from_vars(std::env::vars_os())
+}
+
+fn helper_env_from_vars(
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> HashMap<String, String> {
+    vars.into_iter()
+        .filter_map(|(key, value)| {
+            let key = key.to_string_lossy();
+            helper_env_key_is_allowed(&key)
+                .then(|| (key.into_owned(), value.to_string_lossy().into_owned()))
+        })
+        .collect()
+}
+
+fn helper_env_key_is_allowed(key: &str) -> bool {
+    FS_HELPER_ENV_ALLOWLIST.contains(&key) || (cfg!(windows) && key.eq_ignore_ascii_case("PATH"))
+}
+
 async fn run_command(
     command: SandboxExecRequest,
     request_json: Vec<u8>,
@@ -296,9 +322,14 @@ fn json_error(err: serde_json::Error) -> JSONRPCErrorError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -307,6 +338,9 @@ mod tests {
     use crate::ExecServerRuntimePaths;
 
     use super::FileSystemSandboxRunner;
+    use super::helper_env;
+    use super::helper_env_from_vars;
+    use super::helper_env_key_is_allowed;
     use super::sandbox_policy_with_helper_runtime_defaults;
 
     #[test]
@@ -397,6 +431,99 @@ mod tests {
         assert_eq!(permissions.network, None);
         assert_eq!(write, Some(vec![writable]));
         assert_eq!(read, Some(vec![readable]));
+    }
+
+    #[test]
+    fn helper_env_carries_only_allowlisted_runtime_vars() {
+        let env = helper_env();
+
+        let expected = std::env::vars_os()
+            .filter_map(|(key, value)| {
+                let key = key.to_string_lossy();
+                helper_env_key_is_allowed(&key)
+                    .then(|| (key.into_owned(), value.to_string_lossy().into_owned()))
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(env, expected);
+    }
+
+    #[test]
+    fn helper_env_preserves_path_for_system_bwrap_discovery_without_leaking_secrets() {
+        let env = helper_env_from_vars(
+            [
+                ("PATH", "/usr/bin:/bin"),
+                ("TMPDIR", "/tmp/codex"),
+                ("TMP", "/tmp"),
+                ("TEMP", "/tmp"),
+                ("HOME", "/home/user"),
+                ("OPENAI_API_KEY", "secret"),
+                ("HTTPS_PROXY", "http://proxy.example"),
+            ]
+            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
+
+        assert_eq!(
+            env,
+            HashMap::from([
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("TMPDIR".to_string(), "/tmp/codex".to_string()),
+                ("TMP".to_string(), "/tmp".to_string()),
+                ("TEMP".to_string(), "/tmp".to_string()),
+            ])
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn helper_env_preserves_windows_path_key_for_system_bwrap_discovery() {
+        let env = helper_env_from_vars(
+            [
+                ("Path", r"C:\Windows\System32"),
+                ("PATH_INJECTION", "bad"),
+                ("OPENAI_API_KEY", "secret"),
+            ]
+            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
+
+        assert_eq!(
+            env,
+            HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())])
+        );
+    }
+
+    #[test]
+    fn sandbox_exec_request_carries_helper_env() {
+        let Some((path_key, path)) = std::env::vars_os().find(|(key, _)| {
+            let key = key.to_string_lossy();
+            key == "PATH" || (cfg!(windows) && key.eq_ignore_ascii_case("PATH"))
+        }) else {
+            return;
+        };
+        let path_key = path_key.to_string_lossy().into_owned();
+        let path = path.to_string_lossy().into_owned();
+        let codex_self_exe = std::env::current_exe().expect("current exe");
+        let runtime_paths =
+            ExecServerRuntimePaths::new(codex_self_exe.clone(), Some(codex_self_exe))
+                .expect("runtime paths");
+        let runner = FileSystemSandboxRunner::new(runtime_paths);
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        let file_system_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path());
+        let sandbox_context = crate::FileSystemSandboxContext::new(sandbox_policy.clone());
+
+        let request = runner
+            .sandbox_exec_request(
+                &sandbox_policy,
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+                &cwd,
+                &sandbox_context,
+            )
+            .expect("sandbox exec request");
+
+        assert_eq!(request.env.get(&path_key), Some(&path));
     }
 
     #[test]

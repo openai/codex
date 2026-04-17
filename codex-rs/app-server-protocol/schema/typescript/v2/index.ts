@@ -245,6 +245,7 @@ export type { PluginUninstallParams } from "./PluginUninstallParams";
 export type { PluginUninstallResponse } from "./PluginUninstallResponse";
 export type { PluginsMigration } from "./PluginsMigration";
 export type { ProfileV2 } from "./ProfileV2";
+export type { RateLimitReachedType } from "./RateLimitReachedType";
 export type { RateLimitSnapshot } from "./RateLimitSnapshot";
 export type { RateLimitWindow } from "./RateLimitWindow";
 export type { RawResponseItemCompletedNotification } from "./RawResponseItemCompletedNotification";

@@ -74,6 +74,7 @@ use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
@@ -6625,6 +6626,7 @@ pub struct RateLimitSnapshot {
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
     pub plan_type: Option<PlanType>,
+    pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }
 
 impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
@@ -6636,6 +6638,60 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
             plan_type: value.plan_type,
+            rate_limit_reached_type: value
+                .rate_limit_reached_type
+                .map(RateLimitReachedType::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum RateLimitReachedType {
+    RateLimitReached,
+    WorkspaceOwnerCreditsDepleted,
+    WorkspaceMemberCreditsDepleted,
+    WorkspaceOwnerUsageLimitReached,
+    WorkspaceMemberUsageLimitReached,
+}
+
+impl From<CoreRateLimitReachedType> for RateLimitReachedType {
+    fn from(value: CoreRateLimitReachedType) -> Self {
+        match value {
+            CoreRateLimitReachedType::RateLimitReached => Self::RateLimitReached,
+            CoreRateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
+                Self::WorkspaceOwnerCreditsDepleted
+            }
+            CoreRateLimitReachedType::WorkspaceMemberCreditsDepleted => {
+                Self::WorkspaceMemberCreditsDepleted
+            }
+            CoreRateLimitReachedType::WorkspaceOwnerUsageLimitReached => {
+                Self::WorkspaceOwnerUsageLimitReached
+            }
+            CoreRateLimitReachedType::WorkspaceMemberUsageLimitReached => {
+                Self::WorkspaceMemberUsageLimitReached
+            }
+        }
+    }
+}
+
+impl From<RateLimitReachedType> for CoreRateLimitReachedType {
+    fn from(value: RateLimitReachedType) -> Self {
+        match value {
+            RateLimitReachedType::RateLimitReached => Self::RateLimitReached,
+            RateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
+                Self::WorkspaceOwnerCreditsDepleted
+            }
+            RateLimitReachedType::WorkspaceMemberCreditsDepleted => {
+                Self::WorkspaceMemberCreditsDepleted
+            }
+            RateLimitReachedType::WorkspaceOwnerUsageLimitReached => {
+                Self::WorkspaceOwnerUsageLimitReached
+            }
+            RateLimitReachedType::WorkspaceMemberUsageLimitReached => {
+                Self::WorkspaceMemberUsageLimitReached
+            }
         }
     }
 }
