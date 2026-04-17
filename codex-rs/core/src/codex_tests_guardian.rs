@@ -16,6 +16,7 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
+use codex_model_provider::create_model_provider;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -101,7 +102,10 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
     ));
     session.services.models_manager = models_manager;
     turn_context_raw.config = Arc::clone(&config);
-    turn_context_raw.provider = config.model_provider.clone();
+    turn_context_raw.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context_raw.auth_manager.clone(),
+    );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
     let expiration_ms: u64 = if cfg!(windows) { 2_500 } else { 1_000 };

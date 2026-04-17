@@ -1,4 +1,6 @@
 use super::*;
+use codex_model_provider::SharedModelProvider;
+use codex_model_provider::create_model_provider;
 
 pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
     matches!(
@@ -32,7 +34,7 @@ pub(crate) struct TurnContext {
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
     pub(crate) session_telemetry: SessionTelemetry,
-    pub(crate) provider: ModelProviderInfo,
+    pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
@@ -356,8 +358,8 @@ impl Session {
         let session_source = session_configuration.session_source.clone();
         let image_generation_tool_auth_allowed =
             image_generation_tool_auth_allowed(auth_manager.as_deref());
-        let auth_manager_for_context = auth_manager;
-        let provider_for_context = provider;
+        let auth_manager_for_context = auth_manager.clone();
+        let provider_for_context = create_model_provider(provider, auth_manager);
         let session_telemetry_for_context = session_telemetry;
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,

@@ -794,7 +794,7 @@ async fn run_auto_compact(
     reason: CompactionReason,
     phase: CompactionPhase,
 ) -> CodexResult<()> {
-    if should_use_remote_compact_task(&turn_context.provider) {
+    if should_use_remote_compact_task(turn_context.provider.info()) {
         run_inline_remote_auto_compact_task(
             Arc::clone(sess),
             Arc::clone(turn_context),
@@ -1075,7 +1075,7 @@ async fn run_sampling_request(
         }
 
         // Use the configured provider-specific stream retry budget.
-        let max_retries = turn_context.provider.stream_max_retries();
+        let max_retries = turn_context.provider.info().stream_max_retries();
         if retries >= max_retries
             && client_session.try_switch_fallback_transport(
                 &turn_context.session_telemetry,
