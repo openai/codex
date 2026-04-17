@@ -57,6 +57,7 @@ fn model_context_window_override_wins_over_max_context_window() {
     let updated = with_config_overrides(model.clone(), &config);
     let mut expected = model;
     expected.context_window = Some(500_000);
+    expected.max_context_window = Some(500_000);
 
     assert_eq!(updated, expected);
 }
