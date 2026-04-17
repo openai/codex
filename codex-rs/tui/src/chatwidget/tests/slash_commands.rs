@@ -267,6 +267,7 @@ async fn slash_copy_state_tracks_turn_complete_final_reply() {
             last_agent_message: Some("Final reply **markdown**".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -299,6 +300,7 @@ async fn slash_copy_state_tracks_plan_item_completion() {
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
 
@@ -385,6 +387,7 @@ async fn slash_copy_state_is_preserved_during_running_task() {
             last_agent_message: Some("Previous completed reply".to_string()),
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     chat.on_task_started();
@@ -415,6 +418,7 @@ async fn slash_copy_tracks_replayed_legacy_agent_message_when_turn_complete_omit
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -452,6 +456,7 @@ async fn slash_copy_uses_agent_message_item_when_turn_complete_omits_final_text(
             last_agent_message: None,
             completed_at: None,
             duration_ms: None,
+            time_to_first_token_ms: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);

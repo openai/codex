@@ -279,6 +279,7 @@ async fn on_event_updates_status_from_task_complete() {
         last_agent_message: Some("done".to_string()),
         completed_at: None,
         duration_ms: None,
+        time_to_first_token_ms: None,
     }));
     let expected = AgentStatus::Completed(Some("done".to_string()));
     assert_eq!(status, Some(expected));
@@ -1229,6 +1230,7 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
                 last_agent_message: Some("done".to_string()),
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             }),
         )
         .await;
@@ -1315,6 +1317,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
                 last_agent_message: Some("done".to_string()),
                 completed_at: None,
                 duration_ms: None,
+                time_to_first_token_ms: None,
             }),
         )
         .await;
