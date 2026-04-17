@@ -39,6 +39,7 @@ pub use codex_core_skills::manager;
 pub use codex_core_skills::model;
 pub use codex_core_skills::remote;
 pub use codex_core_skills::render;
+pub use codex_core_skills::render::SkillRenderSideEffects;
 pub use codex_core_skills::render_skills_section;
 pub use codex_core_skills::system;
 

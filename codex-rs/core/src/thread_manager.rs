@@ -926,9 +926,7 @@ impl ThreadManagerState {
             Some(_) | None => crate::file_watcher::WatchRegistration::default(),
         };
         let CodexSpawnOk {
-            codex,
-            thread_id,
-            ..
+            codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
             config,
             auth_manager,

@@ -1,8 +1,14 @@
 use crate::model::SkillMetadata;
+use codex_otel::SessionTelemetry;
+use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_output_truncation::approx_token_count;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 pub const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
 pub const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
@@ -35,10 +41,20 @@ pub struct SkillRenderReport {
     pub omitted_count: usize,
 }
 
+#[derive(Clone, Copy)]
+pub enum SkillRenderSideEffects<'a> {
+    None,
+    ThreadStart {
+        session_telemetry: &'a SessionTelemetry,
+        reported: &'a AtomicBool,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedSkillsSection {
     pub text: String,
     pub report: SkillRenderReport,
+    pub emit_warning: bool,
 }
 
 pub fn default_skill_metadata_budget(context_window: Option<i64>) -> SkillMetadataBudget {
@@ -61,12 +77,20 @@ pub fn default_skill_metadata_budget(context_window: Option<i64>) -> SkillMetada
 pub fn render_skills_section(
     skills: &[SkillMetadata],
     budget: SkillMetadataBudget,
+    side_effects: SkillRenderSideEffects<'_>,
 ) -> Option<RenderedSkillsSection> {
     if skills.is_empty() {
+        let _ = record_skill_render_side_effects(side_effects, 0, 0, false);
         return None;
     }
 
     let (skill_lines, report) = render_skill_lines(skills, budget);
+    let emit_warning = record_skill_render_side_effects(
+        side_effects,
+        report.total_count,
+        report.included_count,
+        report.omitted_count > 0,
+    );
     let mut lines: Vec<String> = Vec::new();
     lines.push("## Skills".to_string());
     lines.push("A skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.".to_string());
@@ -101,7 +125,44 @@ pub fn render_skills_section(
     Some(RenderedSkillsSection {
         text: format!("{SKILLS_INSTRUCTIONS_OPEN_TAG}\n{body}\n{SKILLS_INSTRUCTIONS_CLOSE_TAG}"),
         report,
+        emit_warning,
     })
+}
+
+fn record_skill_render_side_effects(
+    side_effects: SkillRenderSideEffects<'_>,
+    total_count: usize,
+    included_count: usize,
+    truncated: bool,
+) -> bool {
+    match side_effects {
+        SkillRenderSideEffects::None => false,
+        SkillRenderSideEffects::ThreadStart {
+            session_telemetry,
+            reported,
+        } => {
+            if reported.swap(true, Ordering::Relaxed) {
+                return false;
+            }
+
+            session_telemetry.histogram(
+                THREAD_SKILLS_ENABLED_TOTAL_METRIC,
+                i64::try_from(total_count).unwrap_or(i64::MAX),
+                &[],
+            );
+            session_telemetry.histogram(
+                THREAD_SKILLS_KEPT_TOTAL_METRIC,
+                i64::try_from(included_count).unwrap_or(i64::MAX),
+                &[],
+            );
+            session_telemetry.histogram(
+                THREAD_SKILLS_TRUNCATED_METRIC,
+                if truncated { 1 } else { 0 },
+                &[],
+            );
+            truncated
+        }
+    }
 }
 
 fn render_skill_lines(
@@ -218,11 +279,16 @@ mod tests {
             .cost(&format!("{}\n", render_skill_line(&admin)));
         let budget = SkillMetadataBudget::Characters(system_cost + admin_cost);
 
-        let rendered = render_skills_section(&[system, user, repo, admin], budget)
-            .expect("skills should render");
+        let rendered = render_skills_section(
+            &[system, user, repo, admin],
+            budget,
+            SkillRenderSideEffects::None,
+        )
+        .expect("skills should render");
 
         assert_eq!(rendered.report.included_count, 2);
         assert_eq!(rendered.report.omitted_count, 2);
+        assert!(!rendered.emit_warning);
         assert!(rendered.text.contains("- system-skill:"));
         assert!(rendered.text.contains("- admin-skill:"));
         assert!(!rendered.text.contains("- repo-skill:"));
@@ -238,10 +304,13 @@ mod tests {
             .cost(&format!("{}\n", render_skill_line(&repo)));
         let budget = SkillMetadataBudget::Characters(repo_cost);
 
-        let rendered = render_skills_section(&[oversized, repo], budget).expect("skills render");
+        let rendered =
+            render_skills_section(&[oversized, repo], budget, SkillRenderSideEffects::None)
+                .expect("skills render");
 
         assert_eq!(rendered.report.included_count, 1);
         assert_eq!(rendered.report.omitted_count, 1);
+        assert!(!rendered.emit_warning);
         assert!(!rendered.text.contains("- oversized-system-skill:"));
         assert!(rendered.text.contains("- repo-skill:"));
     }

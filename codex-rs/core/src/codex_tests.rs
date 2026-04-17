@@ -13,6 +13,8 @@ use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_exposure::DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD;
 use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::shell::default_user_shell;
+use crate::skills::SkillRenderSideEffects;
+use crate::skills::render::SkillMetadataBudget;
 use crate::tools::format_exec_output_str;
 
 use codex_features::Features;
@@ -134,6 +136,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration as StdDuration;
 
 #[path = "codex_tests_guardian.rs"]
@@ -3261,6 +3264,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
+        thread_start_skill_reported: AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -4224,6 +4228,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
+        thread_start_skill_reported: AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     });
 
@@ -4673,8 +4678,8 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     assert!(
         developer_texts
             .iter()
-            .any(|text| text.contains("Skills list trimmed to fit the metadata budget")),
-        "expected skill budget warning in initial context, got {developer_texts:?}"
+            .all(|text| !text.contains(THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE)),
+        "expected skill budget warning to stay out of the initial context, got {developer_texts:?}"
     );
     assert!(
         developer_texts
@@ -4687,55 +4692,66 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
+    let reported = AtomicBool::new(false);
 
-    emit_thread_start_skill_metrics(&session_telemetry, Some((30, 12, true)));
+    let rendered = render_skills_section(
+        &[SkillMetadata {
+            name: "repo-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: PathBuf::from("/tmp/repo-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        }],
+        SkillMetadataBudget::Characters(1),
+        SkillRenderSideEffects::ThreadStart {
+            session_telemetry: &session_telemetry,
+            reported: &reported,
+        },
+    )
+    .expect("skills should render");
 
+    assert!(rendered.emit_warning);
     let snapshot = session_telemetry
         .snapshot_metrics()
         .expect("runtime metrics snapshot");
     assert_eq!(
         histogram_sum(&snapshot, THREAD_SKILLS_ENABLED_TOTAL_METRIC),
-        30
+        1
     );
-    assert_eq!(
-        histogram_sum(&snapshot, THREAD_SKILLS_KEPT_TOTAL_METRIC),
-        12
-    );
+    assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_KEPT_TOTAL_METRIC), 0);
     assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_TRUNCATED_METRIC), 1);
 }
 
 #[tokio::test]
 async fn build_initial_context_emits_thread_start_skill_warning_once() {
-    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
-    let outcome = SkillLoadOutcome {
-        explicit_invocation_only: vec![],
-        allowlisted: vec![],
-        denylisted: vec![],
-        activated: vec![
-            SkillMetadata {
-                name: "admin-skill".to_string(),
-                description: "desc".to_string(),
-                short_description: None,
-                interface: None,
-                dependencies: None,
-                policy: None,
-                path_to_skills_md: PathBuf::from("/tmp/admin-skill/SKILL.md").abs(),
-                scope: SkillScope::Admin,
-            },
-            SkillMetadata {
-                name: "repo-skill".to_string(),
-                description: "desc".to_string(),
-                short_description: None,
-                interface: None,
-                dependencies: None,
-                policy: None,
-                path_to_skills_md: PathBuf::from("/tmp/repo-skill/SKILL.md").abs(),
-                scope: SkillScope::Repo,
-            },
-        ],
-        unactivated: vec![],
-        invalid: vec![],
-    };
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let mut turn_context = Arc::into_inner(turn_context).expect("sole turn context owner");
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "admin-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: PathBuf::from("/tmp/admin-skill/SKILL.md").abs(),
+            scope: SkillScope::Admin,
+        },
+        SkillMetadata {
+            name: "repo-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: PathBuf::from("/tmp/repo-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+    ];
     turn_context.model_info.context_window = Some(100);
     turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
 

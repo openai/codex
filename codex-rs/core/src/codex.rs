@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -31,6 +30,7 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::render_skills_section;
 use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
+use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use async_channel::Receiver;
@@ -287,9 +287,6 @@ use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
-use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
-use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
-use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
@@ -402,20 +399,6 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
-
-fn emit_thread_start_skill_metrics(
-    session_telemetry: &SessionTelemetry,
-    skill_counts: Option<(usize, usize, bool)>,
-) {
-    let (enabled_total, kept_total, truncated) = skill_counts.unwrap_or((0, 0, false));
-    let enabled_total = i64::try_from(enabled_total).unwrap_or(i64::MAX);
-    let kept_total = i64::try_from(kept_total).unwrap_or(i64::MAX);
-    let truncated = if truncated { 1 } else { 0 };
-
-    session_telemetry.histogram(THREAD_SKILLS_ENABLED_TOTAL_METRIC, enabled_total, &[]);
-    session_telemetry.histogram(THREAD_SKILLS_KEPT_TOTAL_METRIC, kept_total, &[]);
-    session_telemetry.histogram(THREAD_SKILLS_TRUNCATED_METRIC, truncated, &[]);
-}
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -3997,26 +3980,13 @@ impl Session {
         let rendered_skills = render_skills_section(
             &implicit_skills,
             default_skill_metadata_budget(turn_context.model_info.context_window),
+            SkillRenderSideEffects::ThreadStart {
+                session_telemetry: &self.services.session_telemetry,
+                reported: &self.thread_start_skill_reported,
+            },
         );
-        if !self
-            .thread_start_skill_reported
-            .swap(true, Ordering::Relaxed)
-        {
-            let skill_counts = rendered_skills
-                .as_ref()
-                .map(|rendered| {
-                    (
-                        rendered.report.total_count,
-                        rendered.report.included_count,
-                        rendered.report.omitted_count > 0,
-                    )
-                })
-                .or_else(|| implicit_skills.is_empty().then_some((0, 0, false)));
-            emit_thread_start_skill_metrics(&self.services.session_telemetry, skill_counts);
-            if rendered_skills
-                .as_ref()
-                .is_some_and(|rendered| rendered.report.omitted_count > 0)
-            {
+        if let Some(rendered_skills) = rendered_skills {
+            if rendered_skills.emit_warning {
                 self.send_event_raw(Event {
                     id: String::new(),
                     msg: EventMsg::Warning(WarningEvent {
@@ -4025,8 +3995,6 @@ impl Session {
                 })
                 .await;
             }
-        }
-        if let Some(rendered_skills) = rendered_skills {
             developer_sections.push(rendered_skills.text);
         }
         let loaded_plugins = self
