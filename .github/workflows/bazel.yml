@@ -149,7 +149,6 @@ jobs:
               //codex-rs/exec-server:exec-server-initialize-test
               //codex-rs/exec-server:exec-server-process-test
               //codex-rs/exec-server:exec-server-unit-tests
-              //codex-rs/exec-server:exec-server-unit-tests-bin
               //codex-rs/exec-server:exec-server-websocket-test
               //codex-rs/execpolicy:execpolicy-basic-test
               //codex-rs/execpolicy:execpolicy-unit-tests
@@ -196,7 +195,6 @@ jobs:
               //codex-rs/rmcp-client:rmcp-client-resources-test
               //codex-rs/rmcp-client:rmcp-client-streamable_http_recovery-test
               //codex-rs/rmcp-client:rmcp-client-unit-tests
-              //codex-rs/rmcp-client:rmcp-client-unit-tests-bin
               //codex-rs/rollout:rollout-unit-tests
               //codex-rs/rollout:rollout-unit-tests-bin
               //codex-rs/sandboxing:sandboxing-unit-tests
@@ -247,7 +245,6 @@ jobs:
               //codex-rs/utils/plugins:plugins-unit-tests
               //codex-rs/utils/plugins:plugins-unit-tests-bin
               //codex-rs/utils/pty:pty-unit-tests
-              //codex-rs/utils/pty:pty-unit-tests-bin
               //codex-rs/utils/readiness:readiness-unit-tests
               //codex-rs/utils/readiness:readiness-unit-tests-bin
               //codex-rs/utils/rustls-provider:rustls-provider-unit-tests
