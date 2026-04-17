@@ -40,6 +40,8 @@ use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCreateDirectoryParams;
 use codex_app_server_protocol::FsGetMetadataParams;
@@ -163,6 +165,7 @@ impl ExternalAuth for ExternalAuthRefreshBridge {
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
+    thread_manager: Arc<ThreadManager>,
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
@@ -311,7 +314,7 @@ impl MessageProcessor {
             runtime_feature_enablement,
             loader_overrides,
             cloud_requirements,
-            thread_manager,
+            thread_manager.clone(),
             analytics_events_client.clone(),
         );
         let external_agent_config_api =
@@ -322,6 +325,7 @@ impl MessageProcessor {
         Self {
             outgoing,
             codex_message_processor,
+            thread_manager: Arc::clone(&thread_manager),
             config_api,
             external_agent_config_api,
             fs_api,
@@ -1131,8 +1135,50 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
     ) {
+        let has_plugin_imports = params.migration_items.iter().any(|item| {
+            matches!(
+                item.item_type,
+                ExternalAgentConfigMigrationItemType::Plugins
+            )
+        });
         match self.external_agent_config_api.import(params).await {
-            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Ok(pending_plugin_imports) => {
+                if has_plugin_imports {
+                    self.handle_config_mutation().await;
+                }
+                self.outgoing
+                    .send_response(request_id, ExternalAgentConfigImportResponse {})
+                    .await;
+
+                if !has_plugin_imports {
+                    return;
+                }
+
+                if pending_plugin_imports.is_empty() {
+                    return;
+                }
+
+                let external_agent_config_api = self.external_agent_config_api.clone();
+                let thread_manager = Arc::clone(&self.thread_manager);
+                tokio::spawn(async move {
+                    for pending_plugin_import in pending_plugin_imports {
+                        match external_agent_config_api
+                            .complete_pending_plugin_import(pending_plugin_import)
+                            .await
+                        {
+                            Ok(()) => {}
+                            Err(error) => {
+                                tracing::warn!(
+                                    error = %error.message,
+                                    "external agent config plugin import failed"
+                                );
+                            }
+                        }
+                    }
+                    thread_manager.plugins_manager().clear_cache();
+                    thread_manager.skills_manager().clear_cache();
+                });
+            }
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
     }
