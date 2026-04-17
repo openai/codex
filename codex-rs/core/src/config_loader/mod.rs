@@ -688,7 +688,7 @@ async fn project_trust_context(
     let project_root_key = project_root_lookup_keys
         .first()
         .cloned()
-        .unwrap_or_else(|| normalized_project_trust_key(project_root.as_path()));
+        .unwrap_or_else(|| project_trust_key(project_root.as_path()));
     let repo_root = resolve_root_git_project_for_trust(fs, cwd).await;
     let repo_root_lookup_keys = repo_root
         .as_ref()
@@ -713,7 +713,10 @@ async fn project_trust_context(
     })
 }
 
-fn normalized_project_trust_key(path: &Path) -> String {
+/// Canonicalize the path and convert it to a string to be used as a key in the
+/// projects trust map. On Windows, strips UNC, when possible, to try to ensure
+/// that different paths that point to the same location have the same key.
+pub fn project_trust_key(path: &Path) -> String {
     normalized_project_trust_keys(path)
         .into_iter()
         .next()
@@ -742,13 +745,6 @@ fn normalize_project_trust_lookup_key(key: String) -> String {
         key
     }
 }
-/// Canonicalize the path and convert it to a string to be used as a key in the
-/// projects trust map. On Windows, strips UNC, when possible, to try to ensure
-/// that different paths that point to the same location have the same key.
-pub fn project_trust_key(project_path: &Path) -> String {
-    normalized_project_trust_key(project_path)
-}
-
 fn project_trust_for_lookup_key(
     projects_trust: &std::collections::HashMap<String, TrustLevel>,
     lookup_key: &str,
