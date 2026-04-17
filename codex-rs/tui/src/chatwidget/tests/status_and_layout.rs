@@ -1317,6 +1317,7 @@ async fn session_configured_clears_goal_status_footer() {
             usage: Some("40K / 50K".to_string())
         })
     );
+    chat.budget_limited_turn_ids.insert("turn-1".to_string());
 
     let rollout_file = NamedTempFile::new().unwrap();
     chat.handle_codex_event(Event {
@@ -1342,6 +1343,7 @@ async fn session_configured_clears_goal_status_footer() {
     });
 
     assert_eq!(chat.current_goal_status_indicator, None);
+    assert!(chat.budget_limited_turn_ids.is_empty());
 }
 
 #[test]

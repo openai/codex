@@ -2176,6 +2176,7 @@ impl ChatWidget {
         self.current_goal_status_indicator = None;
         self.current_goal_status = None;
         self.goal_status_active_turn_started_at = None;
+        self.budget_limited_turn_ids.clear();
         self.update_collaboration_mode_indicator();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
