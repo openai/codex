@@ -1058,13 +1058,21 @@ impl ChatComposer {
             stripped.to_string(),
             text_elements
                 .into_iter()
-                .filter_map(|element| Self::shift_text_element(element, -1))
+                .filter_map(|element| Self::shift_text_element(element, /*shift*/ -1))
                 .collect(),
         )
     }
 
     fn current_cursor(&self) -> usize {
         self.textarea.cursor() + if self.shell_command_prefix { 1 } else { 0 }
+    }
+
+    fn history_navigation_cursor(&self) -> usize {
+        if self.shell_command_prefix && self.textarea.cursor() == 0 {
+            0
+        } else {
+            self.current_cursor()
+        }
     }
 
     fn set_current_cursor(&mut self, cursor: usize) {
@@ -2464,6 +2472,7 @@ impl ChatComposer {
         // and accumulate it rather than submitting or inserting immediately.
         // Do not treat as paste inside a slash-command context.
         let in_slash_context = self.slash_commands_enabled()
+            && !self.shell_command_prefix
             && (matches!(self.active_popup, ActivePopup::Command(_))
                 || self
                     .textarea
@@ -2543,7 +2552,7 @@ impl ChatComposer {
     /// Check if the first line is a bare slash command (no args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
-        if !self.slash_commands_enabled() {
+        if !self.slash_commands_enabled() || self.shell_command_prefix {
             return None;
         }
         let first_line = self.textarea.text().lines().next().unwrap_or("");
@@ -2569,7 +2578,7 @@ impl ChatComposer {
     /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_slash_command_with_args(&mut self) -> Option<InputResult> {
-        if !self.slash_commands_enabled() {
+        if !self.slash_commands_enabled() || self.shell_command_prefix {
             return None;
         }
         let text = self.textarea.text().to_string();
@@ -2854,10 +2863,10 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                if self
-                    .history
-                    .should_handle_navigation(&self.current_text(), self.current_cursor())
-                {
+                if self.history.should_handle_navigation(
+                    &self.current_text(),
+                    self.history_navigation_cursor(),
+                ) {
                     let replace_entry = match key_event.code {
                         KeyCode::Up => self.history.navigate_up(&self.app_event_tx),
                         KeyCode::Down => self.history.navigate_down(&self.app_event_tx),
@@ -3248,7 +3257,7 @@ impl ChatComposer {
         let file_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
-            .should_handle_navigation(&self.current_text(), self.current_cursor());
+            .should_handle_navigation(&self.current_text(), self.history_navigation_cursor());
         // When browsing input history (shell-style Up/Down recall), skip all popup
         // synchronization so nothing steals focus from continued history navigation.
         if browsing_history {
@@ -3262,8 +3271,10 @@ impl ChatComposer {
         }
         let mention_token = self.current_mention_token();
 
-        let allow_command_popup =
-            self.slash_commands_enabled() && file_token.is_none() && mention_token.is_none();
+        let allow_command_popup = self.slash_commands_enabled()
+            && !self.shell_command_prefix
+            && file_token.is_none()
+            && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
@@ -3347,6 +3358,9 @@ impl ChatComposer {
     }
 
     fn slash_command_element_range(&self, first_line: &str) -> Option<Range<usize>> {
+        if self.shell_command_prefix {
+            return None;
+        }
         let (name, _rest, _rest_offset) = parse_slash_name(first_line)?;
         if name.contains('/') {
             return None;
@@ -7225,6 +7239,33 @@ mod tests {
     }
 
     #[test]
+    fn bang_prefixed_slash_text_submits_literal_shell_command() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['!', '/', 'd', 'i', 'f', 'f']);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { ref text, .. } if text == "!/diff"
+        ));
+    }
+
+    #[test]
     fn slash_mention_dispatches_command_and_inserts_at() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -7823,6 +7864,42 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert!(composer.textarea.is_empty());
         assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
+    fn history_navigation_from_start_of_bang_command_recalls_older_entry() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+
+        type_chars_humanlike(&mut composer, &['f', 'i', 'r', 's', 't']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        type_chars_humanlike(&mut composer, &['!', 'g', 'i', 't']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.current_text(), "!git");
+
+        composer.textarea.set_cursor(0);
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(composer.current_text(), "first");
     }
 
     #[test]
