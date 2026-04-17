@@ -248,7 +248,7 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
         )?;
         archived_ids.push(archived_notification.thread_id);
     }
-    assert_eq!(archived_ids, vec![grandchild_id, child_id, parent_id]);
+    assert_eq!(archived_ids, vec![parent_id, grandchild_id, child_id]);
 
     for thread_id in [parent_thread_id, child_thread_id, grandchild_thread_id] {
         assert!(
@@ -269,7 +269,7 @@ async fn thread_archive_archives_spawned_descendants() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_archive_notifies_descendants_archived_before_later_failure() -> Result<()> {
+async fn thread_archive_succeeds_when_descendant_archive_fails() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -322,14 +322,14 @@ async fn thread_archive_notifies_descendants_archived_before_later_failure() -> 
         )
         .await?;
 
-    let parent_rollout_path = find_thread_path_by_id_str(codex_home.path(), &parent_id)
+    let child_rollout_path = find_thread_path_by_id_str(codex_home.path(), &child_id)
         .await?
-        .expect("parent rollout path");
-    let archived_parent_path = codex_home
+        .expect("child rollout path");
+    let archived_child_path = codex_home
         .path()
         .join(ARCHIVED_SESSIONS_SUBDIR)
-        .join(parent_rollout_path.file_name().expect("rollout file name"));
-    std::fs::create_dir_all(&archived_parent_path)?;
+        .join(child_rollout_path.file_name().expect("rollout file name"));
+    std::fs::create_dir_all(&archived_child_path)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -339,19 +339,12 @@ async fn thread_archive_notifies_descendants_archived_before_later_failure() -> 
             thread_id: parent_id.clone(),
         })
         .await?;
-    let archive_err: JSONRPCError = timeout(
+    let archive_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(archive_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
     )
     .await??;
-    assert!(
-        archive_err
-            .error
-            .message
-            .contains("failed to archive thread"),
-        "unexpected archive error: {}",
-        archive_err.error.message
-    );
+    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
 
     let mut archived_ids = Vec::new();
     for _ in 0..2 {
@@ -367,7 +360,7 @@ async fn thread_archive_notifies_descendants_archived_before_later_failure() -> 
         )?;
         archived_ids.push(archived_notification.thread_id);
     }
-    assert_eq!(archived_ids, vec![grandchild_id, child_id]);
+    assert_eq!(archived_ids, vec![parent_id, grandchild_id]);
 
     assert!(
         timeout(
@@ -379,14 +372,14 @@ async fn thread_archive_notifies_descendants_archived_before_later_failure() -> 
     );
 
     assert!(
-        parent_rollout_path.exists(),
-        "parent should stay active after archive failure"
+        child_rollout_path.exists(),
+        "child should stay active after descendant archive failure"
     );
     assert!(
-        archived_parent_path.is_dir(),
+        archived_child_path.is_dir(),
         "test conflict should remain in archived sessions"
     );
-    for thread_id in [child_thread_id, grandchild_thread_id] {
+    for thread_id in [parent_thread_id, grandchild_thread_id] {
         assert!(
             find_thread_path_by_id_str(codex_home.path(), &thread_id.to_string())
                 .await?
@@ -405,7 +398,7 @@ async fn thread_archive_notifies_descendants_archived_before_later_failure() -> 
 }
 
 #[tokio::test]
-async fn thread_archive_fails_when_spawned_descendant_is_missing() -> Result<()> {
+async fn thread_archive_succeeds_when_spawned_descendant_is_missing() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -442,31 +435,36 @@ async fn thread_archive_fails_when_spawned_descendant_is_missing() -> Result<()>
             thread_id: parent_id.clone(),
         })
         .await?;
-    let archive_err: JSONRPCError = timeout(
+    let archive_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(archive_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(archive_id)),
     )
     .await??;
-    assert!(
-        archive_err
-            .error
-            .message
-            .contains("no rollout found for thread id"),
-        "unexpected archive error: {}",
-        archive_err.error.message
-    );
+    let _: ThreadArchiveResponse = to_response::<ThreadArchiveResponse>(archive_resp)?;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/archived"),
+    )
+    .await??;
+    let archived_notification: ThreadArchivedNotification = serde_json::from_value(
+        notification
+            .params
+            .expect("thread/archived notification params"),
+    )?;
+    assert_eq!(archived_notification.thread_id, parent_id);
 
     assert!(
         find_thread_path_by_id_str(codex_home.path(), &parent_id)
             .await?
-            .is_some(),
-        "parent should not be archived when a descendant is missing"
+            .is_none(),
+        "parent should be archived even when a descendant is missing"
     );
     assert!(
         find_archived_thread_path_by_id_str(codex_home.path(), &parent_id)
             .await?
-            .is_none(),
-        "parent should not be moved into archived sessions"
+            .is_some(),
+        "parent should be moved into archived sessions"
     );
 
     Ok(())
