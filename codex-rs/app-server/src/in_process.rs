@@ -377,6 +377,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 Arc::clone(&outbound_experimental_api_enabled),
                 Arc::clone(&outbound_opted_out_notification_methods),
                 /*disconnect_sender*/ None,
+                /*disconnect_notifier*/ None,
             ),
         );
         let mut outbound_handle = tokio::spawn(async move {

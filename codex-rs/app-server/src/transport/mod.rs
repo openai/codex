@@ -164,12 +164,14 @@ impl OutboundConnectionState {
         experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
         disconnect_sender: Option<CancellationToken>,
+        disconnect_notifier: Option<mpsc::Sender<ConnectionId>>,
     ) -> Self {
         let overflow_depth = Arc::new(AtomicUsize::new(0));
         let overflow_writer = disconnect_sender.as_ref().map(|disconnect_sender| {
             let (overflow_tx, mut overflow_rx) = mpsc::channel(CHANNEL_CAPACITY);
             let writer = writer.clone();
             let disconnect_sender = disconnect_sender.clone();
+            let disconnect_notifier = disconnect_notifier.clone();
             let overflow_depth = Arc::clone(&overflow_depth);
             tokio::spawn(async move {
                 while let Some(queued_message) = overflow_rx.recv().await {
@@ -187,11 +189,22 @@ impl OutboundConnectionState {
                                 OUTBOUND_QUEUE_FULL_GRACE
                             );
                             disconnect_sender.cancel();
+                            // The websocket task will eventually report ConnectionClosed,
+                            // but notify the outbound router now so no newer messages are
+                            // routed after this timed-out one is dropped.
+                            if let Some(disconnect_notifier) = &disconnect_notifier {
+                                let _ = disconnect_notifier.send(connection_id).await;
+                            }
                             break;
                         }
                         Err(mpsc::error::SendTimeoutError::Closed(_)) => {
                             overflow_depth.fetch_sub(1, Ordering::AcqRel);
                             disconnect_sender.cancel();
+                            // Drop outbound routing state promptly even if the transport's
+                            // close event is delayed behind other incoming events.
+                            if let Some(disconnect_notifier) = &disconnect_notifier {
+                                let _ = disconnect_notifier.send(connection_id).await;
+                            }
                             break;
                         }
                     }
@@ -321,7 +334,7 @@ fn should_skip_notification_for_connection(
     }
 }
 
-fn disconnect_connection(
+pub(crate) fn disconnect_connection(
     connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
     connection_id: ConnectionId,
 ) -> bool {
@@ -713,6 +726,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 opted_out_notification_methods,
                 /*disconnect_sender*/ None,
+                /*disconnect_notifier*/ None,
             ),
         );
 
@@ -754,6 +768,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::from(["configWarning".to_string()]))),
                 /*disconnect_sender*/ None,
+                /*disconnect_notifier*/ None,
             ),
         );
 
@@ -795,6 +810,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 /*disconnect_sender*/ None,
+                /*disconnect_notifier*/ None,
             ),
         );
 
@@ -842,6 +858,7 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(RwLock::new(HashSet::new())),
                 /*disconnect_sender*/ None,
+                /*disconnect_notifier*/ None,
             ),
         );
 
@@ -905,6 +922,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 /*disconnect_sender*/ None,
+                /*disconnect_notifier*/ None,
             ),
         );
 
@@ -993,6 +1011,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 Some(disconnect_token.clone()),
+                /*disconnect_notifier*/ None,
             ),
         );
 
@@ -1068,6 +1087,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 Some(disconnect_token.clone()),
+                /*disconnect_notifier*/ None,
             ),
         );
 
@@ -1140,6 +1160,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 Some(disconnect_token.clone()),
+                /*disconnect_notifier*/ None,
             ),
         );
 
@@ -1199,6 +1220,7 @@ mod tests {
     async fn disconnectable_connection_requests_disconnect_after_queue_grace_expires() {
         let connection_id = ConnectionId(2);
         let (writer_tx, mut writer_rx) = mpsc::channel(1);
+        let (disconnect_notifier_tx, mut disconnect_notifier_rx) = mpsc::channel(1);
         let disconnect_token = CancellationToken::new();
 
         writer_tx
@@ -1225,6 +1247,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 Some(disconnect_token.clone()),
+                /*disconnect_notifier*/ Some(disconnect_notifier_tx),
             ),
         );
 
@@ -1246,16 +1269,19 @@ mod tests {
         .await;
 
         assert!(connections.contains_key(&connection_id));
-        timeout(
+        let notified_connection_id = timeout(
             OUTBOUND_QUEUE_FULL_GRACE + Duration::from_millis(100),
-            async {
-                while !disconnect_token.is_cancelled() {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            },
+            disconnect_notifier_rx.recv(),
         )
         .await
-        .expect("full queue should request disconnect after the grace expires");
+        .expect("full queue should notify the router after the grace expires")
+        .expect("disconnect notification should contain a connection id");
+        assert_eq!(notified_connection_id, connection_id);
+        assert!(disconnect_connection(
+            &mut connections,
+            notified_connection_id
+        ));
+        assert!(!connections.contains_key(&connection_id));
         assert!(disconnect_token.is_cancelled());
         let original_message = writer_rx
             .try_recv()
@@ -1296,6 +1322,7 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
                 /*disconnect_sender*/ None,
+                /*disconnect_notifier*/ None,
             ),
         );
 

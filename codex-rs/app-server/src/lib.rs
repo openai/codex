@@ -29,6 +29,7 @@ use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
+use crate::transport::disconnect_connection;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
@@ -594,50 +595,62 @@ pub async fn run_main_with_transport(
 
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
+        // Overflow workers run outside this router task. This side channel lets
+        // them remove a slow connection from routing before the transport loop's
+        // eventual ConnectionClosed event catches up.
+        let (outbound_disconnect_tx, mut outbound_disconnect_rx) =
+            mpsc::channel::<ConnectionId>(CHANNEL_CAPACITY);
         loop {
             tokio::select! {
-                    biased;
-                    event = outbound_control_rx.recv() => {
-                        let Some(event) = event else {
-                            break;
-                        };
-                        match event {
-                            OutboundControlEvent::Opened {
+                biased;
+                event = outbound_control_rx.recv() => {
+                    let Some(event) = event else {
+                        break;
+                    };
+                    match event {
+                        OutboundControlEvent::Opened {
+                            connection_id,
+                            writer,
+                            disconnect_sender,
+                            initialized,
+                            experimental_api_enabled,
+                            opted_out_notification_methods,
+                        } => {
+                            outbound_connections.insert(
                                 connection_id,
-                                writer,
-                                disconnect_sender,
-                                initialized,
-                                experimental_api_enabled,
-                                opted_out_notification_methods,
-                            } => {
-                                outbound_connections.insert(
+                                OutboundConnectionState::new(
                                     connection_id,
-                                    OutboundConnectionState::new(
-                                        connection_id,
-                                        writer,
-                                        initialized,
-                                        experimental_api_enabled,
-                                        opted_out_notification_methods,
-                                        disconnect_sender,
-                                    ),
-                                );
+                                    writer,
+                                    initialized,
+                                    experimental_api_enabled,
+                                    opted_out_notification_methods,
+                                    disconnect_sender,
+                                    Some(outbound_disconnect_tx.clone()),
+                                ),
+                            );
+                        }
+                        OutboundControlEvent::Closed { connection_id } => {
+                            outbound_connections.remove(&connection_id);
+                        }
+                        OutboundControlEvent::DisconnectAll => {
+                            info!(
+                                "disconnecting {} outbound websocket connection(s) for graceful restart",
+                                outbound_connections.len()
+                            );
+                            for connection_state in outbound_connections.values() {
+                                connection_state.request_disconnect();
                             }
-                            OutboundControlEvent::Closed { connection_id } => {
-                                outbound_connections.remove(&connection_id);
-                            }
-                            OutboundControlEvent::DisconnectAll => {
-                                info!(
-                                    "disconnecting {} outbound websocket connection(s) for graceful restart",
-                                    outbound_connections.len()
-                                );
-                                for connection_state in outbound_connections.values() {
-                                    connection_state.request_disconnect();
-                                }
-                                outbound_connections.clear();
-                            }
+                            outbound_connections.clear();
                         }
                     }
-                    envelope = outgoing_rx.recv() => {
+                }
+                connection_id = outbound_disconnect_rx.recv() => {
+                    let Some(connection_id) = connection_id else {
+                        break;
+                    };
+                    disconnect_connection(&mut outbound_connections, connection_id);
+                }
+                envelope = outgoing_rx.recv() => {
                     let Some(envelope) = envelope else {
                         break;
                     };
