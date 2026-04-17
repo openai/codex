@@ -85,7 +85,12 @@ fn write_permissions_for_paths_keep_dirs_outside_workspace_root() {
         dunce::simplified(&outside.canonicalize().expect("canonicalize outside dir")).abs();
 
     assert_eq!(
-        permissions.and_then(|profile| profile.file_system.and_then(|fs| fs.write)),
+        permissions.and_then(|profile| {
+            profile.file_system.and_then(|fs| {
+                let (_, write) = fs.legacy_read_write_roots()?;
+                write
+            })
+        }),
         Some(vec![expected_outside])
     );
 }
