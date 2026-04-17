@@ -224,7 +224,7 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, FunctionCallE
     let base_config = turn.config.clone();
     let mut config = (*base_config).clone();
     config.model = Some(turn.model_info.slug.clone());
-    config.model_provider = turn.provider.clone();
+    config.model_provider = turn.provider.info().clone();
     config.model_reasoning_effort = turn
         .reasoning_effort
         .or(turn.model_info.default_reasoning_level);

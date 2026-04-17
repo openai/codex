@@ -676,9 +676,14 @@ fn custom_mcp_tool_approval_mode(
         .and_then(|value| {
             HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
         })
-        .and_then(|servers| servers.get(server).cloned())
-        .and_then(|server| server.tools.get(tool_name).cloned())
-        .and_then(|tool| tool.approval_mode)
+        .and_then(|servers| {
+            let server_config = servers.get(server)?;
+            server_config
+                .tools
+                .get(tool_name)
+                .and_then(|tool| tool.approval_mode)
+                .or(server_config.default_tools_approval_mode)
+        })
         .unwrap_or_default()
 }
 

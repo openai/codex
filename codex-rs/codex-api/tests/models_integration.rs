@@ -14,6 +14,7 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
 use http::Method;
+use std::sync::Arc;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -108,7 +109,7 @@ async fn models_client_hits_models_endpoint() {
         .await;
 
     let transport = ReqwestTransport::new(reqwest::Client::new());
-    let client = ModelsClient::new(transport, provider(&base_url), DummyAuth);
+    let client = ModelsClient::new(transport, provider(&base_url), Arc::new(DummyAuth));
 
     let (models, _) = client
         .list_models("0.1.0", HeaderMap::new())

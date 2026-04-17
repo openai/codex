@@ -12,6 +12,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerToolConfig;
+use codex_model_provider::create_model_provider;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::PathExt;
@@ -1147,6 +1148,43 @@ async fn persist_custom_mcp_tool_approval_writes_tool_override() {
 }
 
 #[tokio::test]
+async fn custom_mcp_tool_approval_mode_uses_server_default_with_tool_override() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"
+[mcp_servers.docs]
+command = "docs-server"
+default_tools_approval_mode = "approve"
+
+[mcp_servers.docs.tools.search]
+approval_mode = "prompt"
+"#,
+    )
+    .expect("seed config");
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .build()
+        .await
+        .expect("load config");
+    let (_session, mut turn_context) = make_session_and_context().await;
+    turn_context.config = Arc::new(config);
+
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&turn_context, "docs", "read"),
+        AppToolApproval::Approve
+    );
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&turn_context, "docs", "search"),
+        AppToolApproval::Prompt
+    );
+    assert_eq!(
+        custom_mcp_tool_approval_mode(&turn_context, "unknown", "search"),
+        AppToolApproval::Auto
+    );
+}
+
+#[tokio::test]
 async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
     let (session, turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
@@ -1353,7 +1391,10 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1429,7 +1470,10 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
@@ -1883,7 +1927,10 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
     ));
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = config.model_provider.clone();
+    turn_context.provider = create_model_provider(
+        config.model_provider.clone(),
+        turn_context.auth_manager.clone(),
+    );
 
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
