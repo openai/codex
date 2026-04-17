@@ -13,7 +13,6 @@ use crate::config_loader::McpServerRequirement;
 use crate::config_loader::ResidencyRequirement;
 use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
-use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
@@ -95,7 +94,6 @@ use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_from_profile_network;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
-use toml_edit::DocumentMut;
 
 pub(crate) mod agent_roles;
 pub mod edit;
@@ -1065,75 +1063,6 @@ fn ensure_no_inline_bearer_tokens(value: &TomlValue) -> std::io::Result<()> {
         }
     }
 
-    Ok(())
-}
-
-pub(crate) fn set_project_trust_level_inner(
-    doc: &mut DocumentMut,
-    project_path: &Path,
-    trust_level: TrustLevel,
-) -> anyhow::Result<()> {
-    // Ensure we render a human-friendly structure:
-    //
-    // [projects]
-    // [projects."/path/to/project"]
-    // trust_level = "trusted" or "untrusted"
-    //
-    // rather than inline tables like:
-    //
-    // [projects]
-    // "/path/to/project" = { trust_level = "trusted" }
-    let project_key = project_trust_key(project_path);
-
-    // Ensure top-level `projects` exists as a non-inline, explicit table. If it
-    // exists but was previously represented as a non-table (e.g., inline),
-    // replace it with an explicit table.
-    {
-        let root = doc.as_table_mut();
-        // If `projects` exists but isn't a standard table (e.g., it's an inline table),
-        // convert it to an explicit table while preserving existing entries.
-        let existing_projects = root.get("projects").cloned();
-        if existing_projects.as_ref().is_none_or(|i| !i.is_table()) {
-            let mut projects_tbl = toml_edit::Table::new();
-            projects_tbl.set_implicit(true);
-
-            // If there was an existing inline table, migrate its entries to explicit tables.
-            if let Some(inline_tbl) = existing_projects.as_ref().and_then(|i| i.as_inline_table()) {
-                for (k, v) in inline_tbl.iter() {
-                    if let Some(inner_tbl) = v.as_inline_table() {
-                        let new_tbl = inner_tbl.clone().into_table();
-                        projects_tbl.insert(k, toml_edit::Item::Table(new_tbl));
-                    }
-                }
-            }
-
-            root.insert("projects", toml_edit::Item::Table(projects_tbl));
-        }
-    }
-    let Some(projects_tbl) = doc["projects"].as_table_mut() else {
-        return Err(anyhow::anyhow!(
-            "projects table missing after initialization"
-        ));
-    };
-
-    // Ensure the per-project entry is its own explicit table. If it exists but
-    // is not a table (e.g., an inline table), replace it with an explicit table.
-    let needs_proj_table = !projects_tbl.contains_key(project_key.as_str())
-        || projects_tbl
-            .get(project_key.as_str())
-            .and_then(|i| i.as_table())
-            .is_none();
-    if needs_proj_table {
-        projects_tbl.insert(project_key.as_str(), toml_edit::table());
-    }
-    let Some(proj_tbl) = projects_tbl
-        .get_mut(project_key.as_str())
-        .and_then(|i| i.as_table_mut())
-    else {
-        return Err(anyhow::anyhow!("project table missing for {project_key}"));
-    };
-    proj_tbl.set_implicit(false);
-    proj_tbl["trust_level"] = toml_edit::value(trust_level.to_string());
     Ok(())
 }
 
@@ -2441,5 +2370,5 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "config_tests.rs"]
+#[path = "../../tests/unit/config/config_tests.rs"]
 mod tests;

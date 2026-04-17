@@ -1,0 +1,12 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "memory-prompts",
+    crate_name = "codex_memory_prompts",
+    compile_data = [
+        "src/consolidation.md",
+        "src/read_path.md",
+        "src/stage_one_input.md",
+        "src/stage_one_system.md",
+    ],
+)

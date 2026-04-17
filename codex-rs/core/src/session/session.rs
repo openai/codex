@@ -224,6 +224,7 @@ impl Session {
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
+        code_mode_runtime_factory: Option<codex_code_mode::CodeModeRuntimeFactory>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -414,6 +415,9 @@ impl Session {
                 }),
             });
         }
+
+        let code_mode_runtime_factory =
+            code_mode_runtime_factory.unwrap_or_else(codex_code_mode::default_runtime_factory);
 
         let auth = auth.as_ref();
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
@@ -673,8 +677,9 @@ impl Session {
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
             ),
-            code_mode_service: crate::tools::code_mode::CodeModeService::new(
-                config.js_repl_node_path.clone(),
+            code_mode_runtime_factory: Arc::clone(&code_mode_runtime_factory),
+            code_mode_service: crate::tools::code_mode::CodeModeService::from_runtime(
+                code_mode_runtime_factory(),
             ),
             environment,
         };

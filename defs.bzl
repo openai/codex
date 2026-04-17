@@ -143,6 +143,7 @@ def codex_rust_crate(
         test_shard_counts = {},
         test_tags = [],
         unit_test_timeout = None,
+        generate_unit_tests = True,
         extra_binaries = []):
     """Defines a Rust crate with library, binaries, and tests wired for Bazel + Cargo parity.
 
@@ -184,6 +185,9 @@ def codex_rust_crate(
             Typically used to disable the sandbox, but see https://bazel.build/reference/be/common-definitions#common.tags
         unit_test_timeout: Optional Bazel timeout for the unit-test target
             generated from `src/**/*.rs`.
+        generate_unit_tests: Whether to generate the default unit-test target.
+            Crates with custom source partitioning can set this to False and
+            define an equivalent target directly.
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
@@ -252,49 +256,50 @@ def codex_rust_crate(
             visibility = ["//visibility:public"],
         )
 
-        unit_test_name = name + "-unit-tests"
-        unit_test_binary = name + "-unit-tests-bin"
-        unit_test_shard_count = _test_shard_count(test_shard_counts, unit_test_name)
-        unit_test_binary_kwargs = {}
-        if unit_test_shard_count:
-            unit_test_binary_kwargs["experimental_enable_sharding"] = True
+        if generate_unit_tests:
+            unit_test_name = name + "-unit-tests"
+            unit_test_binary = name + "-unit-tests-bin"
+            unit_test_shard_count = _test_shard_count(test_shard_counts, unit_test_name)
+            unit_test_binary_kwargs = {}
+            if unit_test_shard_count:
+                unit_test_binary_kwargs["experimental_enable_sharding"] = True
 
-        rust_test(
-            name = unit_test_binary,
-            crate = name,
-            deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
-            # Unit tests also compile to standalone Windows executables, so
-            # keep their stack reserve aligned with binaries and integration
-            # tests under gnullvm.
-            # Bazel has emitted both `codex-rs/<crate>/...` and
-            # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
-            # prefix so the workspace-root launcher sees Cargo-like metadata
-            # such as `tui/src/...`.
-            rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
-                "--remap-path-prefix=../codex-rs=",
-                "--remap-path-prefix=codex-rs=",
-            ],
-            rustc_env = rustc_env,
-            data = test_data_extra,
-            tags = test_tags + ["manual"],
-            **unit_test_binary_kwargs
-        )
+            rust_test(
+                name = unit_test_binary,
+                crate = name,
+                deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+                # Unit tests also compile to standalone Windows executables, so
+                # keep their stack reserve aligned with binaries and integration
+                # tests under gnullvm.
+                # Bazel has emitted both `codex-rs/<crate>/...` and
+                # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+                # prefix so the workspace-root launcher sees Cargo-like metadata
+                # such as `tui/src/...`.
+                rustc_flags = rustc_flags_extra + WINDOWS_RUSTC_LINK_FLAGS + [
+                    "--remap-path-prefix=../codex-rs=",
+                    "--remap-path-prefix=codex-rs=",
+                ],
+                rustc_env = rustc_env,
+                data = test_data_extra,
+                tags = test_tags + ["manual"],
+                **unit_test_binary_kwargs
+            )
 
-        unit_test_kwargs = {}
-        if unit_test_timeout:
-            unit_test_kwargs["timeout"] = unit_test_timeout
-        if unit_test_shard_count:
-            unit_test_kwargs["shard_count"] = unit_test_shard_count
-            unit_test_kwargs["flaky"] = True
+            unit_test_kwargs = {}
+            if unit_test_timeout:
+                unit_test_kwargs["timeout"] = unit_test_timeout
+            if unit_test_shard_count:
+                unit_test_kwargs["shard_count"] = unit_test_shard_count
+                unit_test_kwargs["flaky"] = True
 
-        workspace_root_test(
-            name = unit_test_name,
-            env = test_env,
-            test_bin = ":" + unit_test_binary,
-            workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
-            tags = test_tags,
-            **unit_test_kwargs
-        )
+            workspace_root_test(
+                name = unit_test_name,
+                env = test_env,
+                test_bin = ":" + unit_test_binary,
+                workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
+                tags = test_tags,
+                **unit_test_kwargs
+            )
 
         maybe_deps += [name]
 

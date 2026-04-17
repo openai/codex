@@ -33,6 +33,7 @@ codex-analytics = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-config = { workspace = true }
+codex-code-mode-runtime = { workspace = true }
 codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-exec-server = { workspace = true }

@@ -4,7 +4,7 @@ This module runs a startup memory pipeline for eligible sessions.
 
 ## Prompt Templates
 
-Memory prompt templates live under `codex-rs/core/templates/memories/`.
+Memory prompt templates live under `codex-rs/memory-prompts/src/`.
 
 - The undated template files are the canonical latest versions used at runtime:
   - `stage_one_system.md`

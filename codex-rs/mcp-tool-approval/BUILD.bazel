@@ -1,0 +1,9 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "mcp-tool-approval",
+    crate_name = "codex_mcp_tool_approval",
+    compile_data = [
+        "src/consequential_tool_message_templates.json",
+    ],
+)

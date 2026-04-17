@@ -3,12 +3,16 @@ mod response_adapter;
 mod wait_handler;
 
 use std::collections::HashSet;
+#[cfg(test)]
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_code_mode::CodeModeTurnHost;
-use codex_code_mode::RuntimeResponse;
+pub(super) use codex_code_mode as code_mode_impl;
+
+use code_mode_impl::CodeModeRuntimeService;
+use code_mode_impl::CodeModeTurnHost;
+use code_mode_impl::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -41,9 +45,9 @@ pub(crate) use execute_handler::CodeModeExecuteHandler;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
-pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
-pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
-pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
+pub(crate) const PUBLIC_TOOL_NAME: &str = code_mode_impl::PUBLIC_TOOL_NAME;
+pub(crate) const WAIT_TOOL_NAME: &str = code_mode_impl::WAIT_TOOL_NAME;
+pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = code_mode_impl::DEFAULT_WAIT_YIELD_TIME_MS;
 
 #[derive(Clone)]
 pub(crate) struct ExecContext {
@@ -52,14 +56,19 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    inner: codex_code_mode::CodeModeService,
+    inner: Arc<dyn CodeModeRuntimeService>,
 }
 
 impl CodeModeService {
+    #[cfg(test)]
     pub(crate) fn new(_js_repl_node_path: Option<PathBuf>) -> Self {
         Self {
-            inner: codex_code_mode::CodeModeService::new(),
+            inner: Arc::new(code_mode_impl::CodeModeService::new()),
         }
+    }
+
+    pub(crate) fn from_runtime(inner: Arc<dyn CodeModeRuntimeService>) -> Self {
+        Self { inner }
     }
 
     pub(crate) async fn stored_values(&self) -> std::collections::HashMap<String, JsonValue> {
@@ -75,14 +84,14 @@ impl CodeModeService {
 
     pub(crate) async fn execute(
         &self,
-        request: codex_code_mode::ExecuteRequest,
+        request: code_mode_impl::ExecuteRequest,
     ) -> Result<RuntimeResponse, String> {
         self.inner.execute(request).await
     }
 
     pub(crate) async fn wait(
         &self,
-        request: codex_code_mode::WaitRequest,
+        request: code_mode_impl::WaitRequest,
     ) -> Result<RuntimeResponse, String> {
         self.inner.wait(request).await
     }
@@ -93,7 +102,7 @@ impl CodeModeService {
         turn: &Arc<TurnContext>,
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
-    ) -> Option<codex_code_mode::CodeModeTurnWorker> {
+    ) -> Option<Box<dyn Send>> {
         if !turn.features.enabled(Feature::CodeMode) {
             return None;
         }
@@ -251,9 +260,7 @@ fn truncate_code_mode_result(
     truncate_function_output_items_with_policy(&items, policy)
 }
 
-pub(super) async fn build_enabled_tools(
-    exec: &ExecContext,
-) -> Vec<codex_code_mode::ToolDefinition> {
+pub(super) async fn build_enabled_tools(exec: &ExecContext) -> Vec<code_mode_impl::ToolDefinition> {
     let router = build_nested_router(exec).await;
     let specs = router.specs();
     collect_code_mode_tool_definitions(&specs)
@@ -340,18 +347,18 @@ async fn call_nested_tool(
     Ok(result.code_mode_result())
 }
 
-fn tool_kind_for_spec(spec: &ToolSpec) -> codex_code_mode::CodeModeToolKind {
+fn tool_kind_for_spec(spec: &ToolSpec) -> code_mode_impl::CodeModeToolKind {
     if matches!(spec, ToolSpec::Freeform(_)) {
-        codex_code_mode::CodeModeToolKind::Freeform
+        code_mode_impl::CodeModeToolKind::Freeform
     } else {
-        codex_code_mode::CodeModeToolKind::Function
+        code_mode_impl::CodeModeToolKind::Function
     }
 }
 
 fn tool_kind_for_name(
     spec: Option<ToolSpec>,
     tool_name: &ToolName,
-) -> Result<codex_code_mode::CodeModeToolKind, String> {
+) -> Result<code_mode_impl::CodeModeToolKind, String> {
     spec.as_ref()
         .map(tool_kind_for_spec)
         .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
@@ -364,12 +371,8 @@ fn build_nested_tool_payload(
 ) -> Result<ToolPayload, String> {
     let actual_kind = tool_kind_for_name(spec, tool_name)?;
     match actual_kind {
-        codex_code_mode::CodeModeToolKind::Function => {
-            build_function_tool_payload(tool_name, input)
-        }
-        codex_code_mode::CodeModeToolKind::Freeform => {
-            build_freeform_tool_payload(tool_name, input)
-        }
+        code_mode_impl::CodeModeToolKind::Function => build_function_tool_payload(tool_name, input),
+        code_mode_impl::CodeModeToolKind::Freeform => build_freeform_tool_payload(tool_name, input),
     }
 }
 

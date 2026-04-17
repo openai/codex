@@ -1,6 +1,6 @@
 ---
-source: core/src/guardian/tests.rs
-expression: "format!(\"{}\\n\\nshared_prompt_cache_key: {}\\nfollowup_contains_first_rationale: {}\",\ncontext_snapshot::format_labeled_requests_snapshot(\"Guardian follow-up review request layout\",\n&[(\"Initial Guardian Review Request\", &requests[0]),\n(\"Follow-up Guardian Review Request\", &requests[1]),],\n&guardian_snapshot_options(),), first_body[\"prompt_cache_key\"] ==\nsecond_body[\"prompt_cache_key\"],\nsecond_body.to_string().contains(first_rationale),)"
+source: core/tests/unit/guardian/tests.rs
+expression: snapshot
 ---
 Scenario: Guardian follow-up review request layout
 

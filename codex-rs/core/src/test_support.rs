@@ -70,6 +70,22 @@ pub fn thread_manager_with_models_provider_and_home(
     )
 }
 
+pub fn thread_manager_with_models_provider_home_and_code_mode_runtime_factory(
+    auth: CodexAuth,
+    provider: ModelProviderInfo,
+    codex_home: PathBuf,
+    environment_manager: Arc<EnvironmentManager>,
+    code_mode_runtime_factory: codex_code_mode::CodeModeRuntimeFactory,
+) -> ThreadManager {
+    ThreadManager::with_models_provider_and_home_and_code_mode_runtime_factory_for_tests(
+        auth,
+        provider,
+        codex_home,
+        environment_manager,
+        code_mode_runtime_factory,
+    )
+}
+
 pub async fn start_thread_with_user_shell_override(
     thread_manager: &ThreadManager,
     config: Config,

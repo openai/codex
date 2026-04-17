@@ -1,0 +1,22 @@
+[package]
+name = "codex-file-watcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_file_watcher"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+notify = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

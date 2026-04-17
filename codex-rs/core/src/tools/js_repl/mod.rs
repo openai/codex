@@ -52,9 +52,9 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 
 pub(crate) const JS_REPL_PRAGMA_PREFIX: &str = "// codex-js-repl:";
-const KERNEL_SOURCE: &str = include_str!("kernel.js");
-const MERIYAH_UMD: &str = include_str!("meriyah.umd.min.js");
-const JS_REPL_MIN_NODE_VERSION: &str = include_str!("../../../../node-version.txt");
+const KERNEL_SOURCE: &str = codex_js_repl::KERNEL_SOURCE;
+const MERIYAH_UMD: &str = codex_js_repl::MERIYAH_UMD;
+const JS_REPL_MIN_NODE_VERSION: &str = codex_js_repl::MIN_NODE_VERSION;
 const JS_REPL_STDERR_TAIL_LINE_LIMIT: usize = 20;
 const JS_REPL_STDERR_TAIL_LINE_MAX_BYTES: usize = 512;
 const JS_REPL_STDERR_TAIL_MAX_BYTES: usize = 4_096;

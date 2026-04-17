@@ -10,6 +10,7 @@ use crate::tools::registry::ToolKind;
 use super::DEFAULT_WAIT_YIELD_TIME_MS;
 use super::ExecContext;
 use super::WAIT_TOOL_NAME;
+use super::code_mode_impl;
 use super::handle_runtime_response;
 
 pub struct CodeModeWaitHandler;
@@ -65,7 +66,7 @@ impl ToolHandler for CodeModeWaitHandler {
                     .session
                     .services
                     .code_mode_service
-                    .wait(codex_code_mode::WaitRequest {
+                    .wait(code_mode_impl::WaitRequest {
                         cell_id: args.cell_id,
                         yield_time_ms: args.yield_time_ms,
                         terminate: args.terminate,

@@ -1,0 +1,20 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-session-runtime"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_session_runtime"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-protocol = { workspace = true }
+codex-rmcp-client = { workspace = true }
+codex-sandboxing = { workspace = true }
+rmcp = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }

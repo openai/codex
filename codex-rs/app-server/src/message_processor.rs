@@ -272,7 +272,7 @@ impl MessageProcessor {
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         );
-        let thread_manager = Arc::new(ThreadManager::new(
+        let thread_manager = Arc::new(ThreadManager::new_with_code_mode_runtime_factory(
             config.as_ref(),
             auth_manager.clone(),
             session_source,
@@ -283,6 +283,7 @@ impl MessageProcessor {
             },
             environment_manager,
             Some(analytics_events_client.clone()),
+            codex_code_mode_runtime::runtime_factory(),
         ));
         thread_manager
             .plugins_manager()

@@ -41,6 +41,7 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_code_mode::CodeModeRuntimeFactory;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
@@ -393,6 +394,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
+    pub(crate) code_mode_runtime_factory: CodeModeRuntimeFactory,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -447,6 +449,7 @@ impl Codex {
             inherited_exec_policy,
             parent_trace: _,
             analytics_events_client,
+            code_mode_runtime_factory,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -643,6 +646,7 @@ impl Codex {
             agent_control,
             environment,
             analytics_events_client,
+            Some(code_mode_runtime_factory),
         )
         .await
         .map_err(|e| {
@@ -3118,4 +3122,5 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 use crate::memories::prompts::build_memory_tool_developer_instructions;
 
 #[cfg(test)]
+#[path = "../../tests/unit/codex_tests.rs"]
 pub(crate) mod tests;

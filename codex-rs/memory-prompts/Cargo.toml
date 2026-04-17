@@ -1,0 +1,13 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-memory-prompts"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_memory_prompts"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

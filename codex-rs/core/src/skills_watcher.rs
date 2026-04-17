@@ -102,9 +102,10 @@ mod tests {
         let file_watcher = Arc::new(FileWatcher::noop());
         let skills_watcher = SkillsWatcher::new(&file_watcher);
         let mut rx = skills_watcher.subscribe();
-        let _registration = skills_watcher
-            .subscriber
-            .register_path(PathBuf::from("/tmp/skill"), /*recursive*/ true);
+        let _registration = skills_watcher.subscriber.register_paths(vec![WatchPath {
+            path: PathBuf::from("/tmp/skill"),
+            recursive: true,
+        }]);
 
         file_watcher
             .send_paths_for_test(vec![PathBuf::from("/tmp/skill/SKILL.md")])

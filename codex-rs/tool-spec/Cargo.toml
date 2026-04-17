@@ -1,0 +1,17 @@
+[package]
+name = "codex-tool-spec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_tool_spec"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-mcp = { workspace = true }
+codex-protocol = { workspace = true }
+codex-tools = { workspace = true }

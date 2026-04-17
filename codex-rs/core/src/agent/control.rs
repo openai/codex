@@ -14,21 +14,27 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
+pub(crate) use codex_agent_runtime::LiveAgent;
+pub(crate) use codex_agent_runtime::SpawnAgentForkMode;
+pub(crate) use codex_agent_runtime::SpawnAgentOptions;
+use codex_agent_runtime::agent_matches_prefix;
+use codex_agent_runtime::keep_forked_rollout_item;
+pub(crate) use codex_agent_runtime::render_input_preview;
+use codex_agent_runtime::thread_spawn_depth;
+use codex_agent_runtime::thread_spawn_parent_thread_id;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::models::MessagePhase;
+#[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::user_input::UserInput;
 use codex_rollout::state_db;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use serde::Serialize;
@@ -39,27 +45,7 @@ use std::sync::Weak;
 use tokio::sync::watch;
 use tracing::warn;
 
-const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SpawnAgentForkMode {
-    FullHistory,
-    LastNTurns(usize),
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct SpawnAgentOptions {
-    pub(crate) fork_parent_spawn_call_id: Option<String>,
-    pub(crate) fork_mode: Option<SpawnAgentForkMode>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct LiveAgent {
-    pub(crate) thread_id: ThreadId,
-    pub(crate) metadata: AgentMetadata,
-    pub(crate) status: AgentStatus,
-}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct ListedAgent {
@@ -69,11 +55,7 @@ pub(crate) struct ListedAgent {
 }
 
 fn default_agent_nickname_list() -> Vec<&'static str> {
-    AGENT_NAMES
-        .lines()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .collect()
+    codex_agent_runtime::default_agent_nickname_list()
 }
 
 fn agent_nickname_candidates(
@@ -91,36 +73,6 @@ fn agent_nickname_candidates(
         .into_iter()
         .map(ToOwned::to_owned)
         .collect()
-}
-
-fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
-    match item {
-        RolloutItem::ResponseItem(ResponseItem::Message { role, phase, .. }) => match role.as_str()
-        {
-            "system" | "developer" | "user" => true,
-            "assistant" => *phase == Some(MessagePhase::FinalAnswer),
-            _ => false,
-        },
-        RolloutItem::ResponseItem(
-            ResponseItem::Reasoning { .. }
-            | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::FunctionCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
-            | ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::CustomToolCall { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::WebSearchCall { .. }
-            | ResponseItem::ImageGenerationCall { .. }
-            | ResponseItem::GhostSnapshot { .. }
-            | ResponseItem::Compaction { .. }
-            | ResponseItem::Other,
-        ) => false,
-        RolloutItem::Compacted(_)
-        | RolloutItem::EventMsg(_)
-        | RolloutItem::SessionMeta(_)
-        | RolloutItem::TurnContext(_) => true,
-    }
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -1160,54 +1112,6 @@ impl AgentControl {
     }
 }
 
-fn thread_spawn_parent_thread_id(session_source: &SessionSource) -> Option<ThreadId> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) => Some(*parent_thread_id),
-        _ => None,
-    }
-}
-
-fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> bool {
-    if prefix.is_root() {
-        return true;
-    }
-
-    agent_path.is_some_and(|agent_path| {
-        agent_path == prefix
-            || agent_path
-                .as_str()
-                .strip_prefix(prefix.as_str())
-                .is_some_and(|suffix| suffix.starts_with('/'))
-    })
-}
-
-pub(crate) fn render_input_preview(initial_operation: &Op) -> String {
-    match initial_operation {
-        Op::UserInput { items, .. } => items
-            .iter()
-            .map(|item| match item {
-                UserInput::Text { text, .. } => text.clone(),
-                UserInput::Image { .. } => "[image]".to_string(),
-                UserInput::LocalImage { path } => format!("[local_image:{}]", path.display()),
-                UserInput::Skill { name, path } => format!("[skill:${name}]({})", path.display()),
-                UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
-                _ => "[input]".to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Op::InterAgentCommunication { communication } => communication.content.clone(),
-        _ => String::new(),
-    }
-}
-
-fn thread_spawn_depth(session_source: &SessionSource) -> Option<i32> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => Some(*depth),
-        _ => None,
-    }
-}
 #[cfg(test)]
-#[path = "control_tests.rs"]
+#[path = "../../tests/unit/agent/control_tests.rs"]
 mod tests;

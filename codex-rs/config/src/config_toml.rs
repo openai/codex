@@ -50,7 +50,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path::normalize_for_path_comparison;
+use dunce::canonicalize as normalize_path;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -733,7 +733,7 @@ impl ConfigToml {
 fn normalized_project_lookup_keys(path: &Path) -> Vec<String> {
     let normalized_path = normalize_project_lookup_key(path.to_string_lossy().to_string());
     let normalized_canonical_path = normalize_project_lookup_key(
-        normalize_for_path_comparison(path)
+        normalize_path(path)
             .unwrap_or_else(|_| path.to_path_buf())
             .to_string_lossy()
             .to_string(),
@@ -769,6 +769,13 @@ fn project_config_for_lookup_key(
     normalized_matches
         .first()
         .map(|(_, project_config)| (**project_config).clone())
+}
+
+pub(crate) fn project_trust_key(project_path: &Path) -> String {
+    normalized_project_lookup_keys(project_path)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| normalize_project_lookup_key(project_path.to_string_lossy().to_string()))
 }
 
 pub fn validate_reserved_model_provider_ids(

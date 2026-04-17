@@ -17,6 +17,7 @@ use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_analytics::AnalyticsEventsClient;
+use codex_code_mode::CodeModeRuntimeFactory;
 use codex_exec_server::Environment;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
@@ -63,6 +64,7 @@ pub(crate) struct SessionServices {
     pub(crate) thread_store: LocalThreadStore,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    pub(crate) code_mode_runtime_factory: CodeModeRuntimeFactory,
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) environment: Option<Arc<Environment>>,
 }
