@@ -144,6 +144,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
@@ -318,6 +319,7 @@ impl ChatComposerConfig {
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
+    shell_command_prefix: bool,
     active_popup: ActivePopup,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
@@ -474,6 +476,7 @@ impl ChatComposer {
         let mut this = Self {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
+            shell_command_prefix: false,
             active_popup: ActivePopup::None,
             app_event_tx,
             history: ChatComposerHistory::new(),
@@ -708,15 +711,12 @@ impl ChatComposer {
 
         let [_, _, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state_and_hidden_prefix(
-            textarea_rect,
-            state,
-            self.shell_command_hidden_prefix_len().unwrap_or(0),
-        )
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
     /// Returns true if the composer currently contains no user-entered input.
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
+            && !self.shell_command_prefix
             && self.attached_images.is_empty()
             && self.remote_image_urls.is_empty()
     }
@@ -921,7 +921,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn current_text_with_pending(&self) -> String {
-        let mut text = self.textarea.text().to_string();
+        let mut text = self.current_text();
         for (placeholder, actual) in &self.pending_pastes {
             if text.contains(placeholder) {
                 text = text.replace(placeholder, actual);
@@ -935,7 +935,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn set_pending_pastes(&mut self, pending_pastes: Vec<(String, String)>) {
-        let text = self.textarea.text().to_string();
+        let text = self.current_text();
         self.pending_pastes = pending_pastes
             .into_iter()
             .filter(|(placeholder, _)| text.contains(placeholder))
@@ -1022,10 +1022,14 @@ impl ChatComposer {
     ) {
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text_clearing_elements("");
+        self.shell_command_prefix = false;
         self.pending_pastes.clear();
         self.attached_images.clear();
         self.mention_bindings.clear();
 
+        let (shell_command_prefix, text, text_elements) =
+            Self::split_shell_command_prefix(text, text_elements);
+        self.shell_command_prefix = shell_command_prefix;
         self.textarea.set_text_with_elements(&text, &text_elements);
 
         for (idx, path) in local_image_paths.into_iter().enumerate() {
@@ -1041,10 +1045,61 @@ impl ChatComposer {
         self.sync_popups();
     }
 
+    fn split_shell_command_prefix(
+        text: String,
+        text_elements: Vec<TextElement>,
+    ) -> (bool, String, Vec<TextElement>) {
+        let Some(stripped) = text.strip_prefix('!') else {
+            return (false, text, text_elements);
+        };
+
+        (
+            true,
+            stripped.to_string(),
+            text_elements
+                .into_iter()
+                .filter_map(|element| Self::shift_text_element(element, -1))
+                .collect(),
+        )
+    }
+
+    fn current_cursor(&self) -> usize {
+        self.textarea.cursor() + if self.shell_command_prefix { 1 } else { 0 }
+    }
+
+    fn set_current_cursor(&mut self, cursor: usize) {
+        let visible_cursor = if self.shell_command_prefix {
+            cursor.saturating_sub(1)
+        } else {
+            cursor
+        };
+        self.textarea
+            .set_cursor(visible_cursor.min(self.textarea.text().len()));
+    }
+
+    fn current_text_elements(&self) -> Vec<TextElement> {
+        let shift = if self.shell_command_prefix { 1 } else { 0 };
+        self.textarea
+            .text_elements()
+            .into_iter()
+            .filter_map(|element| Self::shift_text_element(element, shift))
+            .collect()
+    }
+
+    fn shift_text_element(element: TextElement, shift: isize) -> Option<TextElement> {
+        let start = element.byte_range.start.checked_add_signed(shift)?;
+        let end = element.byte_range.end.checked_add_signed(shift)?;
+        if start >= end {
+            return None;
+        }
+
+        Some(element.map_range(|_| (start..end).into()))
+    }
+
     fn snapshot_draft(&self) -> ComposerDraft {
         ComposerDraft {
-            text: self.textarea.text().to_string(),
-            text_elements: self.textarea.text_elements(),
+            text: self.current_text(),
+            text_elements: self.current_text_elements(),
             local_image_paths: self
                 .attached_images
                 .iter()
@@ -1053,7 +1108,7 @@ impl ChatComposer {
             remote_image_urls: self.remote_image_urls.clone(),
             mention_bindings: self.snapshot_mention_bindings(),
             pending_pastes: self.pending_pastes.clone(),
-            cursor: self.textarea.cursor(),
+            cursor: self.current_cursor(),
         }
     }
 
@@ -1075,8 +1130,7 @@ impl ChatComposer {
             mention_bindings,
         );
         self.set_pending_pastes(pending_pastes);
-        self.textarea
-            .set_cursor(cursor.min(self.textarea.text().len()));
+        self.set_current_cursor(cursor);
         self.sync_popups();
     }
 
@@ -1096,7 +1150,7 @@ impl ChatComposer {
             return None;
         }
         let previous = self.current_text();
-        let text_elements = self.textarea.text_elements();
+        let text_elements = self.current_text_elements();
         let local_image_paths = self
             .attached_images
             .iter()
@@ -1122,7 +1176,11 @@ impl ChatComposer {
 
     /// Get the current composer text.
     pub(crate) fn current_text(&self) -> String {
-        self.textarea.text().to_string()
+        if self.shell_command_prefix {
+            format!("!{}", self.textarea.text())
+        } else {
+            self.textarea.text().to_string()
+        }
     }
 
     /// Rehydrate a history entry into the composer with shell-like cursor placement.
@@ -1153,7 +1211,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn text_elements(&self) -> Vec<TextElement> {
-        self.textarea.text_elements()
+        self.current_text_elements()
     }
 
     #[cfg(test)]
@@ -1332,6 +1390,7 @@ impl ChatComposer {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.textarea.insert_str(text);
+        self.sync_shell_command_prefix_from_text();
         self.sync_popups();
     }
 
@@ -1433,6 +1492,7 @@ impl ChatComposer {
                     if cmd == SlashCommand::Skills {
                         self.stage_selected_slash_command_history(cmd);
                         self.textarea.set_text_clearing_elements("");
+                        self.shell_command_prefix = false;
                         return (InputResult::Command(cmd), true);
                     }
 
@@ -1473,6 +1533,7 @@ impl ChatComposer {
                     if !starts_with_cmd {
                         self.textarea
                             .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                        self.shell_command_prefix = false;
                     }
                     if !self.textarea.text().is_empty() {
                         self.textarea.set_cursor(self.textarea.text().len());
@@ -1489,6 +1550,7 @@ impl ChatComposer {
                     let CommandItem::Builtin(cmd) = sel;
                     self.stage_selected_slash_command_history(cmd);
                     self.textarea.set_text_clearing_elements("");
+                    self.shell_command_prefix = false;
                     return (InputResult::Command(cmd), true);
                 }
                 // Fallback to default newline handling if no command selected.
@@ -2248,9 +2310,9 @@ impl ChatComposer {
         record_history: bool,
         slash_validation: SlashValidation,
     ) -> Option<(String, Vec<TextElement>)> {
-        let mut text = self.textarea.text().to_string();
+        let mut text = self.current_text();
         let original_input = text.clone();
-        let original_text_elements = self.textarea.text_elements();
+        let original_text_elements = self.current_text_elements();
         let original_mention_bindings = self.snapshot_mention_bindings();
         let original_local_image_paths = self
             .attached_images
@@ -2262,6 +2324,7 @@ impl ChatComposer {
         let input_starts_with_space = original_input.starts_with(' ');
         self.recent_submission_mention_bindings.clear();
         self.textarea.set_text_clearing_elements("");
+        self.shell_command_prefix = false;
 
         if !self.pending_pastes.is_empty() {
             // Expand placeholders so element byte ranges stay aligned.
@@ -2429,8 +2492,8 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
 
-        let original_input = self.textarea.text().to_string();
-        let original_text_elements = self.textarea.text_elements();
+        let original_input = self.current_text();
+        let original_text_elements = self.current_text_elements();
         let original_mention_bindings = self.snapshot_mention_bindings();
         let original_local_image_paths = self
             .attached_images
@@ -2496,6 +2559,7 @@ impl ChatComposer {
             }
             self.stage_slash_command_history();
             self.textarea.set_text_clearing_elements("");
+            self.shell_command_prefix = false;
             Some(InputResult::Command(cmd))
         } else {
             None
@@ -2792,7 +2856,7 @@ impl ChatComposer {
             } => {
                 if self
                     .history
-                    .should_handle_navigation(self.textarea.text(), self.textarea.cursor())
+                    .should_handle_navigation(&self.current_text(), self.current_cursor())
                 {
                     let replace_entry = match key_event.code {
                         KeyCode::Up => self.history.navigate_up(&self.app_event_tx),
@@ -2826,20 +2890,12 @@ impl ChatComposer {
     }
 
     fn is_bang_shell_command(&self) -> bool {
-        self.textarea.text().trim_start().starts_with('!')
-    }
-
-    fn shell_command_hidden_prefix_len(&self) -> Option<usize> {
-        if !self.input_enabled {
-            return None;
-        }
-
-        self.textarea.text().strip_prefix('!')?;
-        Some(1)
+        self.current_text().trim_start().starts_with('!')
     }
 
     fn shell_mode_footer_line(&self) -> Option<Line<'static>> {
-        self.shell_command_hidden_prefix_len()
+        self.is_bang_shell_command()
+            .then_some(())
             .map(|_| Line::from(vec![Span::styled("Bash mode", bash_mode_style())]))
     }
 
@@ -2858,8 +2914,7 @@ impl ChatComposer {
                 true
             }
             FlushResult::Typed(ch) => {
-                self.textarea.insert_str(ch.to_string().as_str());
-                self.sync_popups();
+                self.insert_str(ch.to_string().as_str());
                 true
             }
             FlushResult::None => false,
@@ -2993,7 +3048,16 @@ impl ChatComposer {
             Some(self.textarea.element_payloads())
         };
 
+        if self.shell_command_prefix
+            && matches!(input.code, KeyCode::Backspace)
+            && self.textarea.cursor() == 0
+        {
+            self.shell_command_prefix = false;
+            return (InputResult::None, true);
+        }
+
         self.textarea.input(input);
+        self.sync_shell_command_prefix_from_text();
 
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
@@ -3020,6 +3084,13 @@ impl ChatComposer {
         }
 
         (InputResult::None, true)
+    }
+
+    fn sync_shell_command_prefix_from_text(&mut self) {
+        if !self.shell_command_prefix && self.textarea.text().starts_with('!') {
+            self.textarea.replace_range(0..1, "");
+            self.shell_command_prefix = true;
+        }
     }
 
     fn reconcile_deleted_elements(&mut self, elements_before: Vec<String>) {
@@ -3177,7 +3248,7 @@ impl ChatComposer {
         let file_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
-            .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
+            .should_handle_navigation(&self.current_text(), self.current_cursor());
         // When browsing input history (shell-style Up/Down recall), skip all popup
         // synchronization so nothing steals focus from continued history navigation.
         if browsing_history {
@@ -3752,11 +3823,7 @@ impl Renderable for ChatComposer {
 
         let [_, _, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state_and_hidden_prefix(
-            textarea_rect,
-            state,
-            self.shell_command_hidden_prefix_len().unwrap_or(0),
-        )
+        self.textarea.cursor_pos_with_state(textarea_rect, state)
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -3774,10 +3841,8 @@ impl Renderable for ChatComposer {
             .try_into()
             .unwrap_or(u16::MAX);
         let remote_images_separator = u16::from(remote_images_height > 0);
-        self.textarea.desired_height_with_hidden_prefix(
-            inner_width,
-            self.shell_command_hidden_prefix_len().unwrap_or(0),
-        ) + remote_images_height
+        self.textarea.desired_height(inner_width)
+            + remote_images_height
             + remote_images_separator
             + 2
             + match &self.active_popup {
@@ -4062,15 +4127,9 @@ impl ChatComposer {
         if is_zellij && !textarea_rect.is_empty() {
             buf.set_style(textarea_rect, textarea_style);
         }
-        let hidden_prefix = if mask_char.is_none() {
-            self.shell_command_hidden_prefix_len()
-        } else {
-            None
-        };
         if !textarea_rect.is_empty() {
-            let prompt_symbol = if hidden_prefix.is_some() { "!" } else { "›" };
             let prompt = if self.input_enabled {
-                if hidden_prefix.is_some() {
+                if self.shell_command_prefix {
                     let prompt_style = if is_zellij {
                         bash_mode_style()
                     } else {
@@ -4078,9 +4137,9 @@ impl ChatComposer {
                     };
                     Span::styled("!", prompt_style)
                 } else if is_zellij {
-                    Span::styled(prompt_symbol, style.fg(ratatui::style::Color::Cyan))
+                    Span::styled("›", style.fg(ratatui::style::Color::Cyan))
                 } else {
-                    prompt_symbol.bold()
+                    "›".bold()
                 }
             } else if is_zellij {
                 Span::styled("›", style.fg(ratatui::style::Color::DarkGray))
@@ -4096,8 +4155,7 @@ impl ChatComposer {
         }
 
         let mut state = self.textarea_state.borrow_mut();
-        let textarea_is_empty = self.textarea.text().is_empty();
-        let hidden_prefix = hidden_prefix.unwrap_or(0);
+        let textarea_is_empty = self.textarea.text().is_empty() && !self.shell_command_prefix;
         if let Some(mask_char) = mask_char {
             self.textarea.render_ref_masked(
                 textarea_rect,
@@ -4115,19 +4173,8 @@ impl ChatComposer {
         } else if is_zellij {
             let highlight_ranges = self.history_search_highlight_ranges();
             if highlight_ranges.is_empty() {
-                if hidden_prefix == 0 {
-                    self.textarea
-                        .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
-                } else {
-                    self.textarea.render_ref_styled_with_hidden_prefix(
-                        textarea_rect,
-                        buf,
-                        &mut state,
-                        textarea_style,
-                        &[],
-                        hidden_prefix,
-                    );
-                }
+                self.textarea
+                    .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
             } else {
                 let highlight_style =
                     textarea_style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
@@ -4135,26 +4182,18 @@ impl ChatComposer {
                     .into_iter()
                     .map(|range| (range, highlight_style))
                     .collect::<Vec<_>>();
-                self.textarea.render_ref_styled_with_hidden_prefix(
+                self.textarea.render_ref_styled_with_highlights(
                     textarea_rect,
                     buf,
                     &mut state,
                     textarea_style,
                     &highlights,
-                    hidden_prefix,
                 );
             }
         } else {
             let highlight_ranges = self.history_search_highlight_ranges();
             if highlight_ranges.is_empty() {
-                self.textarea.render_ref_styled_with_hidden_prefix(
-                    textarea_rect,
-                    buf,
-                    &mut state,
-                    Style::default(),
-                    &[],
-                    hidden_prefix,
-                );
+                StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
             } else {
                 let highlight_style =
                     Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
@@ -4162,13 +4201,12 @@ impl ChatComposer {
                     .into_iter()
                     .map(|range| (range, highlight_style))
                     .collect::<Vec<_>>();
-                self.textarea.render_ref_styled_with_hidden_prefix(
+                self.textarea.render_ref_styled_with_highlights(
                     textarea_rect,
                     buf,
                     &mut state,
                     Style::default(),
                     &highlights,
-                    hidden_prefix,
                 );
             }
         }
@@ -7181,7 +7219,7 @@ mod tests {
 
         assert!(matches!(result, InputResult::None));
         assert!(
-            composer.textarea.text().starts_with("!ls"),
+            composer.current_text().starts_with("!ls"),
             "expected Tab not to submit or clear a `!` command"
         );
     }
