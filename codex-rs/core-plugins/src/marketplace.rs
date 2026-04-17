@@ -570,22 +570,15 @@ fn normalize_git_plugin_source_url(
     if url.starts_with("http://") || url.starts_with("https://") {
         return Ok(normalize_github_git_url(url));
     }
-    if url.starts_with("./") || url.starts_with("../") {
-        let mut normalized = PathBuf::new();
-        for component in marketplace_root_dir(marketplace_path)?
-            .as_path()
-            .join(url)
-            .components()
-        {
-            match component {
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    normalized.pop();
-                }
-                _ => normalized.push(component.as_os_str()),
-            }
-        }
-        return Ok(normalized.display().to_string());
+    if url.starts_with("./")
+        || url.starts_with("../")
+        || url.starts_with(".\\")
+        || url.starts_with("..\\")
+    {
+        return Ok(normalize_relative_git_plugin_source_url(
+            marketplace_path,
+            url,
+        )?);
     }
     if url.starts_with("file://") || url.starts_with('/') {
         return Ok(url.to_string());
@@ -601,6 +594,25 @@ fn normalize_git_plugin_source_url(
         path: marketplace_path.to_path_buf(),
         message: format!("invalid git plugin source url: {url}"),
     })
+}
+
+fn normalize_relative_git_plugin_source_url(
+    marketplace_path: &AbsolutePathBuf,
+    url: &str,
+) -> Result<String, MarketplaceError> {
+    let mut normalized = marketplace_root_dir(marketplace_path)?
+        .as_path()
+        .to_path_buf();
+    for segment in url.split(['/', '\\']) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                normalized.pop();
+            }
+            segment => normalized.push(segment),
+        }
+    }
+    Ok(normalized.display().to_string())
 }
 
 fn normalize_optional_git_selector(value: &Option<String>) -> Option<String> {
