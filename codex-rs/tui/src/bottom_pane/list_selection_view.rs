@@ -101,10 +101,11 @@ pub(crate) enum SelectionRowDisplay {
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+pub(crate) type SelectionToggleAction = dyn Fn(bool, &AppEventSender) + Send + Sync;
 
 pub(crate) struct SelectionToggle {
     pub is_on: bool,
-    pub action: Box<dyn Fn(bool, &AppEventSender) + Send + Sync>,
+    pub action: Box<SelectionToggleAction>,
 }
 
 /// Callback invoked whenever the highlighted item changes (arrow keys, search
