@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use codex_utils_image::PromptImageMode;
@@ -25,7 +27,6 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
-use codex_git_utils::GhostCommit;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::ImageProcessingError;
 use schemars::JsonSchema;
@@ -44,6 +45,60 @@ static SANDBOX_MODE_READ_ONLY_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(SANDBOX_MODE_READ_ONLY.trim_end())
         .unwrap_or_else(|err| panic!("read-only sandbox template must parse: {err}"))
 });
+
+type CommitID = String;
+
+/// Details of a ghost commit created from a repository state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct GhostCommit {
+    id: CommitID,
+    parent: Option<CommitID>,
+    preexisting_untracked_files: Vec<PathBuf>,
+    preexisting_untracked_dirs: Vec<PathBuf>,
+}
+
+impl GhostCommit {
+    /// Create a new ghost commit wrapper from a raw commit ID and optional parent.
+    pub fn new(
+        id: CommitID,
+        parent: Option<CommitID>,
+        preexisting_untracked_files: Vec<PathBuf>,
+        preexisting_untracked_dirs: Vec<PathBuf>,
+    ) -> Self {
+        Self {
+            id,
+            parent,
+            preexisting_untracked_files,
+            preexisting_untracked_dirs,
+        }
+    }
+
+    /// Commit ID for the snapshot.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Parent commit ID, if the repository had a `HEAD` at creation time.
+    pub fn parent(&self) -> Option<&str> {
+        self.parent.as_deref()
+    }
+
+    /// Untracked or ignored files that already existed when the snapshot was captured.
+    pub fn preexisting_untracked_files(&self) -> &[PathBuf] {
+        &self.preexisting_untracked_files
+    }
+
+    /// Untracked or ignored directories that already existed when the snapshot was captured.
+    pub fn preexisting_untracked_dirs(&self) -> &[PathBuf] {
+        &self.preexisting_untracked_dirs
+    }
+}
+
+impl fmt::Display for GhostCommit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
 
 /// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
@@ -1362,6 +1417,8 @@ impl CallToolResult {
 fn convert_mcp_content_to_items(
     contents: &[serde_json::Value],
 ) -> Option<Vec<FunctionCallOutputContentItem>> {
+    const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
+
     #[derive(serde::Deserialize)]
     #[serde(tag = "type")]
     enum McpContent {
@@ -1372,6 +1429,8 @@ fn convert_mcp_content_to_items(
             data: String,
             #[serde(rename = "mimeType", alias = "mime_type")]
             mime_type: Option<String>,
+            #[serde(rename = "_meta", default)]
+            meta: Option<serde_json::Value>,
         },
         #[serde(other)]
         Unknown,
@@ -1383,7 +1442,11 @@ fn convert_mcp_content_to_items(
     for content in contents {
         let item = match serde_json::from_value::<McpContent>(content.clone()) {
             Ok(McpContent::Text { text }) => FunctionCallOutputContentItem::InputText { text },
-            Ok(McpContent::Image { data, mime_type }) => {
+            Ok(McpContent::Image {
+                data,
+                mime_type,
+                meta,
+            }) => {
                 saw_image = true;
                 let image_url = if data.starts_with("data:") {
                     data
@@ -1393,7 +1456,15 @@ fn convert_mcp_content_to_items(
                 };
                 FunctionCallOutputContentItem::InputImage {
                     image_url,
-                    detail: None,
+                    detail: meta
+                        .as_ref()
+                        .and_then(serde_json::Value::as_object)
+                        .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|detail| match detail {
+                            "original" => Some(ImageDetail::Original),
+                            _ => None,
+                        }),
                 }
             }
             Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
@@ -2242,6 +2313,70 @@ mod tests {
                 "type": "image",
                 "data": "data:image/png;base64,BASE64",
                 "mimeType": "image/png"
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        let items = items.to_vec();
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,BASE64".into(),
+                detail: None,
+            }]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_original_detail_metadata_on_mcp_images() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "data": "BASE64",
+                "mimeType": "image/png",
+                "_meta": {
+                    "codex/imageDetail": "original",
+                },
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        let items = items.to_vec();
+        assert_eq!(
+            items,
+            vec![FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,BASE64".into(),
+                detail: Some(ImageDetail::Original),
+            }]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn ignores_unknown_mcp_image_detail_metadata() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "data": "BASE64",
+                "mimeType": "image/png",
+                "_meta": {
+                    "codex/imageDetail": "high",
+                },
             })],
             structured_content: None,
             is_error: Some(false),

@@ -29,4 +29,4 @@ unixSockets: { [key in string]?: NetworkUnixSocketPermission } | null,
 /**
  * Legacy compatibility view derived from `unix_sockets`.
  */
-allowUnixSockets: Array<string> | null, allowLocalBinding: boolean | null, dangerFullAccessDenylistOnly: boolean | null, };
+allowUnixSockets: Array<string> | null, allowLocalBinding: boolean | null, };

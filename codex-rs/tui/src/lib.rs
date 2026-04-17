@@ -39,6 +39,7 @@ use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
@@ -66,10 +67,12 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::Level;
 use tracing::error;
 use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
@@ -236,6 +239,7 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+#[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
     config: Config,
@@ -243,6 +247,7 @@ async fn start_embedded_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
@@ -252,6 +257,7 @@ async fn start_embedded_app_server(
         loader_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         environment_manager,
         InProcessAppServerClient::start,
     )
@@ -368,6 +374,7 @@ async fn start_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerClient> {
     match target {
@@ -378,6 +385,7 @@ async fn start_app_server(
             loader_overrides,
             cloud_requirements,
             feedback,
+            log_db,
             environment_manager,
         )
         .await
@@ -402,6 +410,7 @@ pub(crate) async fn start_app_server_for_picker(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
+        /*log_db*/ None,
         environment_manager,
     )
     .await?;
@@ -428,6 +437,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
     start_client: F,
 ) -> color_eyre::Result<InProcessAppServerClient>
@@ -452,6 +462,7 @@ where
         loader_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         environment_manager,
         config_warnings,
         session_source: codex_protocol::protocol::SessionSource::Cli,
@@ -722,7 +733,12 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::from_env());
+    let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
+        ExecServerRuntimePaths::from_optional_paths(
+            arg0_paths.codex_self_exe.clone(),
+            arg0_paths.codex_linux_sandbox_exe.clone(),
+        )?,
+    )));
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
@@ -864,7 +880,7 @@ pub async fn run_main(
     if matches!(app_server_target, AppServerTarget::Embedded) {
         #[allow(clippy::print_stderr)]
         if let Err(err) = enforce_login_restrictions(&AuthConfig {
-            codex_home: config.codex_home.clone(),
+            codex_home: config.codex_home.to_path_buf(),
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
@@ -963,9 +979,10 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = get_state_db(&config)
-        .await
-        .map(|db| log_db::start(db).with_filter(env_filter()));
+    let log_db = get_state_db(&config).await.map(log_db::start);
+    let log_db_layer = log_db
+        .clone()
+        .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
 
     let _ = tracing_subscriber::registry()
         .with(file_layer)
@@ -987,6 +1004,7 @@ pub async fn run_main(
         cli_kv_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         remote_url,
         remote_auth_token,
         environment_manager,
@@ -1007,6 +1025,7 @@ async fn run_ratatui_app(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     remote_url: Option<String>,
     remote_auth_token: Option<String>,
     environment_manager: Arc<EnvironmentManager>,
@@ -1065,6 +1084,7 @@ async fn run_ratatui_app(
             loader_overrides.clone(),
             cloud_requirements.clone(),
             feedback.clone(),
+            log_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1131,7 +1151,7 @@ async fn run_ratatui_app(
         // status detection edge cases.
         if show_login_screen && !remote_mode {
             cloud_requirements = cloud_requirements_loader_for_storage(
-                initial_config.codex_home.clone(),
+                initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
@@ -1372,7 +1392,7 @@ async fn run_ratatui_app(
     // this must happen after the last possible reload.
     if let Some(w) = crate::render::highlight::set_theme_override(
         config.tui_theme.clone(),
-        find_codex_home().ok(),
+        find_codex_home().ok().map(AbsolutePathBuf::into_path_buf),
     ) {
         config.startup_warnings.push(w);
     }
@@ -1403,6 +1423,7 @@ async fn run_ratatui_app(
             loader_overrides,
             cloud_requirements.clone(),
             feedback.clone(),
+            log_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1766,6 +1787,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
+            /*log_db*/ None,
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         )
         .await
@@ -2046,7 +2068,7 @@ mod tests {
         std::fs::write(&rollout_path, "")?;
 
         let state_runtime = codex_state::StateRuntime::init(
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             config.model_provider_id.clone(),
         )
         .await
@@ -2157,6 +2179,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
+            /*log_db*/ None,
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
@@ -2226,6 +2249,7 @@ mod tests {
             approval_policy: config.permissions.approval_policy.value(),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             network: None,
+            file_system_sandbox_policy: None,
             model,
             personality: None,
             collaboration_mode: None,
@@ -2475,7 +2499,7 @@ trust_level = "untrusted"
         )?;
 
         let runtime = codex_state::StateRuntime::init(
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             config.model_provider_id.clone(),
         )
         .await

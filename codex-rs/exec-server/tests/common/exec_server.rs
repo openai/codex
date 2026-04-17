@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -8,9 +9,9 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
-use codex_utils_cargo_bin::cargo_bin;
 use futures::SinkExt;
 use futures::StreamExt;
+use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
@@ -21,11 +22,13 @@ use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct ExecServerHarness {
+    _codex_home: TempDir,
+    _helper_paths: TestCodexHelperPaths,
     child: Child,
     websocket_url: String,
     websocket: tokio_tungstenite::WebSocketStream<
@@ -40,18 +43,36 @@ impl Drop for ExecServerHarness {
     }
 }
 
+pub(crate) struct TestCodexHelperPaths {
+    pub(crate) codex_exe: PathBuf,
+    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+}
+
+pub(crate) fn test_codex_helper_paths() -> anyhow::Result<TestCodexHelperPaths> {
+    let (helper_binary, codex_linux_sandbox_exe) = super::current_test_binary_helper_paths()?;
+    Ok(TestCodexHelperPaths {
+        codex_exe: helper_binary,
+        codex_linux_sandbox_exe,
+    })
+}
+
 pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
-    let binary = cargo_bin("codex-exec-server")?;
-    let mut child = Command::new(binary);
-    child.args(["--listen", "ws://127.0.0.1:0"]);
+    let helper_paths = test_codex_helper_paths()?;
+    let codex_home = TempDir::new()?;
+    let mut child = Command::new(&helper_paths.codex_exe);
+    child.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
     child.stdin(Stdio::null());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());
+    child.kill_on_drop(true);
+    child.env("CODEX_HOME", codex_home.path());
     let mut child = child.spawn()?;
 
     let websocket_url = read_listen_url_from_stdout(&mut child).await?;
     let (websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
     Ok(ExecServerHarness {
+        _codex_home: codex_home,
+        _helper_paths: helper_paths,
         child,
         websocket_url,
         websocket,
@@ -140,6 +161,9 @@ impl ExecServerHarness {
 
     pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
         self.child.start_kill()?;
+        timeout(CONNECT_TIMEOUT, self.child.wait())
+            .await
+            .map_err(|_| anyhow!("timed out waiting for exec-server shutdown"))??;
         Ok(())
     }
 

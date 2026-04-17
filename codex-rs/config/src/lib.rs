@@ -14,6 +14,7 @@ pub mod profile_toml;
 mod project_root_markers;
 mod requirements_exec_policy;
 pub mod schema;
+pub mod shell_environment;
 mod skills_config;
 mod state;
 pub mod types;
@@ -85,3 +86,5 @@ pub use state::ConfigLayerEntry;
 pub use state::ConfigLayerStack;
 pub use state::ConfigLayerStackOrdering;
 pub use state::LoaderOverrides;
+
+pub use codex_app_server_protocol::ConfigLayerSource;

@@ -15,6 +15,7 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::EnvironmentManager;
+use codex_app_server_client::ExecServerRuntimePaths;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_client::InProcessServerEvent;
@@ -327,7 +328,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
     let cloud_requirements = cloud_requirements_loader_for_storage(
-        codex_home.clone(),
+        codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
@@ -417,7 +418,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     set_default_client_residency_requirement(config.enforce_residency.value());
 
     if let Err(err) = enforce_login_restrictions(&AuthConfig {
-        codex_home: config.codex_home.clone(),
+        codex_home: config.codex_home.to_path_buf(),
         auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
         forced_login_method: config.forced_login_method,
         forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
@@ -469,6 +470,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             range: None,
         })
         .collect();
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
     let in_process_start_args = InProcessClientStartArgs {
         arg0_paths,
         config: std::sync::Arc::new(config.clone()),
@@ -476,7 +481,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         loader_overrides: run_loader_overrides,
         cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
-        environment_manager: std::sync::Arc::new(EnvironmentManager::from_env()),
+        log_db: None,
+        environment_manager: std::sync::Arc::new(EnvironmentManager::from_env_with_runtime_paths(
+            Some(local_runtime_paths),
+        )),
         config_warnings,
         session_source: SessionSource::Exec,
         enable_codex_api_key_env: true,
@@ -1014,7 +1022,7 @@ fn session_configured_from_thread_response(
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: SandboxPolicy,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
     let session_id = codex_protocol::ThreadId::from_string(thread_id)
@@ -1184,7 +1192,7 @@ async fn latest_thread_cwd(thread: &AppServerThread) -> PathBuf {
     {
         return cwd;
     }
-    thread.cwd.clone()
+    thread.cwd.to_path_buf()
 }
 
 async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
@@ -1238,7 +1246,8 @@ async fn resolve_resume_thread_id(
             .await
             .map_err(anyhow::Error::msg)?;
             for thread in response.data {
-                if args.all || cwds_match(config.cwd.as_path(), &latest_thread_cwd(&thread).await) {
+                let latest_cwd = latest_thread_cwd(&thread).await;
+                if args.all || cwds_match(config.cwd.as_path(), latest_cwd.as_path()) {
                     return Ok(Some(thread.id));
                 }
             }
@@ -1302,7 +1311,8 @@ async fn resolve_resume_thread_id(
             if thread.name.as_deref() != Some(session_id) {
                 continue;
             }
-            if args.all || cwds_match(config.cwd.as_path(), &latest_thread_cwd(&thread).await) {
+            let latest_cwd = latest_thread_cwd(&thread).await;
+            if args.all || cwds_match(config.cwd.as_path(), latest_cwd.as_path()) {
                 return Ok(Some(thread.id));
             }
         }

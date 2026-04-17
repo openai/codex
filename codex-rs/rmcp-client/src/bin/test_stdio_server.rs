@@ -1,6 +1,10 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use rmcp::ErrorData as McpError;
 use rmcp::ServiceExt;
@@ -25,7 +29,9 @@ use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::Barrier;
 use tokio::task;
+use tokio::time::sleep;
 
 #[derive(Clone)]
 struct TestToolServer {
@@ -36,6 +42,7 @@ struct TestToolServer {
 
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
+const SANDBOX_STATE_META_CAPABILITY: &str = "codex/sandbox-state-meta";
 const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
 pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
@@ -44,11 +51,27 @@ pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
 
 impl TestToolServer {
     fn new() -> Self {
+        #[expect(clippy::expect_used)]
+        let sandbox_meta_schema: JsonObject = serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("sandbox_meta tool schema should deserialize");
+        let mut sandbox_meta_tool = Tool::new(
+            Cow::Borrowed("sandbox_meta"),
+            Cow::Borrowed("Return the MCP request metadata received by this test server."),
+            Arc::new(sandbox_meta_schema),
+        );
+        sandbox_meta_tool.annotations = Some(ToolAnnotations::new().read_only(true));
+
         let tools = vec![
             Self::echo_tool(),
             Self::echo_dash_tool(),
+            Self::sync_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
+            sandbox_meta_tool,
         ];
         let resources = vec![Self::memo_resource()];
         let resource_templates = vec![Self::memo_template()];
@@ -112,6 +135,50 @@ impl TestToolServer {
         tool
     }
 
+    fn sync_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "sleep_before_ms": { "type": "number" },
+                "sleep_after_ms": { "type": "number" },
+                "barrier": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string" },
+                        "participants": { "type": "number" },
+                        "timeout_ms": { "type": "number" }
+                    },
+                    "required": ["id", "participants"],
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        }))
+        .expect("sync tool schema should deserialize");
+
+        let mut tool = Tool::new(
+            Cow::Borrowed("sync"),
+            Cow::Borrowed(
+                "Synchronize concurrent test calls and optionally delay before or after the barrier.",
+            ),
+            Arc::new(schema),
+        );
+        #[expect(clippy::expect_used)]
+        let output_schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "result": { "type": "string" }
+            },
+            "required": ["result"],
+            "additionalProperties": false
+        }))
+        .expect("sync tool output schema should deserialize");
+        tool.output_schema = Some(Arc::new(output_schema));
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
+    }
+
     fn image_tool() -> Tool {
         #[expect(clippy::expect_used)]
         let schema: JsonObject = serde_json::from_value(serde_json::json!({
@@ -141,6 +208,7 @@ impl TestToolServer {
     ///   - `codex mcp add mcpimg -- /abs/path/to/test_stdio_server`
     /// - Then in Codex TUI, ask it to call:
     ///   - `mcpimg.image_scenario({"scenario":"image_only"})`
+    ///   - `mcpimg.image_scenario({"scenario":"image_only_original_detail"})`
     ///   - `mcpimg.image_scenario({"scenario":"text_then_image","caption":"Here is the image:"})`
     ///   - `mcpimg.image_scenario({"scenario":"invalid_base64_then_image"})`
     ///   - `mcpimg.image_scenario({"scenario":"invalid_image_bytes_then_image"})`
@@ -157,6 +225,7 @@ impl TestToolServer {
                     "type": "string",
                     "enum": [
                         "image_only",
+                        "image_only_original_detail",
                         "text_then_image",
                         "invalid_base64_then_image",
                         "invalid_image_bytes_then_image",
@@ -227,6 +296,42 @@ struct EchoArgs {
     env_var: Option<String>,
 }
 
+const DEFAULT_SYNC_TIMEOUT_MS: u64 = 1_000;
+
+static SYNC_BARRIERS: OnceLock<tokio::sync::Mutex<HashMap<String, SyncBarrierState>>> =
+    OnceLock::new();
+
+struct SyncBarrierState {
+    barrier: Arc<Barrier>,
+    participants: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncBarrierArgs {
+    id: String,
+    participants: usize,
+    #[serde(default = "default_sync_timeout_ms")]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncArgs {
+    #[serde(default)]
+    sleep_before_ms: Option<u64>,
+    #[serde(default)]
+    sleep_after_ms: Option<u64>,
+    #[serde(default)]
+    barrier: Option<SyncBarrierArgs>,
+}
+
+fn default_sync_timeout_ms() -> u64 {
+    DEFAULT_SYNC_TIMEOUT_MS
+}
+
+fn sync_barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, SyncBarrierState>> {
+    SYNC_BARRIERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "snake_case")]
 /// Scenarios for `image_scenario`, intended to exercise Codex TUI handling of MCP image outputs.
@@ -236,6 +341,7 @@ struct EchoArgs {
 /// invalid image.
 enum ImageScenario {
     ImageOnly,
+    ImageOnlyOriginalDetail,
     TextThenImage,
     InvalidBase64ThenImage,
     InvalidImageBytesThenImage,
@@ -255,12 +361,18 @@ struct ImageScenarioArgs {
 
 impl ServerHandler for TestToolServer {
     fn get_info(&self) -> ServerInfo {
+        let mut capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .enable_resources()
+            .build();
+        capabilities.experimental = Some(BTreeMap::from([(
+            SANDBOX_STATE_META_CAPABILITY.to_string(),
+            JsonObject::new(),
+        )]));
+
         ServerInfo {
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .enable_tool_list_changed()
-                .enable_resources()
-                .build(),
+            capabilities,
             ..ServerInfo::default()
         }
     }
@@ -332,9 +444,15 @@ impl ServerHandler for TestToolServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
+            "sandbox_meta" => Ok(CallToolResult {
+                content: Vec::new(),
+                structured_content: Some(serde_json::Value::Object(context.meta.0)),
+                is_error: Some(false),
+                meta: None,
+            }),
             "echo" | "echo-tool" => {
                 let args: EchoArgs = match request.arguments {
                     Some(arguments) => serde_json::from_value(serde_json::Value::Object(
@@ -387,6 +505,10 @@ impl ServerHandler for TestToolServer {
                 let args = Self::parse_call_args::<ImageScenarioArgs>(&request, "image_scenario")?;
                 Self::image_scenario_result(args)
             }
+            "sync" => {
+                let args = Self::parse_call_args::<SyncArgs>(&request, "sync")?;
+                Self::sync_result(args).await
+            }
             other => Err(McpError::invalid_params(
                 format!("unknown tool: {other}"),
                 None,
@@ -433,6 +555,21 @@ impl TestToolServer {
             ImageScenario::ImageOnly => {
                 content.push(rmcp::model::Content::image(valid_data_b64, mime_type));
             }
+            ImageScenario::ImageOnlyOriginalDetail => {
+                let mut meta = rmcp::model::Meta::new();
+                meta.insert(
+                    "codex/imageDetail".to_string(),
+                    serde_json::json!("original"),
+                );
+                content.push(rmcp::model::Annotated::new(
+                    rmcp::model::RawContent::Image(rmcp::model::RawImageContent {
+                        data: valid_data_b64,
+                        mime_type,
+                        meta: Some(meta),
+                    }),
+                    None,
+                ));
+            }
             ImageScenario::TextThenImage => {
                 content.push(rmcp::model::Content::text(caption));
                 content.push(rmcp::model::Content::image(valid_data_b64, mime_type));
@@ -468,6 +605,102 @@ impl TestToolServer {
         }
 
         Ok(CallToolResult::success(content))
+    }
+
+    async fn sync_result(args: SyncArgs) -> Result<CallToolResult, McpError> {
+        if let Some(delay) = args.sleep_before_ms
+            && delay > 0
+        {
+            sleep(Duration::from_millis(delay)).await;
+        }
+
+        if let Some(barrier) = args.barrier {
+            wait_on_sync_barrier(barrier).await?;
+        }
+
+        if let Some(delay) = args.sleep_after_ms
+            && delay > 0
+        {
+            sleep(Duration::from_millis(delay)).await;
+        }
+
+        Ok(CallToolResult {
+            content: Vec::new(),
+            structured_content: Some(json!({ "result": "ok" })),
+            is_error: Some(false),
+            meta: None,
+        })
+    }
+}
+
+async fn wait_on_sync_barrier(args: SyncBarrierArgs) -> Result<(), McpError> {
+    if args.participants == 0 {
+        return Err(McpError::invalid_params(
+            "barrier participants must be greater than zero",
+            None,
+        ));
+    }
+
+    if args.timeout_ms == 0 {
+        return Err(McpError::invalid_params(
+            "barrier timeout must be greater than zero",
+            None,
+        ));
+    }
+
+    let barrier_id = args.id.clone();
+    let barrier = {
+        let mut map = sync_barrier_map().lock().await;
+        match map.entry(barrier_id.clone()) {
+            Entry::Occupied(entry) => {
+                let state = entry.get();
+                if state.participants != args.participants {
+                    let existing = state.participants;
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "barrier {barrier_id} already registered with {existing} participants"
+                        ),
+                        None,
+                    ));
+                }
+                state.barrier.clone()
+            }
+            Entry::Vacant(entry) => {
+                let barrier = Arc::new(Barrier::new(args.participants));
+                entry.insert(SyncBarrierState {
+                    barrier: barrier.clone(),
+                    participants: args.participants,
+                });
+                barrier
+            }
+        }
+    };
+
+    let wait_result =
+        match tokio::time::timeout(Duration::from_millis(args.timeout_ms), barrier.wait()).await {
+            Ok(wait_result) => wait_result,
+            Err(_) => {
+                remove_sync_barrier_if_current(&barrier_id, &barrier).await;
+                return Err(McpError::invalid_params(
+                    "sync barrier wait timed out",
+                    None,
+                ));
+            }
+        };
+
+    if wait_result.is_leader() {
+        remove_sync_barrier_if_current(&barrier_id, &barrier).await;
+    }
+
+    Ok(())
+}
+
+async fn remove_sync_barrier_if_current(barrier_id: &str, barrier: &Arc<Barrier>) {
+    let mut map = sync_barrier_map().lock().await;
+    if let Some(state) = map.get(barrier_id)
+        && Arc::ptr_eq(&state.barrier, barrier)
+    {
+        map.remove(barrier_id);
     }
 }
 

@@ -7,13 +7,17 @@
  */
 export type FsGetMetadataResponse = {
 /**
- * Whether the path currently resolves to a directory.
+ * Whether the path resolves to a directory.
  */
 isDirectory: boolean,
 /**
- * Whether the path currently resolves to a regular file.
+ * Whether the path resolves to a regular file.
  */
 isFile: boolean,
+/**
+ * Whether the path itself is a symbolic link.
+ */
+isSymlink: boolean,
 /**
  * File creation time in Unix milliseconds when available, otherwise `0`.
  */

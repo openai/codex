@@ -579,6 +579,31 @@
           "type": "object"
         },
         {
+          "description": "Append raw Responses API items to the thread history without starting a user turn.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/inject_items"
+              ],
+              "title": "Thread/injectItemsRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadInjectItemsParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/injectItemsRequest",
+          "type": "object"
+        },
+        {
           "properties": {
             "id": {
               "$ref": "#/definitions/v2/RequestId"
@@ -600,6 +625,30 @@
             "params"
           ],
           "title": "Skills/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "marketplace/add"
+              ],
+              "title": "Marketplace/addRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/MarketplaceAddParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Marketplace/addRequest",
           "type": "object"
         },
         {
@@ -1792,11 +1841,15 @@
           ]
         },
         "cwd": {
-          "description": "The command's working directory.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The command's working directory."
         },
         "itemId": {
           "type": "string"
@@ -4330,20 +4383,40 @@
           "properties": {
             "method": {
               "enum": [
-                "thread/realtime/transcriptUpdated"
+                "thread/realtime/transcript/delta"
               ],
-              "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
+              "title": "Thread/realtime/transcript/deltaNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptUpdatedNotification"
+              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptDeltaNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Thread/realtime/transcriptUpdatedNotification",
+          "title": "Thread/realtime/transcript/deltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/realtime/transcript/done"
+              ],
+              "title": "Thread/realtime/transcript/doneNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptDoneNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/transcript/doneNotification",
           "type": "object"
         },
         {
@@ -5881,7 +5954,7 @@
                 "type": "string"
               },
               "path": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "type": {
                 "enum": [
@@ -7436,6 +7509,16 @@
           "description": {
             "type": "string"
           },
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/MigrationDetails"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "itemType": {
             "$ref": "#/definitions/v2/ExternalAgentConfigMigrationItemType"
           }
@@ -7451,6 +7534,7 @@
           "AGENTS_MD",
           "CONFIG",
           "SKILLS",
+          "PLUGINS",
           "MCP_SERVER_CONFIG"
         ],
         "type": "string"
@@ -7688,11 +7772,15 @@
             "type": "integer"
           },
           "isDirectory": {
-            "description": "Whether the path currently resolves to a directory.",
+            "description": "Whether the path resolves to a directory.",
             "type": "boolean"
           },
           "isFile": {
-            "description": "Whether the path currently resolves to a regular file.",
+            "description": "Whether the path resolves to a regular file.",
+            "type": "boolean"
+          },
+          "isSymlink": {
+            "description": "Whether the path itself is a symbolic link.",
             "type": "boolean"
           },
           "modifiedAtMs": {
@@ -7705,6 +7793,7 @@
           "createdAtMs",
           "isDirectory",
           "isFile",
+          "isSymlink",
           "modifiedAtMs"
         ],
         "title": "FsGetMetadataResponse",
@@ -8169,7 +8258,7 @@
                 "type": "string"
               },
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "source": {
                 "$ref": "#/definitions/v2/GuardianCommandSource"
@@ -8200,7 +8289,7 @@
                 "type": "array"
               },
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "program": {
                 "type": "string"
@@ -8229,11 +8318,11 @@
           {
             "properties": {
               "cwd": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "files": {
                 "items": {
-                  "type": "string"
+                  "$ref": "#/definitions/v2/AbsolutePathBuf"
                 },
                 "type": "array"
               },
@@ -8508,8 +8597,16 @@
           "scope": {
             "$ref": "#/definitions/v2/HookScope"
           },
+          "source": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/HookSource"
+              }
+            ],
+            "default": "unknown"
+          },
           "sourcePath": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "startedAt": {
             "format": "int64",
@@ -8543,6 +8640,19 @@
         "enum": [
           "thread",
           "turn"
+        ],
+        "type": "string"
+      },
+      "HookSource": {
+        "enum": [
+          "system",
+          "user",
+          "project",
+          "mdm",
+          "sessionFlags",
+          "legacyManagedConfigFile",
+          "legacyManagedConfigMdm",
+          "unknown"
         ],
         "type": "string"
       },
@@ -9030,6 +9140,55 @@
         "title": "LogoutAccountResponse",
         "type": "object"
       },
+      "MarketplaceAddParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "refName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "sparsePaths": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "MarketplaceAddParams",
+        "type": "object"
+      },
+      "MarketplaceAddResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "alreadyAdded": {
+            "type": "boolean"
+          },
+          "installedRoot": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "marketplaceName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "alreadyAdded",
+          "installedRoot",
+          "marketplaceName"
+        ],
+        "title": "MarketplaceAddResponse",
+        "type": "object"
+      },
       "MarketplaceInterface": {
         "properties": {
           "displayName": {
@@ -9424,6 +9583,20 @@
           }
         ]
       },
+      "MigrationDetails": {
+        "properties": {
+          "plugins": {
+            "items": {
+              "$ref": "#/definitions/v2/PluginsMigration"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "plugins"
+        ],
+        "type": "object"
+      },
       "ModeKind": {
         "description": "Initial collaboration mode to use when the TUI starts.",
         "enum": [
@@ -9703,12 +9876,6 @@
             },
             "type": [
               "array",
-              "null"
-            ]
-          },
-          "dangerFullAccessDenylistOnly": {
-            "type": [
-              "boolean",
               "null"
             ]
           },
@@ -10352,6 +10519,24 @@
         "title": "PluginUninstallResponse",
         "type": "object"
       },
+      "PluginsMigration": {
+        "properties": {
+          "marketplaceName": {
+            "type": "string"
+          },
+          "pluginNames": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "marketplaceName",
+          "pluginNames"
+        ],
+        "type": "object"
+      },
       "ProfileV2": {
         "additionalProperties": true,
         "properties": {
@@ -10612,6 +10797,13 @@
         "enum": [
           "v1",
           "v2"
+        ],
+        "type": "string"
+      },
+      "RealtimeOutputModality": {
+        "enum": [
+          "text",
+          "audio"
         ],
         "type": "string"
       },
@@ -12034,15 +12226,23 @@
             ]
           },
           "iconLarge": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "iconSmall": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "shortDescription": {
@@ -12086,7 +12286,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "scope": {
             "$ref": "#/definitions/v2/SkillScope"
@@ -12139,7 +12339,7 @@
             "type": "string"
           },
           "path": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "shortDescription": {
             "type": [
@@ -12523,8 +12723,12 @@
             "type": "integer"
           },
           "cwd": {
-            "description": "Working directory captured for the thread.",
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Working directory captured for the thread."
           },
           "ephemeral": {
             "description": "Whether the thread is ephemeral and should not be materialized on disk.",
@@ -12804,13 +13008,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },
@@ -12861,6 +13065,30 @@
       },
       "ThreadId": {
         "type": "string"
+      },
+      "ThreadInjectItemsParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "items": {
+            "description": "Raw Responses API items to append to the thread's model-visible history.",
+            "items": true,
+            "type": "array"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "threadId"
+        ],
+        "title": "ThreadInjectItemsParams",
+        "type": "object"
+      },
+      "ThreadInjectItemsResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadInjectItemsResponse",
+        "type": "object"
       },
       "ThreadItem": {
         "oneOf": [
@@ -13044,8 +13272,12 @@
                 "type": "array"
               },
               "cwd": {
-                "description": "The command's working directory.",
-                "type": "string"
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/AbsolutePathBuf"
+                  }
+                ],
+                "description": "The command's working directory."
               },
               "durationMs": {
                 "description": "The duration of the command execution in milliseconds.",
@@ -13157,6 +13389,12 @@
               },
               "id": {
                 "type": "string"
+              },
+              "mcpAppResourceUri": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "result": {
                 "anyOf": [
@@ -13374,7 +13612,7 @@
                 "type": "string"
               },
               "path": {
-                "type": "string"
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
               },
               "type": {
                 "enum": [
@@ -13407,9 +13645,13 @@
                 ]
               },
               "savedPath": {
-                "type": [
-                  "string",
-                  "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/AbsolutePathBuf"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "status": {
@@ -13646,6 +13888,13 @@
         ],
         "title": "ThreadLoadedListResponse",
         "type": "object"
+      },
+      "ThreadMemoryMode": {
+        "enum": [
+          "enabled",
+          "disabled"
+        ],
+        "type": "string"
       },
       "ThreadMetadataGitInfoUpdateParams": {
         "properties": {
@@ -13954,14 +14203,38 @@
         "title": "ThreadRealtimeStartedNotification",
         "type": "object"
       },
-      "ThreadRealtimeTranscriptUpdatedNotification": {
+      "ThreadRealtimeTranscriptDeltaNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
+        "properties": {
+          "delta": {
+            "description": "Live transcript delta from the realtime event.",
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta",
+          "role",
+          "threadId"
+        ],
+        "title": "ThreadRealtimeTranscriptDeltaNotification",
+        "type": "object"
+      },
+      "ThreadRealtimeTranscriptDoneNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - final transcript text emitted when realtime completes a transcript part.",
         "properties": {
           "role": {
             "type": "string"
           },
           "text": {
+            "description": "Final complete text for the transcript part.",
             "type": "string"
           },
           "threadId": {
@@ -13973,7 +14246,7 @@
           "text",
           "threadId"
         ],
-        "title": "ThreadRealtimeTranscriptUpdatedNotification",
+        "title": "ThreadRealtimeTranscriptDoneNotification",
         "type": "object"
       },
       "ThreadResumeParams": {
@@ -14101,13 +14374,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },
@@ -14400,13 +14673,13 @@
             "description": "Reviewer currently used for approval requests on this thread."
           },
           "cwd": {
-            "type": "string"
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
           "instructionSources": {
             "default": [],
             "description": "Instruction source files currently loaded for this thread.",
             "items": {
-              "type": "string"
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
             },
             "type": "array"
           },
