@@ -215,7 +215,6 @@ use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
-use codex_core::append_thread_name;
 use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -311,13 +310,11 @@ use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
-use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
-use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout::state_db::get_state_db;
 use codex_rollout::state_db::reconcile_rollout;
@@ -331,9 +328,11 @@ use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
 use codex_thread_store::SortDirection as StoreSortDirection;
 use codex_thread_store::StoredThread;
+use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
 use codex_thread_store::ThreadSortKey as StoreThreadSortKey;
 use codex_thread_store::ThreadStore;
 use codex_thread_store::ThreadStoreError;
+use codex_thread_store::UpdateThreadMetadataParams as StoreUpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_json_to_toml::json_to_toml;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
@@ -2897,54 +2896,23 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(path)) => Some(path),
-                Ok(None) => None,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
-
-        let Some(rollout_path) = rollout_path else {
-            self.send_invalid_request_error(request_id, format!("thread not found: {thread_id}"))
-                .await;
-            return;
-        };
-
-        let msg = EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
-            thread_id,
-            thread_name: Some(name.clone()),
-        });
-        let item = RolloutItem::EventMsg(msg);
-        if let Err(err) = append_rollout_item_to_path(rollout_path.as_path(), &item).await {
-            self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
+        if let Err(err) = self
+            .thread_store
+            .update_thread_metadata(StoreUpdateThreadMetadataParams {
+                thread_id,
+                patch: StoreThreadMetadataPatch {
+                    name: Some(name.clone()),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+        {
+            self.outgoing
+                .send_error(request_id, thread_store_write_error("set thread name", err))
                 .await;
             return;
         }
-        if let Err(err) = append_thread_name(&self.config.codex_home, thread_id, &name).await {
-            self.send_internal_error(request_id, format!("failed to index thread name: {err}"))
-                .await;
-            return;
-        }
-
-        let state_db_ctx = open_state_db_for_direct_thread_lookup(&self.config).await;
-        reconcile_rollout(
-            state_db_ctx.as_deref(),
-            rollout_path.as_path(),
-            self.config.model_provider_id.as_str(),
-            /*builder*/ None,
-            &[],
-            /*archived_only*/ None,
-            /*new_thread_memory_mode*/ None,
-        )
-        .await;
 
         self.outgoing
             .send_response(request_id, ThreadSetNameResponse {})
@@ -2998,72 +2966,26 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(path)) => Some(path),
-                Ok(None) => None,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
-
-        let Some(rollout_path) = rollout_path else {
-            self.send_invalid_request_error(request_id, format!("thread not found: {thread_id}"))
-                .await;
-            return;
-        };
-
-        let mut session_meta = match read_session_meta_line(rollout_path.as_path()).await {
-            Ok(session_meta) => session_meta,
-            Err(err) => {
-                self.send_internal_error(
+        if let Err(err) = self
+            .thread_store
+            .update_thread_metadata(StoreUpdateThreadMetadataParams {
+                thread_id,
+                patch: StoreThreadMetadataPatch {
+                    memory_mode: Some(mode.to_core()),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+        {
+            self.outgoing
+                .send_error(
                     request_id,
-                    format!("failed to set thread memory mode: {err}"),
+                    thread_store_write_error("set thread memory mode", err),
                 )
                 .await;
-                return;
-            }
-        };
-        if session_meta.meta.id != thread_id {
-            self.send_internal_error(
-                request_id,
-                format!(
-                    "failed to set thread memory mode: rollout session metadata id mismatch: expected {thread_id}, found {}",
-                    session_meta.meta.id
-                ),
-            )
-            .await;
             return;
         }
-        session_meta.meta.memory_mode = Some(mode.as_str().to_string());
-        let item = RolloutItem::SessionMeta(session_meta);
-
-        if let Err(err) = append_rollout_item_to_path(rollout_path.as_path(), &item).await {
-            self.send_internal_error(
-                request_id,
-                format!("failed to set thread memory mode: {err}"),
-            )
-            .await;
-            return;
-        }
-
-        let state_db_ctx = open_state_db_for_direct_thread_lookup(&self.config).await;
-        reconcile_rollout(
-            state_db_ctx.as_deref(),
-            rollout_path.as_path(),
-            self.config.model_provider_id.as_str(),
-            /*builder*/ None,
-            &[],
-            /*archived_only*/ None,
-            /*new_thread_memory_mode*/ None,
-        )
-        .await;
 
         self.outgoing
             .send_response(request_id, ThreadMemoryModeSetResponse {})
@@ -9433,6 +9355,26 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
         err => JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
             message: format!("failed to list threads: {err}"),
+            data: None,
+        },
+    }
+}
+
+fn thread_store_write_error(operation: &str, err: ThreadStoreError) -> JSONRPCErrorError {
+    match err {
+        ThreadStoreError::ThreadNotFound { thread_id } => JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: format!("thread not found: {thread_id}"),
+            data: None,
+        },
+        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        },
+        err => JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("failed to {operation}: {err}"),
             data: None,
         },
     }
