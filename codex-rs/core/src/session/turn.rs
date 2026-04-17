@@ -160,6 +160,11 @@ pub(crate) async fn run_turn(
     if pre_sampling_compacted && let Some(mut client_session) = prewarmed_client_session.take() {
         client_session.reset_websocket_session();
     }
+    // This pre-sampling kickoff captures full context before this turn records its
+    // context diff. If the candidate is later applied, that captured context can
+    // sit directly before a retained suffix that starts with the same turn's diff.
+    // This is redundant but intentional: we keep the suffix untouched and rely on
+    // the normal prefix/current-history match check before applying.
     maybe_start_prefix_compact(
         &sess,
         &turn_context,
