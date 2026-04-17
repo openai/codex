@@ -163,6 +163,7 @@ fn run_setup_refresh_inner(
         return Ok(());
     }
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
+    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -174,7 +175,7 @@ fn run_setup_refresh_inner(
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
-        deny_write_paths: overrides.deny_write_paths.unwrap_or_default(),
+        deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
@@ -588,6 +589,16 @@ fn find_setup_exe() -> PathBuf {
         if candidate.exists() {
             return candidate;
         }
+
+        // Standalone installs keep Windows helper binaries under
+        // `codex-resources/` next to `codex.exe`, so elevation needs to probe
+        // that sibling folder before falling back to PATH.
+        let resource_candidate = dir
+            .join("codex-resources")
+            .join("codex-windows-sandbox-setup.exe");
+        if resource_candidate.exists() {
+            return resource_candidate;
+        }
     }
     PathBuf::from("codex-windows-sandbox-setup.exe")
 }
@@ -735,6 +746,7 @@ pub fn run_elevated_setup(
         )
     })?;
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
+    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
         SandboxNetworkIdentity::from_policy(request.policy, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
@@ -746,7 +758,7 @@ pub fn run_elevated_setup(
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
         write_roots,
-        deny_write_paths: overrides.deny_write_paths.unwrap_or_default(),
+        deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
@@ -795,6 +807,31 @@ fn build_payload_roots(
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
+}
+
+fn build_payload_deny_write_paths(
+    request: &SandboxSetupRequest<'_>,
+    explicit_deny_write_paths: Option<Vec<PathBuf>>,
+) -> Vec<PathBuf> {
+    let allow_deny_paths: AllowDenyPaths = compute_allow_paths(
+        request.policy,
+        request.policy_cwd,
+        request.command_cwd,
+        request.env_map,
+    );
+    let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| {
+            if path.exists() {
+                dunce::canonicalize(&path).unwrap_or(path)
+            } else {
+                path
+            }
+        })
+        .collect();
+    deny_write_paths.extend(allow_deny_paths.deny);
+    deny_write_paths
 }
 
 fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
@@ -1264,6 +1301,54 @@ mod tests {
             canonical_windows_platform_default_roots()
                 .into_iter()
                 .all(|path| !read_roots.contains(&path))
+        );
+    }
+
+    #[test]
+    fn payload_deny_write_paths_merge_explicit_and_protected_children() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let extra_write_root = tmp.path().join("extra-write-root");
+        let command_git = command_cwd.join(".git");
+        let extra_codex = extra_write_root.join(".codex");
+        let explicit_deny = tmp.path().join("explicit-deny");
+        fs::create_dir_all(&command_git).expect("create command .git");
+        fs::create_dir_all(&extra_codex).expect("create extra .codex");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::from_absolute_path(&extra_write_root)
+                    .expect("absolute writable root"),
+            ],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let request = super::SandboxSetupRequest {
+            policy: &policy,
+            policy_cwd: &command_cwd,
+            command_cwd: &command_cwd,
+            env_map: &HashMap::new(),
+            codex_home: &codex_home,
+            proxy_enforced: false,
+        };
+
+        let deny_write_paths =
+            super::build_payload_deny_write_paths(&request, Some(vec![explicit_deny.clone()]));
+
+        assert_eq!(
+            [
+                dunce::canonicalize(&command_git).expect("canonical command .git"),
+                dunce::canonicalize(&extra_codex).expect("canonical extra .codex"),
+                explicit_deny,
+            ]
+            .into_iter()
+            .collect::<HashSet<PathBuf>>(),
+            deny_write_paths.into_iter().collect()
         );
     }
 

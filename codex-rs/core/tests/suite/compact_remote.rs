@@ -17,6 +17,7 @@ use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
@@ -33,8 +34,10 @@ use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tokio::time::Duration;
 use wiremock::ResponseTemplate;
 
 fn approx_token_count(text: &str) -> i64 {
@@ -54,6 +57,7 @@ fn estimate_compact_payload_tokens(request: &responses::ResponsesRequest) -> i64
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
+const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
@@ -116,6 +120,7 @@ async fn start_remote_realtime_server() -> responses::WebSocketTestServer {
 async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<()> {
     codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -195,6 +200,15 @@ fn assert_request_contains_realtime_end(request: &responses::ResponsesRequest) {
     );
 }
 
+async fn wait_for_turn_complete(codex: &codex_core::CodexThread) {
+    wait_for_event_with_timeout(
+        codex,
+        |ev| matches!(ev, EventMsg::TurnComplete(_)),
+        REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT,
+    )
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -240,10 +254,10 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             responsesapi_client_metadata: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_turn_complete(&codex).await;
 
     codex.submit(Op::Compact).await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_turn_complete(&codex).await;
 
     codex
         .submit(Op::UserInput {
@@ -255,7 +269,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             responsesapi_client_metadata: None,
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    wait_for_turn_complete(&codex).await;
 
     let compact_request = compact_mock.single_request();
     assert_eq!(compact_request.path(), "/v1/responses/compact");

@@ -28,6 +28,14 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
 
+fn assert_wall_time_header(output: &str) {
+    let (wall_time, marker) = output
+        .split_once('\n')
+        .expect("wall-time header should contain an Output marker");
+    assert_regex_match(r"^Wall time: [0-9]+(?:\.[0-9]+)? seconds$", wall_time);
+    assert_eq!(marker, "Output:");
+}
+
 // Verifies that a standard tool call (shell_command) exceeding the model formatting
 // limits is truncated before being sent back to the model.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -323,7 +331,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
 
     let call_id = "rmcp-truncated";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__echo");
+    let namespace = format!("mcp__{server_name}__");
 
     // Build a very large message to exceed 10KiB once serialized.
     let large_msg = "long-message-with-newlines-".repeat(6000);
@@ -333,7 +341,12 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         &server,
         sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call(call_id, &tool_name, &args_json.to_string()),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                &args_json.to_string(),
+            ),
             responses::ev_completed("resp-1"),
         ]),
     )
@@ -362,11 +375,14 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -400,9 +416,9 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         "MCP output should not include line-based truncation header: {output}"
     );
 
-    let truncated_pattern = r#"(?s)^\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#;
+    let truncated_pattern = r#"(?s)^Wall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n\{"echo":\s*"ECHOING: long-message-with-newlines-.*tokens truncated.*long-message-with-newlines-.*$"#;
     assert_regex_match(truncated_pattern, &output);
-    assert!(output.len() < 2500, "{}", output.len());
+    assert!(output.len() < 2600, "{}", output.len());
 
     Ok(())
 }
@@ -417,13 +433,13 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
 
     let call_id = "rmcp-image-no-trunc";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__image");
+    let namespace = format!("mcp__{server_name}__");
 
     mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, &tool_name, "{}"),
+            responses::ev_function_call_with_namespace(call_id, &namespace, "image", "{}"),
             ev_completed("resp-1"),
         ]),
     )
@@ -458,11 +474,14 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -502,13 +521,18 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     // Wait for completion to ensure the outbound request is captured.
     wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     let output_item = final_mock.single_request().function_call_output(call_id);
-    // Expect exactly one array element: the image item; and no trailing summary text.
+    // Expect exactly the wall-time text and image item; no trailing truncation summary.
     let output = output_item.get("output").expect("output");
     assert!(output.is_array(), "expected array output");
     let arr = output.as_array().unwrap();
-    assert_eq!(arr.len(), 1, "no truncation summary should be appended");
+    assert_eq!(arr.len(), 2, "no truncation summary should be appended");
+    assert_wall_time_header(
+        arr[0]["text"]
+            .as_str()
+            .expect("first MCP image output item should be wall-time text"),
+    );
     assert_eq!(
-        arr[0],
+        arr[1],
         json!({"type": "input_image", "image_url": openai_png})
     );
 
@@ -690,7 +714,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
 
     let call_id = "rmcp-untruncated";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__echo");
+    let namespace = format!("mcp__{server_name}__");
     let large_msg = "a".repeat(80_000);
     let args_json = serde_json::json!({ "message": large_msg });
 
@@ -698,7 +722,12 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         &server,
         sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call(call_id, &tool_name, &args_json.to_string()),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                &args_json.to_string(),
+            ),
             responses::ev_completed("resp-1"),
         ]),
     )
@@ -727,11 +756,14 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
@@ -758,22 +790,11 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         .function_call_output_text(call_id)
         .context("function_call_output present for rmcp call")?;
 
-    let parsed: Value = serde_json::from_str(&output)?;
     assert_eq!(
         output.len(),
-        80031,
-        "parsed MCP output should retain its serialized length"
+        80065,
+        "MCP output should retain its serialized length plus wall-time header"
     );
-    let expected_echo = format!("ECHOING: {large_msg}");
-    let echo_str = parsed["echo"]
-        .as_str()
-        .context("echo field should be a string in rmcp echo output")?;
-    assert_eq!(
-        echo_str.len(),
-        expected_echo.len(),
-        "echo length should match"
-    );
-    assert_eq!(echo_str, expected_echo);
     assert!(
         !output.contains("truncated"),
         "output should not include truncation markers when limit is raised: {output}"

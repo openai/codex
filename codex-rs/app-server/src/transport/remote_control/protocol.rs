@@ -48,9 +48,8 @@ pub enum ClientEvent {
         message: JSONRPCMessage,
     },
     /// Backend-generated acknowledgement for all server envelopes addressed to
-    /// `client_id` whose envelope `seq_id` is less than or equal to this ack's
-    /// `seq_id`. This cursor is client-scoped, not stream-scoped, so receivers
-    /// must not use `stream_id` to partition acks.
+    /// `client_id` and `stream_id` whose envelope `seq_id` is less than or equal
+    /// to this ack's `seq_id`. This cursor is stream-scoped.
     Ack,
     Ping,
     ClientClosed,
@@ -65,7 +64,7 @@ pub(crate) struct ClientEnvelope {
     pub(crate) client_id: ClientId,
     #[serde(rename = "stream_id", skip_serializing_if = "Option::is_none")]
     pub(crate) stream_id: Option<StreamId>,
-    /// For `Ack`, this is the backend-generated per-client cursor over
+    /// For `Ack`, this is the backend-generated per-stream cursor over
     /// `ServerEnvelope.seq_id`.
     #[serde(rename = "seq_id", skip_serializing_if = "Option::is_none")]
     pub(crate) seq_id: Option<u64>,

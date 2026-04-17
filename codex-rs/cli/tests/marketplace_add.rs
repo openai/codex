@@ -1,6 +1,8 @@
 use anyhow::Result;
+use codex_config::CONFIG_TOML_FILE;
 use codex_core::plugins::marketplace_install_root;
 use predicates::str::contains;
+use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -37,7 +39,7 @@ fn write_marketplace_source(source: &Path, marker: &str) -> Result<()> {
 }
 
 #[tokio::test]
-async fn marketplace_add_rejects_local_directory_source() -> Result<()> {
+async fn marketplace_add_local_directory_source() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source = TempDir::new()?;
     write_marketplace_source(source.path(), "local ref")?;
@@ -46,18 +48,71 @@ async fn marketplace_add_rejects_local_directory_source() -> Result<()> {
 
     codex_command(codex_home.path())?
         .current_dir(source_parent)
-        .args(["marketplace", "add", source_arg.as_str()])
+        .args(["plugin", "marketplace", "add", source_arg.as_str()])
+        .assert()
+        .success();
+
+    let installed_root = marketplace_install_root(codex_home.path()).join("debug");
+    assert!(!installed_root.exists());
+
+    let config = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
+    let config: toml::Value = toml::from_str(&config)?;
+    let expected_source = source.path().canonicalize()?.display().to_string();
+    assert_eq!(
+        config["marketplaces"]["debug"]["source_type"].as_str(),
+        Some("local")
+    );
+    assert_eq!(
+        config["marketplaces"]["debug"]["source"].as_str(),
+        Some(expected_source.as_str())
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_add_rejects_local_manifest_file_source() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "local ref")?;
+    let manifest_path = source.path().join(".agents/plugins/marketplace.json");
+
+    codex_command(codex_home.path())?
+        .args([
+            "plugin",
+            "marketplace",
+            "add",
+            manifest_path.to_str().unwrap(),
+        ])
         .assert()
         .failure()
         .stderr(contains(
-            "local marketplace sources are not supported yet; use an HTTP(S) Git URL, SSH Git URL, or GitHub owner/repo",
+            "local marketplace source must be a directory, not a file",
         ));
 
-    assert!(
-        !marketplace_install_root(codex_home.path())
-            .join("debug")
-            .exists()
-    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_add_rejects_sparse_for_local_directory_source() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let source = TempDir::new()?;
+    write_marketplace_source(source.path(), "local ref")?;
+
+    codex_command(codex_home.path())?
+        .args([
+            "plugin",
+            "marketplace",
+            "add",
+            "--sparse",
+            ".agents",
+            source.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "--sparse is only supported for git marketplace sources",
+        ));
 
     Ok(())
 }

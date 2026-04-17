@@ -1,6 +1,7 @@
 use crate::codex::Session;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -400,7 +401,7 @@ impl NetworkApprovalService {
                     approval_id,
                     /*approval_id*/ None,
                     prompt_command,
-                    turn_context.cwd.to_path_buf(),
+                    turn_context.cwd.clone(),
                     Some(prompt_reason),
                     Some(network_approval_context.clone()),
                     /*proposed_execpolicy_amendment*/ None,
@@ -488,7 +489,7 @@ impl NetworkApprovalService {
                     PendingApprovalDecision::Deny
                 }
             },
-            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
+            ReviewDecision::Denied | ReviewDecision::Abort => {
                 if let Some(review_id) = guardian_review_id.as_deref() {
                     if let Some(owner_call) = owner_call.as_ref() {
                         let message = guardian_rejection_message(session.as_ref(), review_id).await;
@@ -502,6 +503,16 @@ impl NetworkApprovalService {
                     self.record_call_outcome(
                         &owner_call.registration_id,
                         NetworkApprovalOutcome::DeniedByUser,
+                    )
+                    .await;
+                }
+                PendingApprovalDecision::Deny
+            }
+            ReviewDecision::TimedOut => {
+                if let Some(owner_call) = owner_call.as_ref() {
+                    self.record_call_outcome(
+                        &owner_call.registration_id,
+                        NetworkApprovalOutcome::DeniedByPolicy(guardian_timeout_message()),
                     )
                     .await;
                 }
@@ -567,11 +578,11 @@ pub(crate) fn build_network_policy_decider(
 pub(crate) async fn begin_network_approval(
     session: &Session,
     turn_id: &str,
-    has_managed_network_requirements: bool,
+    managed_network_active: bool,
     spec: Option<NetworkApprovalSpec>,
 ) -> Option<ActiveNetworkApproval> {
     let spec = spec?;
-    if !has_managed_network_requirements || spec.network.is_none() {
+    if !managed_network_active || spec.network.is_none() {
         return None;
     }
 

@@ -53,6 +53,7 @@ codex_rust_crate(
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",
         "//codex-rs/rmcp-client:test_streamable_http_server",
+        "//codex-rs/responses-api-proxy:codex-responses-api-proxy",
         "//codex-rs/cli:codex",
     ],
 )

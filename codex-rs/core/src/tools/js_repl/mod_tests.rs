@@ -2,7 +2,6 @@ use super::*;
 use crate::codex::make_session_and_context;
 use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -295,42 +294,8 @@ async fn emitted_image_content_item_drops_unsupported_explicit_detail() {
 }
 
 #[tokio::test]
-async fn emitted_image_content_item_does_not_force_original_when_enabled() {
+async fn emitted_image_content_item_allows_explicit_original_detail_when_supported() {
     let (_session, mut turn) = make_session_and_context().await;
-    Arc::make_mut(&mut turn.config)
-        .features
-        .enable(Feature::ImageDetailOriginal)
-        .expect("test config should allow feature update");
-    turn.features
-        .enable(Feature::ImageDetailOriginal)
-        .expect("test turn features should allow feature update");
-    turn.model_info.supports_image_detail_original = true;
-
-    let content_item = emitted_image_content_item(
-        &turn,
-        "data:image/png;base64,AAA".to_string(),
-        /*detail*/ None,
-    );
-
-    assert_eq!(
-        content_item,
-        FunctionCallOutputContentItem::InputImage {
-            image_url: "data:image/png;base64,AAA".to_string(),
-            detail: None,
-        }
-    );
-}
-
-#[tokio::test]
-async fn emitted_image_content_item_allows_explicit_original_detail_when_enabled() {
-    let (_session, mut turn) = make_session_and_context().await;
-    Arc::make_mut(&mut turn.config)
-        .features
-        .enable(Feature::ImageDetailOriginal)
-        .expect("test config should allow feature update");
-    turn.features
-        .enable(Feature::ImageDetailOriginal)
-        .expect("test turn features should allow feature update");
     turn.model_info.supports_image_detail_original = true;
 
     let content_item = emitted_image_content_item(
@@ -349,7 +314,7 @@ async fn emitted_image_content_item_allows_explicit_original_detail_when_enabled
 }
 
 #[tokio::test]
-async fn emitted_image_content_item_drops_explicit_original_detail_when_disabled() {
+async fn emitted_image_content_item_drops_explicit_original_detail_when_unsupported() {
     let (_session, turn) = make_session_and_context().await;
 
     let content_item = emitted_image_content_item(

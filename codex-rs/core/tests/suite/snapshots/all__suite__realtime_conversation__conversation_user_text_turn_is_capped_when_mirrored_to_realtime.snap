@@ -1,0 +1,12 @@
+---
+source: core/tests/suite/realtime_conversation.rs
+expression: snapshot
+---
+type: conversation.item.create
+item.type: message
+item.role: user
+content[0].type: input_text
+model_has_full_user_text: true
+realtime_text_equal_full_user_text: false
+realtime_text_approx_tokens: 300
+content[0].text: [USER] mirror-head alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alp…2419 tokens truncated…ega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega omega  mirror-tail

@@ -1,16 +1,18 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
 use crate::mcp_tool_call::handle_mcp_tool_call;
+use crate::original_image_detail::can_request_original_image_detail;
+use crate::tools::context::McpToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::mcp::CallToolResult;
 
 pub struct McpHandler;
 impl ToolHandler for McpHandler {
-    type Output = CallToolResult;
+    type Output = McpToolOutput;
 
     fn kind(&self) -> ToolKind {
         ToolKind::Mcp
@@ -41,7 +43,8 @@ impl ToolHandler for McpHandler {
         let (server, tool, raw_arguments) = payload;
         let arguments_str = raw_arguments;
 
-        let output = handle_mcp_tool_call(
+        let started = Instant::now();
+        let result = handle_mcp_tool_call(
             Arc::clone(&session),
             &turn,
             call_id.clone(),
@@ -51,6 +54,10 @@ impl ToolHandler for McpHandler {
         )
         .await;
 
-        Ok(output)
+        Ok(McpToolOutput {
+            result,
+            wall_time: started.elapsed(),
+            original_image_detail_supported: can_request_original_image_detail(&turn.model_info),
+        })
     }
 }

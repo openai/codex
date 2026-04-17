@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
+use app_test_support::PathBufExt;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
@@ -20,6 +21,7 @@ use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::ServiceTier;
@@ -29,6 +31,7 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -39,7 +42,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::analytics::assert_basic_thread_initialized_event;
-use super::analytics::enable_analytics_capture;
+use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
 
@@ -163,6 +166,65 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_start_response_includes_loaded_instruction_sources() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let global_agents_path = codex_home.path().join("AGENTS.md");
+    std::fs::write(&global_agents_path, "global instructions")?;
+    let workspace = TempDir::new()?;
+    let project_agents_path = workspace.path().join("AGENTS.md");
+    std::fs::write(&project_agents_path, "project instructions")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadStartResponse>(response)?;
+
+    let instruction_sources = instruction_sources
+        .into_iter()
+        .map(normalize_path_for_comparison)
+        .collect::<Vec<_>>();
+    let expected_instruction_sources = vec![
+        std::fs::canonicalize(global_agents_path)?,
+        std::fs::canonicalize(project_agents_path)?,
+    ]
+    .into_iter()
+    .map(normalize_path_for_comparison)
+    .collect::<Vec<_>>();
+
+    assert_eq!(instruction_sources, expected_instruction_sources);
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    let path = path.display().to_string();
+    PathBuf::from(path.strip_prefix(r"\\?\").unwrap_or(&path))
+}
+
+#[cfg(not(windows))]
+fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
+    path.as_ref().to_path_buf()
+}
+
+#[tokio::test]
 async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
@@ -173,9 +235,9 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
         &server.uri(),
         /*general_analytics_enabled*/ true,
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -206,9 +268,9 @@ async fn thread_start_does_not_track_thread_initialized_analytics_without_featur
         &server.uri(),
         /*general_analytics_enabled*/ false,
     )?;
-    enable_analytics_capture(&server, codex_home.path()).await?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let req_id = mcp
@@ -221,11 +283,25 @@ async fn thread_start_does_not_track_thread_initialized_analytics_without_featur
     .await??;
     let _ = to_response::<ThreadStartResponse>(resp)?;
 
-    let payload = wait_for_analytics_payload(&server, Duration::from_millis(250)).await;
-    assert!(
-        payload.is_err(),
-        "thread analytics should be gated off when general_analytics is disabled"
-    );
+    assert_no_thread_initialized_analytics(&server, Duration::from_millis(250)).await?;
+    Ok(())
+}
+
+async fn assert_no_thread_initialized_analytics(
+    server: &MockServer,
+    wait_duration: Duration,
+) -> Result<()> {
+    tokio::time::sleep(wait_duration).await;
+    let requests = server.received_requests().await.unwrap_or_default();
+    for request in requests.iter().filter(|request| {
+        request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
+    }) {
+        let payload: Value = serde_json::from_slice(&request.body)?;
+        assert!(
+            thread_initialized_event(&payload).is_err(),
+            "thread analytics should be gated off when general_analytics is disabled; payload={payload}"
+        );
+    }
     Ok(())
 }
 
@@ -642,9 +718,11 @@ model_reasoning_effort = "high"
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let trusted_root = resolve_root_git_project_for_trust(workspace.path())
-        .unwrap_or_else(|| workspace.path().to_path_buf());
-    assert!(config_toml.contains(&persisted_trust_path(&trusted_root)));
+    let workspace_abs = workspace.path().to_path_buf().abs();
+    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &workspace_abs)
+        .await
+        .unwrap_or(workspace_abs);
+    assert!(config_toml.contains(&persisted_trust_path(trusted_root.as_path())));
     assert!(config_toml.contains("trust_level = \"trusted\""));
 
     Ok(())
@@ -679,9 +757,11 @@ async fn thread_start_with_nested_git_cwd_trusts_repo_root() -> Result<()> {
     .await??;
 
     let config_toml = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let trusted_root =
-        resolve_root_git_project_for_trust(&nested).expect("git root should resolve");
-    assert!(config_toml.contains(&persisted_trust_path(&trusted_root)));
+    let nested_abs = nested.abs();
+    let trusted_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested_abs)
+        .await
+        .expect("git root should resolve");
+    assert!(config_toml.contains(&persisted_trust_path(trusted_root.as_path())));
     assert!(!config_toml.contains(&persisted_trust_path(&nested)));
 
     Ok(())
@@ -829,7 +909,7 @@ fn create_config_toml_with_chatgpt_base_url(
     let general_analytics_toml = if general_analytics_enabled {
         "\ngeneral_analytics = true".to_string()
     } else {
-        String::new()
+        "\ngeneral_analytics = false".to_string()
     };
     let config_toml = codex_home.join("config.toml");
     std::fs::write(

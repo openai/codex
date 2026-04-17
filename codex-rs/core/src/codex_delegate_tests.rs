@@ -23,9 +23,10 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
+use core_test_support::PathBufExt;
+use core_test_support::test_path_buf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -282,7 +283,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
                     approval_id: Some("callback-approval-1".to_string()),
                     turn_id: "child-turn-1".to_string(),
                     command: vec!["rm".to_string(), "-rf".to_string(), "tmp".to_string()],
-                    cwd: PathBuf::from("/tmp"),
+                    cwd: test_path_buf("/tmp").abs(),
                     reason: Some("unsafe subcommand".to_string()),
                     network_approval_context: None,
                     proposed_execpolicy_amendment: None,
@@ -313,7 +314,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
     let expected_action = GuardianAssessmentAction::Command {
         source: GuardianCommandSource::Shell,
         command: "rm -rf tmp".to_string(),
-        cwd: "/tmp".into(),
+        cwd: test_path_buf("/tmp").abs(),
     };
     assert!(!assessment_event.id.is_empty());
     assert_eq!(

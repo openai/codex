@@ -20,9 +20,12 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -39,7 +42,7 @@ pub struct ThreadConfigSnapshot {
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
@@ -95,6 +98,11 @@ impl CodexThread {
         self.codex.submit_with_trace(op, trace).await
     }
 
+    /// Persist whether this thread is eligible for future memory generation.
+    pub async fn set_thread_memory_mode(&self, mode: ThreadMemoryMode) -> anyhow::Result<()> {
+        self.codex.set_thread_memory_mode(mode).await
+    }
+
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
@@ -135,6 +143,17 @@ impl CodexThread {
 
     pub(crate) async fn total_token_usage(&self) -> Option<TokenUsage> {
         self.codex.session.total_token_usage().await
+    }
+
+    /// Returns the complete token usage snapshot currently cached for this thread.
+    ///
+    /// This accessor is intentionally narrower than direct session access: it lets
+    /// app-server lifecycle paths replay restored usage after resume or fork without
+    /// exposing broader session mutation authority. A caller that only reads
+    /// `total_token_usage` would drop last-turn usage and make the v2
+    /// `thread/tokenUsage/updated` payload incomplete.
+    pub async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
+        self.codex.session.token_usage_info().await
     }
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.
@@ -191,6 +210,29 @@ impl CodexThread {
         }
 
         Ok(submission_id)
+    }
+
+    /// Append raw Responses API items to the thread's model-visible history.
+    pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+        if items.is_empty() {
+            return Err(CodexErr::InvalidRequest(
+                "items must not be empty".to_string(),
+            ));
+        }
+
+        let turn_context = self.codex.session.new_default_turn().await;
+        if self.codex.session.reference_context_item().await.is_none() {
+            self.codex
+                .session
+                .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+                .await;
+        }
+        self.codex
+            .session
+            .record_conversation_items(turn_context.as_ref(), &items)
+            .await;
+        self.codex.session.flush_rollout().await?;
+        Ok(())
     }
 
     pub fn rollout_path(&self) -> Option<PathBuf> {

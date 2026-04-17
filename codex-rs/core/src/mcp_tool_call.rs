@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -24,6 +23,7 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::guardian_rejection_message;
+use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
@@ -36,6 +36,7 @@ use codex_analytics::build_track_events_context;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_otel::sanitize_metric_tag_value;
@@ -54,10 +55,10 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::Serialize;
-use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
 use tracing::Instrument;
@@ -100,6 +101,9 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
+    let mcp_app_resource_uri = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.mcp_app_resource_uri.clone());
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         connectors::app_tool_policy(
             &turn_context.config,
@@ -129,6 +133,7 @@ pub(crate) async fn handle_mcp_tool_call(
             turn_context.as_ref(),
             &call_id,
             invocation,
+            mcp_app_resource_uri.clone(),
             "MCP tool call blocked by app configuration".to_string(),
             /*already_started*/ false,
         )
@@ -160,6 +165,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.clone(),
         invocation: invocation.clone(),
+        mcp_app_resource_uri: mcp_app_resource_uri.clone(),
     });
     notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
 
@@ -212,6 +218,7 @@ pub(crate) async fn handle_mcp_tool_call(
                 let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                     call_id: call_id.clone(),
                     invocation,
+                    mcp_app_resource_uri: mcp_app_resource_uri.clone(),
                     duration,
                     result: result.clone(),
                 });
@@ -238,6 +245,7 @@ pub(crate) async fn handle_mcp_tool_call(
                         turn_context.as_ref(),
                         &call_id,
                         invocation,
+                        mcp_app_resource_uri.clone(),
                         message,
                         /*already_started*/ true,
                     )
@@ -253,6 +261,7 @@ pub(crate) async fn handle_mcp_tool_call(
                         turn_context.as_ref(),
                         &call_id,
                         invocation,
+                        mcp_app_resource_uri.clone(),
                         message,
                         /*already_started*/ true,
                     )
@@ -267,6 +276,7 @@ pub(crate) async fn handle_mcp_tool_call(
                         turn_context.as_ref(),
                         &call_id,
                         invocation,
+                        mcp_app_resource_uri.clone(),
                         message,
                         /*already_started*/ true,
                     )
@@ -324,6 +334,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.clone(),
         invocation,
+        mcp_app_resource_uri,
         duration,
         result: result.clone(),
     });
@@ -466,6 +477,10 @@ async fn execute_mcp_tool_call(
         metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
     )
     .await?;
+    let request_meta =
+        augment_mcp_tool_request_meta_with_sandbox_state(sess, turn_context, server, request_meta)
+            .await
+            .map_err(|e| format!("failed to build MCP tool request metadata: {e:#}"))?;
     let result = sess
         .call_tool(server, tool_name, rewritten_arguments, request_meta)
         .await
@@ -477,6 +492,52 @@ async fn execute_mcp_tool_call(
             .contains(&InputModality::Image),
         Ok(result),
     )
+}
+
+async fn augment_mcp_tool_request_meta_with_sandbox_state(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+    mut meta: Option<serde_json::Value>,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let supports_sandbox_state_meta = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .server_supports_sandbox_state_meta_capability(server)
+        .await
+        .unwrap_or(false);
+    if !supports_sandbox_state_meta {
+        return Ok(meta);
+    }
+
+    let sandbox_state = serde_json::to_value(SandboxState {
+        sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
+        sandbox_cwd: turn_context.cwd.to_path_buf(),
+        use_legacy_landlock: turn_context.features.use_legacy_landlock(),
+    })?;
+
+    match meta.as_mut() {
+        Some(serde_json::Value::Object(map)) => {
+            map.insert(
+                codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
+                sandbox_state,
+            );
+        }
+        Some(_) => {}
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY.to_string(),
+                sandbox_state,
+            );
+            meta = Some(serde_json::Value::Object(map));
+        }
+    }
+
+    Ok(meta)
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
@@ -591,11 +652,14 @@ pub(crate) struct McpToolApprovalMetadata {
     connector_description: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
+    mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
+const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
+const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 
 fn custom_mcp_tool_approval_mode(
     turn_context: &TurnContext,
@@ -612,9 +676,14 @@ fn custom_mcp_tool_approval_mode(
         .and_then(|value| {
             HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
         })
-        .and_then(|servers| servers.get(server).cloned())
-        .and_then(|server| server.tools.get(tool_name).cloned())
-        .and_then(|tool| tool.approval_mode)
+        .and_then(|servers| {
+            let server_config = servers.get(server)?;
+            server_config
+                .tools
+                .get(tool_name)
+                .and_then(|tool| tool.approval_mode)
+                .or(server_config.default_tools_approval_mode)
+        })
         .unwrap_or_default()
 }
 
@@ -980,8 +1049,11 @@ async fn mcp_tool_approval_decision_from_guardian(
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied | ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
+        ReviewDecision::Denied => McpToolApprovalDecision::Decline {
             message: Some(guardian_rejection_message(sess, review_id).await),
+        },
+        ReviewDecision::TimedOut => McpToolApprovalDecision::Decline {
+            message: Some(guardian_timeout_message()),
         },
         ReviewDecision::Abort => McpToolApprovalDecision::Decline { message: None },
     }
@@ -1046,6 +1118,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         connector_description,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
+        mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),
         codex_apps_meta: tool_info
             .tool
             .meta
@@ -1057,6 +1130,26 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             tool_info.tool.meta.as_deref(),
         ))
         .filter(|params| !params.is_empty()),
+    })
+}
+
+fn get_mcp_app_resource_uri(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    meta.and_then(|meta| {
+        meta.get("ui")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|ui| ui.get("resourceUri"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                meta.get(MCP_TOOL_UI_RESOURCE_URI_META_KEY)
+                    .and_then(serde_json::Value::as_str)
+            })
+            .or_else(|| {
+                meta.get(MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY)
+                    .and_then(serde_json::Value::as_str)
+            })
+            .map(str::to_string)
     })
 }
 
@@ -1508,7 +1601,7 @@ async fn maybe_persist_mcp_tool_approval(
 }
 
 async fn persist_codex_app_tool_approval(
-    codex_home: &Path,
+    codex_home: &AbsolutePathBuf,
     connector_id: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
@@ -1559,7 +1652,10 @@ async fn persist_custom_mcp_tool_approval(
         .await
 }
 
-fn project_mcp_tool_approval_config_folder(config: &Config, server: &str) -> Option<PathBuf> {
+fn project_mcp_tool_approval_config_folder(
+    config: &Config,
+    server: &str,
+) -> Option<AbsolutePathBuf> {
     config
         .config_layer_stack
         .layers_high_to_low()
@@ -1578,9 +1674,7 @@ fn project_mcp_tool_approval_config_folder(config: &Config, server: &str) -> Opt
                     HashMap::<String, codex_config::types::McpServerConfig>::deserialize(value).ok()
                 })?;
             if servers.contains_key(server) {
-                layer
-                    .config_folder()
-                    .map(|folder| folder.as_path().to_path_buf())
+                layer.config_folder()
             } else {
                 None
             }
@@ -1611,6 +1705,7 @@ async fn notify_mcp_tool_call_skip(
     turn_context: &TurnContext,
     call_id: &str,
     invocation: McpInvocation,
+    mcp_app_resource_uri: Option<String>,
     message: String,
     already_started: bool,
 ) -> Result<CallToolResult, String> {
@@ -1618,6 +1713,7 @@ async fn notify_mcp_tool_call_skip(
         let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
             call_id: call_id.to_string(),
             invocation: invocation.clone(),
+            mcp_app_resource_uri: mcp_app_resource_uri.clone(),
         });
         notify_mcp_tool_call_event(sess, turn_context, tool_call_begin_event).await;
     }
@@ -1625,6 +1721,7 @@ async fn notify_mcp_tool_call_skip(
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.to_string(),
         invocation,
+        mcp_app_resource_uri,
         duration: Duration::ZERO,
         result: Err(message.clone()),
     });

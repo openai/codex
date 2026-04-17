@@ -4,7 +4,6 @@ use tracing::warn;
 
 use super::OPENAI_CURATED_MARKETPLACE_NAME;
 use super::PluginCapabilitySummary;
-use super::PluginReadRequest;
 use super::PluginsManager;
 use crate::config::Config;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -22,14 +21,14 @@ const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "figma@openai-curated",
 ];
 
-pub(crate) fn list_tool_suggest_discoverable_plugins(
+pub(crate) async fn list_tool_suggest_discoverable_plugins(
     config: &Config,
 ) -> anyhow::Result<Vec<DiscoverablePluginInfo>> {
     if !config.features.enabled(Feature::Plugins) {
         return Ok(Vec::new());
     }
 
-    let plugins_manager = PluginsManager::new(config.codex_home.clone());
+    let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
     let configured_plugin_ids = config
         .tool_suggest
         .discoverables
@@ -47,6 +46,7 @@ pub(crate) fn list_tool_suggest_discoverable_plugins(
     else {
         return Ok(Vec::new());
     };
+    let curated_marketplace_name = curated_marketplace.name;
 
     let mut discoverable_plugins = Vec::<DiscoverablePluginInfo>::new();
     for plugin in curated_marketplace.plugins {
@@ -58,17 +58,13 @@ pub(crate) fn list_tool_suggest_discoverable_plugins(
         }
 
         let plugin_id = plugin.id.clone();
-        let plugin_name = plugin.name.clone();
 
-        match plugins_manager.read_plugin_for_config(
-            config,
-            &PluginReadRequest {
-                plugin_name,
-                marketplace_path: curated_marketplace.path.clone(),
-            },
-        ) {
+        match plugins_manager
+            .read_plugin_detail_for_marketplace_plugin(config, &curated_marketplace_name, plugin)
+            .await
+        {
             Ok(plugin) => {
-                let plugin: PluginCapabilitySummary = plugin.plugin.into();
+                let plugin: PluginCapabilitySummary = plugin.into();
                 discoverable_plugins.push(DiscoverablePluginInfo {
                     id: plugin.config_name,
                     name: plugin.display_name,

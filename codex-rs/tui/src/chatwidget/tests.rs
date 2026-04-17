@@ -29,6 +29,7 @@ pub(super) use crate::legacy_core::skills::model::SkillMetadata;
 pub(super) use crate::model_catalog::ModelCatalog;
 pub(super) use crate::test_backend::VT100Backend;
 pub(super) use crate::test_support::PathBufExt;
+pub(super) use crate::test_support::test_path_buf;
 pub(super) use crate::test_support::test_path_display;
 pub(super) use crate::tui::FrameRequester;
 pub(super) use assert_matches::assert_matches;

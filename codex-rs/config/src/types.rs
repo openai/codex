@@ -31,6 +31,10 @@ pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
+const MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 1;
+const MAX_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 4096;
+const MIN_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 1;
+const MAX_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 128;
 
 const fn default_enabled() -> bool {
     true
@@ -185,12 +189,14 @@ pub struct MemoriesToml {
     /// When `false`, skip injecting memory usage instructions into developer prompts.
     pub use_memories: Option<bool>,
     /// Maximum number of recent raw memories retained for global consolidation.
+    #[schemars(range(min = 1, max = 4096))]
     pub max_raw_memories_for_consolidation: Option<usize>,
     /// Maximum number of days since a memory was last used before it becomes ineligible for phase 2 selection.
     pub max_unused_days: Option<i64>,
     /// Maximum age of the threads used for memories.
     pub max_rollout_age_days: Option<i64>,
     /// Maximum number of rollout candidates processed per pass.
+    #[schemars(range(min = 1, max = 128))]
     pub max_rollouts_per_startup: Option<usize>,
     /// Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.
     pub min_rollout_idle_hours: Option<i64>,
@@ -244,7 +250,10 @@ impl From<MemoriesToml> for MemoriesConfig {
             max_raw_memories_for_consolidation: toml
                 .max_raw_memories_for_consolidation
                 .unwrap_or(defaults.max_raw_memories_for_consolidation)
-                .min(4096),
+                .clamp(
+                    MIN_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+                    MAX_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+                ),
             max_unused_days: toml
                 .max_unused_days
                 .unwrap_or(defaults.max_unused_days)
@@ -256,7 +265,10 @@ impl From<MemoriesToml> for MemoriesConfig {
             max_rollouts_per_startup: toml
                 .max_rollouts_per_startup
                 .unwrap_or(defaults.max_rollouts_per_startup)
-                .min(128),
+                .clamp(
+                    MIN_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
+                    MAX_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
+                ),
             min_rollout_idle_hours: toml
                 .min_rollout_idle_hours
                 .unwrap_or(defaults.min_rollout_idle_hours)
@@ -614,6 +626,9 @@ pub struct MarketplaceConfig {
     /// Last time Codex successfully added or refreshed this marketplace.
     #[serde(default)]
     pub last_updated: Option<String>,
+    /// Git revision Codex last successfully activated for this marketplace.
+    #[serde(default)]
+    pub last_revision: Option<String>,
     /// Source kind used to install this marketplace.
     #[serde(default)]
     pub source_type: Option<MarketplaceSourceType>,
@@ -632,6 +647,7 @@ pub struct MarketplaceConfig {
 #[serde(rename_all = "snake_case")]
 pub enum MarketplaceSourceType {
     Git,
+    Local,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
@@ -658,7 +674,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {
     /// "Core" environment variables for the platform. On UNIX, this would

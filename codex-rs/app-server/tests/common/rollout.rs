@@ -1,9 +1,13 @@
 use anyhow::Result;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TokenCountEvent;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use serde_json::json;
 use std::fs;
 use std::fs::FileTimes;
@@ -48,6 +52,61 @@ pub fn create_fake_rollout(
         git_info,
         SessionSource::Cli,
     )
+}
+
+/// Creates a minimal rollout whose history includes a persisted token usage event.
+///
+/// Resume and fork tests use this fixture to verify lifecycle replay of restored
+/// usage without starting a model turn. The exact token values are intentionally
+/// non-zero and asymmetric so assertions catch swapped total/last fields and
+/// dropped cached or reasoning counters.
+pub fn create_fake_rollout_with_token_usage(
+    codex_home: &Path,
+    filename_ts: &str,
+    meta_rfc3339: &str,
+    preview: &str,
+    model_provider: Option<&str>,
+) -> Result<String> {
+    let thread_id = create_fake_rollout(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        model_provider,
+        /*git_info*/ None,
+    )?;
+    let payload = serde_json::to_value(EventMsg::TokenCount(TokenCountEvent {
+        info: Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 120,
+                cached_input_tokens: 20,
+                output_tokens: 30,
+                reasoning_output_tokens: 10,
+                total_tokens: 150,
+            },
+            last_token_usage: TokenUsage {
+                input_tokens: 70,
+                cached_input_tokens: 10,
+                output_tokens: 20,
+                reasoning_output_tokens: 5,
+                total_tokens: 90,
+            },
+            model_context_window: Some(200_000),
+        }),
+        rate_limits: None,
+    }))?;
+    let file_path = rollout_path(codex_home, filename_ts, &thread_id);
+    let line = json!({
+        "timestamp": meta_rfc3339,
+        "type": "event_msg",
+        "payload": payload
+    })
+    .to_string();
+    fs::write(
+        &file_path,
+        format!("{}{}\n", fs::read_to_string(&file_path)?, line),
+    )?;
+    Ok(thread_id)
 }
 
 /// Create a minimal rollout file with an explicit session source.

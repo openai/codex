@@ -11,9 +11,11 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::sandboxing::ExecRequest;
+use crate::sandboxing::ExecServerEnvConfig;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -24,6 +26,7 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
@@ -47,6 +50,9 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_config::types::ShellEnvironmentPolicy;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::SandboxErr;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
@@ -87,6 +93,71 @@ fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, S
         env.insert(key.to_string(), value.to_string());
     }
     env
+}
+
+fn exec_env_policy_from_shell_policy(
+    policy: &ShellEnvironmentPolicy,
+) -> codex_exec_server::ExecEnvPolicy {
+    codex_exec_server::ExecEnvPolicy {
+        inherit: policy.inherit.clone(),
+        ignore_default_excludes: policy.ignore_default_excludes,
+        exclude: policy
+            .exclude
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
+        r#set: policy.r#set.clone(),
+        include_only: policy
+            .include_only
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
+    }
+}
+
+fn env_overlay_for_exec_server(
+    request_env: &HashMap<String, String>,
+    local_policy_env: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    request_env
+        .iter()
+        .filter(|(key, value)| local_policy_env.get(*key) != Some(*value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn exec_server_env_for_request(
+    request: &ExecRequest,
+) -> (
+    Option<codex_exec_server::ExecEnvPolicy>,
+    HashMap<String, String>,
+) {
+    if let Some(exec_server_env_config) = &request.exec_server_env_config {
+        (
+            Some(exec_server_env_config.policy.clone()),
+            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env),
+        )
+    } else {
+        (None, request.env.clone())
+    }
+}
+
+fn exec_server_params_for_request(
+    process_id: i32,
+    request: &ExecRequest,
+    tty: bool,
+) -> codex_exec_server::ExecParams {
+    let (env_policy, env) = exec_server_env_for_request(request);
+    codex_exec_server::ExecParams {
+        process_id: exec_server_process_id(process_id).into(),
+        argv: request.command.clone(),
+        cwd: request.cwd.to_path_buf(),
+        env_policy,
+        env,
+        tty,
+        pipe_stdin: false,
+        arg0: request.arg0.clone(),
+    }
 }
 
 /// Borrowed process state prepared for a `write_stdin` or poll operation.
@@ -189,7 +260,7 @@ impl UnifiedExecProcessManager {
         );
         let emitter = ToolEmitter::unified_exec(
             &request.command,
-            cwd.to_path_buf(),
+            cwd.clone(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
         );
@@ -255,7 +326,7 @@ impl UnifiedExecProcessManager {
                     Arc::clone(&context.turn),
                     context.call_id.clone(),
                     request.command.clone(),
-                    cwd.to_path_buf(),
+                    cwd.clone(),
                     Some(request.process_id.to_string()),
                     Arc::clone(&transcript),
                     message.clone(),
@@ -298,7 +369,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
                 request.command.clone(),
-                cwd.to_path_buf(),
+                cwd.clone(),
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
                 text.clone(),
@@ -572,7 +643,7 @@ impl UnifiedExecProcessManager {
             Arc::clone(&context.turn),
             context.call_id.clone(),
             command.to_vec(),
-            cwd.to_path_buf(),
+            cwd,
             process_id,
             transcript,
             started_at,
@@ -587,12 +658,7 @@ impl UnifiedExecProcessManager {
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let (program, args) = request
-            .command
-            .split_first()
-            .ok_or(UnifiedExecError::MissingCommandLine)?;
         let inherited_fds = spawn_lifecycle.inherited_fds();
-
         if environment.is_remote() {
             if !inherited_fds.is_empty() {
                 return Err(UnifiedExecError::create_process(
@@ -602,19 +668,17 @@ impl UnifiedExecProcessManager {
 
             let started = environment
                 .get_exec_backend()
-                .start(codex_exec_server::ExecParams {
-                    process_id: exec_server_process_id(process_id).into(),
-                    argv: request.command.clone(),
-                    cwd: request.cwd.to_path_buf(),
-                    env: request.env.clone(),
-                    tty,
-                    arg0: request.arg0.clone(),
-                })
+                .start(exec_server_params_for_request(process_id, request, tty))
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-            return UnifiedExecProcess::from_remote_started(started, request.sandbox).await;
+            spawn_lifecycle.after_spawn();
+            return UnifiedExecProcess::from_exec_server_started(started, request.sandbox).await;
         }
 
+        let (program, args) = request
+            .command
+            .split_first()
+            .ok_or(UnifiedExecError::MissingCommandLine)?;
         let spawn_result = if tty {
             codex_utils_pty::pty::spawn_process_with_inherited_fds(
                 program,
@@ -649,10 +713,20 @@ impl UnifiedExecProcessManager {
         cwd: AbsolutePathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(
+        let local_policy_env = create_env(
             &context.turn.shell_environment_policy,
-            Some(context.session.conversation_id),
-        ));
+            /*thread_id*/ None,
+        );
+        let mut env = local_policy_env.clone();
+        env.insert(
+            CODEX_THREAD_ID_ENV_VAR.to_string(),
+            context.session.conversation_id.to_string(),
+        );
+        let env = apply_unified_exec_env(env);
+        let exec_server_env_config = ExecServerEnvConfig {
+            policy: exec_env_policy_from_shell_policy(&context.turn.shell_environment_policy),
+            local_policy_env,
+        };
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(
             self,
@@ -680,6 +754,7 @@ impl UnifiedExecProcessManager {
             process_id: request.process_id,
             cwd,
             env,
+            exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
             network: request.network.clone(),
             tty: request.tty,
@@ -706,7 +781,19 @@ impl UnifiedExecProcessManager {
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))
-            .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))
+            .map_err(|err| match err {
+                ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied { output, .. })) => {
+                    let output = *output;
+                    let message = if output.aggregated_output.text.is_empty() {
+                        let exit_code = output.exit_code;
+                        format!("Process exited with code {exit_code}")
+                    } else {
+                        output.aggregated_output.text.clone()
+                    };
+                    UnifiedExecError::sandbox_denied(message, output)
+                }
+                other => UnifiedExecError::create_process(format!("{other:?}")),
+            })
     }
 
     pub(super) async fn collect_output_until_deadline(

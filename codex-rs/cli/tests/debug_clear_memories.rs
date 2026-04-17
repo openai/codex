@@ -125,13 +125,8 @@ INSERT INTO jobs (
     .fetch_one(&pool)
     .await?;
     assert_eq!(memory_jobs_count, 0);
-
-    let memory_mode: String = sqlx::query_scalar("SELECT memory_mode FROM threads WHERE id = ?")
-        .bind(thread_id)
-        .fetch_one(&pool)
-        .await?;
-    assert_eq!(memory_mode, "disabled");
-    assert!(!memory_root.exists());
+    assert!(memory_root.exists());
+    assert_eq!(std::fs::read_dir(memory_root)?.count(), 0);
 
     Ok(())
 }

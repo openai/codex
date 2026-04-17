@@ -1,3 +1,4 @@
+use crate::agents_md::AgentsMdManager;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::CloudRequirementsLoader;
@@ -15,8 +16,6 @@ use crate::config_loader::load_config_layers_state;
 use crate::config_loader::project_trust_key;
 use crate::memories::memory_root;
 use crate::path_utils::normalize_for_native_workdir;
-use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -48,6 +47,8 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -55,6 +56,7 @@ use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -120,10 +122,11 @@ pub use codex_git_utils::GhostSnapshotConfig;
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
-pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+pub(crate) const AGENTS_MD_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
+const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -141,14 +144,41 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     }
 }
 
+fn resolve_cli_auth_credentials_store_mode(
+    configured: AuthCredentialsStoreMode,
+    package_version: &str,
+) -> AuthCredentialsStoreMode {
+    match (package_version, configured) {
+        (
+            LOCAL_DEV_BUILD_VERSION,
+            AuthCredentialsStoreMode::Keyring | AuthCredentialsStoreMode::Auto,
+        ) => AuthCredentialsStoreMode::File,
+        (_, mode) => mode,
+    }
+}
+
+fn resolve_mcp_oauth_credentials_store_mode(
+    configured: OAuthCredentialsStoreMode,
+    package_version: &str,
+) -> OAuthCredentialsStoreMode {
+    match (package_version, configured) {
+        (
+            LOCAL_DEV_BUILD_VERSION,
+            OAuthCredentialsStoreMode::Keyring | OAuthCredentialsStoreMode::Auto,
+        ) => OAuthCredentialsStoreMode::File,
+        (_, mode) => mode,
+    }
+}
+
 #[cfg(test)]
-pub(crate) fn test_config() -> Config {
+pub(crate) async fn test_config() -> Config {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
+        AbsolutePathBuf::from_absolute_path(codex_home.path()).expect("temp dir should resolve"),
     )
+    .await
     .expect("load default test config")
 }
 
@@ -244,9 +274,6 @@ pub struct Config {
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
-    /// Path to the global AGENTS file loaded into `user_instructions`.
-    pub user_instructions_path: Option<PathBuf>,
-
     /// Base instructions override.
     pub base_instructions: Option<String>,
 
@@ -324,8 +351,7 @@ pub struct Config {
 
     /// Ordered list of status line item identifiers for the TUI.
     ///
-    /// When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and
-    /// `current-dir`.
+    /// When unset, the TUI defaults to: `model-with-reasoning` and `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
     /// Ordered list of terminal title item identifiers for the TUI.
@@ -399,7 +425,7 @@ pub struct Config {
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
-    pub codex_home: PathBuf,
+    pub codex_home: AbsolutePathBuf,
 
     /// Directory where Codex stores the SQLite state DB.
     pub sqlite_home: PathBuf,
@@ -590,7 +616,7 @@ impl Default for MultiAgentV2Config {
 
 impl AuthManagerConfig for Config {
     fn codex_home(&self) -> PathBuf {
-        self.codex_home.clone()
+        self.codex_home.to_path_buf()
     }
 
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
@@ -652,7 +678,10 @@ impl ConfigBuilder {
             cloud_requirements,
             fallback_cwd,
         } = self;
-        let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        let codex_home = match codex_home {
+            Some(codex_home) => AbsolutePathBuf::from_absolute_path(codex_home)?,
+            None => find_codex_home()?,
+        };
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
@@ -663,6 +692,7 @@ impl ConfigBuilder {
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack = load_config_layers_state(
+            LOCAL_FS.as_ref(),
             &codex_home,
             Some(cwd),
             &cli_overrides,
@@ -692,11 +722,13 @@ impl ConfigBuilder {
             }
         };
         Config::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
             config_toml,
             harness_overrides,
             codex_home,
             config_layer_stack,
         )
+        .await
     }
 
     #[cfg(test)]
@@ -718,8 +750,11 @@ impl Config {
         }
     }
 
-    pub fn to_mcp_config(&self, plugins_manager: &crate::plugins::PluginsManager) -> McpConfig {
-        let loaded_plugins = plugins_manager.plugins_for_config(self);
+    pub async fn to_mcp_config(
+        &self,
+        plugins_manager: &crate::plugins::PluginsManager,
+    ) -> McpConfig {
+        let loaded_plugins = plugins_manager.plugins_for_config(self).await;
         let mut configured_mcp_servers = self.mcp_servers.get().clone();
         for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
             configured_mcp_servers.entry(name).or_insert(plugin_server);
@@ -727,7 +762,7 @@ impl Config {
 
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
-            codex_home: self.codex_home.clone(),
+            codex_home: self.codex_home.to_path_buf(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             mcp_oauth_callback_port: self.mcp_oauth_callback_port,
             mcp_oauth_callback_url: self.mcp_oauth_callback_url.clone(),
@@ -754,16 +789,20 @@ impl Config {
     }
 
     /// Load a default configuration when user config files are invalid.
-    pub fn load_default_with_cli_overrides(
+    pub async fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
-        Self::load_default_with_cli_overrides_for_codex_home(codex_home, cli_overrides)
+        Self::load_default_with_cli_overrides_for_codex_home(
+            codex_home.to_path_buf(),
+            cli_overrides,
+        )
+        .await
     }
 
     /// Load a default configuration for a specific Codex home without reading
     /// user, project, or system config layers.
-    pub fn load_default_with_cli_overrides_for_codex_home(
+    pub async fn load_default_with_cli_overrides_for_codex_home(
         codex_home: PathBuf,
         cli_overrides: Vec<(String, TomlValue)>,
     ) -> std::io::Result<Self> {
@@ -775,13 +814,16 @@ impl Config {
         })?;
         let cli_layer = crate::config_loader::build_cli_overrides_layer(&cli_overrides);
         crate::config_loader::merge_toml_values(&mut merged, &cli_layer);
+        let codex_home = AbsolutePathBuf::from_absolute_path_checked(codex_home)?;
         let config_toml = deserialize_config_toml_with_base(merged, &codex_home)?;
         Self::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
             config_toml,
             ConfigOverrides::default(),
             codex_home,
             ConfigLayerStack::default(),
         )
+        .await
     }
 
     /// This is a secondary way of creating [Config], which is appropriate when
@@ -813,6 +855,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home,
         cwd.cloned(),
         &cli_overrides,
@@ -983,6 +1026,7 @@ pub async fn load_global_mcp_servers(
     // MCP servers defined in in-repo .codex/ folders.
     let cwd: Option<AbsolutePathBuf> = None;
     let config_layer_stack = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         codex_home,
         cwd,
         &cli_overrides,
@@ -1377,22 +1421,32 @@ pub(crate) fn resolve_web_search_mode_for_turn(
 
 impl Config {
     #[cfg(test)]
-    fn load_from_base_config_with_overrides(
+    async fn load_from_base_config_with_overrides(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        codex_home: PathBuf,
+        codex_home: AbsolutePathBuf,
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
+        Self::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
+            cfg,
+            overrides,
+            codex_home,
+            config_layer_stack,
+        )
+        .await
     }
 
-    pub(crate) fn load_config_with_layer_stack(
+    pub(crate) async fn load_config_with_layer_stack(
+        fs: &dyn ExecutorFileSystem,
         cfg: ConfigToml,
         overrides: ConfigOverrides,
-        codex_home: PathBuf,
+        codex_home: AbsolutePathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        // Keep the large config-construction future off small test thread stacks.
+        Box::pin(async move {
         validate_model_providers(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
@@ -1409,10 +1463,8 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let (user_instructions, user_instructions_path) =
-            Self::load_instructions(Some(&codex_home))
-                .map(|loaded| (Some(loaded.contents), Some(loaded.path)))
-                .unwrap_or((None, None));
+        let user_instructions = AgentsMdManager::load_global_instructions(Some(&codex_home))
+            .map(|loaded| loaded.contents);
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -1509,8 +1561,12 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
+        let repo_root = resolve_root_git_project_for_trust(fs, &resolved_cwd).await;
         let active_project = cfg
-            .get_active_project(resolved_cwd.as_path())
+            .get_active_project(
+                resolved_cwd.as_path(),
+                repo_root.as_ref().map(AbsolutePathBuf::as_path),
+            )
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
@@ -1542,7 +1598,6 @@ impl Config {
         };
         let memories_root = memory_root(&codex_home);
         std::fs::create_dir_all(&memories_root)?;
-        let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
         if !additional_writable_roots
             .iter()
             .any(|existing| existing == &memories_root)
@@ -1580,6 +1635,7 @@ impl Config {
                 compile_permission_profile(
                     permissions,
                     default_permissions,
+                    resolved_cwd.as_path(),
                     &mut startup_warnings,
                 )?;
             let mut sandbox_policy = file_system_sandbox_policy
@@ -1601,13 +1657,15 @@ impl Config {
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
-            let mut sandbox_policy = cfg.derive_sandbox_policy(
-                sandbox_mode,
-                config_profile.sandbox_mode,
-                windows_sandbox_level,
-                resolved_cwd.as_path(),
-                Some(&constrained_sandbox_policy),
-            );
+            let mut sandbox_policy = cfg
+                .derive_sandbox_policy(
+                    sandbox_mode,
+                    config_profile.sandbox_mode,
+                    windows_sandbox_level,
+                    Some(&active_project),
+                    Some(&constrained_sandbox_policy),
+                )
+                .await;
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
                 for path in &additional_writable_roots {
                     if !writable_roots.iter().any(|existing| existing == path) {
@@ -1673,7 +1731,8 @@ impl Config {
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg, &config_profile);
 
         let agent_roles =
-            agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
+            agent_roles::load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings)
+                .await?;
 
         let openai_base_url = cfg
             .openai_base_url
@@ -1822,8 +1881,12 @@ impl Config {
             .model_instructions_file
             .as_ref()
             .or(cfg.model_instructions_file.as_ref());
-        let file_base_instructions =
-            Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
+        let file_base_instructions = Self::try_read_non_empty_file(
+            fs,
+            model_instructions_path,
+            "model instructions file",
+        )
+        .await?;
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let include_permissions_instructions = config_profile
@@ -1854,9 +1917,11 @@ impl Config {
             .as_ref()
             .or(cfg.experimental_compact_prompt_file.as_ref());
         let file_compact_prompt = Self::try_read_non_empty_file(
+            fs,
             experimental_compact_prompt_path,
             "experimental compact prompt file",
-        )?;
+        )
+        .await?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
@@ -1890,11 +1955,7 @@ impl Config {
             .log_dir
             .as_ref()
             .map(AbsolutePathBuf::to_path_buf)
-            .unwrap_or_else(|| {
-                let mut p = codex_home.clone();
-                p.push("log");
-                p
-            });
+            .unwrap_or_else(|| codex_home.join("log").to_path_buf());
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
@@ -1966,9 +2027,10 @@ impl Config {
             if effective_sandbox_policy == original_sandbox_policy {
                 file_system_sandbox_policy
             } else {
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
                     &effective_sandbox_policy,
                     resolved_cwd.as_path(),
+                    &file_system_sandbox_policy,
                 )
             };
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
@@ -2004,7 +2066,6 @@ impl Config {
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,
-            user_instructions_path,
             base_instructions,
             personality,
             developer_instructions,
@@ -2015,15 +2076,21 @@ impl Config {
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: cfg.cli_auth_credentials_store.unwrap_or_default(),
+            cli_auth_credentials_store_mode: resolve_cli_auth_credentials_store_mode(
+                cfg.cli_auth_credentials_store.unwrap_or_default(),
+                env!("CARGO_PKG_VERSION"),
+            ),
             mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
+            mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
+                cfg.mcp_oauth_credentials_store.unwrap_or_default(),
+                env!("CARGO_PKG_VERSION"),
+            ),
             mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
             mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
             model_providers,
-            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
+            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(AGENTS_MD_MAX_BYTES),
             project_doc_fallback_filenames: cfg
                 .project_doc_fallback_filenames
                 .unwrap_or_default()
@@ -2170,30 +2237,15 @@ impl Config {
             },
         };
         Ok(config)
-    }
-
-    fn load_instructions(codex_dir: Option<&Path>) -> Option<LoadedUserInstructions> {
-        let base = codex_dir?;
-        for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
-            let mut path = base.to_path_buf();
-            path.push(candidate);
-            if let Ok(contents) = std::fs::read_to_string(&path) {
-                let trimmed = contents.trim();
-                if !trimmed.is_empty() {
-                    return Some(LoadedUserInstructions {
-                        contents: trimmed.to_string(),
-                        path,
-                    });
-                }
-            }
-        }
-        None
+        })
+        .await
     }
 
     /// If `path` is `Some`, attempts to read the file at the given path and
     /// returns its contents as a trimmed `String`. If the file is empty, or
     /// is `Some` but cannot be read, returns an `Err`.
-    fn try_read_non_empty_file(
+    async fn try_read_non_empty_file(
+        fs: &dyn ExecutorFileSystem,
         path: Option<&AbsolutePathBuf>,
         context: &str,
     ) -> std::io::Result<Option<String>> {
@@ -2201,12 +2253,15 @@ impl Config {
             return Ok(None);
         };
 
-        let contents = std::fs::read_to_string(path).map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("failed to read {context} {}: {e}", path.display()),
-            )
-        })?;
+        let contents = fs
+            .read_file_text(path, /*sandbox*/ None)
+            .await
+            .map_err(|e| {
+                std::io::Error::new(
+                    e.kind(),
+                    format!("failed to read {context} {}: {e}", path.display()),
+                )
+            })?;
 
         let s = contents.trim().to_string();
         if s.is_empty() {
@@ -2246,7 +2301,11 @@ impl Config {
     }
 
     pub fn managed_network_requirements_enabled(&self) -> bool {
-        self.config_layer_stack
+        !matches!(
+            self.permissions.sandbox_policy.get(),
+            SandboxPolicy::DangerFullAccess
+        ) && self
+            .config_layer_stack
             .requirements_toml()
             .network
             .is_some()
@@ -2255,11 +2314,6 @@ impl Config {
     pub fn bundled_skills_enabled(&self) -> bool {
         crate::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
-}
-
-struct LoadedUserInstructions {
-    contents: String,
-    path: PathBuf,
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
@@ -2306,7 +2360,7 @@ fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
 ///   value will be canonicalized and this function will Err otherwise.
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
-pub fn find_codex_home() -> std::io::Result<PathBuf> {
+pub fn find_codex_home() -> std::io::Result<AbsolutePathBuf> {
     codex_utils_home_dir::find_codex_home()
 }
 

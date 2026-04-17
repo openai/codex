@@ -86,6 +86,148 @@ fn mcp_code_mode_result_serializes_full_call_tool_result() {
 }
 
 #[test]
+fn mcp_tool_output_response_item_includes_wall_time() {
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "done",
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
+    };
+
+    let response = output.to_response_item(
+        "mcp-call-1",
+        &ToolPayload::Mcp {
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    );
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { call_id, output } => {
+            assert_eq!(call_id, "mcp-call-1");
+            assert_eq!(output.success, Some(true));
+            let Some(text) = output.body.to_text() else {
+                panic!("MCP output should serialize as text");
+            };
+            let Some(payload) = text.strip_prefix("Wall time: 1.2500 seconds\nOutput:\n") else {
+                panic!("MCP output should include wall-time header: {text}");
+            };
+            let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_else(|err| {
+                panic!("MCP output should serialize JSON content: {err}");
+            });
+            assert_eq!(
+                parsed,
+                json!([{
+                    "type": "text",
+                    "text": "done",
+                }])
+            );
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_tool_output_response_item_preserves_content_items() {
+    let image_url = "data:image/png;base64,AAA";
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "image",
+                "mimeType": "image/png",
+                "data": "AAA",
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        wall_time: std::time::Duration::from_millis(500),
+        original_image_detail_supported: false,
+    };
+
+    let response = output.to_response_item(
+        "mcp-call-2",
+        &ToolPayload::Mcp {
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    );
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            assert_eq!(
+                output.content_items(),
+                Some(
+                    vec![
+                        FunctionCallOutputContentItem::InputText {
+                            text: "Wall time: 0.5000 seconds\nOutput:".to_string(),
+                        },
+                        FunctionCallOutputContentItem::InputImage {
+                            image_url: image_url.to_string(),
+                            detail: None,
+                        },
+                    ]
+                    .as_slice()
+                )
+            );
+            assert_eq!(
+                output.body.to_text().as_deref(),
+                Some("Wall time: 0.5000 seconds\nOutput:")
+            );
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
+fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "ignored",
+            })],
+            structured_content: Some(serde_json::json!({
+                "content": "done",
+            })),
+            is_error: Some(false),
+            meta: None,
+        },
+        wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
+    };
+
+    let result = output.code_mode_result(&ToolPayload::Mcp {
+        server: "server".to_string(),
+        tool: "tool".to_string(),
+        raw_arguments: "{}".to_string(),
+    });
+
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "ignored",
+            }],
+            "structuredContent": {
+                "content": "done",
+            },
+            "isError": false,
+        })
+    );
+}
+
+#[test]
 fn custom_tool_calls_can_derive_text_from_content_items() {
     let payload = ToolPayload::Custom {
         input: "patch".to_string(),
