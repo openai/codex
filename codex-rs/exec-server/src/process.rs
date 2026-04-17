@@ -33,25 +33,61 @@ pub enum ExecProcessEvent {
     Failed(String),
 }
 
+/// Replay buffer plus live fan-out for pushed process events.
+///
+/// New subscribers first drain a bounded replay history, then continue on the
+/// live broadcast channel. The history is bounded by event count and retained
+/// output bytes: count protects against many tiny events, while bytes protects
+/// against a few very large output chunks.
 #[derive(Clone)]
 pub(crate) struct ExecProcessEventLog {
     inner: Arc<ExecProcessEventLogInner>,
 }
 
 struct ExecProcessEventLogInner {
-    history: StdMutex<VecDeque<ExecProcessEvent>>,
+    history: StdMutex<ExecProcessEventHistory>,
     live_tx: broadcast::Sender<ExecProcessEvent>,
-    capacity: usize,
+    event_capacity: usize,
+    byte_capacity: usize,
+}
+
+#[derive(Default)]
+struct ExecProcessEventHistory {
+    events: VecDeque<ExecProcessEvent>,
+    retained_bytes: usize,
+}
+
+impl ExecProcessEvent {
+    /// Sequence number used to order process-owned events.
+    ///
+    /// `Failed` is intentionally unsequenced because it is synthesized by the
+    /// client when the session or transport fails, not emitted by the process.
+    pub(crate) fn seq(&self) -> Option<u64> {
+        match self {
+            ExecProcessEvent::Output(chunk) => Some(chunk.seq),
+            ExecProcessEvent::Exited { seq, .. } | ExecProcessEvent::Closed { seq } => Some(*seq),
+            ExecProcessEvent::Failed(_) => None,
+        }
+    }
+
+    fn retained_len(&self) -> usize {
+        match self {
+            ExecProcessEvent::Output(chunk) => chunk.chunk.0.len(),
+            ExecProcessEvent::Failed(message) => message.len(),
+            ExecProcessEvent::Exited { .. } | ExecProcessEvent::Closed { .. } => 0,
+        }
+    }
 }
 
 impl ExecProcessEventLog {
-    pub(crate) fn new(capacity: usize) -> Self {
-        let (live_tx, _live_rx) = broadcast::channel(capacity);
+    pub(crate) fn new(event_capacity: usize, byte_capacity: usize) -> Self {
+        let (live_tx, _live_rx) = broadcast::channel(event_capacity);
         Self {
             inner: Arc::new(ExecProcessEventLogInner {
-                history: StdMutex::new(VecDeque::new()),
+                history: StdMutex::new(ExecProcessEventHistory::default()),
                 live_tx,
-                capacity,
+                event_capacity,
+                byte_capacity,
             }),
         }
     }
@@ -62,9 +98,17 @@ impl ExecProcessEventLog {
             .history
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        history.push_back(event.clone());
-        while history.len() > self.inner.capacity {
-            history.pop_front();
+        history.retained_bytes += event.retained_len();
+        history.events.push_back(event.clone());
+        while history.events.len() > self.inner.event_capacity
+            || history.retained_bytes > self.inner.byte_capacity
+        {
+            let Some(evicted) = history.events.pop_front() else {
+                break;
+            };
+            history.retained_bytes = history
+                .retained_bytes
+                .saturating_sub(evicted.retained_len());
         }
 
         let _ = self.inner.live_tx.send(event);
@@ -77,7 +121,7 @@ impl ExecProcessEventLog {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let live_rx = self.inner.live_tx.subscribe();
-        let replay = history.iter().cloned().collect();
+        let replay = history.events.iter().cloned().collect();
 
         ExecProcessEventReceiver { replay, live_rx }
     }
@@ -97,6 +141,11 @@ impl ExecProcessEventReceiver {
         }
     }
 
+    /// Returns the next replayed or live event.
+    ///
+    /// `Lagged` means this receiver fell behind the bounded live channel. The
+    /// caller should recover through [`ExecProcess::read`] using the last
+    /// delivered sequence number, then continue receiving pushed events.
     pub async fn recv(&mut self) -> Result<ExecProcessEvent, broadcast::error::RecvError> {
         if let Some(event) = self.replay.pop_front() {
             return Ok(event);
@@ -135,4 +184,55 @@ pub trait ExecProcess: Send + Sync {
 #[async_trait]
 pub trait ExecBackend: Send + Sync {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    use super::ExecProcessEvent;
+    use super::ExecProcessEventLog;
+    use crate::protocol::ExecOutputStream;
+    use crate::protocol::ProcessOutputChunk;
+
+    #[tokio::test]
+    async fn event_history_replay_is_bounded_by_retained_bytes() {
+        let log = ExecProcessEventLog::new(/*event_capacity*/ 8, /*byte_capacity*/ 3);
+
+        log.publish(ExecProcessEvent::Output(ProcessOutputChunk {
+            seq: 1,
+            stream: ExecOutputStream::Stdout,
+            chunk: b"large".to_vec().into(),
+        }));
+        log.publish(ExecProcessEvent::Exited {
+            seq: 2,
+            exit_code: 0,
+        });
+        log.publish(ExecProcessEvent::Closed { seq: 3 });
+
+        let mut events = log.subscribe();
+        let replay = vec![
+            timeout(Duration::from_secs(1), events.recv())
+                .await
+                .expect("exit event replay should not time out")
+                .expect("exit event replay should be available"),
+            timeout(Duration::from_secs(1), events.recv())
+                .await
+                .expect("closed event replay should not time out")
+                .expect("closed event replay should be available"),
+        ];
+
+        assert_eq!(
+            replay,
+            vec![
+                ExecProcessEvent::Exited {
+                    seq: 2,
+                    exit_code: 0,
+                },
+                ExecProcessEvent::Closed { seq: 3 },
+            ]
+        );
+    }
 }

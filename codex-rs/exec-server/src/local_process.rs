@@ -204,7 +204,10 @@ impl LocalProcess {
 
         let output_notify = Arc::new(Notify::new());
         let (wake_tx, _wake_rx) = watch::channel(0);
-        let events = ExecProcessEventLog::new(PROCESS_EVENT_CHANNEL_CAPACITY);
+        let events = ExecProcessEventLog::new(
+            PROCESS_EVENT_CHANNEL_CAPACITY,
+            RETAINED_OUTPUT_BYTES_PER_PROCESS,
+        );
         {
             let mut process_map = self.inner.processes.lock().await;
             process_map.insert(
