@@ -134,6 +134,30 @@ impl EnvironmentManager {
         }
     }
 
+    /// Validates that the referenced environment id is configured without
+    /// instantiating the underlying environment or connecting any remote
+    /// client.
+    pub fn validate_environment(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Result<(), ExecServerError> {
+        let Some(environment_id) = normalize_environment_id(environment_id) else {
+            return Ok(());
+        };
+        if self.is_disabled() {
+            return Err(ExecServerError::Protocol(
+                "environments are disabled for this session".to_string(),
+            ));
+        }
+        if self.environment_configs.contains_key(&environment_id) {
+            Ok(())
+        } else {
+            Err(ExecServerError::Protocol(format!(
+                "unknown environment id: {environment_id}"
+            )))
+        }
+    }
+
     async fn environment_by_id(
         &self,
         environment_id: &str,
@@ -299,6 +323,16 @@ fn normalize_environment_id(environment_id: Option<&str>) -> Option<EnvironmentI
     }
 }
 
+/// Bootstraps the built-in environment registry from `CODEX_EXEC_SERVER_URL`.
+///
+/// Supported modes:
+/// - unset or empty: register only `local` and make it current
+/// - `none`: register nothing and leave the manager disabled
+/// - websocket URL: register both `local` and `remote`, and make `remote`
+///   current
+///
+/// The returned map is the authoritative environment registry for the manager;
+/// the current environment id is just the default selection over that map.
 fn bootstrap_environment_set(
     exec_server_url: Option<String>,
 ) -> (
