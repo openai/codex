@@ -5,7 +5,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ImageDetail;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;

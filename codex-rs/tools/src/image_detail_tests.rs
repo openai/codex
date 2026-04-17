@@ -1,6 +1,6 @@
 use super::*;
-use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ModelInfo;
 use pretty_assertions::assert_eq;

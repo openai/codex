@@ -2411,7 +2411,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,BASE64".into(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: Some(ImageDetail::High),
             }]
         );
 

@@ -1,8 +1,8 @@
 use serde_json::Value as JsonValue;
 
+use crate::response::DEFAULT_IMAGE_DETAIL;
 use crate::response::FunctionCallOutputContentItem;
 use crate::response::ImageDetail;
-use crate::response::DEFAULT_IMAGE_DETAIL;
 
 const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block";
 const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
