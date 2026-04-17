@@ -117,7 +117,97 @@ where
 const COMMON_CORE_VARS: &[&str] = &["PATH", "SHELL", "TMPDIR", "TEMP", "TMP"];
 
 #[cfg(target_os = "windows")]
-const PLATFORM_CORE_VARS: &[&str] = &["PATHEXT", "USERNAME", "USERPROFILE"];
+const PLATFORM_CORE_VARS: &[&str] = &[
+    "APPDATA",
+    "COMSPEC",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LOCALAPPDATA",
+    "PATHEXT",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "SYSTEMROOT",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+];
 
 #[cfg(unix)]
 const PLATFORM_CORE_VARS: &[&str] = &["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "USER"];
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+    use crate::types::ShellEnvironmentPolicy;
+    use crate::types::ShellEnvironmentPolicyInherit;
+    use std::collections::HashMap;
+
+    fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn core_inherit_keeps_windows_system_environment() {
+        let vars = make_vars(&[
+            ("Path", "C:\\Windows\\System32"),
+            ("PATHEXT", ".COM;.EXE;.BAT;.CMD"),
+            ("APPDATA", "C:\\Users\\alice\\AppData\\Roaming"),
+            ("LOCALAPPDATA", "C:\\Users\\alice\\AppData\\Local"),
+            ("ProgramFiles", "C:\\Program Files"),
+            ("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+            ("ProgramW6432", "C:\\Program Files"),
+            ("SystemRoot", "C:\\Windows"),
+            ("ComSpec", "C:\\Windows\\System32\\cmd.exe"),
+            ("USERPROFILE", "C:\\Users\\alice"),
+            ("HOMEDRIVE", "C:"),
+            ("HOMEPATH", "\\Users\\alice"),
+            ("TEMP", "C:\\Temp"),
+            ("FOO", "bar"),
+        ]);
+
+        let policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: true,
+            ..Default::default()
+        };
+
+        let result = populate_env(vars, &policy, Some("thread-123"));
+
+        let expected = HashMap::from([
+            ("Path".to_string(), "C:\\Windows\\System32".to_string()),
+            ("PATHEXT".to_string(), ".COM;.EXE;.BAT;.CMD".to_string()),
+            (
+                "APPDATA".to_string(),
+                "C:\\Users\\alice\\AppData\\Roaming".to_string(),
+            ),
+            (
+                "LOCALAPPDATA".to_string(),
+                "C:\\Users\\alice\\AppData\\Local".to_string(),
+            ),
+            ("ProgramFiles".to_string(), "C:\\Program Files".to_string()),
+            (
+                "ProgramFiles(x86)".to_string(),
+                "C:\\Program Files (x86)".to_string(),
+            ),
+            ("ProgramW6432".to_string(), "C:\\Program Files".to_string()),
+            ("SystemRoot".to_string(), "C:\\Windows".to_string()),
+            (
+                "ComSpec".to_string(),
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+            ),
+            ("USERPROFILE".to_string(), "C:\\Users\\alice".to_string()),
+            ("HOMEDRIVE".to_string(), "C:".to_string()),
+            ("HOMEPATH".to_string(), "\\Users\\alice".to_string()),
+            ("TEMP".to_string(), "C:\\Temp".to_string()),
+            ("CODEX_THREAD_ID".to_string(), "thread-123".to_string()),
+        ]);
+
+        assert_eq!(result, expected);
+    }
+}
