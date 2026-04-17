@@ -1281,6 +1281,12 @@ pub(crate) enum ReplayKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TurnCompletionStateCleanup {
+    ClearPendingMarkers,
+    PreservePendingMarkers,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ThreadItemRenderSource {
     Live,
     Replay(ReplayKind),
@@ -5469,7 +5475,7 @@ impl ChatWidget {
                 )));
                 return;
             }
-            let starts_standalone_user_shell_turn = !self.bottom_pane.is_task_running()
+            let starts_standalone_user_shell_turn = !self.agent_turn_running
                 && !self.pending_turn_start_after_submit
                 && !self.should_hold_user_input_for_standalone_shell_turn();
             if self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()))
@@ -5790,6 +5796,7 @@ impl ChatWidget {
                         },
                     },
                     Some(replay_kind),
+                    TurnCompletionStateCleanup::PreservePendingMarkers,
                 );
             }
         }
@@ -6204,7 +6211,7 @@ impl ChatWidget {
             }
             ServerNotification::TurnStarted(notification) => {
                 let turn_id = notification.turn.id;
-                if replay_kind.is_none() {
+                if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
                     self.note_turn_started(&turn_id);
                 }
                 self.last_turn_id = Some(turn_id);
@@ -6214,7 +6221,15 @@ impl ChatWidget {
                 }
             }
             ServerNotification::TurnCompleted(notification) => {
-                self.handle_turn_completed_notification(notification, replay_kind);
+                let state_cleanup = match replay_kind {
+                    Some(ReplayKind::ResumeInitialMessages) => {
+                        TurnCompletionStateCleanup::PreservePendingMarkers
+                    }
+                    Some(ReplayKind::ThreadSnapshot) | None => {
+                        TurnCompletionStateCleanup::ClearPendingMarkers
+                    }
+                };
+                self.handle_turn_completed_notification(notification, replay_kind, state_cleanup);
             }
             ServerNotification::ItemStarted(notification) => {
                 self.handle_item_started_notification(notification, replay_kind.is_some());
@@ -6464,9 +6479,15 @@ impl ChatWidget {
         &mut self,
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
+        state_cleanup: TurnCompletionStateCleanup,
     ) {
-        self.pending_turn_start_after_submit = false;
-        self.clear_standalone_user_shell_turn(Some(&notification.turn.id));
+        if matches!(
+            state_cleanup,
+            TurnCompletionStateCleanup::ClearPendingMarkers
+        ) {
+            self.pending_turn_start_after_submit = false;
+            self.clear_standalone_user_shell_turn(Some(&notification.turn.id));
+        }
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
@@ -6783,7 +6804,7 @@ impl ChatWidget {
             EventMsg::TurnStarted(event) => {
                 let turn_id = event.turn_id;
                 let model_context_window = event.model_context_window;
-                if !from_replay {
+                if !is_resume_initial_replay {
                     self.note_turn_started(&turn_id);
                 }
                 self.last_turn_id = Some(turn_id);
@@ -6797,8 +6818,10 @@ impl ChatWidget {
                 last_agent_message,
                 ..
             }) => {
-                self.pending_turn_start_after_submit = false;
-                self.clear_standalone_user_shell_turn(Some(&turn_id));
+                if !is_resume_initial_replay {
+                    self.pending_turn_start_after_submit = false;
+                    self.clear_standalone_user_shell_turn(Some(&turn_id));
+                }
                 self.on_task_complete(last_agent_message, from_replay);
             }
             EventMsg::TokenCount(ev) => {
@@ -6835,8 +6858,10 @@ impl ChatWidget {
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => {
-                self.pending_turn_start_after_submit = false;
-                self.clear_standalone_user_shell_turn(ev.turn_id.as_deref());
+                if !is_resume_initial_replay {
+                    self.pending_turn_start_after_submit = false;
+                    self.clear_standalone_user_shell_turn(ev.turn_id.as_deref());
+                }
                 match ev.reason {
                     TurnAbortReason::Interrupted => {
                         self.on_interrupted_turn(ev.reason);

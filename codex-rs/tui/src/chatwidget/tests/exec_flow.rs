@@ -1199,6 +1199,28 @@ async fn bang_after_user_turn_submit_before_turn_started_does_not_mark_standalon
 }
 
 #[tokio::test]
+async fn bang_during_mcp_startup_marks_standalone_shell_command() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.mcp_startup_status = Some(HashMap::from([(
+        "server".to_string(),
+        McpStartupStatus::Starting,
+    )]));
+    chat.update_task_running_state();
+
+    chat.bottom_pane
+        .set_composer_text("!sleep 10".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "sleep 10"),
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
+    }
+    assert!(chat.pending_turn_start_after_submit);
+    assert!(chat.pending_standalone_user_shell_command);
+}
+
+#[tokio::test]
 async fn completion_without_seen_shell_start_clears_pending_marker() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
