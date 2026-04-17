@@ -256,6 +256,31 @@ fn find_marketplace_plugin_normalizes_relative_git_source_urls_to_marketplace_ro
 }
 
 #[test]
+fn normalize_relative_git_plugin_source_url_rejects_parent_traversal() {
+    for source_url in [
+        "../toolkit.git",
+        "./../toolkit.git",
+        "..\\toolkit.git",
+        ".\\..\\toolkit.git",
+    ] {
+        let tmp = tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        let marketplace_path = repo_root.join(".agents/plugins/marketplace.json");
+        let marketplace_path = AbsolutePathBuf::try_from(marketplace_path).unwrap();
+        let err =
+            normalize_relative_git_plugin_source_url(&marketplace_path, source_url).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "invalid marketplace file `{}`: relative git plugin source url must stay within the marketplace root",
+                marketplace_path.display()
+            )
+        );
+    }
+}
+
+#[test]
 fn find_marketplace_plugin_skips_root_equivalent_git_subdir_paths() {
     for path in [".", "./", "plugins/.."] {
         let tmp = tempdir().unwrap();

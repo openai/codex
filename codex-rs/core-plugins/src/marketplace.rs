@@ -604,7 +604,11 @@ fn normalize_relative_git_plugin_source_url(
         match segment {
             "" | "." => {}
             ".." => {
-                normalized.pop();
+                return Err(MarketplaceError::InvalidMarketplaceFile {
+                    path: marketplace_path.to_path_buf(),
+                    message: "relative git plugin source url must stay within the marketplace root"
+                        .to_string(),
+                });
             }
             segment => normalized.push(segment),
         }
