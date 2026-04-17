@@ -1,4 +1,5 @@
 use super::*;
+use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
 ///
@@ -11,7 +12,7 @@ pub(crate) struct Session {
     pub(super) state: Mutex<SessionState>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
-    pub(super) managed_network_proxy_refresh_lock: Mutex<()>,
+    pub(super) managed_network_proxy_refresh_lock: Semaphore,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
@@ -207,6 +208,10 @@ pub(crate) struct AppServerClientMetadata {
 impl Session {
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "session initialization must serialize access through session-owned manager guards"
+    )]
     pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
@@ -695,7 +700,7 @@ impl Session {
             agent_status,
             out_of_band_elicitation_paused,
             state: Mutex::new(state),
-            managed_network_proxy_refresh_lock: Mutex::new(()),
+            managed_network_proxy_refresh_lock: Semaphore::new(1),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),

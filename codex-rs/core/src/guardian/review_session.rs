@@ -19,6 +19,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SubAgentSource;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -91,7 +92,7 @@ struct GuardianReviewSession {
     codex: Codex,
     cancel_token: CancellationToken,
     reuse_key: GuardianReviewSessionReuseKey,
-    review_lock: Mutex<()>,
+    review_lock: Semaphore,
     state: Mutex<GuardianReviewState>,
 }
 
@@ -264,6 +265,10 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "review session selection and trunk spawning must stay serialized"
+    )]
     pub(crate) async fn run_review(
         &self,
         params: GuardianReviewSessionParams,
@@ -281,7 +286,7 @@ impl GuardianReviewSessionManager {
             Ok(mut state) => {
                 if let Some(trunk) = state.trunk.as_ref()
                     && trunk.reuse_key != next_reuse_key
-                    && trunk.review_lock.try_lock().is_ok()
+                    && trunk.review_lock.try_acquire().is_ok()
                 {
                     stale_trunk_to_shutdown = state.trunk.take();
                 }
@@ -336,7 +341,7 @@ impl GuardianReviewSessionManager {
             .await;
         }
 
-        let trunk_guard = match trunk.review_lock.try_lock() {
+        let trunk_guard = match trunk.review_lock.try_acquire() {
             Ok(trunk_guard) => trunk_guard,
             Err(_) => {
                 return Box::pin(self.run_ephemeral_review(
@@ -375,7 +380,7 @@ impl GuardianReviewSessionManager {
             reuse_key,
             codex,
             cancel_token: CancellationToken::new(),
-            review_lock: Mutex::new(()),
+            review_lock: Semaphore::new(1),
             state: Mutex::new(GuardianReviewState {
                 prior_review_count: 0,
                 last_reviewed_transcript_cursor: None,
@@ -397,7 +402,7 @@ impl GuardianReviewSessionManager {
                 reuse_key,
                 codex,
                 cancel_token: CancellationToken::new(),
-                review_lock: Mutex::new(()),
+                review_lock: Semaphore::new(1),
                 state: Mutex::new(GuardianReviewState {
                     prior_review_count: 0,
                     last_reviewed_transcript_cursor: None,
@@ -531,7 +536,7 @@ async fn spawn_guardian_review_session(
         codex,
         cancel_token,
         reuse_key,
-        review_lock: Mutex::new(()),
+        review_lock: Semaphore::new(1),
         state: Mutex::new(GuardianReviewState {
             prior_review_count,
             last_reviewed_transcript_cursor: initial_transcript_cursor,
