@@ -5522,7 +5522,7 @@ async fn interrupt_without_active_turn_preserves_queued_response_items_without_a
     let queued_item = ResponseInputItem::Message {
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
-            text: "continue the active goal".to_string(),
+            text: "Continue working toward the active thread goal.".to_string(),
         }],
     };
 
@@ -5699,7 +5699,7 @@ async fn interrupt_without_active_turn_pauses_active_goal() -> anyhow::Result<()
     let queued_item = ResponseInputItem::Message {
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
-            text: "continue the active goal".to_string(),
+            text: "Continue working toward the active thread goal.".to_string(),
         }],
     };
     sess.set_thread_goal(
@@ -6077,7 +6077,11 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
             ]),
             sse(vec![
                 ev_response_created("resp-3"),
-                ev_function_call("call-complete-goal", "set_goal", r#"{"status":"complete"}"#),
+                ev_function_call(
+                    "call-complete-goal",
+                    "update_goal",
+                    r#"{"status":"complete"}"#,
+                ),
                 ev_completed("resp-3"),
             ]),
             sse(vec![
@@ -6300,6 +6304,66 @@ async fn goal_accounting_resets_baseline_for_out_of_band_replacement() -> anyhow
         .await?
         .expect("goal should remain persisted after accounting");
     assert_eq!(30, goal.tokens_used);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_goal_same_objective_preserves_usage_accounting() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: Some(Some(1_000)),
+        },
+    )
+    .await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .account_thread_goal_usage(
+            sess.conversation_id,
+            /*time_delta_seconds*/ 123,
+            /*token_delta*/ 456,
+            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+        )
+        .await?;
+    let original_goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should exist before idempotent update");
+
+    let updated_goal = sess
+        .set_thread_goal(
+            tc.as_ref(),
+            SetGoalRequest {
+                objective: Some("Keep improving the benchmark".to_string()),
+                status: Some(codex_protocol::protocol::ThreadGoalStatus::Active),
+                token_budget: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(
+        original_goal.time_used_seconds,
+        updated_goal.time_used_seconds
+    );
+    assert_eq!(original_goal.tokens_used, updated_goal.tokens_used);
+    assert_eq!(
+        original_goal.created_at.timestamp(),
+        updated_goal.created_at
+    );
+    assert_eq!(
+        codex_protocol::protocol::ThreadGoalStatus::Active,
+        updated_goal.status
+    );
 
     Ok(())
 }
@@ -6910,7 +6974,11 @@ async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_respon
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_function_call("call-complete-goal", "set_goal", r#"{"status":"complete"}"#),
+                ev_function_call(
+                    "call-complete-goal",
+                    "update_goal",
+                    r#"{"status":"complete"}"#,
+                ),
                 ev_completed_with_usage(
                     "resp-2", /*input_tokens*/ 900, /*cached_input_tokens*/ 400,
                     /*output_tokens*/ 80, /*reasoning_output_tokens*/ 20,
@@ -7001,7 +7069,7 @@ async fn stopping_goal_accounts_current_turn_uncached_tokens_before_tool_respons
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_function_call("call-pause-goal", "set_goal", r#"{"status":"paused"}"#),
+                ev_function_call("call-pause-goal", "update_goal", r#"{"status":"paused"}"#),
                 ev_completed_with_usage(
                     "resp-2", /*input_tokens*/ 900, /*cached_input_tokens*/ 400,
                     /*output_tokens*/ 80, /*reasoning_output_tokens*/ 20,
