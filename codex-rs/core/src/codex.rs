@@ -110,6 +110,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::LocalThreadStore;
@@ -1011,15 +1012,21 @@ impl TurnContext {
         &self,
         additional_permissions: Option<PermissionProfile>,
     ) -> FileSystemSandboxContext {
+        let base_permissions = PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        );
+        let permissions =
+            merge_permission_profiles(Some(&base_permissions), additional_permissions.as_ref())
+                .unwrap_or(base_permissions);
         FileSystemSandboxContext {
-            sandbox_policy: self.sandbox_policy.get().clone(),
+            permissions,
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config
                 .permissions
                 .windows_sandbox_private_desktop,
             use_legacy_landlock: self.features.use_legacy_landlock(),
-            additional_permissions,
         }
     }
 

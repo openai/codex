@@ -31,6 +31,7 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -74,12 +75,18 @@ impl ApplyPatchRuntime {
             return None;
         }
 
+        let base_permissions = PermissionProfile::from_runtime_permissions(
+            attempt.file_system_policy,
+            attempt.network_policy,
+        );
+        let permissions =
+            merge_permission_profiles(Some(&base_permissions), req.additional_permissions.as_ref())
+                .unwrap_or(base_permissions);
         Some(FileSystemSandboxContext {
-            sandbox_policy: attempt.policy.clone(),
+            permissions,
             windows_sandbox_level: attempt.windows_sandbox_level,
             windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             use_legacy_landlock: attempt.use_legacy_landlock,
-            additional_permissions: req.additional_permissions.clone(),
         })
     }
 
