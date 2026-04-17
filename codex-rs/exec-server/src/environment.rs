@@ -22,7 +22,8 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 /// environment. Otherwise the local environment is the default.
 ///
 /// Setting `CODEX_EXEC_SERVER_URL=none` does not remove the local environment:
-/// Codex internals may still use `local_environment()` or `default_environment()`.
+/// Codex internals may still use `default_environment()` or explicit
+/// `get_environment()` lookups.
 /// Instead it disables agent/tool access as reported by
 /// `allows_agent_environment_access()`, so shell/filesystem tools can be hidden
 /// from the model while internal local filesystem access still works.
@@ -116,12 +117,6 @@ impl EnvironmentManager {
     pub fn default_environment(&self) -> Arc<Environment> {
         self.get_environment(&self.default_environment)
             .expect("default environment exists")
-    }
-
-    /// Returns the local environment instance.
-    pub fn local_environment(&self) -> Arc<Environment> {
-        self.get_environment(LOCAL_ENVIRONMENT_ID)
-            .expect("local environment exists")
     }
 
     /// Returns a named environment instance.
@@ -243,6 +238,7 @@ mod tests {
     use super::Environment;
     use super::EnvironmentManager;
     use super::EnvironmentManagerArgs;
+    use super::LOCAL_ENVIRONMENT_ID;
     use super::REMOTE_ENVIRONMENT_ID;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
@@ -267,7 +263,12 @@ mod tests {
         let environment = manager.default_environment();
         assert!(!environment.is_remote());
         assert!(manager.allows_agent_environment_access());
-        assert!(!manager.local_environment().is_remote());
+        assert!(
+            !manager
+                .get_environment(LOCAL_ENVIRONMENT_ID)
+                .expect("local environment")
+                .is_remote()
+        );
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
     }
 
@@ -280,7 +281,12 @@ mod tests {
 
         assert!(!manager.allows_agent_environment_access());
         assert!(!manager.default_environment().is_remote());
-        assert!(!manager.local_environment().is_remote());
+        assert!(
+            !manager
+                .get_environment(LOCAL_ENVIRONMENT_ID)
+                .expect("local environment")
+                .is_remote()
+        );
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
     }
 
@@ -295,7 +301,12 @@ mod tests {
         assert!(environment.is_remote());
         assert!(manager.allows_agent_environment_access());
         assert_eq!(environment.exec_server_url(), Some("ws://127.0.0.1:8765"));
-        assert!(!manager.local_environment().is_remote());
+        assert!(
+            !manager
+                .get_environment(LOCAL_ENVIRONMENT_ID)
+                .expect("local environment")
+                .is_remote()
+        );
         assert_eq!(
             manager
                 .get_environment(REMOTE_ENVIRONMENT_ID)
@@ -358,7 +369,12 @@ mod tests {
 
         assert!(!manager.default_environment().is_remote());
         assert!(!manager.allows_agent_environment_access());
-        assert!(!manager.local_environment().is_remote());
+        assert!(
+            !manager
+                .get_environment(LOCAL_ENVIRONMENT_ID)
+                .expect("local environment")
+                .is_remote()
+        );
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
     }
 
