@@ -680,10 +680,10 @@ fn app_tool_policy_from_apps_config(
         });
     let destructive_hint = annotations
         .and_then(|annotations| annotations.destructive_hint)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let open_world_hint = annotations
         .and_then(|annotations| annotations.open_world_hint)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let enabled =
         (destructive_enabled || !destructive_hint) && (open_world_enabled || !open_world_hint);
 

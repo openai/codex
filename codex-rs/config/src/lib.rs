@@ -4,6 +4,7 @@ pub mod config_toml;
 mod constraint;
 mod diagnostics;
 mod fingerprint;
+mod key_aliases;
 mod marketplace_edit;
 mod mcp_edit;
 mod mcp_types;

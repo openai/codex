@@ -221,7 +221,7 @@ persistence = "none"
 
     let memories = r#"
 [memories]
-no_memories_if_mcp_or_web_search = true
+disable_on_external_context = true
 generate_memories = false
 use_memories = false
 max_raw_memories_for_consolidation = 512
@@ -236,7 +236,7 @@ consolidation_model = "gpt-5"
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
     assert_eq!(
         Some(MemoriesToml {
-            no_memories_if_mcp_or_web_search: Some(true),
+            disable_on_external_context: Some(true),
             generate_memories: Some(false),
             use_memories: Some(false),
             max_raw_memories_for_consolidation: Some(512),
@@ -260,7 +260,7 @@ consolidation_model = "gpt-5"
     assert_eq!(
         config.memories,
         MemoriesConfig {
-            no_memories_if_mcp_or_web_search: true,
+            disable_on_external_context: true,
             generate_memories: false,
             use_memories: false,
             max_raw_memories_for_consolidation: 512,
@@ -271,6 +271,18 @@ consolidation_model = "gpt-5"
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5".to_string()),
         }
+    );
+
+    let legacy_memories_cfg =
+        toml::from_str::<ConfigToml>("[memories]\nno_memories_if_mcp_or_web_search = true\n")
+            .expect("legacy memories TOML should deserialize");
+    assert!(
+        MemoriesConfig::from(
+            legacy_memories_cfg
+                .memories
+                .expect("legacy memories config")
+        )
+        .disable_on_external_context
     );
 }
 

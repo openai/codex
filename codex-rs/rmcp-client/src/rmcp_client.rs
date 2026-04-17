@@ -4,7 +4,6 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -52,7 +51,6 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::OAuthState;
-use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::AuthRequiredError;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -63,23 +61,20 @@ use serde::Serialize;
 use serde_json::Value;
 use sse_stream::Sse;
 use sse_stream::SseStream;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
-use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio::time;
-use tracing::info;
 use tracing::warn;
 
 use crate::elicitation_client_service::ElicitationClientService;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
-use crate::program_resolver;
+use crate::stdio_server_launcher::StdioServerCommand;
+use crate::stdio_server_launcher::StdioServerLauncher;
+use crate::stdio_server_launcher::StdioServerTransport;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
-use crate::utils::create_env_for_mcp_server;
 use codex_config::types::OAuthCredentialsStoreMode;
 
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
@@ -307,9 +302,8 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
 }
 
 enum PendingTransport {
-    ChildProcess {
-        transport: TokioChildProcess,
-        process_group_guard: Option<ProcessGroupGuard>,
+    Stdio {
+        transport: StdioServerTransport,
     },
     StreamableHttp {
         transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
@@ -325,79 +319,16 @@ enum ClientState {
         transport: Option<PendingTransport>,
     },
     Ready {
-        _process_group_guard: Option<ProcessGroupGuard>,
         service: Arc<RunningService<RoleClient, ElicitationClientService>>,
         oauth: Option<OAuthPersistor>,
     },
 }
 
-#[cfg(unix)]
-const PROCESS_GROUP_TERM_GRACE_PERIOD: Duration = Duration::from_secs(2);
-
-#[cfg(unix)]
-struct ProcessGroupGuard {
-    process_group_id: u32,
-}
-
-#[cfg(not(unix))]
-struct ProcessGroupGuard;
-
-impl ProcessGroupGuard {
-    fn new(process_group_id: u32) -> Self {
-        #[cfg(unix)]
-        {
-            Self { process_group_id }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = process_group_id;
-            Self
-        }
-    }
-
-    #[cfg(unix)]
-    fn maybe_terminate_process_group(&self) {
-        let process_group_id = self.process_group_id;
-        let should_escalate =
-            match codex_utils_pty::process_group::terminate_process_group(process_group_id) {
-                Ok(exists) => exists,
-                Err(error) => {
-                    warn!("Failed to terminate MCP process group {process_group_id}: {error}");
-                    false
-                }
-            };
-        if should_escalate {
-            std::thread::spawn(move || {
-                std::thread::sleep(PROCESS_GROUP_TERM_GRACE_PERIOD);
-                if let Err(error) =
-                    codex_utils_pty::process_group::kill_process_group(process_group_id)
-                {
-                    warn!("Failed to kill MCP process group {process_group_id}: {error}");
-                }
-            });
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn maybe_terminate_process_group(&self) {}
-}
-
-impl Drop for ProcessGroupGuard {
-    fn drop(&mut self) {
-        if cfg!(unix) {
-            self.maybe_terminate_process_group();
-        }
-    }
-}
-
 #[derive(Clone)]
 enum TransportRecipe {
     Stdio {
-        program: OsString,
-        args: Vec<OsString>,
-        env: Option<HashMap<OsString, OsString>>,
-        env_vars: Vec<String>,
-        cwd: Option<PathBuf>,
+        command: StdioServerCommand,
+        launcher: Arc<dyn StdioServerLauncher>,
     },
     StreamableHttp {
         server_name: String,
@@ -574,13 +505,11 @@ impl RmcpClient {
         env: Option<HashMap<OsString, OsString>>,
         env_vars: &[String],
         cwd: Option<PathBuf>,
+        launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {
-            program,
-            args,
-            env,
-            env_vars: env_vars.to_vec(),
-            cwd,
+            command: StdioServerCommand::new(program, args, env, env_vars.to_vec(), cwd),
+            launcher,
         };
         let transport = Self::create_pending_transport(&transport_recipe)
             .await
@@ -650,7 +579,7 @@ impl RmcpClient {
             }
         };
 
-        let (service, oauth_persistor, process_group_guard) =
+        let (service, oauth_persistor) =
             Self::connect_pending_transport(pending_transport, client_service.clone(), timeout)
                 .await?;
 
@@ -671,7 +600,6 @@ impl RmcpClient {
         {
             let mut guard = self.state.lock().await;
             *guard = ClientState::Ready {
-                _process_group_guard: process_group_guard,
                 service,
                 oauth: oauth_persistor.clone(),
             };
@@ -954,60 +882,9 @@ impl RmcpClient {
         transport_recipe: &TransportRecipe,
     ) -> Result<PendingTransport> {
         match transport_recipe {
-            TransportRecipe::Stdio {
-                program,
-                args,
-                env,
-                env_vars,
-                cwd,
-            } => {
-                let program_name = program.to_string_lossy().into_owned();
-                let envs = create_env_for_mcp_server(env.clone(), env_vars);
-                let resolved_program = program_resolver::resolve(program.clone(), &envs)?;
-
-                let mut command = Command::new(resolved_program);
-                command
-                    .kill_on_drop(true)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .env_clear()
-                    .envs(envs)
-                    .args(args);
-                #[cfg(unix)]
-                command.process_group(0);
-                if let Some(cwd) = cwd {
-                    command.current_dir(cwd);
-                }
-
-                let (transport, stderr) = TokioChildProcess::builder(command)
-                    .stderr(Stdio::piped())
-                    .spawn()?;
-                let process_group_guard = transport.id().map(ProcessGroupGuard::new);
-
-                if let Some(stderr) = stderr {
-                    tokio::spawn(async move {
-                        let mut reader = BufReader::new(stderr).lines();
-                        loop {
-                            match reader.next_line().await {
-                                Ok(Some(line)) => {
-                                    info!("MCP server stderr ({program_name}): {line}");
-                                }
-                                Ok(None) => break,
-                                Err(error) => {
-                                    warn!(
-                                        "Failed to read MCP server stderr ({program_name}): {error}"
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                    });
-                }
-
-                Ok(PendingTransport::ChildProcess {
-                    transport,
-                    process_group_guard,
-                })
+            TransportRecipe::Stdio { command, launcher } => {
+                let transport = launcher.launch(command.clone()).await?;
+                Ok(PendingTransport::Stdio { transport })
             }
             TransportRecipe::StreamableHttp {
                 server_name,
@@ -1101,20 +978,14 @@ impl RmcpClient {
     ) -> Result<(
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
-        Option<ProcessGroupGuard>,
     )> {
-        let (transport, oauth_persistor, process_group_guard) = match pending_transport {
-            PendingTransport::ChildProcess {
-                transport,
-                process_group_guard,
-            } => (
+        let (transport, oauth_persistor) = match pending_transport {
+            PendingTransport::Stdio { transport } => (
                 service::serve_client(client_service, transport).boxed(),
                 None,
-                process_group_guard,
             ),
             PendingTransport::StreamableHttp { transport } => (
                 service::serve_client(client_service, transport).boxed(),
-                None,
                 None,
             ),
             PendingTransport::StreamableHttpWithOAuth {
@@ -1123,7 +994,6 @@ impl RmcpClient {
             } => (
                 service::serve_client(client_service, transport).boxed(),
                 Some(oauth_persistor),
-                None,
             ),
         };
 
@@ -1137,7 +1007,7 @@ impl RmcpClient {
                 .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
         };
 
-        Ok((Arc::new(service), oauth_persistor, process_group_guard))
+        Ok((Arc::new(service), oauth_persistor))
     }
 
     async fn run_service_operation<T, F, Fut>(
@@ -1249,7 +1119,7 @@ impl RmcpClient {
             .clone()
             .ok_or_else(|| anyhow!("MCP client cannot recover before initialize succeeds"))?;
         let pending_transport = Self::create_pending_transport(&self.transport_recipe).await?;
-        let (service, oauth_persistor, process_group_guard) = Self::connect_pending_transport(
+        let (service, oauth_persistor) = Self::connect_pending_transport(
             pending_transport,
             initialize_context.client_service,
             initialize_context.timeout,
@@ -1259,7 +1129,6 @@ impl RmcpClient {
         {
             let mut guard = self.state.lock().await;
             *guard = ClientState::Ready {
-                _process_group_guard: process_group_guard,
                 service,
                 oauth: oauth_persistor.clone(),
             };
