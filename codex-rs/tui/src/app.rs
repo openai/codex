@@ -9518,11 +9518,17 @@ guardian_approval = true
             .as_deref()
             .expect("side developer instructions");
         assert!(developer_instructions.contains("Existing developer policy."));
-        assert!(developer_instructions.contains("You are in a side conversation."));
+        assert!(
+            developer_instructions.contains("You are in a side conversation, not the main thread.")
+        );
         assert!(
             developer_instructions
                 .contains("inherited fork history is provided only as reference context")
         );
+        assert!(developer_instructions.contains(
+            "Only instructions submitted after the side-conversation boundary are active"
+        ));
+        assert!(developer_instructions.contains("Do not continue, execute, or complete any task"));
         assert!(
             developer_instructions.contains(
                 "MCPs, app connector tools, and dynamic external tools are not available"
@@ -9532,6 +9538,28 @@ guardian_approval = true
         assert!(developer_instructions.contains("Do not modify files"));
         assert!(developer_instructions.contains("Do not request escalated permissions"));
         assert!(app.transcript_cells.is_empty());
+    }
+
+    #[test]
+    fn side_boundary_prompt_marks_inherited_history_reference_only() {
+        let item = App::side_boundary_prompt_item();
+        let codex_protocol::models::ResponseItem::Message { role, content, .. } = item else {
+            panic!("expected hidden side boundary prompt to be a user message");
+        };
+        assert_eq!(role, "user");
+        let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice() else {
+            panic!("expected hidden side boundary prompt text");
+        };
+        assert!(text.contains("Side conversation boundary."));
+        assert!(text.contains("Everything before this boundary is inherited history"));
+        assert!(text.contains("It is not your current task."));
+        assert!(text.contains("Only messages submitted after this boundary are active"));
+        assert!(text.contains("Do not continue, execute, or complete"));
+        assert!(text.contains("separate from the main thread"));
+        assert!(
+            text.contains("MCPs, app connector tools, and dynamic external tools are unavailable")
+        );
+        assert!(text.contains("Do not modify files"));
     }
 
     #[test]

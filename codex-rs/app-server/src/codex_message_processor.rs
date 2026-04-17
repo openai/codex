@@ -4884,7 +4884,11 @@ impl CodexMessageProcessor {
         )
         .await;
 
-        let notif = ThreadStartedNotification { thread };
+        let mut notification_thread = thread;
+        notification_thread.turns.clear();
+        let notif = ThreadStartedNotification {
+            thread: notification_thread,
+        };
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
             .await;

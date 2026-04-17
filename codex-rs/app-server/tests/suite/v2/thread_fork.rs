@@ -184,7 +184,9 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread, thread);
+    let mut expected_started_thread = thread.clone();
+    expected_started_thread.turns.clear();
+    assert_eq!(started.thread, expected_started_thread);
 
     Ok(())
 }
@@ -577,7 +579,9 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
     );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    assert_eq!(started.thread, thread);
+    let mut expected_started_thread = thread.clone();
+    expected_started_thread.turns.clear();
+    assert_eq!(started.thread, expected_started_thread);
 
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
