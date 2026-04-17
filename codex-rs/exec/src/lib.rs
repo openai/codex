@@ -1016,6 +1016,7 @@ fn session_configured_from_thread_start_response(
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
+        response.permission_profile.clone().into(),
         response.cwd.clone(),
         response.reasoning_effort,
     )
@@ -1034,6 +1035,7 @@ fn session_configured_from_thread_resume_response(
         response.approval_policy.to_core(),
         response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
+        response.permission_profile.clone().into(),
         response.cwd.clone(),
         response.reasoning_effort,
     )
@@ -1062,6 +1064,7 @@ fn session_configured_from_thread_response(
     approval_policy: AskForApproval,
     approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: SandboxPolicy,
+    permission_profile: PermissionProfile,
     cwd: AbsolutePathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 ) -> Result<SessionConfiguredEvent, String> {
@@ -1078,6 +1081,7 @@ fn session_configured_from_thread_response(
         approval_policy,
         approvals_reviewer,
         sandbox_policy,
+        permission_profile: Some(permission_profile),
         cwd,
         reasoning_effort,
         history_log_id: 0,
