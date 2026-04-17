@@ -42,22 +42,20 @@ async fn external_agent_config_import_sends_completion_notification_for_local_pl
         r#"{"name":"sample","version":"0.1.0"}"#,
     )?;
     std::fs::create_dir_all(codex_home.path().join(".claude"))?;
+    let settings = serde_json::json!({
+        "enabledPlugins": {
+            "sample@debug": true
+        },
+        "extraKnownMarketplaces": {
+            "debug": {
+                "source": "local",
+                "path": marketplace_root,
+            }
+        }
+    });
     std::fs::write(
         codex_home.path().join(".claude").join("settings.json"),
-        format!(
-            r#"{{
-  "enabledPlugins": {{
-    "sample@debug": true
-  }},
-  "extraKnownMarketplaces": {{
-    "debug": {{
-      "source": "local",
-      "path": "{}"
-    }}
-  }}
-}}"#,
-            marketplace_root.display()
-        ),
+        serde_json::to_string_pretty(&settings)?,
     )?;
 
     let home_dir = codex_home.path().display().to_string();
