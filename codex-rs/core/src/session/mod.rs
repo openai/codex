@@ -110,6 +110,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::RolloutConfig;
 use codex_rollout::state_db;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_shell_command::parse_command::parse_command;
 use codex_terminal_detection::user_agent;
 use codex_thread_store::LocalThreadStore;
@@ -785,6 +786,323 @@ pub(crate) fn session_loop_termination_from_handle(
     }
     .boxed()
     .shared()
+}
+
+/// Context for an initialized model agent
+///
+/// A session has at most 1 running task at a time, and can be interrupted by user input.
+pub(crate) struct Session {
+    pub(crate) conversation_id: ThreadId,
+    tx_event: Sender<Event>,
+    agent_status: watch::Sender<AgentStatus>,
+    out_of_band_elicitation_paused: watch::Sender<bool>,
+    state: Mutex<SessionState>,
+    /// Serializes rebuild/apply cycles for the running proxy; each cycle
+    /// rebuilds from the current SessionState while holding this lock.
+    managed_network_proxy_refresh_lock: Mutex<()>,
+    /// The set of enabled features should be invariant for the lifetime of the
+    /// session.
+    features: ManagedFeatures,
+    pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
+    pub(crate) conversation: Arc<RealtimeConversationManager>,
+    pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    mailbox: Mailbox,
+    mailbox_rx: Mutex<MailboxReceiver>,
+    idle_pending_input: Mutex<Vec<ResponseInputItem>>, // TODO (jif) merge with mailbox!
+    pub(crate) guardian_review_session: GuardianReviewSessionManager,
+    pub(crate) services: SessionServices,
+    js_repl: Arc<JsReplHandle>,
+    next_internal_sub_id: AtomicU64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TurnSkillsContext {
+    pub(crate) outcome: Arc<SkillLoadOutcome>,
+    pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
+}
+
+impl TurnSkillsContext {
+    pub(crate) fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
+        Self {
+            outcome,
+            implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+}
+
+/// The context needed for a single turn of the thread.
+#[derive(Debug)]
+pub(crate) struct TurnContext {
+    pub(crate) sub_id: String,
+    pub(crate) trace_id: Option<String>,
+    pub(crate) realtime_active: bool,
+    pub(crate) config: Arc<Config>,
+    pub(crate) auth_manager: Option<Arc<AuthManager>>,
+    pub(crate) model_info: ModelInfo,
+    pub(crate) session_telemetry: SessionTelemetry,
+    pub(crate) provider: ModelProviderInfo,
+    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+    pub(crate) reasoning_summary: ReasoningSummaryConfig,
+    pub(crate) session_source: SessionSource,
+    pub(crate) environment: Option<Arc<Environment>>,
+    /// The session's absolute working directory. All relative paths provided
+    /// by the model as well as sandbox policies are resolved against this path
+    /// instead of `std::env::current_dir()`.
+    pub(crate) cwd: AbsolutePathBuf,
+    pub(crate) current_date: Option<String>,
+    pub(crate) timezone: Option<String>,
+    pub(crate) app_server_client_name: Option<String>,
+    pub(crate) developer_instructions: Option<String>,
+    pub(crate) compact_prompt: Option<String>,
+    pub(crate) user_instructions: Option<String>,
+    pub(crate) collaboration_mode: CollaborationMode,
+    pub(crate) personality: Option<Personality>,
+    pub(crate) approval_policy: Constrained<AskForApproval>,
+    pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
+    pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
+    pub(crate) network: Option<NetworkProxy>,
+    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
+    pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
+    pub(crate) tools_config: ToolsConfig,
+    pub(crate) features: ManagedFeatures,
+    pub(crate) ghost_snapshot: GhostSnapshotConfig,
+    pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) codex_self_exe: Option<PathBuf>,
+    pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    pub(crate) tool_call_gate: Arc<ReadinessFlag>,
+    pub(crate) truncation_policy: TruncationPolicy,
+    pub(crate) js_repl: Arc<JsReplHandle>,
+    pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
+    pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
+    pub(crate) turn_skills: TurnSkillsContext,
+    pub(crate) turn_timing_state: Arc<TurnTimingState>,
+}
+impl TurnContext {
+    pub(crate) fn model_context_window(&self) -> Option<i64> {
+        let effective_context_window_percent = self.model_info.effective_context_window_percent;
+        self.model_info.context_window.map(|context_window| {
+            context_window.saturating_mul(effective_context_window_percent) / 100
+        })
+    }
+
+    pub(crate) fn apps_enabled(&self) -> bool {
+        let is_chatgpt_auth = self
+            .auth_manager
+            .as_deref()
+            .and_then(AuthManager::auth_cached)
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth);
+        self.features.apps_enabled_for_auth(is_chatgpt_auth)
+    }
+
+    pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
+        let mut config = (*self.config).clone();
+        config.model = Some(model.clone());
+        let model_info = models_manager
+            .get_model_info(model.as_str(), &config.to_models_manager_config())
+            .await;
+        let truncation_policy = model_info.truncation_policy.into();
+        let supported_reasoning_levels = model_info
+            .supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect::<Vec<_>>();
+        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort {
+            if supported_reasoning_levels.contains(&current_reasoning_effort) {
+                Some(current_reasoning_effort)
+            } else {
+                supported_reasoning_levels
+                    .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                    .copied()
+                    .or(model_info.default_reasoning_level)
+            }
+        } else {
+            supported_reasoning_levels
+                .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
+                .copied()
+                .or(model_info.default_reasoning_level)
+        };
+        config.model_reasoning_effort = reasoning_effort;
+
+        let collaboration_mode = self.collaboration_mode.with_updates(
+            Some(model.clone()),
+            Some(reasoning_effort),
+            /*developer_instructions*/ None,
+        );
+        let features = self.features.clone();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &models_manager
+                .list_models(RefreshStrategy::OnlineIfUncached)
+                .await,
+            features: &features,
+            image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(
+                self.auth_manager.as_deref(),
+            ),
+            web_search_mode: self.tools_config.web_search_mode,
+            session_source: self.session_source.clone(),
+            sandbox_policy: self.sandbox_policy.get(),
+            windows_sandbox_level: self.windows_sandbox_level,
+        })
+        .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
+        .with_web_search_config(self.tools_config.web_search_config.clone())
+        .with_allow_login_shell(self.tools_config.allow_login_shell)
+        .with_has_environment(self.tools_config.has_environment)
+        .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
+        .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
+        .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
+        .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
+            &config.agent_roles,
+        ));
+
+        Self {
+            sub_id: self.sub_id.clone(),
+            trace_id: self.trace_id.clone(),
+            realtime_active: self.realtime_active,
+            config: Arc::new(config),
+            auth_manager: self.auth_manager.clone(),
+            model_info: model_info.clone(),
+            session_telemetry: self
+                .session_telemetry
+                .clone()
+                .with_model(model.as_str(), model_info.slug.as_str()),
+            provider: self.provider.clone(),
+            reasoning_effort,
+            reasoning_summary: self.reasoning_summary,
+            session_source: self.session_source.clone(),
+            environment: self.environment.clone(),
+            cwd: self.cwd.clone(),
+            current_date: self.current_date.clone(),
+            timezone: self.timezone.clone(),
+            app_server_client_name: self.app_server_client_name.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            compact_prompt: self.compact_prompt.clone(),
+            user_instructions: self.user_instructions.clone(),
+            collaboration_mode,
+            personality: self.personality,
+            approval_policy: self.approval_policy.clone(),
+            sandbox_policy: self.sandbox_policy.clone(),
+            file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: self.network_sandbox_policy,
+            network: self.network.clone(),
+            windows_sandbox_level: self.windows_sandbox_level,
+            shell_environment_policy: self.shell_environment_policy.clone(),
+            tools_config,
+            features,
+            ghost_snapshot: self.ghost_snapshot.clone(),
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            codex_self_exe: self.codex_self_exe.clone(),
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
+            truncation_policy,
+            js_repl: Arc::clone(&self.js_repl),
+            dynamic_tools: self.dynamic_tools.clone(),
+            turn_metadata_state: self.turn_metadata_state.clone(),
+            turn_skills: self.turn_skills.clone(),
+            turn_timing_state: Arc::clone(&self.turn_timing_state),
+        }
+    }
+
+    pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
+        path.as_ref()
+            .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
+    }
+
+    pub(crate) fn file_system_sandbox_context(
+        &self,
+        additional_permissions: Option<PermissionProfile>,
+    ) -> FileSystemSandboxContext {
+        let base_permissions = PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        );
+        let permissions =
+            merge_permission_profiles(Some(&base_permissions), additional_permissions.as_ref())
+                .unwrap_or(base_permissions);
+        FileSystemSandboxContext {
+            permissions,
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
+            use_legacy_landlock: self.features.use_legacy_landlock(),
+        }
+    }
+
+    pub(crate) fn compact_prompt(&self) -> &str {
+        self.compact_prompt
+            .as_deref()
+            .unwrap_or(compact::SUMMARIZATION_PROMPT)
+    }
+
+    pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+        let legacy_file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            self.sandbox_policy.get(),
+            &self.cwd,
+        );
+        // Omit the derived split filesystem policy when it is equivalent to
+        // the legacy sandbox policy. This keeps turn-context payloads stable
+        // while both fields exist; once callers consume only the split policy,
+        // this comparison and the legacy projection should go away.
+        let file_system_sandbox_policy = (self.file_system_sandbox_policy
+            != legacy_file_system_sandbox_policy)
+            .then(|| self.file_system_sandbox_policy.clone());
+
+        TurnContextItem {
+            turn_id: Some(self.sub_id.clone()),
+            trace_id: self.trace_id.clone(),
+            cwd: self.cwd.to_path_buf(),
+            current_date: self.current_date.clone(),
+            timezone: self.timezone.clone(),
+            approval_policy: self.approval_policy.value(),
+            sandbox_policy: self.sandbox_policy.get().clone(),
+            network: self.turn_context_network_item(),
+            file_system_sandbox_policy,
+            model: self.model_info.slug.clone(),
+            personality: self.personality,
+            collaboration_mode: Some(self.collaboration_mode.clone()),
+            realtime_active: Some(self.realtime_active),
+            effort: self.reasoning_effort,
+            summary: self.reasoning_summary,
+            user_instructions: self.user_instructions.clone(),
+            developer_instructions: self.developer_instructions.clone(),
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            truncation_policy: Some(self.truncation_policy),
+        }
+    }
+
+    fn turn_context_network_item(&self) -> Option<TurnContextNetworkItem> {
+        let network = self
+            .config
+            .config_layer_stack
+            .requirements()
+            .network
+            .as_ref()?;
+        Some(TurnContextNetworkItem {
+            allowed_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
+                .unwrap_or_default(),
+            denied_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
+                .unwrap_or_default(),
+        })
+    }
+}
+
+fn local_time_context() -> (String, String) {
+    match iana_time_zone::get_timezone() {
+        Ok(timezone) => (Local::now().format("%Y-%m-%d").to_string(), timezone),
+        Err(_) => (
+            Utc::now().format("%Y-%m-%d").to_string(),
+            "Etc/UTC".to_string(),
+        ),
+    }
 }
 
 async fn thread_title_from_state_db(
