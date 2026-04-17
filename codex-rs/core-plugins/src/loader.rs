@@ -462,7 +462,7 @@ async fn load_plugin(
     }
 
     let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
-        loaded_plugin.error = Some("missing or invalid .codex-plugin/plugin.json".to_string());
+        loaded_plugin.error = Some("missing or invalid plugin.json".to_string());
         return loaded_plugin;
     };
 

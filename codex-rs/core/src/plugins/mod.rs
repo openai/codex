@@ -32,6 +32,7 @@ pub use installed_marketplaces::marketplace_install_root;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;
 pub use manager::ConfiguredMarketplacePlugin;
+pub use manager::OPENAI_BUNDLED_MARKETPLACE_NAME;
 pub use manager::OPENAI_CURATED_MARKETPLACE_NAME;
 pub use manager::PluginDetail;
 pub use manager::PluginInstallError;
