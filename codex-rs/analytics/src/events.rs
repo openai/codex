@@ -567,6 +567,7 @@ pub(crate) fn codex_hook_run_metadata(
 fn analytics_hook_event_name(event_name: HookEventName) -> &'static str {
     match event_name {
         HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",

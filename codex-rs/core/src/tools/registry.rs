@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::goals::GoalAccountingBoundary;
 use crate::hook_runtime::record_additional_contexts;
@@ -11,6 +10,7 @@ use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::sandbox_tags::sandbox_tag;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;

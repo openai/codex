@@ -109,6 +109,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use crate::tools::handlers::unavailable_tool_message;
+    use crate::tools::tool_search_entry::build_tool_search_entries;
 
     let mut builder = ToolRegistryBuilder::new();
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
@@ -159,6 +160,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    let deferred_dynamic_tools = dynamic_tools
+        .iter()
+        .filter(|tool| tool.defer_loading)
+        .cloned()
+        .collect::<Vec<_>>();
     let mut tool_search_handler = None;
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
@@ -264,9 +270,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
             ToolHandlerKind::ToolSearch => {
                 if tool_search_handler.is_none() {
-                    tool_search_handler = deferred_mcp_tools
-                        .as_ref()
-                        .map(|tools| Arc::new(ToolSearchHandler::new(tools.clone())));
+                    let entries = build_tool_search_entries(
+                        deferred_mcp_tools.as_ref(),
+                        &deferred_dynamic_tools,
+                    );
+                    tool_search_handler = Some(Arc::new(ToolSearchHandler::new(entries)));
                 }
                 if let Some(tool_search_handler) = tool_search_handler.as_ref() {
                     builder.register_handler(handler.name, tool_search_handler.clone());

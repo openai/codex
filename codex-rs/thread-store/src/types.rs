@@ -101,6 +101,16 @@ pub enum ThreadSortKey {
     UpdatedAt,
 }
 
+/// The direction to use when listing stored threads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SortDirection {
+    /// Return older threads before newer threads.
+    Asc,
+    /// Return newer threads before older threads.
+    #[default]
+    Desc,
+}
+
 /// Parameters for listing threads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListThreadsParams {
@@ -110,6 +120,8 @@ pub struct ListThreadsParams {
     pub cursor: Option<String>,
     /// Sort order requested by the caller.
     pub sort_key: ThreadSortKey,
+    /// Sort direction requested by the caller.
+    pub sort_direction: SortDirection,
     /// Allowed session sources. Empty means implementation default.
     pub allowed_sources: Vec<SessionSource>,
     /// Optional model provider filter. `None` means implementation default, while an empty vector

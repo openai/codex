@@ -1,7 +1,5 @@
 use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
-use crate::codex::Session;
-use crate::codex::emit_subagent_session_started;
 use crate::config::Config;
 use crate::memories::extensions::PendingExtensionResourceRemoval;
 use crate::memories::extensions::find_old_extension_resources;
@@ -13,6 +11,8 @@ use crate::memories::prompts::build_consolidation_prompt;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
+use crate::session::emit_subagent_session_started;
+use crate::session::session::Session;
 use codex_config::Constrained;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
@@ -300,7 +300,9 @@ mod agent {
 
         agent_config.cwd = root.clone();
         // Consolidation threads must never feed back into phase-1 memory generation.
+        agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;
+        agent_config.memories.use_memories = false;
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.

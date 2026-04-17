@@ -2,7 +2,6 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
-use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -12,6 +11,7 @@ use codex_core::external_agent_config::ExternalAgentConfigDetectOptions;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use codex_core::external_agent_config::ExternalAgentConfigService;
+use codex_core::external_agent_config::PendingPluginImport;
 use std::io;
 use std::path::PathBuf;
 
@@ -81,7 +81,7 @@ impl ExternalAgentConfigApi {
     pub(crate) async fn import(
         &self,
         params: ExternalAgentConfigImportParams,
-    ) -> Result<ExternalAgentConfigImportResponse, JSONRPCErrorError> {
+    ) -> Result<Vec<PendingPluginImport>, JSONRPCErrorError> {
         self.migration_service
             .import(
                 params
@@ -125,9 +125,21 @@ impl ExternalAgentConfigApi {
                     .collect(),
             )
             .await
-            .map_err(map_io_error)?;
+            .map_err(map_io_error)
+    }
 
-        Ok(ExternalAgentConfigImportResponse {})
+    pub(crate) async fn complete_pending_plugin_import(
+        &self,
+        pending_plugin_import: PendingPluginImport,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.migration_service
+            .import_plugins(
+                pending_plugin_import.cwd.as_deref(),
+                Some(pending_plugin_import.details),
+            )
+            .await
+            .map(|_| ())
+            .map_err(map_io_error)
     }
 }
 
