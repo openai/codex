@@ -396,6 +396,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::Environment;
+    use super::EnvironmentConfig;
     use super::EnvironmentManager;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
