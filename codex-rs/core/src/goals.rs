@@ -42,7 +42,6 @@ pub(crate) enum GoalAccountingBoundary {
 #[derive(Debug)]
 pub(crate) struct GoalAccountingState {
     accounting_lock: Mutex<()>,
-    last_accounted_at: Mutex<Instant>,
     last_accounted_token_usage: Mutex<TokenUsage>,
     completed_this_turn: AtomicBool,
     active_this_turn: AtomicBool,
@@ -53,7 +52,6 @@ impl GoalAccountingState {
     pub(crate) fn new() -> Self {
         Self {
             accounting_lock: Mutex::new(()),
-            last_accounted_at: Mutex::new(Instant::now()),
             last_accounted_token_usage: Mutex::new(TokenUsage::default()),
             completed_this_turn: AtomicBool::new(false),
             active_this_turn: AtomicBool::new(false),
@@ -62,7 +60,6 @@ impl GoalAccountingState {
     }
 
     pub(crate) async fn mark_turn_started(&self, token_usage: TokenUsage) {
-        *self.last_accounted_at.lock().await = Instant::now();
         *self.last_accounted_token_usage.lock().await = token_usage;
         self.completed_this_turn.store(false, Ordering::SeqCst);
         self.active_this_turn.store(false, Ordering::SeqCst);
@@ -88,7 +85,6 @@ impl GoalAccountingState {
     }
 
     async fn reset_baseline(&self, token_usage: TokenUsage) {
-        *self.last_accounted_at.lock().await = Instant::now();
         *self.last_accounted_token_usage.lock().await = token_usage;
     }
 
@@ -120,12 +116,33 @@ impl GoalAccountingState {
         goal_token_delta_for_usage(&delta)
     }
 
+    async fn mark_accounted(&self, current: TokenUsage) {
+        *self.last_accounted_token_usage.lock().await = current;
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct GoalWallClockAccountingState {
+    accounting_lock: Mutex<()>,
+    last_accounted_at: Mutex<Instant>,
+    active_goal_created_at_ms: Mutex<Option<i64>>,
+}
+
+impl GoalWallClockAccountingState {
+    pub(crate) fn new() -> Self {
+        Self {
+            accounting_lock: Mutex::new(()),
+            last_accounted_at: Mutex::new(Instant::now()),
+            active_goal_created_at_ms: Mutex::new(None),
+        }
+    }
+
     async fn time_delta_since_last_accounting(&self) -> i64 {
         let last = self.last_accounted_at.lock().await;
         i64::try_from(last.elapsed().as_secs()).unwrap_or(i64::MAX)
     }
 
-    async fn mark_accounted(&self, current: TokenUsage, time_delta_seconds: i64) {
+    async fn mark_accounted(&self, time_delta_seconds: i64) {
         if time_delta_seconds > 0 {
             let mut last_accounted_at = self.last_accounted_at.lock().await;
             let advance =
@@ -134,7 +151,22 @@ impl GoalAccountingState {
                 .checked_add(advance)
                 .unwrap_or_else(Instant::now);
         }
-        *self.last_accounted_token_usage.lock().await = current;
+    }
+
+    async fn reset_baseline(&self) {
+        *self.last_accounted_at.lock().await = Instant::now();
+    }
+
+    async fn mark_active_goal(&self, created_at_ms: i64) {
+        let mut active_goal_created_at_ms = self.active_goal_created_at_ms.lock().await;
+        if *active_goal_created_at_ms != Some(created_at_ms) {
+            self.reset_baseline().await;
+            *active_goal_created_at_ms = Some(created_at_ms);
+        }
+    }
+
+    async fn clear_active_goal(&self) {
+        *self.active_goal_created_at_ms.lock().await = None;
     }
 }
 
@@ -147,10 +179,16 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(None);
         };
-        let goal = state_db
-            .get_thread_goal(self.conversation_id)
-            .await
-            .map(|goal| goal.map(protocol_goal_from_state))?;
+        let goal = self
+            .account_thread_goal_wall_clock_usage(
+                &state_db,
+                codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            )
+            .await?
+            .or(state_db
+                .get_thread_goal(self.conversation_id)
+                .await?
+                .map(protocol_goal_from_state));
         if goal.is_some() {
             self.thread_goal_may_exist.store(true, Ordering::SeqCst);
         }
@@ -170,6 +208,13 @@ impl Session {
         validate_goal_budget(request.token_budget.flatten())?;
         let state_db = self.require_state_db_for_thread_goals().await?;
         let replacing_goal = request.objective.is_some();
+        if !replacing_goal {
+            self.account_thread_goal_wall_clock_usage(
+                &state_db,
+                codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            )
+            .await?;
+        }
         let previous_status = if !replacing_goal && request.status == Some(ThreadGoalStatus::Active)
         {
             state_db
@@ -230,11 +275,17 @@ impl Session {
                 .reset_baseline(current_token_usage)
                 .await;
             if goal_status == codex_state::ThreadGoalStatus::Active {
+                self.thread_goal_wall_clock_accounting
+                    .mark_active_goal(goal_created_at_ms)
+                    .await;
                 turn_context
                     .goal_accounting
                     .mark_active_goal(goal_created_at_ms)
                     .await;
             } else {
+                self.thread_goal_wall_clock_accounting
+                    .clear_active_goal()
+                    .await;
                 turn_context.goal_accounting.clear_active_goal().await;
             }
         }
@@ -284,8 +335,15 @@ impl Session {
                     .goal_accounting
                     .mark_active_goal(goal.created_at.timestamp_millis())
                     .await;
+                self.thread_goal_wall_clock_accounting
+                    .mark_active_goal(goal.created_at.timestamp_millis())
+                    .await;
             }
-            Ok(Some(_)) | Ok(None) => {}
+            Ok(Some(_)) | Ok(None) => {
+                self.thread_goal_wall_clock_accounting
+                    .clear_active_goal()
+                    .await;
+            }
             Err(err) => {
                 tracing::warn!("failed to read thread goal at turn start: {err}");
             }
@@ -320,9 +378,14 @@ impl Session {
             return Ok(());
         }
         let _accounting_guard = turn_context.goal_accounting.accounting_lock.lock().await;
+        let _wall_clock_guard = self
+            .thread_goal_wall_clock_accounting
+            .accounting_lock
+            .lock()
+            .await;
         let current_token_usage = self.total_token_usage().await.unwrap_or_default();
-        let time_delta_seconds = turn_context
-            .goal_accounting
+        let time_delta_seconds = self
+            .thread_goal_wall_clock_accounting
             .time_delta_since_last_accounting()
             .await;
         let token_delta = turn_context
@@ -393,9 +456,15 @@ impl Session {
                     );
                 turn_context
                     .goal_accounting
-                    .mark_accounted(current_token_usage, time_delta_seconds)
+                    .mark_accounted(current_token_usage)
+                    .await;
+                self.thread_goal_wall_clock_accounting
+                    .mark_accounted(time_delta_seconds)
                     .await;
                 if clear_active_goal {
+                    self.thread_goal_wall_clock_accounting
+                        .clear_active_goal()
+                        .await;
                     turn_context.goal_accounting.clear_active_goal().await;
                 }
                 goal
@@ -428,6 +497,58 @@ impl Session {
         Ok(())
     }
 
+    async fn account_thread_goal_wall_clock_usage(
+        &self,
+        state_db: &StateDbHandle,
+        mode: codex_state::ThreadGoalAccountingMode,
+    ) -> anyhow::Result<Option<ThreadGoal>> {
+        let _wall_clock_guard = self
+            .thread_goal_wall_clock_accounting
+            .accounting_lock
+            .lock()
+            .await;
+        let time_delta_seconds = self
+            .thread_goal_wall_clock_accounting
+            .time_delta_since_last_accounting()
+            .await;
+        if time_delta_seconds == 0 {
+            return Ok(None);
+        }
+
+        match state_db
+            .account_thread_goal_usage(
+                self.conversation_id,
+                time_delta_seconds,
+                /*token_delta*/ 0,
+                mode,
+            )
+            .await?
+        {
+            codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
+                self.thread_goal_wall_clock_accounting
+                    .mark_accounted(time_delta_seconds)
+                    .await;
+                let goal = protocol_goal_from_state(goal);
+                *self.thread_goal_cache.lock().await = Some(goal.clone());
+                Ok(Some(goal))
+            }
+            codex_state::ThreadGoalAccountingOutcome::Unchanged(goal) => {
+                self.thread_goal_wall_clock_accounting
+                    .reset_baseline()
+                    .await;
+                self.thread_goal_wall_clock_accounting
+                    .clear_active_goal()
+                    .await;
+                if let Some(goal) = goal {
+                    let goal = protocol_goal_from_state(goal);
+                    *self.thread_goal_cache.lock().await = Some(goal.clone());
+                    return Ok(Some(goal));
+                }
+                Ok(None)
+            }
+        }
+    }
+
     async fn refresh_goal_accounting_baseline_if_needed(
         &self,
         turn_context: &TurnContext,
@@ -454,6 +575,9 @@ impl Session {
                 .goal_accounting
                 .reset_baseline(current_token_usage)
                 .await;
+            self.thread_goal_wall_clock_accounting
+                .mark_active_goal(created_at_ms)
+                .await;
             turn_context
                 .goal_accounting
                 .mark_active_goal(created_at_ms)
@@ -467,6 +591,9 @@ impl Session {
             turn_context
                 .goal_accounting
                 .reset_baseline(current_token_usage)
+                .await;
+            self.thread_goal_wall_clock_accounting
+                .clear_active_goal()
                 .await;
             turn_context.goal_accounting.clear_active_goal().await;
             return Ok(true);
@@ -498,6 +625,9 @@ impl Session {
         };
         let goal = protocol_goal_from_state(goal);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
+        self.thread_goal_wall_clock_accounting
+            .clear_active_goal()
+            .await;
         self.send_event_raw(Event {
             id: event_id,
             msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
@@ -726,10 +856,9 @@ pub(crate) fn goal_token_delta_for_usage(usage: &TokenUsage) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::GoalAccountingState;
+    use super::GoalWallClockAccountingState;
     use super::should_ignore_goal_for_mode;
     use codex_protocol::config_types::ModeKind;
-    use codex_protocol::protocol::TokenUsage;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -743,15 +872,13 @@ mod tests {
 
     #[tokio::test]
     async fn goal_accounting_preserves_fractional_seconds_between_boundaries() {
-        let accounting = GoalAccountingState::new();
+        let accounting = GoalWallClockAccountingState::new();
         *accounting.last_accounted_at.lock().await = Instant::now() - Duration::from_millis(2500);
 
         let delta = accounting.time_delta_since_last_accounting().await;
         assert_eq!(2, delta);
 
-        accounting
-            .mark_accounted(TokenUsage::default(), delta)
-            .await;
+        accounting.mark_accounted(delta).await;
         let elapsed = accounting.last_accounted_at.lock().await.elapsed();
         assert!(
             elapsed >= Duration::from_millis(400),
