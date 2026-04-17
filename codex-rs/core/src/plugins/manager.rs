@@ -592,7 +592,7 @@ impl PluginsManager {
                 )
             } else {
                 None
-        };
+            };
         let store = self.store.clone();
         let codex_home = self.codex_home.clone();
         let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
