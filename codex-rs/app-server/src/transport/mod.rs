@@ -19,6 +19,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -28,6 +29,11 @@ use tracing::warn;
 /// is a balance between throughput and memory usage - 128 messages should be
 /// plenty for an interactive CLI.
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
+
+#[cfg(not(test))]
+const OUTBOUND_QUEUE_FULL_GRACE: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const OUTBOUND_QUEUE_FULL_GRACE: Duration = Duration::from_millis(200);
 
 mod remote_control;
 mod stdio;
@@ -308,12 +314,27 @@ async fn send_message_to_connection(
     if connection_state.can_disconnect() {
         match writer.try_send(queued_message) {
             Ok(()) => false,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                warn!(
-                    "disconnecting slow connection after outbound queue filled: {connection_id:?}"
-                );
-                disconnect_connection(connections, connection_id)
-            }
+            Err(mpsc::error::TrySendError::Full(queued_message)) => match writer
+                // WebSocket clients are marked disconnectable so a stuck writer
+                // cannot block the outbound router forever. Still, normal turns
+                // can briefly burst past the per-connection queue capacity while
+                // the writer task is healthy, so give it a bounded chance to
+                // drain before treating the client as slow.
+                .send_timeout(queued_message, OUTBOUND_QUEUE_FULL_GRACE)
+                .await
+            {
+                Ok(()) => false,
+                Err(mpsc::error::SendTimeoutError::Timeout(_)) => {
+                    warn!(
+                        "disconnecting slow connection after outbound queue remained full for {:?}: {connection_id:?}",
+                        OUTBOUND_QUEUE_FULL_GRACE
+                    );
+                    disconnect_connection(connections, connection_id)
+                }
+                Err(mpsc::error::SendTimeoutError::Closed(_)) => {
+                    disconnect_connection(connections, connection_id)
+                }
+            },
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 disconnect_connection(connections, connection_id)
             }
@@ -875,86 +896,159 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broadcast_does_not_block_on_slow_connection() {
-        let fast_connection_id = ConnectionId(1);
-        let slow_connection_id = ConnectionId(2);
+    async fn disconnectable_connection_waits_for_queue_to_drain() {
+        let connection_id = ConnectionId(1);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+        let disconnect_token = CancellationToken::new();
 
-        let (fast_writer_tx, mut fast_writer_rx) = mpsc::channel(1);
-        let (slow_writer_tx, mut slow_writer_rx) = mpsc::channel(1);
-        let fast_disconnect_token = CancellationToken::new();
-        let slow_disconnect_token = CancellationToken::new();
+        writer_tx
+            .send(QueuedOutgoingMessage::new(
+                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "queued".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
+            ))
+            .await
+            .expect("channel should accept the first queued message");
 
         let mut connections = HashMap::new();
         connections.insert(
-            fast_connection_id,
+            connection_id,
             OutboundConnectionState::new(
-                fast_writer_tx,
+                writer_tx,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                Some(fast_disconnect_token.clone()),
-            ),
-        );
-        connections.insert(
-            slow_connection_id,
-            OutboundConnectionState::new(
-                slow_writer_tx.clone(),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(AtomicBool::new(true)),
-                Arc::new(RwLock::new(HashSet::new())),
-                Some(slow_disconnect_token.clone()),
+                Some(disconnect_token.clone()),
             ),
         );
 
-        let queued_message = OutgoingMessage::AppServerNotification(
-            ServerNotification::ConfigWarning(ConfigWarningNotification {
-                summary: "already-buffered".to_string(),
-                details: None,
-                path: None,
-                range: None,
-            }),
-        );
-        slow_writer_tx
-            .try_send(QueuedOutgoingMessage::new(queued_message))
-            .expect("channel should have room");
-
-        let broadcast_message = OutgoingMessage::AppServerNotification(
-            ServerNotification::ConfigWarning(ConfigWarningNotification {
-                summary: "test".to_string(),
-                details: None,
-                path: None,
-                range: None,
-            }),
-        );
-        timeout(
-            Duration::from_millis(100),
+        let mut route_task = tokio::spawn(async move {
             route_outgoing_envelope(
                 &mut connections,
-                OutgoingEnvelope::Broadcast {
-                    message: broadcast_message,
+                OutgoingEnvelope::ToConnection {
+                    connection_id,
+                    message: OutgoingMessage::AppServerNotification(
+                        ServerNotification::ConfigWarning(ConfigWarningNotification {
+                            summary: "second".to_string(),
+                            details: None,
+                            path: None,
+                            range: None,
+                        }),
+                    ),
+                    write_complete_tx: None,
                 },
-            ),
-        )
-        .await
-        .expect("broadcast should return even when one connection is slow");
-        assert!(!connections.contains_key(&slow_connection_id));
-        assert!(slow_disconnect_token.is_cancelled());
-        assert!(!fast_disconnect_token.is_cancelled());
-        let fast_message = fast_writer_rx
-            .try_recv()
-            .expect("fast connection should receive the broadcast notification");
+            )
+            .await;
+            connections
+        });
+
+        assert!(
+            timeout(Duration::from_millis(25), &mut route_task)
+                .await
+                .is_err(),
+            "routing should wait briefly for queue capacity"
+        );
+
+        let first = writer_rx
+            .recv()
+            .await
+            .expect("first queued message should be readable");
+        let connections = timeout(Duration::from_millis(100), route_task)
+            .await
+            .expect("routing should finish after the first queued message is drained")
+            .expect("routing task should succeed");
+
+        assert!(connections.contains_key(&connection_id));
+        assert!(!disconnect_token.is_cancelled());
         assert!(matches!(
-            fast_message.message,
+            first.message,
             OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
                 ConfigWarningNotification { summary, .. }
-            )) if summary == "test"
+            )) if summary == "queued"
         ));
-
-        let slow_message = slow_writer_rx
+        let second = writer_rx
             .try_recv()
-            .expect("slow connection should retain its original buffered message");
+            .expect("second notification should be delivered once the queue has room");
         assert!(matches!(
-            slow_message.message,
+            second.message,
+            OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                ConfigWarningNotification { summary, .. }
+            )) if summary == "second"
+        ));
+    }
+
+    #[tokio::test]
+    async fn disconnectable_connection_disconnects_after_queue_grace_expires() {
+        let connection_id = ConnectionId(2);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+        let disconnect_token = CancellationToken::new();
+
+        writer_tx
+            .send(QueuedOutgoingMessage::new(
+                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "already-buffered".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
+            ))
+            .await
+            .expect("channel should accept the first queued message");
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                Some(disconnect_token.clone()),
+            ),
+        );
+
+        let route_task = tokio::spawn(async move {
+            route_outgoing_envelope(
+                &mut connections,
+                OutgoingEnvelope::ToConnection {
+                    connection_id,
+                    message: OutgoingMessage::AppServerNotification(
+                        ServerNotification::ConfigWarning(ConfigWarningNotification {
+                            summary: "second".to_string(),
+                            details: None,
+                            path: None,
+                            range: None,
+                        }),
+                    ),
+                    write_complete_tx: None,
+                },
+            )
+            .await;
+            connections
+        });
+
+        let connections = timeout(
+            OUTBOUND_QUEUE_FULL_GRACE + Duration::from_millis(100),
+            route_task,
+        )
+        .await
+        .expect("routing should finish after the queue grace expires")
+        .expect("routing task should succeed");
+
+        assert!(!connections.contains_key(&connection_id));
+        assert!(disconnect_token.is_cancelled());
+        let original_message = writer_rx
+            .try_recv()
+            .expect("full queue should retain its original buffered message");
+        assert!(matches!(
+            original_message.message,
             OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
                 ConfigWarningNotification { summary, .. }
             )) if summary == "already-buffered"
