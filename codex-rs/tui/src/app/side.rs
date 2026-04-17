@@ -50,7 +50,7 @@ pub(super) struct SideThreadState {
 impl App {
     pub(super) fn sync_side_thread_ui(&mut self) {
         let clear_side_ui = |chat_widget: &mut crate::chatwidget::ChatWidget| {
-            chat_widget.set_thread_footer_hint_override(/*items*/ None);
+            chat_widget.set_side_conversation_context_label(/*label*/ None);
             chat_widget.set_side_conversation_active(/*active*/ false);
             chat_widget.clear_thread_rename_block();
             chat_widget.set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Default);
@@ -81,7 +81,7 @@ impl App {
             format!("from parent thread ({parent_label}) · Esc to return")
         };
         self.chat_widget
-            .set_thread_footer_hint_override(Some(vec![("Side".to_string(), label)]));
+            .set_side_conversation_context_label(Some(format!("Side {label}")));
     }
 
     pub(super) fn active_side_parent_thread_id(&self) -> Option<ThreadId> {
@@ -101,7 +101,7 @@ impl App {
             && let Some(parent_thread_id) = self.active_side_parent_thread_id()
         {
             let _ = self
-                .select_agent_thread_and_discard_side_chain(tui, app_server, parent_thread_id)
+                .select_agent_thread_and_discard_side(tui, app_server, parent_thread_id)
                 .await;
             true
         } else {
@@ -109,42 +109,16 @@ impl App {
         }
     }
 
-    pub(super) fn side_threads_to_discard_after_switch(
+    pub(super) fn side_thread_to_discard_after_switch(
         &self,
         target_thread_id: ThreadId,
-    ) -> Vec<ThreadId> {
-        let Some(mut side_thread_id) = self.current_displayed_thread_id() else {
-            return Vec::new();
-        };
-        if target_thread_id == side_thread_id
-            || !self.side_threads.contains_key(&side_thread_id)
-            || self
-                .side_threads
-                .get(&target_thread_id)
-                .map(|state| state.parent_thread_id)
-                == Some(side_thread_id)
-        {
-            return Vec::new();
+    ) -> Option<ThreadId> {
+        let side_thread_id = self.current_displayed_thread_id()?;
+        if target_thread_id == side_thread_id || !self.side_threads.contains_key(&side_thread_id) {
+            return None;
         }
 
-        let mut side_threads_to_discard = Vec::new();
-        loop {
-            side_threads_to_discard.push(side_thread_id);
-            let Some(parent_thread_id) = self
-                .side_threads
-                .get(&side_thread_id)
-                .map(|state| state.parent_thread_id)
-            else {
-                break;
-            };
-            if parent_thread_id == target_thread_id
-                || !self.side_threads.contains_key(&parent_thread_id)
-            {
-                break;
-            }
-            side_thread_id = parent_thread_id;
-        }
-        side_threads_to_discard
+        Some(side_thread_id)
     }
 
     pub(super) async fn discard_side_thread(
@@ -286,29 +260,22 @@ impl App {
         store.set_session(session, Vec::new());
     }
 
-    pub(super) async fn select_agent_thread_and_discard_side_chain(
+    pub(super) async fn select_agent_thread_and_discard_side(
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
         let active_thread_id_before_switch = self.active_thread_id;
-        let side_threads_to_discard = self.side_threads_to_discard_after_switch(thread_id);
+        let side_thread_to_discard = self.side_thread_to_discard_after_switch(thread_id);
         self.select_agent_thread(tui, app_server, thread_id).await?;
-        if self.active_thread_id == Some(thread_id) {
-            for side_thread_id in side_threads_to_discard {
-                if !self.discard_side_thread(app_server, side_thread_id).await {
-                    if active_thread_id_before_switch == Some(side_thread_id) {
-                        self.keep_side_thread_visible_after_cleanup_failure(
-                            tui,
-                            app_server,
-                            side_thread_id,
-                        )
-                        .await;
-                    }
-                    break;
-                }
-            }
+        if self.active_thread_id == Some(thread_id)
+            && let Some(side_thread_id) = side_thread_to_discard
+            && !self.discard_side_thread(app_server, side_thread_id).await
+            && active_thread_id_before_switch == Some(side_thread_id)
+        {
+            self.keep_side_thread_visible_after_cleanup_failure(tui, app_server, side_thread_id)
+                .await;
         }
         Ok(())
     }
@@ -322,6 +289,7 @@ impl App {
     ) -> Result<AppRunControl> {
         if let Some(message) = self.side_start_block_message() {
             self.restore_side_user_message(user_message.take());
+            self.sync_side_thread_ui();
             self.chat_widget.add_error_message(message.to_string());
             return Ok(AppRunControl::Continue);
         }
@@ -358,7 +326,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 }
                 if let Err(err) = self
-                    .select_agent_thread_and_discard_side_chain(tui, app_server, child_thread_id)
+                    .select_agent_thread_and_discard_side(tui, app_server, child_thread_id)
                     .await
                 {
                     let discarded = self
@@ -398,7 +366,7 @@ impl App {
             Err(err) => {
                 self.restore_side_user_message(user_message.take());
                 self.chat_widget
-                    .set_thread_footer_hint_override(/*items*/ None);
+                    .set_side_conversation_context_label(/*label*/ None);
                 self.chat_widget.add_error_message(format!(
                     "Failed to fork side conversation from {parent_thread_id}: {err}"
                 ));

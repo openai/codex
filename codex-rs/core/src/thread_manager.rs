@@ -28,7 +28,6 @@ use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
-use codex_protocol::config_types::ToolAccessPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
@@ -42,7 +41,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
@@ -508,7 +506,6 @@ impl ThreadManager {
             initial_history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
-            /*tool_access_policy*/ Default::default(),
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
@@ -549,7 +546,6 @@ impl ThreadManager {
             initial_history,
             auth_manager,
             self.agent_control(),
-            /*tool_access_policy*/ Default::default(),
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
@@ -569,7 +565,6 @@ impl ThreadManager {
             InitialHistory::New,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
-            /*tool_access_policy*/ Default::default(),
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
@@ -592,7 +587,6 @@ impl ThreadManager {
             initial_history,
             auth_manager,
             self.agent_control(),
-            /*tool_access_policy*/ Default::default(),
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
@@ -670,7 +664,6 @@ impl ThreadManager {
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
-        tool_access_policy: ToolAccessPolicy,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
     where
@@ -702,7 +695,6 @@ impl ThreadManager {
             history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
-            tool_access_policy,
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
@@ -796,14 +788,12 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
-        let tool_access_policy = self.tool_access_policy_for_source(&session_source).await;
         Box::pin(self.spawn_thread_with_source(
             config,
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
-            tool_access_policy,
             Vec::new(),
             persist_extended_history,
             metrics_service_name,
@@ -825,14 +815,12 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        let tool_access_policy = self.tool_access_policy_for_source(&session_source).await;
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
-            tool_access_policy,
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
@@ -855,14 +843,12 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
-        let tool_access_policy = self.tool_access_policy_for_source(&session_source).await;
         Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
-            tool_access_policy,
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
@@ -874,22 +860,6 @@ impl ThreadManagerState {
         .await
     }
 
-    async fn tool_access_policy_for_source(
-        &self,
-        session_source: &SessionSource,
-    ) -> ToolAccessPolicy {
-        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) = session_source
-        else {
-            return ToolAccessPolicy::default();
-        };
-        let Ok(parent_thread) = self.get_thread(*parent_thread_id).await else {
-            return ToolAccessPolicy::default();
-        };
-        parent_thread.config_snapshot().await.tool_access_policy
-    }
-
     /// Spawn a new thread with optional history and register it with the manager.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread(
@@ -898,7 +868,6 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
-        tool_access_policy: ToolAccessPolicy,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
@@ -911,7 +880,6 @@ impl ThreadManagerState {
             auth_manager,
             agent_control,
             self.session_source.clone(),
-            tool_access_policy,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
@@ -931,7 +899,6 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
-        tool_access_policy: ToolAccessPolicy,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
@@ -972,7 +939,6 @@ impl ThreadManagerState {
             conversation_history: initial_history,
             session_source,
             agent_control,
-            tool_access_policy,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,

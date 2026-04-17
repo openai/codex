@@ -3,7 +3,6 @@ use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::config_types::ToolAccessPolicy;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -152,34 +151,6 @@ async fn forward_ops_preserves_submission_trace_context() {
         .await
         .expect("forward_ops did not exit")
         .expect("forward_ops join error");
-}
-
-#[tokio::test]
-async fn delegated_thread_inherits_parent_tool_access_policy() {
-    let (parent_session, parent_ctx, _rx_events) =
-        crate::codex::make_session_and_context_with_rx().await;
-    let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
-    parent_ctx.tool_access_policy = ToolAccessPolicy::NoExternalTools;
-    let parent_ctx = Arc::new(parent_ctx);
-
-    let delegate = run_codex_thread_interactive(
-        (*parent_ctx.config).clone(),
-        Arc::clone(&parent_session.services.auth_manager),
-        Arc::clone(&parent_session.services.models_manager),
-        Arc::clone(&parent_session),
-        Arc::clone(&parent_ctx),
-        CancellationToken::new(),
-        SubAgentSource::Review,
-        /*initial_history*/ None,
-    )
-    .await
-    .expect("delegate should start");
-
-    assert_eq!(
-        delegate.thread_config_snapshot().await.tool_access_policy,
-        ToolAccessPolicy::NoExternalTools
-    );
-    delegate.submit(Op::Shutdown {}).await.expect("shutdown");
 }
 
 #[tokio::test]

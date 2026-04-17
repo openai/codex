@@ -12985,16 +12985,6 @@
           },
           "threadId": {
             "type": "string"
-          },
-          "toolAccessPolicy": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ToolAccessPolicy"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -15033,13 +15023,6 @@
           "name"
         ],
         "type": "object"
-      },
-      "ToolAccessPolicy": {
-        "enum": [
-          "default",
-          "noExternalTools"
-        ],
-        "type": "string"
       },
       "ToolsV2": {
         "properties": {

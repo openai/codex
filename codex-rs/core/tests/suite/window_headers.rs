@@ -73,7 +73,6 @@ async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_fork(
             resumed.config.clone(),
             rollout_path,
             /*persist_extended_history*/ false,
-            /*tool_access_policy*/ Default::default(),
             /*parent_trace*/ None,
         )
         .await?;

@@ -183,7 +183,6 @@ use codex_app_server_protocol::ThreadUnarchivedNotification;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::ThreadUnsubscribeStatus;
-use codex_app_server_protocol::ToolAccessPolicy;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -4564,20 +4563,9 @@ impl CodexMessageProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
-            tool_access_policy,
             ephemeral,
             persist_extended_history,
         } = params;
-
-        if matches!(tool_access_policy, Some(ToolAccessPolicy::NoExternalTools)) && !ephemeral {
-            self.send_invalid_request_error(
-                request_id,
-                "toolAccessPolicy=noExternalTools is only supported for ephemeral forks"
-                    .to_string(),
-            )
-            .await;
-            return;
-        }
 
         let (rollout_path, source_thread_id) = if let Some(path) = path {
             (path, None)
@@ -4698,9 +4686,6 @@ impl CodexMessageProcessor {
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
-                tool_access_policy
-                    .map(ToolAccessPolicy::to_core)
-                    .unwrap_or_default(),
                 self.request_trace_context(&request_id).await,
             )
             .await
@@ -4884,11 +4869,7 @@ impl CodexMessageProcessor {
         )
         .await;
 
-        let mut notification_thread = thread;
-        notification_thread.turns.clear();
-        let notif = ThreadStartedNotification {
-            thread: notification_thread,
-        };
+        let notif = ThreadStartedNotification { thread };
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
             .await;
@@ -7437,7 +7418,6 @@ impl CodexMessageProcessor {
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
-        let parent_tool_access_policy = parent_thread.config_snapshot().await.tool_access_policy;
 
         let NewThread {
             thread_id,
@@ -7451,7 +7431,6 @@ impl CodexMessageProcessor {
                 config,
                 rollout_path,
                 /*persist_extended_history*/ false,
-                parent_tool_access_policy,
                 self.request_trace_context(request_id).await,
             )
             .await
@@ -9853,7 +9832,6 @@ mod tests {
             reasoning_effort: None,
             personality: None,
             session_source: SessionSource::Cli,
-            tool_access_policy: Default::default(),
         };
 
         assert_eq!(

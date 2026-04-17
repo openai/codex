@@ -151,7 +151,7 @@ impl App {
         }
     }
 
-    pub(super) async fn handle_server_notification_event(
+    async fn handle_server_notification_event(
         &mut self,
         _app_server_client: &AppServerSession,
         notification: ServerNotification,

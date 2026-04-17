@@ -478,7 +478,6 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
             fork_config,
             rollout_path,
             /*persist_extended_history*/ false,
-            /*tool_access_policy*/ Default::default(),
             /*parent_trace*/ None,
         )
         .await?;

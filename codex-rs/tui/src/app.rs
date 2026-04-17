@@ -3438,8 +3438,7 @@ impl App {
         self.active_thread_rx = Some(receiver);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-        let chat_widget = ChatWidget::new_with_app_event(init);
-        self.replace_chat_widget(chat_widget);
+        self.replace_chat_widget(ChatWidget::new_with_app_event(init));
 
         self.reset_for_thread_switch(tui)?;
         self.replay_thread_snapshot(snapshot, !is_replay_only);
@@ -5646,7 +5645,7 @@ impl App {
                 self.open_agent_picker(app_server).await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread_and_discard_side_chain(tui, app_server, thread_id)
+                self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await?;
             }
             AppEvent::StartSide {
@@ -6070,7 +6069,7 @@ impl App {
                 self.select_agent_thread(tui, app_server, primary_thread_id)
                     .await?;
             } else {
-                self.select_agent_thread_and_discard_side_chain(tui, app_server, primary_thread_id)
+                self.select_agent_thread_and_discard_side(tui, app_server, primary_thread_id)
                     .await?;
             }
             if self.active_thread_id == Some(primary_thread_id) {
@@ -6259,7 +6258,7 @@ impl App {
                 .await
             {
                 let _ = self
-                    .select_agent_thread_and_discard_side_chain(tui, app_server, thread_id)
+                    .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
             }
             return;
@@ -6276,7 +6275,7 @@ impl App {
                 .await
             {
                 let _ = self
-                    .select_agent_thread_and_discard_side_chain(tui, app_server, thread_id)
+                    .select_agent_thread_and_discard_side(tui, app_server, thread_id)
                     .await;
             }
             return;
@@ -9747,13 +9746,15 @@ guardian_approval = true
             .insert(side_thread_id, SideThreadState { parent_thread_id });
         app.sync_side_thread_ui();
 
-        app.handle_server_notification_event(
+        app.handle_app_server_event(
             &app_server,
-            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-                name: "sentry".to_string(),
-                status: McpServerStartupState::Failed,
-                error: Some("sentry is not logged in".to_string()),
-            }),
+            codex_app_server_client::AppServerEvent::ServerNotification(
+                ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                    name: "sentry".to_string(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("sentry is not logged in".to_string()),
+                }),
+            ),
         )
         .await;
 
@@ -9783,12 +9784,12 @@ guardian_approval = true
             .insert(side_thread_id, SideThreadState { parent_thread_id });
 
         assert_eq!(
-            app.side_threads_to_discard_after_switch(side_thread_id),
-            Vec::new()
+            app.side_thread_to_discard_after_switch(side_thread_id),
+            None
         );
         assert_eq!(
-            app.side_threads_to_discard_after_switch(parent_thread_id),
-            vec![side_thread_id]
+            app.side_thread_to_discard_after_switch(parent_thread_id),
+            Some(side_thread_id)
         );
     }
 

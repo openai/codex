@@ -118,6 +118,62 @@ async fn slash_commands_without_side_flag_are_rejected_for_side_threads() {
 }
 
 #[tokio::test]
+async fn slash_side_is_rejected_for_side_threads() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_side_conversation_active(/*active*/ true);
+
+    chat.dispatch_command(SlashCommand::Side);
+
+    let event = rx
+        .try_recv()
+        .expect("expected side conversation slash command error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(
+                rendered.contains(
+                    "'/side' is unavailable in side conversations. Press Esc to return to the main thread first."
+                ),
+                "expected side conversation slash command error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+    assert!(
+        op_rx.try_recv().is_err(),
+        "expected no side conversation op"
+    );
+}
+
+#[tokio::test]
+async fn slash_side_is_rejected_during_review_mode() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.is_review_mode = true;
+
+    chat.dispatch_command(SlashCommand::Side);
+
+    let event = rx
+        .try_recv()
+        .expect("expected review-mode side conversation error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(
+                rendered.contains("'/side' is unavailable while code review is running."),
+                "expected review-mode side conversation error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+    assert!(
+        op_rx.try_recv().is_err(),
+        "expected no side conversation op"
+    );
+}
+
+#[tokio::test]
 async fn submit_user_message_as_plain_user_turn_does_not_run_shell_commands() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -211,13 +267,15 @@ async fn slash_side_requests_forked_side_question_while_task_running() {
 }
 
 #[tokio::test]
-async fn side_footer_override_snapshot() {
+async fn side_context_label_preserves_status_line_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
-    chat.set_thread_footer_hint_override(Some(vec![(
-        "Side".to_string(),
-        "from main thread · Esc to return".to_string(),
-    )]));
+    chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
+    chat.refresh_status_line();
+    chat.set_side_conversation_active(/*active*/ true);
+    chat.set_side_conversation_context_label(Some(
+        "Side from main thread · Esc to return".to_string(),
+    ));
 
     let width = 80;
     let height = chat.desired_height(width);
@@ -225,31 +283,8 @@ async fn side_footer_override_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw side conversation footer");
-    assert_chatwidget_snapshot!("side_footer_override", terminal.backend());
-}
-
-#[tokio::test]
-async fn clearing_thread_footer_override_preserves_general_footer_hint_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.show_welcome_banner = false;
-    chat.set_footer_hint_override(Some(vec![(
-        "Save and close external editor to continue.".to_string(),
-        String::new(),
-    )]));
-    chat.set_thread_footer_hint_override(Some(vec![(
-        "Side".to_string(),
-        "from main thread · Esc to return".to_string(),
-    )]));
-    chat.set_thread_footer_hint_override(/*items*/ None);
-
-    let width = 80;
-    let height = chat.desired_height(width);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw preserved footer hint");
     assert_chatwidget_snapshot!(
-        "clearing_thread_footer_override_preserves_general_footer_hint",
+        "side_context_label_preserves_status_line",
         terminal.backend()
     );
 }

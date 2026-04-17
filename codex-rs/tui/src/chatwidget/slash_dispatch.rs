@@ -7,7 +7,9 @@
 
 use super::*;
 
-const SIDE_STARTING_FOOTER_HINT: &str = "starting...";
+const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
+const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
+    "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 
 impl ChatWidget {
@@ -61,10 +63,7 @@ impl ChatWidget {
         parent_thread_id: ThreadId,
         user_message: Option<UserMessage>,
     ) {
-        self.set_thread_footer_hint_override(Some(vec![(
-            "Side".to_string(),
-            SIDE_STARTING_FOOTER_HINT.to_string(),
-        )]));
+        self.set_side_conversation_context_label(Some(SIDE_STARTING_CONTEXT_LABEL.to_string()));
         self.request_redraw();
         self.app_event_tx.send(AppEvent::StartSide {
             parent_thread_id,
@@ -83,6 +82,9 @@ impl ChatWidget {
 
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
+            return;
+        }
+        if !self.ensure_side_command_allowed_outside_review(cmd) {
             return;
         }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
@@ -415,6 +417,9 @@ impl ChatWidget {
         if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
             return;
         }
+        if !self.ensure_side_command_allowed_outside_review(cmd) {
+            return;
+        }
         if !cmd.supports_inline_args() {
             self.dispatch_command(cmd);
             return;
@@ -566,6 +571,16 @@ impl ChatWidget {
             "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
             cmd.command()
         ));
+        self.bottom_pane.drain_pending_submission_state();
+        false
+    }
+
+    fn ensure_side_command_allowed_outside_review(&mut self, cmd: SlashCommand) -> bool {
+        if cmd != SlashCommand::Side || !self.is_review_mode {
+            return true;
+        }
+
+        self.add_error_message(SIDE_REVIEW_UNAVAILABLE_MESSAGE.to_string());
         self.bottom_pane.drain_pending_submission_state();
         false
     }

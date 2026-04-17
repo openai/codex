@@ -74,7 +74,6 @@ use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
-use codex_protocol::config_types::ToolAccessPolicy;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -386,7 +385,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) agent_control: AgentControl,
-    pub(crate) tool_access_policy: ToolAccessPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
@@ -440,7 +438,6 @@ impl Codex {
             conversation_history,
             session_source,
             agent_control,
-            tool_access_policy,
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
@@ -559,9 +556,7 @@ impl Codex {
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
-        let persisted_tools = if tool_access_policy == ToolAccessPolicy::NoExternalTools {
-            None
-        } else if dynamic_tools.is_empty() {
+        let persisted_tools = if dynamic_tools.is_empty() {
             let thread_id = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => conversation_history.forked_from_id(),
@@ -578,9 +573,7 @@ impl Codex {
         } else {
             None
         };
-        let dynamic_tools = if tool_access_policy == ToolAccessPolicy::NoExternalTools {
-            Vec::new()
-        } else if dynamic_tools.is_empty() {
+        let dynamic_tools = if dynamic_tools.is_empty() {
             persisted_tools
                 .or_else(|| conversation_history.get_dynamic_tools())
                 .unwrap_or_default()
@@ -622,7 +615,6 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
-            tool_access_policy,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,

@@ -869,7 +869,6 @@ async fn fork_thread(
         config.clone(),
         path,
         /*persist_extended_history*/ false,
-        /*tool_access_policy*/ Default::default(),
         /*parent_trace*/ None,
     ))
     .await

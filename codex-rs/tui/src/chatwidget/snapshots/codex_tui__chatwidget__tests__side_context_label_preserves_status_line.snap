@@ -4,6 +4,6 @@ expression: terminal.backend()
 ---
 "                                                                                "
 "                                                                                "
-"› Ask Codex to do anything                                                      "
+"› Check recently modified functions for compatibility                           "
 "                                                                                "
-"   Side from main thread · Esc to return                                        "
+"  gpt-5.3-codex                          Side from main thread · Esc to return  "

@@ -16,7 +16,7 @@
 //!   confirmation, shortcut help, or queue hints.
 //! - "contextual footer" means the footer is free to show ambient context instead of an
 //!   instruction. In that state, the footer may render the configured status line, the active
-//!   agent label, or both combined.
+//!   agent label, side-conversation state, or some combination of those.
 //!
 //! Single-line collapse overview:
 //! 1. The composer decides the current `FooterMode` and hint flags, then calls
@@ -483,6 +483,14 @@ pub(crate) fn mode_indicator_line(
     indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
 }
 
+pub(crate) fn side_conversation_context_line(label: &str) -> Line<'static> {
+    if let Some(rest) = label.strip_prefix("Side ") {
+        Line::from(vec!["Side".magenta().bold(), format!(" {rest}").magenta()])
+    } else {
+        Line::from(label.to_string()).magenta()
+    }
+}
+
 fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
     if area.is_empty() {
         return None;
@@ -717,18 +725,9 @@ pub(crate) fn footer_hint_items_width(items: &[(String, String)]) -> u16 {
 fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
     let mut spans = Vec::with_capacity(items.len() * 4);
     for (idx, (key, label)) in items.iter().enumerate() {
-        let is_side = key == "Side";
         spans.push(" ".into());
-        spans.push(if is_side {
-            key.clone().magenta().bold()
-        } else {
-            key.clone().bold()
-        });
-        spans.push(if is_side {
-            format!(" {label}").magenta().bold()
-        } else {
-            format!(" {label}").into()
-        });
+        spans.push(key.clone().bold());
+        spans.push(format!(" {label}").into());
         if idx + 1 != items.len() {
             spans.push("   ".into());
         }

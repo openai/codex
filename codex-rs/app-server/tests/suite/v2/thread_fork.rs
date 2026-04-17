@@ -22,7 +22,6 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
-use codex_app_server_protocol::ToolAccessPolicy;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
@@ -184,9 +183,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    let mut expected_started_thread = thread.clone();
-    expected_started_thread.turns.clear();
-    assert_eq!(started.thread, expected_started_thread);
+    assert_eq!(started.thread, thread);
 
     Ok(())
 }
@@ -431,45 +428,6 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_fork_rejects_external_tool_policy_for_persistent_forks() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-
-    let conversation_id = create_fake_rollout(
-        codex_home.path(),
-        "2025-01-05T12-00-00",
-        "2025-01-05T12:00:00Z",
-        "Saved user message",
-        Some("mock_provider"),
-        /*git_info*/ None,
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let fork_id = mcp
-        .send_thread_fork_request(ThreadForkParams {
-            thread_id: conversation_id,
-            tool_access_policy: Some(ToolAccessPolicy::NoExternalTools),
-            ..Default::default()
-        })
-        .await?;
-    let fork_err: JSONRPCError = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
-    )
-    .await??;
-
-    assert_eq!(
-        fork_err.error.message,
-        "toolAccessPolicy=noExternalTools is only supported for ephemeral forks"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -492,7 +450,6 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
             ephemeral: true,
-            tool_access_policy: Some(ToolAccessPolicy::NoExternalTools),
             ..Default::default()
         })
         .await?;
@@ -579,9 +536,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
     );
     let started: ThreadStartedNotification =
         serde_json::from_value(notif.params.expect("params must be present"))?;
-    let mut expected_started_thread = thread.clone();
-    expected_started_thread.turns.clear();
-    assert_eq!(started.thread, expected_started_thread);
+    assert_eq!(started.thread, thread);
 
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {

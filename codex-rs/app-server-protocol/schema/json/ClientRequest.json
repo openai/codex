@@ -2784,16 +2784,6 @@
         },
         "threadId": {
           "type": "string"
-        },
-        "toolAccessPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolAccessPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -3392,13 +3382,6 @@
         "threadId"
       ],
       "type": "object"
-    },
-    "ToolAccessPolicy": {
-      "enum": [
-        "default",
-        "noExternalTools"
-      ],
-      "type": "string"
     },
     "TurnInterruptParams": {
       "properties": {

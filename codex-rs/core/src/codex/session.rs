@@ -78,7 +78,6 @@ pub(crate) struct SessionConfiguration {
     pub(super) app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
-    pub(super) tool_access_policy: ToolAccessPolicy,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
     pub(super) persist_extended_history: bool,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -103,7 +102,6 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
-            tool_access_policy: self.tool_access_policy,
         }
     }
 
@@ -328,16 +326,11 @@ impl Session {
             otel.name = "session_init.history_metadata",
             session_init.is_subagent = is_subagent,
         ));
-        let external_tools_enabled =
-            external_tools_enabled(session_configuration.tool_access_policy);
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            if !external_tools_enabled {
-                return (auth, Default::default(), Default::default());
-            }
             let mcp_servers = mcp_manager_for_mcp
                 .effective_servers(&config_for_mcp, auth.as_ref())
                 .await;
@@ -763,11 +756,7 @@ impl Session {
         required_mcp_servers.sort();
         let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
         let required_mcp_server_count = required_mcp_servers.len();
-        let tool_plugin_provenance = if external_tools_enabled {
-            mcp_manager.tool_plugin_provenance(config.as_ref()).await
-        } else {
-            Default::default()
-        };
+        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
             cancel_guard.cancel();
@@ -851,20 +840,5 @@ impl Session {
         );
 
         Ok(sess)
-    }
-}
-
-fn external_tools_enabled(tool_access_policy: ToolAccessPolicy) -> bool {
-    tool_access_policy != ToolAccessPolicy::NoExternalTools
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_external_tools_disables_external_session_startup() {
-        assert!(!external_tools_enabled(ToolAccessPolicy::NoExternalTools));
-        assert!(external_tools_enabled(ToolAccessPolicy::default()));
     }
 }

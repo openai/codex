@@ -171,6 +171,7 @@ use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
+use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
@@ -328,7 +329,6 @@ pub(crate) struct ChatComposer {
     disable_paste_burst: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
-    thread_footer_hint_override: Option<Vec<(String, String)>>,
     remote_image_urls: Vec<String>,
     /// Tracks keyboard selection for the remote-image rows so Up/Down + Delete/Backspace
     /// can highlight and remove remote attachments from the composer UI.
@@ -364,6 +364,7 @@ pub(crate) struct ChatComposer {
     is_zellij: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
+    side_conversation_context_label: Option<String>,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
     history_search: Option<HistorySearchSession>,
@@ -473,7 +474,6 @@ impl ChatComposer {
             disable_paste_burst: false,
             footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
-            thread_footer_hint_override: None,
             remote_image_urls: Vec::new(),
             selected_remote_image_index: None,
             pending_slash_command_history: None,
@@ -505,6 +505,7 @@ impl ChatComposer {
             ),
             status_line_value: None,
             status_line_enabled: false,
+            side_conversation_context_label: None,
             active_agent_label: None,
             history_search: None,
         };
@@ -919,14 +920,6 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
-    }
-
-    /// Override the footer hint with thread-scoped UI, such as side-conversation navigation state.
-    ///
-    /// This lives below general footer overrides so temporary flows like external editor launch
-    /// or realtime status can still take precedence.
-    pub(crate) fn set_thread_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
-        self.thread_footer_hint_override = items;
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
@@ -3520,6 +3513,14 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) -> bool {
+        if self.side_conversation_context_label == label {
+            return false;
+        }
+        self.side_conversation_context_label = label;
+        true
+    }
+
     /// Replaces the contextual footer label for the currently viewed agent.
     ///
     /// Returning `false` means the value was unchanged, so callers can skip redraw work. This
@@ -3729,10 +3730,7 @@ impl ChatComposer {
                     } else {
                         self.collaboration_mode_indicator
                     };
-                    let active_footer_hint_override = self
-                        .footer_hint_override
-                        .as_ref()
-                        .or(self.thread_footer_hint_override.as_ref());
+                    let active_footer_hint_override = self.footer_hint_override.as_ref();
                     let mut left_width = if self.footer_flash_visible() {
                         self.footer_flash
                             .as_ref()
@@ -3754,7 +3752,11 @@ impl ChatComposer {
                             show_queue_hint,
                         )
                     };
-                    let right_line = if status_line_active {
+                    let right_line = if let Some(label) =
+                        self.side_conversation_context_label.as_ref()
+                    {
+                        Some(side_conversation_context_line(label))
+                    } else if status_line_active {
                         let full =
                             mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
                         let compact = mode_indicator_line(
