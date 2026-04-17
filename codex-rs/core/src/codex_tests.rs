@@ -2218,6 +2218,7 @@ async fn set_rate_limits_retains_previous_credits() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        environments: Vec::new(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -2320,6 +2321,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        environments: Vec::new(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -2672,6 +2674,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        environments: Vec::new(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -2942,6 +2945,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        environments: Vec::new(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -2982,6 +2986,9 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
             codex_exec_server::Environment::create(/*exec_server_url*/ None)
                 .await
                 .expect("create environment"),
+        )),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
         )),
         /*analytics_events_client*/ None,
     )
@@ -3046,6 +3053,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        environments: Vec::new(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -3146,6 +3154,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.js_repl_node_path.clone(),
         ),
         environment: Some(Arc::clone(&environment)),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3263,6 +3274,7 @@ async fn make_session_with_config_and_rx(
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        environments: Vec::new(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -3304,6 +3316,9 @@ async fn make_session_with_config_and_rx(
             codex_exec_server::Environment::create(/*exec_server_url*/ None)
                 .await
                 .expect("create environment"),
+        )),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
         )),
         /*analytics_events_client*/ None,
     )
@@ -4010,6 +4025,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
+        environments: Vec::new(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -4110,6 +4126,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             config.js_repl_node_path.clone(),
         ),
         environment: Some(Arc::clone(&environment)),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),

@@ -299,7 +299,10 @@ async fn spawned_subagent_thread_inherits_parent_environment_selection() {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
-            Some("local".to_string()),
+            Some(vec![codex_protocol::protocol::TurnEnvironment {
+                environment_id: "local".to_string(),
+                cwd: None,
+            }]),
         )
         .await
         .expect("start parent thread");

@@ -54,6 +54,7 @@ pub(crate) enum AppCommandView<'a> {
     },
     OverrideTurnContext {
         cwd: &'a Option<PathBuf>,
+        environments: &'a Option<Vec<codex_protocol::protocol::TurnEnvironment>>,
         approval_policy: &'a Option<AskForApproval>,
         approvals_reviewer: &'a Option<ApprovalsReviewer>,
         sandbox_policy: &'a Option<SandboxPolicy>,
@@ -180,6 +181,7 @@ impl AppCommand {
     ) -> Self {
         Self(Op::OverrideTurnContext {
             cwd,
+            environments: None,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -312,6 +314,7 @@ impl AppCommand {
             },
             Op::OverrideTurnContext {
                 cwd,
+                environments,
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
@@ -324,6 +327,7 @@ impl AppCommand {
                 personality,
             } => AppCommandView::OverrideTurnContext {
                 cwd,
+                environments,
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
