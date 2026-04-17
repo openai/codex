@@ -3080,7 +3080,7 @@ impl CodexMessageProcessor {
                             .update_thread_goal(
                                 thread_id,
                                 codex_state::ThreadGoalUpdate {
-                                    status: status.or(Some(codex_state::ThreadGoalStatus::Active)),
+                                    status,
                                     token_budget: params.token_budget,
                                 },
                             )

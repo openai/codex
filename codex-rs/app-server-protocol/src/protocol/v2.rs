@@ -3107,7 +3107,7 @@ pub struct ThreadGoalSetParams {
         serialize_with = "super::serde_helpers::serialize_double_option",
         skip_serializing_if = "Option::is_none"
     )]
-    #[ts(optional = nullable)]
+    #[ts(optional = nullable, type = "number | null")]
     pub token_budget: Option<Option<i64>>,
 }
 
