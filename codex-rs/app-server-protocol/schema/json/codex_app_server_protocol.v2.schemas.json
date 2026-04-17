@@ -11117,6 +11117,12 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
