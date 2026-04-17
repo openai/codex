@@ -596,9 +596,8 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             if link.show_destination {
-                self.push_span(" (".into());
+                self.push_span(" - ".into());
                 self.push_span(Span::styled(link.destination, self.styles.link));
-                self.push_span(")".into());
             } else if let Some(local_target_display) = link.local_target_display {
                 if self.pending_marker_line {
                     self.push_line(Line::default());

@@ -652,9 +652,8 @@ fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
         "Link".into(),
-        " (".into(),
+        " - ".into(),
         "https://example.com".cyan().underlined(),
-        ")".into(),
     ]));
     assert_eq!(text, expected);
 }
@@ -807,9 +806,8 @@ fn url_link_shows_destination() {
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
         "docs".into(),
-        " (".into(),
+        " - ".into(),
         "https://example.com/docs".cyan().underlined(),
-        ")".into(),
     ]));
     assert_eq!(text, expected);
 }
