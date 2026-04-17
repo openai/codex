@@ -739,8 +739,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         now,
         &model_slug,
         /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ Some(None),
-        /*model_default_reasoning_effort*/ Some(ReasoningEffort::Medium),
+        /*reasoning_effort_override*/ Some(Some(ReasoningEffort::Medium)),
         "<none>".to_string(),
         /*refreshing_rate_limits*/ false,
     );

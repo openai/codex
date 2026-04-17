@@ -176,7 +176,6 @@ pub(crate) fn new_status_output_with_rate_limits(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
-        /*model_default_reasoning_effort*/ None,
         "<none>".to_string(),
         refreshing_rate_limits,
     )
@@ -198,7 +197,6 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     model_name: &str,
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
-    model_default_reasoning_effort: Option<ReasoningEffort>,
     agents_summary: String,
     refreshing_rate_limits: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
@@ -217,7 +215,6 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         model_name,
         collaboration_mode,
         reasoning_effort_override,
-        model_default_reasoning_effort,
         agents_summary,
         refreshing_rate_limits,
     );
@@ -244,7 +241,6 @@ impl StatusHistoryCell {
         model_name: &str,
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
-        model_default_reasoning_effort: Option<ReasoningEffort>,
         agents_summary: String,
         refreshing_rate_limits: bool,
     ) -> (Self, StatusHistoryHandle) {
@@ -264,7 +260,6 @@ impl StatusHistoryCell {
         if config.model_provider.wire_api == WireApi::Responses {
             let effort_value = reasoning_effort_override
                 .unwrap_or(config.model_reasoning_effort)
-                .or(model_default_reasoning_effort)
                 .map(|effort| effort.to_string())
                 .unwrap_or_else(|| "none".to_string());
             config_entries.push(("reasoning effort", effort_value));
