@@ -202,6 +202,36 @@ impl App {
         })
     }
 
+    async fn keep_side_thread_visible_after_cleanup_failure(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        if self.active_thread_id != Some(thread_id)
+            && let Err(err) = self.select_agent_thread(tui, app_server, thread_id).await
+        {
+            tracing::warn!(
+                "failed to restore side conversation after cleanup failure for {thread_id}: {err}"
+            );
+        }
+    }
+
+    async fn discard_side_thread_or_keep_visible(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> bool {
+        if self.discard_side_thread(app_server, thread_id).await {
+            true
+        } else {
+            self.keep_side_thread_visible_after_cleanup_failure(tui, app_server, thread_id)
+                .await;
+            false
+        }
+    }
+
     fn side_developer_instructions(existing_instructions: Option<&str>) -> String {
         match existing_instructions {
             Some(existing_instructions) if !existing_instructions.trim().is_empty() => {
@@ -263,19 +293,22 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
-        let mut side_threads_to_discard = self.side_threads_to_discard_after_switch(thread_id);
-        if let Some(active_thread_id) = self.active_thread_id
-            && side_threads_to_discard.contains(&active_thread_id)
-        {
-            if !self.discard_side_thread(app_server, active_thread_id).await {
-                return Ok(());
-            }
-            side_threads_to_discard.retain(|thread_id| *thread_id != active_thread_id);
-        }
+        let active_thread_id_before_switch = self.active_thread_id;
+        let side_threads_to_discard = self.side_threads_to_discard_after_switch(thread_id);
         self.select_agent_thread(tui, app_server, thread_id).await?;
         if self.active_thread_id == Some(thread_id) {
             for side_thread_id in side_threads_to_discard {
-                self.discard_side_thread(app_server, side_thread_id).await;
+                if !self.discard_side_thread(app_server, side_thread_id).await {
+                    if active_thread_id_before_switch == Some(side_thread_id) {
+                        self.keep_side_thread_visible_after_cleanup_failure(
+                            tui,
+                            app_server,
+                            side_thread_id,
+                        )
+                        .await;
+                    }
+                    break;
+                }
             }
         }
         Ok(())
@@ -324,7 +357,8 @@ impl App {
                     .thread_inject_items(child_thread_id, vec![Self::side_boundary_prompt_item()])
                     .await
                 {
-                    self.discard_side_thread(app_server, child_thread_id).await;
+                    self.discard_side_thread_or_keep_visible(tui, app_server, child_thread_id)
+                        .await;
                     self.restore_side_user_message(user_message.take());
                     self.chat_widget.add_error_message(format!(
                         "Failed to prepare side conversation {child_thread_id}: {err}"
@@ -335,8 +369,11 @@ impl App {
                     .select_agent_thread_and_discard_side_chain(tui, app_server, child_thread_id)
                     .await
                 {
-                    self.discard_side_thread(app_server, child_thread_id).await;
-                    if self.active_thread_id != Some(parent_thread_id)
+                    let discarded = self
+                        .discard_side_thread_or_keep_visible(tui, app_server, child_thread_id)
+                        .await;
+                    if discarded
+                        && self.active_thread_id != Some(parent_thread_id)
                         && let Err(restore_err) = self
                             .select_agent_thread(tui, app_server, parent_thread_id)
                             .await
@@ -358,7 +395,8 @@ impl App {
                             .submit_user_message_as_plain_user_turn(user_message);
                     }
                 } else {
-                    self.discard_side_thread(app_server, child_thread_id).await;
+                    self.discard_side_thread_or_keep_visible(tui, app_server, child_thread_id)
+                        .await;
                     self.restore_side_user_message(user_message.take());
                     self.chat_widget.add_error_message(format!(
                         "Failed to switch into side conversation {child_thread_id}."
