@@ -2006,7 +2006,7 @@ mod tests {
             runtime_args
                 .environment_manager
                 .default_environment()
-                .is_some_and(|environment| environment.is_remote())
+                .is_remote()
         );
     }
 

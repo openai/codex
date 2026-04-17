@@ -23,7 +23,7 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 /// separately tracking whether model-facing tools may access environments.
 #[derive(Debug)]
 pub struct EnvironmentManager {
-    default_environment: Option<String>,
+    default_environment: String,
     environment_disabled_for_agent: bool,
     environments: HashMap<String, Arc<Environment>>,
 }
@@ -124,9 +124,9 @@ impl EnvironmentManager {
                         .expect("valid remote environment"),
                     ),
                 );
-                Some(REMOTE_ENVIRONMENT_ID.to_string())
+                REMOTE_ENVIRONMENT_ID.to_string()
             }
-            None => Some(LOCAL_ENVIRONMENT_ID.to_string()),
+            None => LOCAL_ENVIRONMENT_ID.to_string(),
         };
 
         Self {
@@ -139,22 +139,19 @@ impl EnvironmentManager {
     /// Returns true when model-facing tools may access an environment.
     pub fn allows_agent_environment_access(&self) -> bool {
         !self.environment_disabled_for_agent
-            && self
-                .default_environment
-                .as_deref()
-                .is_some_and(|environment_id| self.environments.contains_key(environment_id))
+            && self.environments.contains_key(&self.default_environment)
     }
 
     /// Returns the default environment instance.
-    pub fn default_environment(&self) -> Option<Arc<Environment>> {
-        self.default_environment
-            .as_deref()
-            .and_then(|environment_id| self.get_environment(environment_id))
+    pub fn default_environment(&self) -> Arc<Environment> {
+        self.get_environment(&self.default_environment)
+            .expect("default environment exists")
     }
 
     /// Returns the local environment instance.
-    pub fn local_environment(&self) -> Option<Arc<Environment>> {
+    pub fn local_environment(&self) -> Arc<Environment> {
         self.get_environment(LOCAL_ENVIRONMENT_ID)
+            .expect("local environment exists")
     }
 
     /// Returns a named environment instance.
@@ -297,10 +294,10 @@ mod tests {
             local_runtime_paths: None,
         });
 
-        let environment = manager.default_environment().expect("local environment");
+        let environment = manager.default_environment();
         assert!(!environment.is_remote());
         assert!(manager.allows_agent_environment_access());
-        assert!(manager.local_environment().is_some());
+        assert!(!manager.local_environment().is_remote());
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
     }
 
@@ -312,8 +309,8 @@ mod tests {
         });
 
         assert!(!manager.allows_agent_environment_access());
-        assert!(manager.default_environment().is_some());
-        assert!(manager.local_environment().is_some());
+        assert!(!manager.default_environment().is_remote());
+        assert!(!manager.local_environment().is_remote());
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
     }
 
@@ -324,16 +321,11 @@ mod tests {
             local_runtime_paths: None,
         });
 
-        let environment = manager.default_environment().expect("remote environment");
+        let environment = manager.default_environment();
         assert!(environment.is_remote());
         assert!(manager.allows_agent_environment_access());
         assert_eq!(environment.exec_server_url(), Some("ws://127.0.0.1:8765"));
-        assert!(
-            !manager
-                .local_environment()
-                .expect("local environment")
-                .is_remote()
-        );
+        assert!(!manager.local_environment().is_remote());
         assert_eq!(
             manager
                 .get_environment(REMOTE_ENVIRONMENT_ID)
@@ -347,8 +339,8 @@ mod tests {
     async fn environment_manager_default_environment_caches_environment() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs::default());
 
-        let first = manager.default_environment().expect("local environment");
-        let second = manager.default_environment().expect("local environment");
+        let first = manager.default_environment();
+        let second = manager.default_environment();
 
         assert!(Arc::ptr_eq(&first, &second));
     }
@@ -365,14 +357,14 @@ mod tests {
             local_runtime_paths: Some(runtime_paths.clone()),
         });
 
-        let environment = manager.default_environment().expect("local environment");
+        let environment = manager.default_environment();
 
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
         let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: environment.exec_server_url().map(str::to_owned),
             local_runtime_paths: environment.local_runtime_paths().cloned(),
         });
-        let environment = manager.default_environment().expect("local environment");
+        let environment = manager.default_environment();
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
     }
 
@@ -383,7 +375,7 @@ mod tests {
             local_runtime_paths: None,
         });
 
-        assert!(manager.default_environment().is_some());
+        assert!(!manager.default_environment().is_remote());
         assert!(!manager.allows_agent_environment_access());
     }
 
@@ -394,9 +386,9 @@ mod tests {
             local_runtime_paths: None,
         });
 
-        assert!(manager.default_environment().is_some());
+        assert!(!manager.default_environment().is_remote());
         assert!(!manager.allows_agent_environment_access());
-        assert!(manager.local_environment().is_some());
+        assert!(!manager.local_environment().is_remote());
         assert!(manager.get_environment(REMOTE_ENVIRONMENT_ID).is_none());
     }
 

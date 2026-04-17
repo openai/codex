@@ -5677,17 +5677,14 @@ impl CodexMessageProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
-        let environment_manager = self.thread_manager.environment_manager();
-        let runtime_environment = match environment_manager.default_environment() {
-            Some(environment) => {
-                // Status listing has no turn cwd. This fallback is used only
-                // by executor-backed stdio MCPs whose config omits `cwd`.
-                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
-            }
-            None => McpRuntimeEnvironment::new(
-                environment_manager.local_environment(),
-                config.cwd.to_path_buf(),
-            ),
+        let runtime_environment = {
+            let environment = self
+                .thread_manager
+                .environment_manager()
+                .default_environment();
+            // Status listing has no turn cwd. This fallback is used only
+            // by executor-backed stdio MCPs whose config omits `cwd`.
+            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
         };
 
         tokio::spawn(async move {
@@ -5850,8 +5847,7 @@ impl CodexMessageProcessor {
             let environment = self
                 .thread_manager
                 .environment_manager()
-                .default_environment()
-                .unwrap_or_else(|| Arc::new(codex_exec_server::Environment::default()));
+                .default_environment();
             // Resource reads without a thread have no turn cwd. This fallback
             // is used only by executor-backed stdio MCPs whose config omits `cwd`.
             McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
@@ -6445,7 +6441,8 @@ impl CodexMessageProcessor {
             .thread_manager
             .environment_manager()
             .default_environment()
-            .map(|environment| environment.get_filesystem());
+            .get_filesystem();
+        let fs = Some(fs);
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd

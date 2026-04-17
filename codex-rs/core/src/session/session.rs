@@ -679,7 +679,7 @@ impl Session {
                 config.js_repl_node_path.clone(),
             ),
             environment_manager,
-            environment,
+            environment: Some(environment),
             allows_agent_environment_access,
         };
         services
