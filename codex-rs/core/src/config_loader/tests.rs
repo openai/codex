@@ -16,6 +16,7 @@ use crate::config_loader::version_for_toml;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -92,6 +93,7 @@ async fn returns_config_error_for_invalid_user_config_toml() {
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let err = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -119,6 +121,7 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let err = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -203,6 +206,7 @@ extra = true
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -235,6 +239,7 @@ async fn returns_empty_when_all_layers_missing() {
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -327,6 +332,7 @@ flag = false
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -428,6 +434,7 @@ allowed_sandbox_modes = ["read-only"]
     );
 
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(AbsolutePathBuf::try_from(tmp.path())?),
         &[] as &[(String, TomlValue)],
@@ -489,6 +496,7 @@ allowed_approval_policies = ["never"]
     );
 
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(AbsolutePathBuf::try_from(tmp.path())?),
         &[] as &[(String, TomlValue)],
@@ -529,8 +537,14 @@ personality = true
     )
     .await?;
 
+    let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
-    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &requirements_file,
+    )
+    .await?;
 
     assert_eq!(
         config_requirements_toml
@@ -620,6 +634,7 @@ allowed_approval_policies = ["on-request"]
         ),
     );
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(AbsolutePathBuf::try_from(tmp.path())?),
         &[] as &[(String, TomlValue)],
@@ -691,7 +706,12 @@ allowed_approval_policies = ["on-request"]
             guardian_policy_config: None,
         },
     );
-    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &AbsolutePathBuf::try_from(requirements_file)?,
+    )
+    .await?;
 
     assert_eq!(
         config_requirements_toml
@@ -735,6 +755,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
     let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
 
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -771,6 +792,7 @@ async fn load_config_layers_fails_when_cloud_requirements_loader_fails() -> anyh
     let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
 
     let err = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -823,6 +845,7 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
     .await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -967,6 +990,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
     .await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -1006,6 +1030,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
 
     let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -1062,6 +1087,7 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &project_dot_codex,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -1132,6 +1158,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     .await?;
 
     let layers_untrusted = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home_untrusted,
         Some(cwd.clone()),
         &[] as &[(String, TomlValue)],
@@ -1170,6 +1197,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     .await?;
 
     let layers_unknown = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home_unknown,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -1328,6 +1356,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         }
 
         let layers = load_config_layers_state(
+            LOCAL_FS.as_ref(),
             &codex_home,
             Some(cwd.clone()),
             &[] as &[(String, TomlValue)],
@@ -1390,6 +1419,7 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
     )];
 
     load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &cli_overrides,
@@ -1432,6 +1462,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],

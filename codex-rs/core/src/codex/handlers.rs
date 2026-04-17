@@ -22,6 +22,7 @@ use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
 use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
 use crate::realtime_conversation::prefix_realtime_v2_text;
+use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -526,6 +527,7 @@ pub async fn list_skills(sess: &Session, sub_id: String, cwds: Vec<PathBuf>, for
             }
         };
         let config_layer_stack = match load_config_layers_state(
+            LOCAL_FS.as_ref(),
             &codex_home,
             Some(cwd_abs.clone()),
             empty_cli_overrides,
