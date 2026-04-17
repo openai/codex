@@ -1,4 +1,5 @@
 use crate::transport::TransportEvent;
+use crate::transport::remote_control::RemoteControlStateRuntimeConfig;
 use crate::transport::remote_control::client_tracker::ClientTracker;
 use crate::transport::remote_control::client_tracker::REMOTE_CONTROL_IDLE_SWEEP_INTERVAL;
 use crate::transport::remote_control::enroll::RemoteControlConnectionAuth;
@@ -115,7 +116,7 @@ struct WebsocketState {
 pub(crate) struct RemoteControlWebsocket {
     remote_control_url: String,
     remote_control_target: Option<RemoteControlTarget>,
-    state_db: Option<Arc<StateRuntime>>,
+    state_runtime_config: RemoteControlStateRuntimeConfig,
     auth_manager: Arc<AuthManager>,
     shutdown_token: CancellationToken,
     reconnect_attempt: u64,
@@ -138,7 +139,7 @@ impl RemoteControlWebsocket {
     pub(crate) fn new(
         remote_control_url: String,
         remote_control_target: Option<RemoteControlTarget>,
-        state_db: Option<Arc<StateRuntime>>,
+        state_runtime_config: RemoteControlStateRuntimeConfig,
         auth_manager: Arc<AuthManager>,
         transport_event_tx: mpsc::Sender<TransportEvent>,
         shutdown_token: CancellationToken,
@@ -154,7 +155,7 @@ impl RemoteControlWebsocket {
         Self {
             remote_control_url,
             remote_control_target,
-            state_db,
+            state_runtime_config,
             auth_manager,
             shutdown_token,
             reconnect_attempt: 0,
@@ -273,7 +274,7 @@ impl RemoteControlWebsocket {
                 }
                 connect_result = connect_remote_control_websocket(
                     &remote_control_target,
-                    self.state_db.as_deref(),
+                    &self.state_runtime_config,
                     &self.auth_manager,
                     &mut self.auth_recovery,
                     &mut self.enrollment,
@@ -723,7 +724,7 @@ pub(crate) async fn load_remote_control_auth(
 
 pub(super) async fn connect_remote_control_websocket(
     remote_control_target: &RemoteControlTarget,
-    state_db: Option<&StateRuntime>,
+    state_runtime_config: &RemoteControlStateRuntimeConfig,
     auth_manager: &Arc<AuthManager>,
     auth_recovery: &mut UnauthorizedRecovery,
     enrollment: &mut Option<RemoteControlEnrollment>,
@@ -734,6 +735,17 @@ pub(super) async fn connect_remote_control_websocket(
     tungstenite::http::Response<()>,
 )> {
     ensure_rustls_crypto_provider();
+    let state_db = StateRuntime::init(
+        state_runtime_config.sqlite_home.clone(),
+        state_runtime_config.model_provider_id.clone(),
+    )
+    .await
+    .map_err(|err| {
+        io::Error::other(format!(
+            "failed to open sqlite state db for remote control websocket: {err}"
+        ))
+    })?;
+    let state_db = state_db.as_ref();
 
     let auth = load_remote_control_auth(auth_manager).await?;
     let enrollment_account_id = enrollment.as_ref().map(|enrollment| &enrollment.account_id);
@@ -751,7 +763,7 @@ pub(super) async fn connect_remote_control_websocket(
 
     if enrollment.is_none() {
         *enrollment = load_persisted_remote_control_enrollment(
-            state_db,
+            Some(state_db),
             remote_control_target,
             &auth.account_id,
             app_server_client_name,
@@ -778,7 +790,7 @@ pub(super) async fn connect_remote_control_websocket(
             Err(err) => return Err(err),
         };
         if let Err(err) = update_persisted_remote_control_enrollment(
-            state_db,
+            Some(state_db),
             remote_control_target,
             &auth.account_id,
             app_server_client_name,
@@ -821,7 +833,7 @@ pub(super) async fn connect_remote_control_websocket(
                         enrollment_ref.environment_id
                     );
                     if let Err(clear_err) = update_persisted_remote_control_enrollment(
-                        state_db,
+                        Some(state_db),
                         remote_control_target,
                         &auth.account_id,
                         app_server_client_name,
@@ -918,7 +930,6 @@ mod tests {
     use codex_login::save_auth;
     use codex_login::token_data::TokenData;
     use codex_login::token_data::parse_chatgpt_jwt_claims;
-    use codex_state::StateRuntime;
     use futures::StreamExt;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
@@ -940,10 +951,13 @@ mod tests {
     #[cfg(not(windows))]
     const TEST_HTTP_ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
 
-    async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime> {
-        StateRuntime::init(codex_home.path().to_path_buf(), "test-provider".to_string())
-            .await
-            .expect("state runtime should initialize")
+    fn remote_control_state_runtime_config(
+        codex_home: &TempDir,
+    ) -> RemoteControlStateRuntimeConfig {
+        RemoteControlStateRuntimeConfig {
+            sqlite_home: codex_home.path().to_path_buf(),
+            model_provider_id: "test-provider".to_string(),
+        }
     }
 
     fn remote_control_auth_manager() -> Arc<AuthManager> {
@@ -1022,7 +1036,6 @@ mod tests {
             .await;
         });
         let codex_home = TempDir::new().expect("temp dir should create");
-        let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = remote_control_auth_manager();
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut enrollment = Some(RemoteControlEnrollment {
@@ -1034,7 +1047,7 @@ mod tests {
 
         let err = match connect_remote_control_websocket(
             &remote_control_target,
-            Some(state_db.as_ref()),
+            &remote_control_state_runtime_config(&codex_home),
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
@@ -1052,6 +1065,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connect_remote_control_websocket_fails_when_state_runtime_cannot_open() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let remote_control_url = remote_control_url_for_listener(&listener);
+        let remote_control_target =
+            normalize_remote_control_url(&remote_control_url).expect("target should parse");
+        let codex_home = TempDir::new().expect("temp dir should create");
+        let sqlite_home = codex_home.path().join("not-a-directory");
+        std::fs::write(&sqlite_home, "file blocks state runtime directory")
+            .expect("sqlite_home blocker file should write");
+        let state_runtime_config = RemoteControlStateRuntimeConfig {
+            sqlite_home,
+            model_provider_id: "test-provider".to_string(),
+        };
+        let auth_manager = remote_control_auth_manager();
+        let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut enrollment = None;
+
+        let err = connect_remote_control_websocket(
+            &remote_control_target,
+            &state_runtime_config,
+            &auth_manager,
+            &mut auth_recovery,
+            &mut enrollment,
+            /*subscribe_cursor*/ None,
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect_err("state runtime open failure should fail the connect attempt");
+
+        assert!(
+            err.to_string()
+                .starts_with("failed to open sqlite state db for remote control websocket:"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn connect_remote_control_websocket_recovers_after_unauthorized_reload() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1066,7 +1118,6 @@ mod tests {
             AuthCredentialsStoreMode::File,
         )
         .expect("stale auth should save");
-        let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
@@ -1097,7 +1148,7 @@ mod tests {
 
         let err = connect_remote_control_websocket(
             &remote_control_target,
-            Some(state_db.as_ref()),
+            &remote_control_state_runtime_config(&codex_home),
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
@@ -1147,7 +1198,6 @@ mod tests {
             AuthCredentialsStoreMode::File,
         )
         .expect("stale auth should save");
-        let state_db = remote_control_state_runtime(&codex_home).await;
         let auth_manager = AuthManager::shared(
             codex_home.path().to_path_buf(),
             /*enable_codex_api_key_env*/ false,
@@ -1164,7 +1214,7 @@ mod tests {
 
         let err = connect_remote_control_websocket(
             &remote_control_target,
-            Some(state_db.as_ref()),
+            &remote_control_state_runtime_config(&codex_home),
             &auth_manager,
             &mut auth_recovery,
             &mut enrollment,
@@ -1199,6 +1249,7 @@ mod tests {
             .expect("listener should bind");
         let remote_control_url = remote_control_url_for_listener(&listener);
         drop(listener);
+        let codex_home = TempDir::new().expect("temp dir should create");
 
         let remote_control_target =
             normalize_remote_control_url(&remote_control_url).expect("target should parse");
@@ -1212,7 +1263,7 @@ mod tests {
                 RemoteControlWebsocket::new(
                     remote_control_url,
                     Some(remote_control_target),
-                    /*state_db*/ None,
+                    remote_control_state_runtime_config(&codex_home),
                     remote_control_auth_manager(),
                     transport_event_tx,
                     shutdown_token,

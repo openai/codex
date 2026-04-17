@@ -582,7 +582,10 @@ pub async fn run_main_with_transport(
 
     let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
         config.chatgpt_base_url.clone(),
-        state_db.clone(),
+        transport::RemoteControlStateRuntimeConfig {
+            sqlite_home: config.sqlite_home.clone(),
+            model_provider_id: config.model_provider_id.clone(),
+        },
         auth_manager.clone(),
         transport_event_tx.clone(),
         transport_shutdown_token.clone(),

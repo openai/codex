@@ -107,6 +107,13 @@ async fn remote_control_state_runtime(codex_home: &TempDir) -> Arc<StateRuntime>
         .expect("state runtime should initialize")
 }
 
+fn remote_control_state_runtime_config(codex_home: &TempDir) -> RemoteControlStateRuntimeConfig {
+    RemoteControlStateRuntimeConfig {
+        sqlite_home: codex_home.path().to_path_buf(),
+        model_provider_id: "test-provider".to_string(),
+    }
+}
+
 fn remote_control_url_for_listener(listener: &TcpListener) -> String {
     let addr = listener
         .local_addr()
@@ -126,7 +133,7 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -391,7 +398,7 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -458,12 +465,13 @@ async fn remote_control_transport_reconnects_after_disconnect() {
 
 #[tokio::test]
 async fn remote_control_start_allows_remote_control_invalid_url_when_disabled() {
+    let codex_home = TempDir::new().expect("temp dir should create");
     let (transport_event_tx, _transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         "https://internal.example.com/backend-api/".to_string(),
-        /*state_db*/ None,
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -497,7 +505,7 @@ async fn remote_control_start_allows_missing_auth_when_enabled() {
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        /*state_db*/ None,
+        remote_control_state_runtime_config(&codex_home),
         auth_manager,
         transport_event_tx,
         shutdown_token.clone(),
@@ -530,7 +538,7 @@ async fn remote_control_handle_set_enabled_stops_and_restarts_connections() {
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
         remote_control_url,
-        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -583,7 +591,7 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -751,7 +759,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
@@ -968,7 +976,7 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        Some(state_db.clone()),
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
@@ -1035,7 +1043,7 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        Some(state_db.clone()),
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
@@ -1073,7 +1081,6 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         AuthCredentialsStoreMode::File,
     )
     .expect("auth without account id should save");
-    let state_db = remote_control_state_runtime(&codex_home).await;
     let auth_manager = AuthManager::shared(
         codex_home.path().to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -1092,7 +1099,7 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        Some(state_db.clone()),
+        remote_control_state_runtime_config(&codex_home),
         auth_manager,
         transport_event_tx,
         shutdown_token.clone(),
@@ -1175,7 +1182,7 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         remote_control_url,
-        Some(state_db.clone()),
+        remote_control_state_runtime_config(&codex_home),
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
