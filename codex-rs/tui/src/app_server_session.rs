@@ -444,6 +444,7 @@ impl AppServerSession {
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
                     sandbox_policy: Some(sandbox_policy.into()),
+                    permission_profile: None,
                     model: Some(model),
                     service_tier,
                     effort,
@@ -1385,6 +1386,12 @@ mod tests {
             approval_policy: codex_protocol::protocol::AskForApproval::Never.into(),
             approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
             sandbox: codex_protocol::protocol::SandboxPolicy::new_read_only_policy().into(),
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &codex_protocol::protocol::SandboxPolicy::new_read_only_policy(),
+                    std::path::Path::new("/tmp/project"),
+                )
+                .into(),
             reasoning_effort: None,
         };
 

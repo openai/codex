@@ -3053,6 +3053,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
