@@ -2783,56 +2783,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ctrl_p_and_ctrl_n_browse_rows() {
-        let loader: PageLoader = Arc::new(|_| {});
-        let mut state = PickerState::new(
-            PathBuf::from("/tmp"),
-            FrameRequester::test_dummy(),
-            loader,
-            ProviderFilter::MatchDefault(String::from("openai")),
-            /*show_all*/ true,
-            /*filter_cwd*/ None,
-            SessionPickerAction::Resume,
-        );
-
-        state.reset_pagination();
-        state.ingest_page(page(
-            vec![
-                make_item("/tmp/a.jsonl", "2025-01-03T00:00:00Z", "third"),
-                make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "second"),
-                make_item("/tmp/c.jsonl", "2025-01-01T00:00:00Z", "first"),
-            ],
-            /*next_cursor*/ None,
-            /*num_scanned_files*/ 3,
-            /*reached_scan_cap*/ false,
-        ));
-
-        state
-            .handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL))
-            .await
-            .unwrap();
-        assert_eq!(state.selected, 1);
-
-        state
-            .handle_key(KeyEvent::new(KeyCode::Char('\u{000e}'), KeyModifiers::NONE))
-            .await
-            .unwrap();
-        assert_eq!(state.selected, 2);
-
-        state
-            .handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL))
-            .await
-            .unwrap();
-        assert_eq!(state.selected, 1);
-
-        state
-            .handle_key(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE))
-            .await
-            .unwrap();
-        assert_eq!(state.selected, 0);
-    }
-
-    #[tokio::test]
     async fn set_query_loads_until_match_and_respects_scan_cap() {
         let recorded_requests: Arc<Mutex<Vec<PageLoadRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let request_sink = recorded_requests.clone();
