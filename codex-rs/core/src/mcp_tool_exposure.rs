@@ -33,21 +33,11 @@ pub(crate) fn build_mcp_tool_exposure(
         ));
     }
 
-    if !tools_config.search_tool {
-        return McpToolExposure {
-            direct_tools: deferred_tools,
-            deferred_tools: None,
-        };
-    }
-
-    let should_defer = if config
-        .features
-        .enabled(Feature::ToolSearchAlwaysDeferMcpTools)
-    {
-        true
-    } else {
-        deferred_tools.len() >= DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD
-    };
+    let should_defer = tools_config.search_tool
+        && (config
+            .features
+            .enabled(Feature::ToolSearchAlwaysDeferMcpTools)
+            || deferred_tools.len() >= DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
 
     if !should_defer {
         return McpToolExposure {

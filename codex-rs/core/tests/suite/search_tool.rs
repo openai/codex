@@ -228,12 +228,8 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
         "small app tool sets should be deferred behind tool_search: {tools:?}"
     );
     assert!(
-        !tools.iter().any(|name| name == CALENDAR_CREATE_TOOL),
-        "app tool should not be directly exposed: {tools:?}"
-    );
-    assert!(
-        !tools.iter().any(|name| name == SEARCH_CALENDAR_NAMESPACE),
-        "app namespace should not be directly exposed: {tools:?}"
+        tools.iter().all(|name| !name.starts_with("mcp__")),
+        "MCP tools should not be directly exposed: {tools:?}"
     );
 
     Ok(())
