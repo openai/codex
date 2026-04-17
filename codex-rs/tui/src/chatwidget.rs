@@ -888,6 +888,9 @@ pub(crate) struct ChatWidget {
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message item.
     pending_steers: VecDeque<PendingSteer>,
+    // Active turn captured with restored input state. Replayed terminal/user-message events can
+    // only mutate restored queues when they match this id.
+    restored_active_turn_id: Option<String>,
     // When set, the next interrupt should resubmit all pending steers as one
     // fresh user turn instead of restoring them into the composer.
     submit_pending_steers_after_interrupt: bool,
@@ -1066,6 +1069,7 @@ pub(crate) struct ThreadInputState {
     pending_steers: VecDeque<UserMessage>,
     rejected_steers_queue: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<UserMessage>,
+    active_turn_id: Option<String>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -1101,6 +1105,7 @@ impl From<&str> for UserMessage {
 struct PendingSteer {
     user_message: UserMessage,
     compare_key: PendingSteerCompareKey,
+    turn_id: Option<String>,
 }
 
 pub(crate) fn create_initial_user_message(
@@ -1977,6 +1982,7 @@ impl ChatWidget {
         self.session_network_proxy = event.network_proxy.clone();
         self.thread_id = Some(event.session_id);
         self.last_turn_id = None;
+        self.restored_active_turn_id = None;
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
@@ -2541,6 +2547,45 @@ impl ChatWidget {
         true
     }
 
+    fn queue_unacknowledged_pending_steers_for_turn(&mut self, turn_id: &str) -> bool {
+        if self
+            .pending_steers
+            .front()
+            .is_none_or(|pending| pending.turn_id.as_deref() != Some(turn_id))
+        {
+            return false;
+        }
+
+        let mut queued = false;
+        while self
+            .pending_steers
+            .front()
+            .is_some_and(|pending| pending.turn_id.as_deref() == Some(turn_id))
+        {
+            if let Some(pending) = self.pending_steers.pop_front() {
+                self.rejected_steers_queue.push_back(pending.user_message);
+                queued = true;
+            }
+        }
+        queued
+    }
+
+    fn replayed_turn_matches_restored_active_turn(&self, turn_id: &str) -> bool {
+        self.restored_active_turn_id.as_deref() == Some(turn_id)
+    }
+
+    fn replayed_turn_is_stale_for_restored_input(&self, turn_id: &str) -> bool {
+        self.restored_active_turn_id
+            .as_deref()
+            .is_some_and(|active_turn_id| active_turn_id != turn_id)
+    }
+
+    fn clear_restored_active_turn_if_matches(&mut self, turn_id: &str) {
+        if self.replayed_turn_matches_restored_active_turn(turn_id) {
+            self.restored_active_turn_id = None;
+        }
+    }
+
     fn restore_pending_messages_after_replayed_incomplete_turn(&mut self) {
         self.finalize_turn();
         if let Some(combined) = self.drain_pending_messages_for_restore() {
@@ -2554,13 +2599,18 @@ impl ChatWidget {
         &mut self,
         event: UserMessageEvent,
         compare_key: PendingSteerCompareKey,
+        turn_id: Option<&str>,
     ) {
         let rendered = Self::rendered_user_message_event_from_event(&event);
-        if self
-            .pending_steers
-            .front()
-            .is_some_and(|pending| pending.compare_key == compare_key)
-        {
+        if self.pending_steers.front().is_some_and(|pending| {
+            pending.compare_key == compare_key
+                && turn_id.is_none_or(|turn_id| {
+                    pending
+                        .turn_id
+                        .as_deref()
+                        .is_none_or(|pending_turn_id| pending_turn_id == turn_id)
+                })
+        }) {
             if let Some(pending) = self.pending_steers.pop_front() {
                 self.refresh_pending_input_preview();
                 let pending_event = UserMessageEvent {
@@ -3320,6 +3370,10 @@ impl ChatWidget {
                 .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
+            active_turn_id: self
+                .last_turn_id
+                .clone()
+                .filter(|_| self.agent_turn_running || self.bottom_pane.is_task_running()),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3333,6 +3387,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.restored_active_turn_id = input_state.active_turn_id.clone();
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             if let Some(composer) = input_state.composer {
@@ -3369,6 +3424,7 @@ impl ChatWidget {
                         image_count: user_message.local_images.len()
                             + user_message.remote_image_urls.len(),
                     },
+                    turn_id: input_state.active_turn_id.clone(),
                     user_message,
                 })
                 .collect();
@@ -3376,6 +3432,7 @@ impl ChatWidget {
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
             self.agent_turn_running = false;
+            self.restored_active_turn_id = None;
             self.pending_steers.clear();
             self.rejected_steers_queue.clear();
             self.set_remote_image_urls(Vec::new());
@@ -4990,6 +5047,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            restored_active_turn_id: None,
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
@@ -5625,6 +5683,7 @@ impl ChatWidget {
                 mention_bindings: mention_bindings.clone(),
             },
             compare_key: Self::pending_steer_compare_key_from_items(&items),
+            turn_id: self.last_turn_id.clone(),
         });
         let personality = self
             .config
@@ -5816,12 +5875,15 @@ impl ChatWidget {
                 else {
                     unreachable!("user message item should convert to a user message event");
                 };
-                if from_replay {
+                let compare_key = Self::pending_steer_compare_key_from_items(&user_message.content);
+                if from_replay && !self.replayed_turn_matches_restored_active_turn(&turn_id) {
                     self.on_user_message_event(event);
                 } else {
-                    let compare_key =
-                        Self::pending_steer_compare_key_from_items(&user_message.content);
-                    self.on_user_message_event_reconciling_pending_steer(event, compare_key);
+                    self.on_user_message_event_reconciling_pending_steer(
+                        event,
+                        compare_key,
+                        Some(&turn_id),
+                    );
                 }
             }
             ThreadItem::AgentMessage {
@@ -6245,12 +6307,16 @@ impl ChatWidget {
                     }
                 } else if from_replay {
                     self.last_non_retry_error = None;
+                    if self.replayed_turn_is_stale_for_restored_input(&notification.turn_id) {
+                        return;
+                    }
                     if !matches!(
                         notification.error.codex_error_info,
                         Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
                     ) {
                         self.finalize_turn();
                         self.request_redraw();
+                        self.clear_restored_active_turn_if_matches(&notification.turn_id);
                     }
                 } else {
                     self.last_non_retry_error = Some((
@@ -6431,23 +6497,43 @@ impl ChatWidget {
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        let from_replay = replay_kind.is_some();
+        let turn_id = notification.turn.id.clone();
+        let replayed_turn_matches_restored_active_turn =
+            from_replay && self.replayed_turn_matches_restored_active_turn(&turn_id);
+        if from_replay && self.replayed_turn_is_stale_for_restored_input(&turn_id) {
+            return;
+        }
+
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
-                self.on_task_complete(/*last_agent_message*/ None, replay_kind.is_some())
+                if replayed_turn_matches_restored_active_turn {
+                    self.queue_unacknowledged_pending_steers_for_turn(&turn_id);
+                }
+                self.on_task_complete(/*last_agent_message*/ None, from_replay);
+                self.clear_restored_active_turn_if_matches(&turn_id);
             }
             TurnStatus::Interrupted => {
                 self.last_non_retry_error = None;
-                if replay_kind.is_some() {
+                if from_replay {
+                    if !replayed_turn_matches_restored_active_turn {
+                        return;
+                    }
                     self.restore_pending_messages_after_replayed_incomplete_turn();
+                    self.clear_restored_active_turn_if_matches(&turn_id);
                 } else {
                     self.on_interrupted_turn(TurnAbortReason::Interrupted);
                 }
             }
             TurnStatus::Failed => {
-                if replay_kind.is_some() {
+                if from_replay {
+                    if !replayed_turn_matches_restored_active_turn {
+                        return;
+                    }
                     self.last_non_retry_error = None;
                     self.restore_pending_messages_after_replayed_incomplete_turn();
+                    self.clear_restored_active_turn_if_matches(&turn_id);
                     return;
                 }
                 if let Some(error) = notification.turn.error {
@@ -6960,7 +7046,11 @@ impl ChatWidget {
                         unreachable!("user message item should convert to a legacy user message");
                     };
                     let compare_key = Self::pending_steer_compare_key_from_items(&item.content);
-                    self.on_user_message_event_reconciling_pending_steer(event, compare_key);
+                    self.on_user_message_event_reconciling_pending_steer(
+                        event,
+                        compare_key,
+                        /*turn_id*/ None,
+                    );
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());

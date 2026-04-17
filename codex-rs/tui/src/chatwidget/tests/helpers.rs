@@ -254,6 +254,7 @@ pub(super) async fn make_chatwidget_manual(
         queued_user_messages: VecDeque::new(),
         rejected_steers_queue: VecDeque::new(),
         pending_steers: VecDeque::new(),
+        restored_active_turn_id: None,
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
@@ -572,6 +573,7 @@ pub(super) fn pending_steer(text: &str) -> PendingSteer {
             message: text.to_string(),
             image_count: 0,
         },
+        turn_id: None,
     }
 }
 

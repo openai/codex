@@ -361,6 +361,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         pending_steers,
         rejected_steers_queue,
         queued_user_messages,
+        active_turn_id: None,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,
@@ -502,6 +503,37 @@ async fn replayed_completion_does_not_retry_pending_steer() {
     assert_eq!(chat.pending_steers.len(), 1);
     assert!(chat.rejected_steers_queue.is_empty());
     assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn replayed_user_message_acknowledges_pending_steer_only_for_restored_turn() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut pending = pending_steer("already committed");
+    pending.turn_id = Some("active-turn".to_string());
+    chat.pending_steers.push_back(pending);
+    chat.restored_active_turn_id = Some("active-turn".to_string());
+
+    let user_message = || AppServerThreadItem::UserMessage {
+        id: "user-message".to_string(),
+        content: vec![AppServerUserInput::Text {
+            text: "already committed".to_string(),
+            text_elements: Vec::new(),
+        }],
+    };
+
+    chat.replay_thread_item(
+        user_message(),
+        "older-turn".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+    assert_eq!(chat.pending_steers.len(), 1);
+
+    chat.replay_thread_item(
+        user_message(),
+        "active-turn".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+    assert!(chat.pending_steers.is_empty());
 }
 
 #[tokio::test]
