@@ -1,13 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
-use tokio::sync::OnceCell;
-
-use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
-use crate::RemoteExecServerConnectArgs;
+use crate::client::LazyRemoteExecServerClient;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
@@ -35,37 +31,6 @@ pub const REMOTE_ENVIRONMENT_ID: &str = "remote";
 pub struct EnvironmentManagerArgs {
     pub exec_server_url: Option<String>,
     pub local_runtime_paths: Option<ExecServerRuntimePaths>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct LazyRemoteExecServerClient {
-    websocket_url: String,
-    client: Arc<OnceCell<ExecServerClient>>,
-}
-
-impl LazyRemoteExecServerClient {
-    fn new(websocket_url: String) -> Self {
-        Self {
-            websocket_url,
-            client: Arc::new(OnceCell::new()),
-        }
-    }
-
-    pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
-        self.client
-            .get_or_try_init(|| async {
-                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
-                    websocket_url: self.websocket_url.clone(),
-                    client_name: "codex-environment".to_string(),
-                    connect_timeout: Duration::from_secs(5),
-                    initialize_timeout: Duration::from_secs(5),
-                    resume_session_id: None,
-                })
-                .await
-            })
-            .await
-            .cloned()
-    }
 }
 
 impl Default for EnvironmentManager {
