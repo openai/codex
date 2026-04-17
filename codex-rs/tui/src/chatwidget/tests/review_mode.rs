@@ -365,7 +365,6 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,
         agent_turn_running: false,
-        turn_submission_state: TurnSubmissionState::Idle,
     }));
 
     assert_eq!(
@@ -434,6 +433,38 @@ async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("queued while running"));
+}
+
+#[tokio::test]
+async fn unacknowledged_pending_steer_is_retried_as_follow_up_when_turn_completes() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("try again after tool".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected running-turn steer submit, got {other:?}"),
+    }
+    assert_eq!(chat.pending_steers.len(), 1);
+
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "try again after tool".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected unacknowledged steer to be retried, got {other:?}"),
+    }
+    assert!(chat.pending_steers.is_empty());
+    assert!(chat.rejected_steers_queue.is_empty());
 }
 
 #[tokio::test]

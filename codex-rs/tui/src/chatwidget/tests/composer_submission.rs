@@ -801,7 +801,6 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: true,
         agent_turn_running: true,
-        turn_submission_state: TurnSubmissionState::Idle,
     }));
 
     assert!(chat.agent_turn_running);

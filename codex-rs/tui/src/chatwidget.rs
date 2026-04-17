@@ -87,7 +87,6 @@ use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
-use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
@@ -889,9 +888,6 @@ pub(crate) struct ChatWidget {
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message item.
     pending_steers: VecDeque<PendingSteer>,
-    // Local turn submission state that has not fully settled in the replayed
-    // thread snapshot yet.
-    turn_submission_state: TurnSubmissionState,
     // When set, the next interrupt should resubmit all pending steers as one
     // fresh user turn instead of restoring them into the composer.
     submit_pending_steers_after_interrupt: bool,
@@ -1064,40 +1060,6 @@ impl ThreadComposerState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-enum TurnSubmissionState {
-    #[default]
-    Idle,
-    AwaitingTurnStart {
-        kind: TurnSubmissionKind,
-        preceding_turn_id: Option<String>,
-    },
-    RunningStandaloneUserShell {
-        turn_id: String,
-    },
-}
-
-impl TurnSubmissionState {
-    fn clear_for_finished_turn(&mut self, finished_turn_id: Option<&str>) {
-        let should_clear = match self {
-            Self::Idle => false,
-            Self::AwaitingTurnStart { .. } => finished_turn_id.is_none(),
-            Self::RunningStandaloneUserShell { turn_id } => finished_turn_id
-                .map(|finished_turn_id| finished_turn_id == turn_id)
-                .unwrap_or(true),
-        };
-        if should_clear {
-            *self = Self::Idle;
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TurnSubmissionKind {
-    UserTurn,
-    StandaloneUserShell,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
@@ -1108,7 +1070,6 @@ pub(crate) struct ThreadInputState {
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
     agent_turn_running: bool,
-    turn_submission_state: TurnSubmissionState,
 }
 
 impl From<String> for UserMessage {
@@ -1305,12 +1266,6 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
 pub(crate) enum ReplayKind {
     ResumeInitialMessages,
     ThreadSnapshot,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TurnCompletionStateCleanup {
-    ClearPendingMarkers,
-    PreservePendingMarkers,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2397,42 +2352,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn note_turn_started(&mut self, turn_id: &str) {
-        self.turn_submission_state = match std::mem::take(&mut self.turn_submission_state) {
-            TurnSubmissionState::AwaitingTurnStart {
-                kind: TurnSubmissionKind::StandaloneUserShell,
-                ..
-            } => TurnSubmissionState::RunningStandaloneUserShell {
-                turn_id: turn_id.to_string(),
-            },
-            TurnSubmissionState::AwaitingTurnStart {
-                kind: TurnSubmissionKind::UserTurn,
-                ..
-            } => TurnSubmissionState::Idle,
-            TurnSubmissionState::RunningStandaloneUserShell {
-                turn_id: running_turn_id,
-            } if running_turn_id == turn_id => TurnSubmissionState::RunningStandaloneUserShell {
-                turn_id: running_turn_id,
-            },
-            TurnSubmissionState::Idle | TurnSubmissionState::RunningStandaloneUserShell { .. } => {
-                TurnSubmissionState::Idle
-            }
-        };
-    }
-
-    fn should_hold_user_input_for_standalone_shell_turn(&self) -> bool {
-        matches!(
-            &self.turn_submission_state,
-            TurnSubmissionState::AwaitingTurnStart {
-                kind: TurnSubmissionKind::StandaloneUserShell,
-                ..
-            }
-        ) || (matches!(
-            &self.turn_submission_state,
-            TurnSubmissionState::RunningStandaloneUserShell { .. }
-        ) && self.bottom_pane.is_task_running())
-    }
-
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
         // Use `last_agent_message` from the turn-complete notification as the copy
@@ -2505,10 +2424,13 @@ impl ChatWidget {
         self.unified_exec_wait_streak = None;
         self.request_redraw();
 
-        let had_pending_steers = !self.pending_steers.is_empty();
+        let had_unacknowledged_pending_steers = self.queue_unacknowledged_pending_steers();
         self.refresh_pending_input_preview();
 
-        if !from_replay && !self.has_queued_follow_up_messages() && !had_pending_steers {
+        if !from_replay
+            && !self.has_queued_follow_up_messages()
+            && !had_unacknowledged_pending_steers
+        {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -2604,6 +2526,27 @@ impl ChatWidget {
 
     fn has_queued_follow_up_messages(&self) -> bool {
         !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
+    }
+
+    fn queue_unacknowledged_pending_steers(&mut self) -> bool {
+        if self.pending_steers.is_empty() {
+            return false;
+        }
+        self.rejected_steers_queue.extend(
+            self.pending_steers
+                .drain(..)
+                .map(|pending| pending.user_message),
+        );
+        true
+    }
+
+    fn restore_pending_messages_after_replayed_incomplete_turn(&mut self) {
+        self.finalize_turn();
+        if let Some(combined) = self.drain_pending_messages_for_restore() {
+            self.restore_user_message_to_composer(combined);
+        }
+        self.refresh_pending_input_preview();
+        self.request_redraw();
     }
 
     fn pop_next_queued_user_message(&mut self) -> Option<UserMessage> {
@@ -2907,7 +2850,6 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
-        self.turn_submission_state = TurnSubmissionState::Idle;
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
@@ -2927,14 +2869,9 @@ impl ChatWidget {
         self.maybe_show_pending_rate_limit_prompt();
     }
 
-    fn finalize_turn_preserving_submission_state(&mut self) {
-        let turn_submission_state = std::mem::take(&mut self.turn_submission_state);
-        self.finalize_turn();
-        self.turn_submission_state = turn_submission_state;
-    }
-
     fn on_server_overloaded_error(&mut self, message: String) {
         self.submit_pending_steers_after_interrupt = false;
+        self.queue_unacknowledged_pending_steers();
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -2950,6 +2887,7 @@ impl ChatWidget {
 
     fn on_error(&mut self, message: String) {
         self.submit_pending_steers_after_interrupt = false;
+        self.queue_unacknowledged_pending_steers();
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -3349,7 +3287,6 @@ impl ChatWidget {
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
-            turn_submission_state: self.turn_submission_state.clone(),
         })
     }
 
@@ -3359,7 +3296,6 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
-            self.turn_submission_state = input_state.turn_submission_state;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             if let Some(composer) = input_state.composer {
@@ -3403,7 +3339,6 @@ impl ChatWidget {
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
             self.agent_turn_running = false;
-            self.turn_submission_state = TurnSubmissionState::Idle;
             self.pending_steers.clear();
             self.rejected_steers_queue.clear();
             self.set_remote_image_urls(Vec::new());
@@ -5018,7 +4953,6 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
-            turn_submission_state: TurnSubmissionState::Idle,
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
@@ -5229,9 +5163,8 @@ impl ChatWidget {
                     {
                         return;
                     }
-                    let should_submit_now = self.is_session_configured()
-                        && !self.is_plan_streaming_in_tui()
-                        && !self.should_hold_user_input_for_standalone_shell_turn();
+                    let should_submit_now =
+                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
                     if should_submit_now {
                         // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -5450,10 +5383,7 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if !self.is_session_configured()
-            || self.bottom_pane.is_task_running()
-            || self.should_hold_user_input_for_standalone_shell_turn()
-        {
+        if !self.is_session_configured() || self.bottom_pane.is_task_running() {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
         } else {
@@ -5506,20 +5436,7 @@ impl ChatWidget {
                 )));
                 return;
             }
-            let starts_standalone_user_shell_turn = !self.agent_turn_running
-                && !matches!(
-                    &self.turn_submission_state,
-                    TurnSubmissionState::AwaitingTurnStart { .. }
-                )
-                && !self.should_hold_user_input_for_standalone_shell_turn();
-            if self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()))
-                && starts_standalone_user_shell_turn
-            {
-                self.turn_submission_state = TurnSubmissionState::AwaitingTurnStart {
-                    kind: TurnSubmissionKind::StandaloneUserShell,
-                    preceding_turn_id: self.last_turn_id.clone(),
-                };
-            }
+            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
             return;
         }
 
@@ -5695,12 +5612,6 @@ impl ChatWidget {
         if !self.submit_op(op) {
             return;
         }
-        if render_in_history {
-            self.turn_submission_state = TurnSubmissionState::AwaitingTurnStart {
-                kind: TurnSubmissionKind::UserTurn,
-                preceding_turn_id: self.last_turn_id.clone(),
-            };
-        }
 
         // Persist the text to cross-session message history. Mentions are
         // encoded into placeholder syntax so recall can reconstruct the
@@ -5797,94 +5708,6 @@ impl ChatWidget {
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
     pub(crate) fn replay_thread_turns(&mut self, turns: Vec<Turn>, replay_kind: ReplayKind) {
-        let replay_reconciliation_start = match &self.turn_submission_state {
-            TurnSubmissionState::AwaitingTurnStart {
-                preceding_turn_id: Some(preceding_turn_id),
-                ..
-            } => turns
-                .iter()
-                .position(|turn| &turn.id == preceding_turn_id)
-                .map(|position| position + 1)
-                .unwrap_or(turns.len()),
-            TurnSubmissionState::AwaitingTurnStart {
-                preceding_turn_id: None,
-                ..
-            }
-            | TurnSubmissionState::Idle
-            | TurnSubmissionState::RunningStandaloneUserShell { .. } => 0,
-        };
-        let replay_reconciliation_turns = &turns[replay_reconciliation_start..];
-        // Reconcile local submit/queue latches from the replayed snapshot as a whole before
-        // rendering individual turns. Per-item replay is historical UI reconstruction; this is the
-        // single place where snapshot state is allowed to unblock queued follow-up input.
-        match self.turn_submission_state.clone() {
-            TurnSubmissionState::AwaitingTurnStart {
-                kind: TurnSubmissionKind::UserTurn,
-                ..
-            } => {
-                if let Some(turn) = replay_reconciliation_turns.first()
-                    && matches!(
-                        turn.status,
-                        TurnStatus::Completed
-                            | TurnStatus::Interrupted
-                            | TurnStatus::Failed
-                            | TurnStatus::InProgress
-                    )
-                {
-                    if matches!(turn.status, TurnStatus::InProgress) {
-                        self.note_turn_started(&turn.id);
-                    } else {
-                        self.turn_submission_state = TurnSubmissionState::Idle;
-                    }
-                }
-            }
-            TurnSubmissionState::AwaitingTurnStart {
-                kind: TurnSubmissionKind::StandaloneUserShell,
-                ..
-            } => {
-                let finished_user_shell_turn =
-                    replay_reconciliation_turns.iter().rev().find(|turn| {
-                        matches!(
-                            turn.status,
-                            TurnStatus::Completed | TurnStatus::Interrupted | TurnStatus::Failed
-                        ) && turn.items.iter().any(|item| {
-                            matches!(
-                                item,
-                                ThreadItem::CommandExecution {
-                                    source: CommandExecutionSource::UserShell,
-                                    ..
-                                }
-                            )
-                        })
-                    });
-                if finished_user_shell_turn.is_some() {
-                    self.turn_submission_state = TurnSubmissionState::Idle;
-                } else if let Some(turn) = replay_reconciliation_turns.first()
-                    && matches!(turn.status, TurnStatus::InProgress)
-                {
-                    self.note_turn_started(&turn.id);
-                }
-            }
-            TurnSubmissionState::RunningStandaloneUserShell { turn_id } => {
-                if let Some(turn) = replay_reconciliation_turns.iter().find(|turn| {
-                    turn.id.as_str() == turn_id.as_str()
-                        && matches!(
-                            turn.status,
-                            TurnStatus::Completed | TurnStatus::Interrupted | TurnStatus::Failed
-                        )
-                }) {
-                    self.turn_submission_state
-                        .clear_for_finished_turn(Some(&turn.id));
-                } else if replay_reconciliation_turns.iter().any(|turn| {
-                    turn.id.as_str() == turn_id.as_str()
-                        && matches!(turn.status, TurnStatus::InProgress)
-                }) {
-                    self.note_turn_started(&turn_id);
-                }
-            }
-            TurnSubmissionState::Idle => {}
-        }
-
         for turn in turns {
             let Turn {
                 id: turn_id,
@@ -5920,7 +5743,6 @@ impl ChatWidget {
                         },
                     },
                     Some(replay_kind),
-                    TurnCompletionStateCleanup::PreservePendingMarkers,
                 );
             }
         }
@@ -6334,26 +6156,14 @@ impl ChatWidget {
                 }
             }
             ServerNotification::TurnStarted(notification) => {
-                let turn_id = notification.turn.id;
-                if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
-                    self.note_turn_started(&turn_id);
-                }
-                self.last_turn_id = Some(turn_id);
+                self.last_turn_id = Some(notification.turn.id);
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
                     self.on_task_started();
                 }
             }
             ServerNotification::TurnCompleted(notification) => {
-                let state_cleanup = match replay_kind {
-                    Some(ReplayKind::ResumeInitialMessages) => {
-                        TurnCompletionStateCleanup::PreservePendingMarkers
-                    }
-                    Some(ReplayKind::ThreadSnapshot) | None => {
-                        TurnCompletionStateCleanup::ClearPendingMarkers
-                    }
-                };
-                self.handle_turn_completed_notification(notification, replay_kind, state_cleanup);
+                self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
                 self.handle_item_started_notification(notification, replay_kind.is_some());
@@ -6605,15 +6415,7 @@ impl ChatWidget {
         &mut self,
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
-        state_cleanup: TurnCompletionStateCleanup,
     ) {
-        if matches!(
-            state_cleanup,
-            TurnCompletionStateCleanup::ClearPendingMarkers
-        ) {
-            self.turn_submission_state
-                .clear_for_finished_turn(Some(&notification.turn.id));
-        }
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
@@ -6621,13 +6423,8 @@ impl ChatWidget {
             }
             TurnStatus::Interrupted => {
                 self.last_non_retry_error = None;
-                if matches!(
-                    state_cleanup,
-                    TurnCompletionStateCleanup::PreservePendingMarkers
-                ) {
-                    self.finalize_turn_preserving_submission_state();
-                    self.request_redraw();
-                    self.maybe_send_next_queued_input();
+                if replay_kind.is_some() {
+                    self.restore_pending_messages_after_replayed_incomplete_turn();
                 } else {
                     self.on_interrupted_turn(TurnAbortReason::Interrupted);
                 }
@@ -6635,9 +6432,7 @@ impl ChatWidget {
             TurnStatus::Failed => {
                 if replay_kind.is_some() {
                     self.last_non_retry_error = None;
-                    self.finalize_turn_preserving_submission_state();
-                    self.request_redraw();
-                    self.maybe_send_next_queued_input();
+                    self.restore_pending_messages_after_replayed_incomplete_turn();
                     return;
                 }
                 if let Some(error) = notification.turn.error {
@@ -6946,9 +6741,6 @@ impl ChatWidget {
             EventMsg::TurnStarted(event) => {
                 let turn_id = event.turn_id;
                 let model_context_window = event.model_context_window;
-                if !is_resume_initial_replay {
-                    self.note_turn_started(&turn_id);
-                }
                 self.last_turn_id = Some(turn_id);
                 if !is_resume_initial_replay {
                     self.apply_turn_started_context_window(model_context_window);
@@ -6956,14 +6748,8 @@ impl ChatWidget {
                 }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id,
-                last_agent_message,
-                ..
+                last_agent_message, ..
             }) => {
-                if !is_resume_initial_replay {
-                    self.turn_submission_state
-                        .clear_for_finished_turn(Some(&turn_id));
-                }
                 self.on_task_complete(last_agent_message, from_replay);
             }
             EventMsg::TokenCount(ev) => {
@@ -6977,50 +6763,43 @@ impl ChatWidget {
                 message,
                 codex_error_info,
             }) => {
-                if !from_replay
-                    && !codex_error_info
+                if from_replay
+                    || codex_error_info
                         .as_ref()
                         .is_some_and(|info| self.handle_steer_rejected_error(info))
                 {
-                    if let Some(kind) = codex_error_info
-                        .as_ref()
-                        .and_then(core_rate_limit_error_kind)
-                    {
-                        match kind {
-                            RateLimitErrorKind::ServerOverloaded => {
-                                self.on_server_overloaded_error(message)
-                            }
-                            RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                                self.on_error(message)
-                            }
+                } else if let Some(kind) = codex_error_info
+                    .as_ref()
+                    .and_then(core_rate_limit_error_kind)
+                {
+                    match kind {
+                        RateLimitErrorKind::ServerOverloaded => {
+                            self.on_server_overloaded_error(message)
                         }
-                    } else {
-                        self.on_error(message);
+                        RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                            self.on_error(message)
+                        }
                     }
+                } else {
+                    self.on_error(message);
                 }
             }
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
-            EventMsg::TurnAborted(ev) => {
-                if !is_resume_initial_replay {
-                    self.turn_submission_state
-                        .clear_for_finished_turn(ev.turn_id.as_deref());
+            EventMsg::TurnAborted(ev) => match ev.reason {
+                TurnAbortReason::Interrupted => {
+                    self.on_interrupted_turn(ev.reason);
                 }
-                match ev.reason {
-                    TurnAbortReason::Interrupted => {
-                        self.on_interrupted_turn(ev.reason);
-                    }
-                    TurnAbortReason::Replaced => {
-                        self.submit_pending_steers_after_interrupt = false;
-                        self.pending_steers.clear();
-                        self.refresh_pending_input_preview();
-                        self.on_error("Turn aborted: replaced by a new task".to_owned())
-                    }
-                    TurnAbortReason::ReviewEnded => {
-                        self.on_interrupted_turn(ev.reason);
-                    }
+                TurnAbortReason::Replaced => {
+                    self.submit_pending_steers_after_interrupt = false;
+                    self.pending_steers.clear();
+                    self.refresh_pending_input_preview();
+                    self.on_error("Turn aborted: replaced by a new task".to_owned())
                 }
-            }
+                TurnAbortReason::ReviewEnded => {
+                    self.on_interrupted_turn(ev.reason);
+                }
+            },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
@@ -7358,9 +7137,6 @@ impl ChatWidget {
             return;
         }
         if self.bottom_pane.is_task_running() {
-            return;
-        }
-        if self.should_hold_user_input_for_standalone_shell_turn() {
             return;
         }
         if let Some(user_message) = self.pop_next_queued_user_message() {
