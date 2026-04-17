@@ -294,6 +294,75 @@ async fn thread_read_can_return_archived_threads_by_id() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_turns_list_rejects_cursor_when_anchor_turn_is_rolled_back() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "first",
+        vec![],
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    append_user_message(rollout_path.as_path(), "2025-01-05T12:01:00Z", "second")?;
+    append_user_message(rollout_path.as_path(), "2025-01-05T12:02:00Z", "third")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let read_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: conversation_id.clone(),
+            cursor: None,
+            limit: Some(2),
+            sort_direction: Some(SortDirection::Desc),
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadTurnsListResponse {
+        backwards_cursor, ..
+    } = to_response::<ThreadTurnsListResponse>(read_resp)?;
+    let backwards_cursor = backwards_cursor.expect("expected backwardsCursor for newest turn");
+
+    append_thread_rollback(
+        rollout_path.as_path(),
+        "2025-01-05T12:03:00Z",
+        /*num_turns*/ 1,
+    )?;
+
+    let read_id = mcp
+        .send_thread_turns_list_request(ThreadTurnsListParams {
+            thread_id: conversation_id,
+            cursor: Some(backwards_cursor),
+            limit: Some(10),
+            sort_direction: Some(SortDirection::Asc),
+        })
+        .await?;
+    let read_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+
+    assert_eq!(
+        read_err.error.message,
+        "invalid cursor: anchor turn is no longer present"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_read_returns_forked_from_id_for_forked_threads() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -679,6 +748,38 @@ fn append_user_message(path: &Path, timestamp: &str, text: &str) -> std::io::Res
                 "message": text,
                 "text_elements": [],
                 "local_images": []
+            }
+        })
+    )
+}
+
+fn append_thread_rollback(path: &Path, timestamp: &str, num_turns: u32) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+    writeln!(
+        file,
+        "{}",
+        json!({
+            "timestamp": timestamp,
+            "type":"event_msg",
+            "payload": {
+                "type":"thread_rolled_back",
+                "num_turns": num_turns
+            }
+        })
+    )
+}
+
+fn append_thread_rollback(path: &Path, timestamp: &str, num_turns: u32) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+    writeln!(
+        file,
+        "{}",
+        json!({
+            "timestamp": timestamp,
+            "type":"event_msg",
+            "payload": {
+                "type":"thread_rolled_back",
+                "num_turns": num_turns
             }
         })
     )

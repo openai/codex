@@ -10016,10 +10016,10 @@ fn paginate_thread_turns(
         .as_ref()
         .and_then(|anchor| turns.iter().position(|turn| turn.id == anchor.turn_id));
     if anchor.is_some() && anchor_index.is_none() {
-        return Ok(ThreadTurnsPage {
-            turns: Vec::new(),
-            next_cursor: None,
-            backwards_cursor: None,
+        return Err(JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: "invalid cursor: anchor turn is no longer present".to_string(),
+            data: None,
         });
     }
 
