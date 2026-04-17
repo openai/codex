@@ -75,6 +75,7 @@ fn first_input_index_containing(request: &responses::ResponsesRequest, needle: &
         .unwrap_or_else(|| panic!("expected request input to contain {needle:?}"))
 }
 
+const PRETURN_CONTEXT_DIFF_CWD_MARKER: &str = "PRETURN_CONTEXT_DIFF_CWD";
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1495,7 +1496,7 @@ async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()
     assert!(third_request_body.contains("THIRD_REMOTE_USER"));
     let summary_index = first_input_index_containing(third_request, "PREFIX_READY_SUMMARY");
     let captured_context_index =
-        first_input_index_containing(third_request, PRETURN_CONTEXT_DIFF_CWD);
+        first_input_index_containing(third_request, PRETURN_CONTEXT_DIFF_CWD_MARKER);
     let suffix_user_index = first_input_index_containing(third_request, "SECOND_REMOTE_USER");
     let current_user_index = first_input_index_containing(third_request, "THIRD_REMOTE_USER");
     assert!(
@@ -1513,7 +1514,7 @@ async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()
     let stale_context_count = third_request
         .message_input_texts("user")
         .iter()
-        .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
+        .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD_MARKER))
         .count();
     assert_eq!(
         stale_context_count, 1,
