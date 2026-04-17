@@ -385,8 +385,10 @@ impl NetworkApprovalService {
             &guardian_approval_id,
             PermissionRequestPayload {
                 tool_name: HookToolName::bash(),
-                command,
-                description: Some(format!("network-access {target}")),
+                tool_input: serde_json::json!({
+                    "command": command,
+                    "description": format!("network-access {target}"),
+                }),
             },
         )
         .await

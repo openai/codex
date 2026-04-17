@@ -203,8 +203,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
     fn permission_request_payload(&self, req: &ShellRequest) -> Option<PermissionRequestPayload> {
         Some(PermissionRequestPayload {
             tool_name: HookToolName::bash(),
-            command: req.hook_command.clone(),
-            description: req.justification.clone(),
+            tool_input: serde_json::json!({
+                "command": req.hook_command,
+                "description": req.justification,
+            }),
         })
     }
 

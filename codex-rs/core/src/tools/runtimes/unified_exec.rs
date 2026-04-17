@@ -188,8 +188,10 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     ) -> Option<PermissionRequestPayload> {
         Some(PermissionRequestPayload {
             tool_name: HookToolName::bash(),
-            command: req.hook_command.clone(),
-            description: req.justification.clone(),
+            tool_input: serde_json::json!({
+                "command": req.hook_command,
+                "description": req.justification,
+            }),
         })
     }
 

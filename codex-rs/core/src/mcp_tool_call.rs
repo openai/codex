@@ -25,16 +25,19 @@ use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
+use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::SandboxState;
 use codex_mcp::declared_openai_file_input_param_names;
@@ -654,6 +657,7 @@ pub(crate) struct McpToolApprovalMetadata {
     connector_description: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
+    model_tool_name: String,
     mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
@@ -863,6 +867,35 @@ async fn maybe_request_mcp_tool_approval(
     {
         return Some(McpToolApprovalDecision::Accept);
     }
+
+    let tool_name = metadata
+        .map(|metadata| metadata.model_tool_name.clone())
+        .unwrap_or_else(|| format!("mcp__{}__{}", invocation.server, invocation.tool));
+    match run_permission_request_hooks(
+        sess,
+        turn_context,
+        call_id,
+        PermissionRequestPayload {
+            tool_name,
+            tool_input: invocation
+                .arguments
+                .clone()
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())),
+        },
+    )
+    .await
+    {
+        Some(PermissionRequestDecision::Allow) => {
+            return Some(McpToolApprovalDecision::Accept);
+        }
+        Some(PermissionRequestDecision::Deny { message }) => {
+            return Some(McpToolApprovalDecision::Decline {
+                message: Some(message),
+            });
+        }
+        None => {}
+    }
+
     let tool_call_mcp_elicitation_enabled = turn_context
         .config
         .features
@@ -1149,6 +1182,10 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         connector_description,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
+        model_tool_name: format!(
+            "{}{}",
+            tool_info.callable_namespace, tool_info.callable_name
+        ),
         mcp_app_resource_uri: get_mcp_app_resource_uri(tool_info.tool.meta.as_deref()),
         codex_apps_meta: tool_info
             .tool

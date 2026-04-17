@@ -208,20 +208,23 @@ impl ToolHandler for ShellHandler {
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         shell_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
             tool_name: HookToolName::bash(),
-            command,
+            tool_input: serde_json::json!({ "command": command }),
+            display_command: Some(command),
         })
     }
 
     fn post_tool_use_payload(
         &self,
         call_id: &str,
+        _tool_name: &codex_tools::ToolName,
         payload: &ToolPayload,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         let tool_response = result.post_tool_use_response(call_id, payload)?;
+        let command = shell_payload_command(payload)?;
         Some(PostToolUsePayload {
             tool_name: HookToolName::bash(),
-            command: shell_payload_command(payload)?,
+            tool_input: serde_json::json!({ "command": command }),
             tool_response,
         })
     }
@@ -320,20 +323,23 @@ impl ToolHandler for ShellCommandHandler {
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         shell_command_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
             tool_name: HookToolName::bash(),
-            command,
+            tool_input: serde_json::json!({ "command": command }),
+            display_command: Some(command),
         })
     }
 
     fn post_tool_use_payload(
         &self,
         call_id: &str,
+        _tool_name: &codex_tools::ToolName,
         payload: &ToolPayload,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         let tool_response = result.post_tool_use_response(call_id, payload)?;
+        let command = shell_command_payload_command(payload)?;
         Some(PostToolUsePayload {
             tool_name: HookToolName::bash(),
-            command: shell_command_payload_command(payload)?,
+            tool_input: serde_json::json!({ "command": command }),
             tool_response,
         })
     }

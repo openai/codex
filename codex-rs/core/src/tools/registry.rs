@@ -71,6 +71,7 @@ pub trait ToolHandler: Send + Sync {
     fn post_tool_use_payload(
         &self,
         _call_id: &str,
+        _tool_name: &ToolName,
         _payload: &ToolPayload,
         _result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
@@ -135,8 +136,12 @@ pub(crate) struct PreToolUsePayload {
     /// The canonical name is serialized to hook stdin, while aliases are used
     /// only for matcher compatibility.
     pub(crate) tool_name: HookToolName,
-    /// Command-shaped input exposed at `tool_input.command`.
-    pub(crate) command: String,
+    /// Tool-specific input exposed at `tool_input`.
+    ///
+    /// Shell-like tools use `{ "command": ... }`; MCP tools use their resolved
+    /// JSON arguments.
+    pub(crate) tool_input: Value,
+    pub(crate) display_command: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -146,8 +151,8 @@ pub(crate) struct PostToolUsePayload {
     /// Keep this aligned with the corresponding pre-use payload so external
     /// hook consumers can pair events by `tool_use_id`.
     pub(crate) tool_name: HookToolName,
-    /// Command-shaped input exposed at `tool_input.command`.
-    pub(crate) command: String,
+    /// Tool-specific input exposed at `tool_input`.
+    pub(crate) tool_input: Value,
     /// Tool result exposed at `tool_response`.
     pub(crate) tool_response: Value,
 }
@@ -162,6 +167,7 @@ trait AnyToolHandler: Send + Sync {
     fn post_tool_use_payload(
         &self,
         call_id: &str,
+        tool_name: &ToolName,
         payload: &ToolPayload,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload>;
@@ -193,10 +199,11 @@ where
     fn post_tool_use_payload(
         &self,
         call_id: &str,
+        tool_name: &ToolName,
         payload: &ToolPayload,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        ToolHandler::post_tool_use_payload(self, call_id, payload, result)
+        ToolHandler::post_tool_use_payload(self, call_id, tool_name, payload, result)
     }
 
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
@@ -346,14 +353,19 @@ impl ToolRegistry {
                 invocation.call_id.clone(),
                 pre_tool_use_payload.tool_name.name().to_string(),
                 pre_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                pre_tool_use_payload.command.clone(),
+                pre_tool_use_payload.tool_input.clone(),
             )
             .await
         {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "Command blocked by PreToolUse hook: {reason}. Command: {}",
-                pre_tool_use_payload.command
-            )));
+            let message = if let Some(command) = pre_tool_use_payload.display_command {
+                format!("Command blocked by PreToolUse hook: {reason}. Command: {command}")
+            } else {
+                format!(
+                    "Tool call blocked by PreToolUse hook: {reason}. Tool: {}",
+                    pre_tool_use_payload.tool_name.name()
+                )
+            };
+            return Err(FunctionCallError::RespondToModel(message));
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
@@ -403,6 +415,7 @@ impl ToolRegistry {
             guard.as_ref().and_then(|result| {
                 handler.post_tool_use_payload(
                     &result.call_id,
+                    &tool_name,
                     &result.payload,
                     result.result.as_ref(),
                 )
@@ -418,7 +431,7 @@ impl ToolRegistry {
                     invocation.call_id.clone(),
                     post_tool_use_payload.tool_name.name().to_string(),
                     post_tool_use_payload.tool_name.matcher_aliases().to_vec(),
-                    post_tool_use_payload.command,
+                    post_tool_use_payload.tool_input,
                     post_tool_use_payload.tool_response,
                 )
                 .await,

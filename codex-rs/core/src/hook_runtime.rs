@@ -139,7 +139,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     tool_use_id: String,
     tool_name: String,
     matcher_aliases: Vec<String>,
-    command: String,
+    tool_input: Value,
 ) -> Option<String> {
     let request = PreToolUseRequest {
         session_id: sess.conversation_id,
@@ -151,7 +151,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         tool_name,
         matcher_aliases,
         tool_use_id,
-        command,
+        tool_input,
     };
     let preview_runs = sess.hooks().preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -185,8 +185,7 @@ pub(crate) async fn run_permission_request_hooks(
         tool_name: payload.tool_name.name().to_string(),
         matcher_aliases: payload.tool_name.matcher_aliases().to_vec(),
         run_id_suffix: run_id_suffix.to_string(),
-        command: payload.command,
-        description: payload.description,
+        tool_input: payload.tool_input,
     };
     let preview_runs = sess.hooks().preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
@@ -202,7 +201,7 @@ pub(crate) async fn run_permission_request_hooks(
 
 /// Runs matching `PostToolUse` hooks after a tool has produced a successful output.
 ///
-/// The `tool_name`, matcher aliases, `command`, and `tool_response` values are
+/// The `tool_name`, matcher aliases, `tool_input`, and `tool_response` values are
 /// already adapted by the tool handler into the stable hook contract. Passing
 /// raw internal tool data here would leak implementation details into user hook
 /// matchers and hook logs.
@@ -212,7 +211,7 @@ pub(crate) async fn run_post_tool_use_hooks(
     tool_use_id: String,
     tool_name: String,
     matcher_aliases: Vec<String>,
-    command: String,
+    tool_input: Value,
     tool_response: Value,
 ) -> PostToolUseOutcome {
     let request = PostToolUseRequest {
@@ -225,7 +224,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         tool_name,
         matcher_aliases,
         tool_use_id,
-        command,
+        tool_input,
         tool_response,
     };
     let preview_runs = sess.hooks().preview_post_tool_use(&request);

@@ -219,7 +219,8 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         }),
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
-            command: "printf exec command".to_string(),
+            tool_input: serde_json::json!({ "command": "printf exec command" }),
+            display_command: Some("printf exec command".to_string()),
         })
     );
 }
@@ -266,12 +267,13 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
             "echo three".to_string(),
         ]),
     };
+    let tool_name = codex_tools::ToolName::plain("exec_command");
 
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-43", &tool_name, &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             tool_name: HookToolName::bash(),
-            command: "echo three".to_string(),
+            tool_input: serde_json::json!({ "command": "echo three" }),
             tool_response: serde_json::json!("three"),
         })
     );
@@ -297,9 +299,10 @@ fn exec_command_post_tool_use_payload_skips_interactive_exec() {
             "echo three".to_string(),
         ]),
     };
+    let tool_name = codex_tools::ToolName::plain("exec_command");
 
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-44", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-44", &tool_name, &payload, &output),
         None
     );
 }
@@ -324,9 +327,10 @@ fn exec_command_post_tool_use_payload_skips_running_sessions() {
             "echo three".to_string(),
         ]),
     };
+    let tool_name = codex_tools::ToolName::plain("exec_command");
 
     assert_eq!(
-        UnifiedExecHandler.post_tool_use_payload("call-45", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-45", &tool_name, &payload, &output),
         None
     );
 }

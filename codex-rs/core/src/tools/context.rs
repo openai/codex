@@ -162,6 +162,10 @@ impl ToolOutput for McpToolOutput {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
         })
     }
+
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        serde_json::to_value(&self.result).ok()
+    }
 }
 
 impl McpToolOutput {

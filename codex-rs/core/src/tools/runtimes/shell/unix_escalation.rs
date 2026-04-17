@@ -404,8 +404,10 @@ impl CoreShellActionProvider {
                 // 1) Run PermissionRequest hooks
                 let permission_request = PermissionRequestPayload {
                     tool_name: HookToolName::bash(),
-                    command: codex_shell_command::parse_command::shlex_join(&command),
-                    description: None,
+                    tool_input: serde_json::json!({
+                        "command": codex_shell_command::parse_command::shlex_join(&command),
+                        "description": null,
+                    }),
                 };
                 let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
                 match run_permission_request_hooks(
