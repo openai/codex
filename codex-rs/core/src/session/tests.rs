@@ -3103,8 +3103,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.js_repl_node_path.clone(),
         ),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default()),
-        environment: Some(Arc::clone(&environment)),
-        allows_agent_environment_access: true,
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3138,7 +3136,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         model_info,
         &models_manager,
         /*network*/ None,
-        /*allows_agent_environment_access*/ true,
         Some(environment),
         "turn_id".to_string(),
         Arc::clone(&js_repl),
@@ -4192,8 +4189,6 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             config.js_repl_node_path.clone(),
         ),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default()),
-        environment: Some(Arc::clone(&environment)),
-        allows_agent_environment_access: true,
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -4227,7 +4222,6 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         model_info,
         &models_manager,
         /*network*/ None,
-        /*allows_agent_environment_access*/ true,
         Some(environment),
         "turn_id".to_string(),
         Arc::clone(&js_repl),

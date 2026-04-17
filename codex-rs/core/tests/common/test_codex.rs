@@ -204,6 +204,7 @@ pub struct TestCodexBuilder {
     workspace_setups: Vec<Box<WorkspaceSetup>>,
     home: Option<Arc<TempDir>>,
     user_shell_override: Option<Shell>,
+    exec_server_url: Option<String>,
 }
 
 impl TestCodexBuilder {
@@ -252,6 +253,11 @@ impl TestCodexBuilder {
 
     pub fn with_user_shell(mut self, user_shell: Shell) -> Self {
         self.user_shell_override = Some(user_shell);
+        self
+    }
+
+    pub fn with_exec_server_url(mut self, exec_server_url: impl Into<String>) -> Self {
+        self.exec_server_url = Some(exec_server_url.into());
         self
     }
 
@@ -350,9 +356,13 @@ impl TestCodexBuilder {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
+        let exec_server_url = self
+            .exec_server_url
+            .clone()
+            .or_else(|| test_env.exec_server_url().map(str::to_owned));
         let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs {
-                exec_server_url: test_env.exec_server_url().map(str::to_owned),
+                exec_server_url,
                 local_runtime_paths: None,
             },
         ));
@@ -888,6 +898,7 @@ pub fn test_codex() -> TestCodexBuilder {
         workspace_setups: vec![],
         home: None,
         user_shell_override: None,
+        exec_server_url: None,
     }
 }
 
