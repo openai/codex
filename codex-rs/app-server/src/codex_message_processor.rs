@@ -3235,6 +3235,7 @@ impl CodexMessageProcessor {
             .send_server_notification(ServerNotification::ThreadGoalUpdated(
                 ThreadGoalUpdatedNotification {
                     thread_id: thread_id.to_string(),
+                    turn_id: None,
                     goal,
                 },
             ))
@@ -8851,6 +8852,7 @@ async fn handle_thread_listener_command(
                 .send_server_notification(ServerNotification::ThreadGoalUpdated(
                     ThreadGoalUpdatedNotification {
                         thread_id: conversation_id.to_string(),
+                        turn_id: None,
                         goal,
                     },
                 ))
@@ -9016,6 +9018,7 @@ async fn handle_pending_thread_resume_request(
                         .send_server_notification(ServerNotification::ThreadGoalUpdated(
                             ThreadGoalUpdatedNotification {
                                 thread_id: conversation_id.to_string(),
+                                turn_id: None,
                                 goal: api_thread_goal_from_state(goal),
                             },
                         ))
