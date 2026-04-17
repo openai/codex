@@ -2418,6 +2418,7 @@ impl App {
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,
+                permission_profile,
                 model,
                 effort,
                 summary,
@@ -2501,6 +2502,7 @@ impl App {
                             approvals_reviewer
                                 .unwrap_or(self.chat_widget.config_ref().approvals_reviewer),
                             sandbox_policy.clone(),
+                            permission_profile.clone(),
                             model.to_string(),
                             effort,
                             *summary,
@@ -3232,6 +3234,7 @@ impl App {
                 approval_policy: self.config.permissions.approval_policy.value(),
                 approvals_reviewer: self.config.approvals_reviewer,
                 sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
+                permission_profile: self.config.permissions.permission_profile(),
                 cwd: thread.cwd.clone(),
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: self.chat_widget.current_reasoning_effort(),
@@ -8442,6 +8445,7 @@ mod tests {
                 approval_policy: Some(guardian_approvals.approval_policy),
                 approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
                 sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+                permission_profile: None,
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -8533,6 +8537,7 @@ mod tests {
                 approval_policy: None,
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: None,
+                permission_profile: None,
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -8612,6 +8617,7 @@ mod tests {
                 approval_policy: Some(guardian_approvals.approval_policy),
                 approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
                 sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+                permission_profile: None,
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -8669,6 +8675,7 @@ mod tests {
                 approval_policy: None,
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: None,
+                permission_profile: None,
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -8728,6 +8735,7 @@ mod tests {
                 approval_policy: Some(guardian_approvals.approval_policy),
                 approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
                 sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
+                permission_profile: None,
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -8815,6 +8823,7 @@ guardian_approval = true
                 approval_policy: None,
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: None,
+                permission_profile: None,
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -9002,6 +9011,11 @@ guardian_approval = true
                 ThreadSessionState {
                     approval_policy: AskForApproval::OnRequest,
                     sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    permission_profile:
+                        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                            &SandboxPolicy::new_workspace_write_policy(),
+                            std::path::Path::new("/tmp/agent"),
+                        ),
                     rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                     ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
                 },
@@ -9059,6 +9073,7 @@ guardian_approval = true
             file_system: Some(AdditionalFileSystemPermissions {
                 read: Some(vec![test_absolute_path("/tmp/read-only")]),
                 write: Some(vec![test_absolute_path("/tmp/write")]),
+                entries: None,
             }),
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
@@ -9091,10 +9106,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![test_absolute_path("/tmp/read-only")]),
+                    Some(vec![test_absolute_path("/tmp/write")]),
+                )),
             })
         );
         assert_eq!(
@@ -9166,6 +9181,7 @@ guardian_approval = true
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![test_absolute_path("/tmp/read-only")]),
                         write: Some(vec![test_absolute_path("/tmp/write")]),
+                        entries: None,
                     }),
                 },
             },
@@ -9187,10 +9203,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![test_absolute_path("/tmp/read-only")]),
+                    Some(vec![test_absolute_path("/tmp/write")]),
+                )),
             }
         );
     }
@@ -9215,6 +9231,11 @@ guardian_approval = true
                 ThreadSessionState {
                     approval_policy: AskForApproval::OnRequest,
                     sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    permission_profile:
+                        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                            &SandboxPolicy::new_workspace_write_policy(),
+                            std::path::Path::new("/tmp/agent"),
+                        ),
                     rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
                     ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
                 },
@@ -9268,6 +9289,11 @@ guardian_approval = true
         let primary_session = ThreadSessionState {
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/main"),
+                ),
             ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
         };
 
@@ -9292,6 +9318,7 @@ guardian_approval = true
             timezone: None,
             approval_policy: primary_session.approval_policy,
             sandbox_policy: primary_session.sandbox_policy.clone(),
+            permission_profile: None,
             network: None,
             file_system_sandbox_policy: None,
             model: "gpt-agent".to_string(),
@@ -9379,6 +9406,11 @@ guardian_approval = true
         let primary_session = ThreadSessionState {
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_workspace_write_policy(),
+                    std::path::Path::new("/tmp/main"),
+                ),
             ..test_thread_session(main_thread_id, test_path_buf("/tmp/main"))
         };
 
@@ -9624,6 +9656,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/tmp/project").abs(),
                 reasoning_effort: Some(ReasoningEffortConfig::High),
                 history_log_id: 0,
@@ -9854,6 +9887,11 @@ guardian_approval = true
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile:
+                codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy(
+                    &SandboxPolicy::new_read_only_policy(),
+                    cwd.as_path(),
+                ),
             cwd: cwd.abs(),
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
@@ -10789,6 +10827,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: next_cwd.clone().abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -10905,6 +10944,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -10968,6 +11008,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -11061,6 +11102,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/home/user/project").abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
@@ -11441,6 +11483,7 @@ guardian_approval = true
             approval_policy: AskForApproval::Never,
             approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: None,
             cwd: test_path_buf("/home/user/project").abs(),
             reasoning_effort: None,
             history_log_id: 0,
@@ -11557,6 +11600,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                permission_profile: None,
                 cwd: test_path_buf("/tmp/project").abs(),
                 reasoning_effort: None,
                 history_log_id: 0,
