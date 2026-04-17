@@ -153,7 +153,7 @@ impl App {
 
     async fn handle_server_notification_event(
         &mut self,
-        _app_server_client: &AppServerSession,
+        app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
         match &notification {
@@ -186,6 +186,16 @@ impl App {
                         Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
                     ),
                 );
+                return;
+            }
+            ServerNotification::ExternalAgentConfigImportCompleted(_) => {
+                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+                self.refresh_plugin_state_after_change(
+                    app_server_client,
+                    cwd.as_path(),
+                    "external agent config import",
+                )
+                .await;
                 return;
             }
             _ => {}
@@ -413,6 +423,7 @@ fn server_notification_thread_target(
         | ServerNotification::AccountUpdated(_)
         | ServerNotification::AccountRateLimitsUpdated(_)
         | ServerNotification::AppListUpdated(_)
+        | ServerNotification::ExternalAgentConfigImportCompleted(_)
         | ServerNotification::DeprecationNotice(_)
         | ServerNotification::ConfigWarning(_)
         | ServerNotification::FuzzyFileSearchSessionUpdated(_)

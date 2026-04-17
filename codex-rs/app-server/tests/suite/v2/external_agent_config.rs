@@ -15,7 +15,8 @@ use tokio::time::timeout;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::test]
-async fn external_agent_config_import_returns_completed_for_local_plugins() -> Result<()> {
+async fn external_agent_config_import_sends_completion_notification_for_local_plugins() -> Result<()>
+{
     let codex_home = TempDir::new()?;
     let marketplace_root = codex_home.path().join("marketplace");
     let plugin_root = marketplace_root.join("plugins").join("sample");
@@ -91,6 +92,13 @@ async fn external_agent_config_import_returns_completed_for_local_plugins() -> R
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
 
     assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+    )
+    .await??;
+    assert_eq!(notification.method, "externalAgentConfig/import/completed");
+
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
             cwds: None,
@@ -120,7 +128,7 @@ async fn external_agent_config_import_returns_completed_for_local_plugins() -> R
 }
 
 #[tokio::test]
-async fn external_agent_config_import_sends_completion_notification_for_pending_plugins()
+async fn external_agent_config_import_sends_completion_notification_after_pending_plugins_finish()
 -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::create_dir_all(codex_home.path().join(".claude"))?;
@@ -169,6 +177,12 @@ async fn external_agent_config_import_sends_completion_notification_for_pending_
     .await??;
     let response: ExternalAgentConfigImportResponse = to_response(response)?;
     assert_eq!(response, ExternalAgentConfigImportResponse {});
+    let notification = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_notification_message("externalAgentConfig/import/completed"),
+    )
+    .await??;
+    assert_eq!(notification.method, "externalAgentConfig/import/completed");
 
     Ok(())
 }

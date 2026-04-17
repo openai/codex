@@ -39,6 +39,7 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
+use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::ExternalAgentConfigImportResponse;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItemType;
@@ -1155,10 +1156,18 @@ impl MessageProcessor {
                 }
 
                 if pending_plugin_imports.is_empty() {
+                    self.outgoing
+                        .send_server_notification(
+                            ServerNotification::ExternalAgentConfigImportCompleted(
+                                ExternalAgentConfigImportCompletedNotification {},
+                            ),
+                        )
+                        .await;
                     return;
                 }
 
                 let external_agent_config_api = self.external_agent_config_api.clone();
+                let outgoing = Arc::clone(&self.outgoing);
                 let thread_manager = Arc::clone(&self.thread_manager);
                 tokio::spawn(async move {
                     for pending_plugin_import in pending_plugin_imports {
@@ -1177,6 +1186,13 @@ impl MessageProcessor {
                     }
                     thread_manager.plugins_manager().clear_cache();
                     thread_manager.skills_manager().clear_cache();
+                    outgoing
+                        .send_server_notification(
+                            ServerNotification::ExternalAgentConfigImportCompleted(
+                                ExternalAgentConfigImportCompletedNotification {},
+                            ),
+                        )
+                        .await;
                 });
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,

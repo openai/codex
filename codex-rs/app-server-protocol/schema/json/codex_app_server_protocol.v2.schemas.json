@@ -4093,6 +4093,11 @@
       "title": "ExternalAgentConfigDetectResponse",
       "type": "object"
     },
+    "ExternalAgentConfigImportCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ExternalAgentConfigImportCompletedNotification",
+      "type": "object"
+    },
     "ExternalAgentConfigImportParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -9501,6 +9506,26 @@
             "params"
           ],
           "title": "App/list/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "externalAgentConfig/import/completed"
+              ],
+              "title": "ExternalAgentConfig/import/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ExternalAgentConfigImportCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "ExternalAgentConfig/import/completedNotification",
           "type": "object"
         },
         {
