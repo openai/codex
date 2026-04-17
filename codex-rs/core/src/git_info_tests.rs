@@ -6,6 +6,7 @@ use codex_git_utils::get_has_changes;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::recent_commits;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_utils_path::normalize_for_path_comparison;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::skip_if_sandbox;
@@ -475,14 +476,27 @@ async fn resolve_root_git_project_for_trust_detects_worktree_and_returns_main_ro
         .output()
         .expect("git worktree add");
 
-    let expected = Some(std::fs::canonicalize(&repo_path).unwrap().abs());
+    let expected = normalize_for_path_comparison(&repo_path).unwrap();
     let wt_root = wt_root.abs();
     let got = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &wt_root).await;
-    assert_eq!(got, expected);
+    assert_eq!(
+        got.as_ref()
+            .map(normalize_for_path_comparison)
+            .transpose()
+            .unwrap(),
+        Some(expected.clone())
+    );
     let nested = wt_root.join("nested/sub");
     std::fs::create_dir_all(nested.as_path()).unwrap();
     let got_nested = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested).await;
-    assert_eq!(got_nested, expected);
+    assert_eq!(
+        got_nested
+            .as_ref()
+            .map(normalize_for_path_comparison)
+            .transpose()
+            .unwrap(),
+        Some(expected)
+    );
 }
 
 #[tokio::test]
