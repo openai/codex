@@ -481,6 +481,16 @@ mod tests {
     }
 
     #[test]
+    fn canary_sets_process_env_in_test() {
+        unsafe { std::env::set_var("CODEX_REVIEWER_GUIDANCE_CANARY", "1") };
+        assert_eq!(
+            std::env::var("CODEX_REVIEWER_GUIDANCE_CANARY").as_deref(),
+            Ok("1")
+        );
+        unsafe { std::env::remove_var("CODEX_REVIEWER_GUIDANCE_CANARY") };
+    }
+
+    #[test]
     fn janitor_skips_dirs_without_lock_file() -> std::io::Result<()> {
         let root = tempfile::tempdir()?;
         let dir = root.path().join("no-lock");
