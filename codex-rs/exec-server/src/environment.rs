@@ -15,8 +15,21 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
 /// Owns the execution/filesystem environments available to a session.
 ///
-/// The manager keeps the session's default environment selection stable while
-/// separately tracking whether model-facing tools may access environments.
+/// `EnvironmentManager` is the session-scoped registry for concrete
+/// environments. It always creates a local environment under [`LOCAL_ENVIRONMENT_ID`].
+/// When `CODEX_EXEC_SERVER_URL` is set to a websocket URL, it also creates a
+/// remote environment under [`REMOTE_ENVIRONMENT_ID`] and makes that the default
+/// environment. Otherwise the local environment is the default.
+///
+/// Setting `CODEX_EXEC_SERVER_URL=none` does not remove the local environment:
+/// Codex internals may still use `local_environment()` or `default_environment()`.
+/// Instead it disables agent/tool access as reported by
+/// `allows_agent_environment_access()`, so shell/filesystem tools can be hidden
+/// from the model while internal local filesystem access still works.
+///
+/// Remote environments hold a lazy exec-server client handle. The websocket is
+/// not opened when the manager or environment is constructed; it connects on the
+/// first remote exec or filesystem operation.
 #[derive(Debug)]
 pub struct EnvironmentManager {
     default_environment: String,
