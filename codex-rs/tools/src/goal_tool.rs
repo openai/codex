@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
 pub const SET_GOAL_TOOL_NAME: &str = "set_goal";
+pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
 
 pub fn create_get_goal_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
@@ -25,6 +26,42 @@ pub fn create_get_goal_tool() -> ToolSpec {
 }
 
 pub fn create_set_goal_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "objective".to_string(),
+            JsonSchema::string(Some(
+                "Required. The concrete objective to start pursuing. This starts a fresh active goal, replacing any previous goal and resetting usage accounting unless the existing non-terminal goal already has the same objective."
+                    .to_string(),
+            )),
+        ),
+        (
+            "token_budget".to_string(),
+            JsonSchema::integer(Some(
+                "Optional positive token budget for the new active goal.".to_string(),
+            )),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: SET_GOAL_TOOL_NAME.to_string(),
+        description: r#"Start a new long-running goal for this thread.
+This tool always creates or replaces an active goal. It resets time/token usage accounting to zero when the objective is new.
+If the existing non-terminal goal already has the same objective, the call is treated as an idempotent update that keeps the goal active and preserves usage accounting.
+Use update_goal, not set_goal, to pause, resume, mark achieved, mark budget-limited, or change the token budget for an existing goal.
+The system owns usage fields, so this tool cannot set them directly."#
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            /*required*/ Some(vec!["objective".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })
+}
+
+pub fn create_update_goal_tool() -> ToolSpec {
     let nullable_integer = |description: &str| {
         JsonSchema::any_of(
             vec![
@@ -35,13 +72,6 @@ pub fn create_set_goal_tool() -> ToolSpec {
         )
     };
     let properties = BTreeMap::from([
-        (
-            "objective".to_string(),
-            JsonSchema::string(Some(
-                "Optional. If provided, this starts a new goal, replacing any existing goal and resetting usage accounting. Omit this for pause, resume, achieved-goal, or budget-only updates so existing usage is preserved."
-                    .to_string(),
-            )),
-        ),
         (
             "status".to_string(),
             JsonSchema::string_enum(
@@ -59,15 +89,14 @@ pub fn create_set_goal_tool() -> ToolSpec {
         ),
         (
             "token_budget".to_string(),
-            nullable_integer("Optional positive token budget. Use null to clear the existing token budget when updating a goal."),
+            nullable_integer("Optional positive token budget. Use null to clear the existing token budget while preserving usage accounting."),
         ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: SET_GOAL_TOOL_NAME.to_string(),
-        description: r#"Set the current long-running goal for this thread.
-Providing `objective` creates or replaces the goal and resets time/token usage accounting to zero.
-Omitting `objective` updates the existing goal while preserving usage accounting; use this for pause, resume, achieved-goal, or budget-only changes.
+        name: UPDATE_GOAL_TOOL_NAME.to_string(),
+        description: r#"Update the existing long-running goal while preserving time/token usage accounting.
+Use this tool to pause, resume, mark the goal achieved, mark it budget-limited, or change the token budget.
 Set status to `complete` only when the objective has actually been achieved and no required work remains.
 Set status to `budgetLimited` when a budgeted goal has not been achieved and cannot be achieved within the remaining budget, or when the budget is exhausted or nearly exhausted.
 Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.

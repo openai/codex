@@ -20,8 +20,6 @@ use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::goals::GoalAccountingBoundary;
@@ -29,6 +27,8 @@ use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::RunningTaskHandle;

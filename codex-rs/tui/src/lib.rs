@@ -518,6 +518,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 cursor: cursor.clone(),
                 limit: Some(100),
                 sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+                sort_direction: None,
                 model_providers: None,
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
@@ -613,6 +614,7 @@ fn latest_session_lookup_params(
         cursor: None,
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+        sort_direction: None,
         model_providers: if is_remote {
             None
         } else {

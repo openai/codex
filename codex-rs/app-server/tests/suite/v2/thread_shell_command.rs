@@ -135,7 +135,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.turns.len(), 1);
     let ThreadItem::CommandExecution {
         source,
@@ -305,7 +305,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread, .. } = to_response::<ThreadReadResponse>(read_resp)?;
     assert_eq!(thread.turns.len(), 1);
     assert!(
         thread.turns[0].items.iter().any(|item| {

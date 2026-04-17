@@ -6,8 +6,8 @@
 //! continuation prompt that wakes an idle thread while a goal remains active.
 
 use crate::StateDbHandle;
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use anyhow::Context;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
@@ -220,48 +220,85 @@ impl Session {
             anyhow::bail!("goal_mode feature is disabled");
         }
 
-        validate_goal_budget(request.token_budget.flatten())?;
+        let SetGoalRequest {
+            objective,
+            status,
+            token_budget,
+        } = request;
+        validate_goal_budget(token_budget.flatten())?;
         let state_db = self.require_state_db_for_thread_goals().await?;
-        let replacing_goal = request.objective.is_some();
-        if !replacing_goal {
+        let objective = objective.map(|objective| objective.trim().to_string());
+        if let Some(objective) = objective.as_deref()
+            && objective.is_empty()
+        {
+            anyhow::bail!("goal objective must not be empty");
+        }
+
+        let objective_provided = objective.is_some();
+        if !objective_provided {
             self.account_thread_goal_wall_clock_usage(
                 &state_db,
                 codex_state::ThreadGoalAccountingMode::ActiveOnly,
             )
             .await?;
         }
-        let previous_status = if !replacing_goal {
-            state_db
+        let mut replacing_goal = objective_provided;
+        let previous_status;
+        let goal = if let Some(objective) = objective.as_deref() {
+            self.account_thread_goal_wall_clock_usage(
+                &state_db,
+                codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            )
+            .await?;
+            let existing_goal = state_db.get_thread_goal(self.conversation_id).await?;
+            previous_status = existing_goal.as_ref().map(|goal| goal.status);
+            let same_nonterminal_goal = existing_goal.as_ref().is_some_and(|goal| {
+                goal.objective == objective
+                    && goal.status != codex_state::ThreadGoalStatus::Complete
+            });
+            if same_nonterminal_goal {
+                replacing_goal = false;
+                state_db
+                    .update_thread_goal(
+                        self.conversation_id,
+                        codex_state::ThreadGoalUpdate {
+                            status: status
+                                .map(state_goal_status_from_protocol)
+                                .or(Some(codex_state::ThreadGoalStatus::Active)),
+                            token_budget,
+                        },
+                    )
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "cannot update goal for thread {}: no goal exists",
+                            self.conversation_id
+                        )
+                    })?
+            } else {
+                state_db
+                    .replace_thread_goal(
+                        self.conversation_id,
+                        objective,
+                        status
+                            .map(state_goal_status_from_protocol)
+                            .unwrap_or(codex_state::ThreadGoalStatus::Active),
+                        token_budget.flatten(),
+                    )
+                    .await?
+            }
+        } else {
+            previous_status = state_db
                 .get_thread_goal(self.conversation_id)
                 .await?
-                .map(|goal| goal.status)
-        } else {
-            None
-        };
-        let goal = if let Some(objective) = request.objective {
-            let objective = objective.trim();
-            if objective.is_empty() {
-                anyhow::bail!("goal objective must not be empty");
-            }
-            state_db
-                .replace_thread_goal(
-                    self.conversation_id,
-                    objective,
-                    request
-                        .status
-                        .map(state_goal_status_from_protocol)
-                        .unwrap_or(codex_state::ThreadGoalStatus::Active),
-                    request.token_budget.flatten(),
-                )
-                .await?
-        } else {
-            let status = request.status.map(state_goal_status_from_protocol);
+                .map(|goal| goal.status);
+            let status = status.map(state_goal_status_from_protocol);
             state_db
                 .update_thread_goal(
                     self.conversation_id,
                     codex_state::ThreadGoalUpdate {
                         status,
-                        token_budget: request.token_budget,
+                        token_budget,
                     },
                 )
                 .await?
@@ -863,9 +900,9 @@ Before deciding that the goal is achieved, perform a completion audit against th
 - Identify any missing, incomplete, weakly verified, or uncovered requirement.
 - Treat uncertainty as not achieved; do more verification or continue the work.
 
-Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when the audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call set_goal with status "complete" and omit objective so usage accounting is preserved. Report the final elapsed time, and if the achieved goal has a token budget, report the final consumed token budget to the user after set_goal succeeds.
+Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when the audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call update_goal with status "complete" so usage accounting is preserved. Report the final elapsed time, and if the achieved goal has a token budget, report the final consumed token budget to the user after update_goal succeeds.
 
-If the goal has not been achieved and cannot be achieved within the remaining budget, or the remaining budget is too small for productive continuation, call set_goal with status "budgetLimited" and omit objective. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If the goal is otherwise blocked and cannot continue productively for a non-budget reason, call set_goal with status "paused" and omit objective."#,
+If the goal has not been achieved and cannot be achieved within the remaining budget, or the remaining budget is too small for productive continuation, call update_goal with status "budgetLimited". Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If the goal is otherwise blocked and cannot continue productively for a non-budget reason, call update_goal with status "paused"."#,
         objective = goal.objective,
         tokens_used = goal.tokens_used,
         time_used_seconds = goal.time_used_seconds,

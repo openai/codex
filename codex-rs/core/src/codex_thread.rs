@@ -1,8 +1,8 @@
 use crate::agent::AgentStatus;
-use crate::codex::Codex;
-use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
+use crate::session::Codex;
+use crate::session::SteerInputError;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;

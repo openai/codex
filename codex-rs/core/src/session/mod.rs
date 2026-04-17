@@ -169,30 +169,27 @@ mod handlers;
 mod mcp;
 mod review;
 mod rollout_reconstruction;
-mod session;
-mod turn;
-mod turn_context;
+#[allow(clippy::module_inception)]
+pub(crate) mod session;
+pub(crate) mod turn;
+pub(crate) mod turn_context;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
 use self::review::spawn_review_thread;
-pub(crate) use self::session::AppServerClientMetadata;
-pub(crate) use self::session::Session;
-pub(crate) use self::session::SessionConfiguration;
-pub(crate) use self::session::SessionSettingsUpdate;
+use self::session::AppServerClientMetadata;
+use self::session::Session;
+use self::session::SessionConfiguration;
+use self::session::SessionSettingsUpdate;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
-pub(crate) use self::turn::build_prompt;
-pub(crate) use self::turn::built_tools;
 #[cfg(test)]
 use self::turn::collect_explicit_app_ids_from_skill_items;
 #[cfg(test)]
 use self::turn::filter_connectors_for_input;
-pub(crate) use self::turn::get_last_assistant_message_from_turn;
 use self::turn::realtime_text_for_event;
-pub(crate) use self::turn::run_turn;
-pub(crate) use self::turn_context::TurnContext;
-pub(crate) use self::turn_context::TurnSkillsContext;
+use self::turn_context::TurnContext;
+use self::turn_context::TurnSkillsContext;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
@@ -3161,15 +3158,6 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
 }
 
 use crate::memories::prompts::build_memory_tool_developer_instructions;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_dynamic_tools_and_rx;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_rx;
-#[cfg(test)]
-pub(crate) use tests::make_session_configuration_for_tests;
 
 #[cfg(test)]
-#[path = "codex_tests.rs"]
-mod tests;
+pub(crate) mod tests;

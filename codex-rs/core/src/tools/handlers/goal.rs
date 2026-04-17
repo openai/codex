@@ -1,14 +1,14 @@
 //! Built-in model tool handlers for persisted thread goals.
 //!
-//! The public tool contract mirrors the app-server `thread/goal/set` overload:
-//! providing an objective replaces the goal and resets accounting, while
-//! omitting the objective updates the existing goal and preserves usage.
+//! The public tool contract intentionally splits goal creation from updates:
+//! `set_goal` starts an active objective, while `update_goal` changes status
+//! or budget on the existing goal and preserves usage accounting.
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::goals::GoalAccountingBoundary;
 use crate::goals::SetGoalRequest;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -19,6 +19,7 @@ use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_tools::GET_GOAL_TOOL_NAME;
 use codex_tools::SET_GOAL_TOOL_NAME;
+use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -30,7 +31,13 @@ pub struct GoalHandler;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct SetGoalArgs {
-    objective: Option<String>,
+    objective: String,
+    token_budget: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct UpdateGoalArgs {
     status: Option<ToolGoalStatus>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     token_budget: Option<Option<i64>>,
@@ -110,6 +117,7 @@ impl ToolHandler for GoalHandler {
         match tool_name.name.as_str() {
             GET_GOAL_TOOL_NAME => handle_get_goal(session.as_ref()).await,
             SET_GOAL_TOOL_NAME => handle_set_goal(&session, turn.as_ref(), &arguments).await,
+            UPDATE_GOAL_TOOL_NAME => handle_update_goal(&session, turn.as_ref(), &arguments).await,
             other => Err(FunctionCallError::Fatal(format!(
                 "goal handler received unsupported tool: {other}"
             ))),
@@ -131,20 +139,37 @@ async fn handle_set_goal(
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: SetGoalArgs = parse_arguments(arguments)?;
-    let is_update = args.objective.is_none();
+    let goal = session
+        .set_thread_goal(
+            turn_context,
+            SetGoalRequest {
+                objective: Some(args.objective),
+                status: Some(ThreadGoalStatus::Active),
+                token_budget: args.token_budget.map(Some),
+            },
+        )
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+    goal_response(Some(goal))
+}
+
+async fn handle_update_goal(
+    session: &Arc<Session>,
+    turn_context: &TurnContext,
+    arguments: &str,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let args: UpdateGoalArgs = parse_arguments(arguments)?;
     let status = args.status;
     let request = SetGoalRequest {
-        objective: args.objective,
+        objective: None,
         status: status.map(Into::into),
         token_budget: args.token_budget,
     };
 
-    if is_update
-        && matches!(
-            status,
-            Some(ToolGoalStatus::Paused | ToolGoalStatus::BudgetLimited | ToolGoalStatus::Complete)
-        )
-    {
+    if matches!(
+        status,
+        Some(ToolGoalStatus::Paused | ToolGoalStatus::BudgetLimited | ToolGoalStatus::Complete)
+    ) {
         if status == Some(ToolGoalStatus::Paused) {
             let goal = session
                 .get_thread_goal()

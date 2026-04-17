@@ -442,6 +442,7 @@ async fn test_goal_mode_adds_goal_tools() {
             "update_plan",
             "get_goal",
             "set_goal",
+            "update_goal",
             "request_user_input",
             "apply_patch",
             "web_search",

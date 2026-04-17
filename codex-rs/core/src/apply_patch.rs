@@ -1,7 +1,7 @@
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
+use crate::session::turn_context::TurnContext;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
