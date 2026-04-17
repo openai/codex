@@ -178,10 +178,10 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; the
   done
 
   if [[ $has_host_platform_override -eq 0 ]]; then
-    # Keep Windows Bazel targets on `windows-gnullvm` for cfg coverage, but opt
-    # specific jobs into an MSVC exec platform when they need helper binaries
-    # like Rust test wrappers and V8 generators to resolve a compatible host
-    # toolchain.
+    # Use the MSVC Windows platform for jobs that need helper binaries like
+    # Rust test wrappers and V8 generators to resolve a compatible toolchain.
+    # Callers that need a different Windows target platform should pass an
+    # explicit `--platforms=...` flag.
     post_config_bazel_args+=("--host_platform=//:local_windows_msvc")
   fi
 fi

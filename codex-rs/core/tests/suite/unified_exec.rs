@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_config::Constrained;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -2349,6 +2348,8 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
+    use codex_config::Constrained;
+
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
