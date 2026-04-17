@@ -106,6 +106,7 @@ fn server_opts(
         codex_home.path().to_path_buf(),
         "client-id".to_string(),
         /*forced_chatgpt_workspace_id*/ None,
+        /*forced_chatgpt_org_id*/ None,
         cli_auth_credentials_store_mode,
     );
     opts.issuer = issuer;
@@ -258,6 +259,7 @@ async fn device_code_login_integration_persists_without_api_key_on_exchange_fail
         codex_home.path().to_path_buf(),
         "client-id".to_string(),
         /*forced_chatgpt_workspace_id*/ None,
+        /*forced_chatgpt_org_id*/ None,
         AuthCredentialsStoreMode::File,
     );
     opts.issuer = issuer;
@@ -308,6 +310,7 @@ async fn device_code_login_integration_handles_error_payload() -> anyhow::Result
         codex_home.path().to_path_buf(),
         "client-id".to_string(),
         /*forced_chatgpt_workspace_id*/ None,
+        /*forced_chatgpt_org_id*/ None,
         AuthCredentialsStoreMode::File,
     );
     opts.issuer = issuer;

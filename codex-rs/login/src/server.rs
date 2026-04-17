@@ -65,6 +65,7 @@ pub struct ServerOptions {
     pub open_browser: bool,
     pub force_state: Option<String>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
+    pub forced_chatgpt_org_id: Option<Vec<String>>,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
 
@@ -74,6 +75,7 @@ impl ServerOptions {
         codex_home: PathBuf,
         client_id: String,
         forced_chatgpt_workspace_id: Option<Vec<String>>,
+        forced_chatgpt_org_id: Option<Vec<String>>,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
         Self {
@@ -84,6 +86,7 @@ impl ServerOptions {
             open_browser: true,
             force_state: None,
             forced_chatgpt_workspace_id,
+            forced_chatgpt_org_id,
             cli_auth_credentials_store_mode,
         }
     }
@@ -154,6 +157,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         &pkce,
         &state,
         opts.forced_chatgpt_workspace_id.as_deref(),
+        opts.forced_chatgpt_org_id.as_deref(),
     );
 
     if opts.open_browser {
@@ -332,8 +336,9 @@ async fn process_request(
                 .await
             {
                 Ok(tokens) => {
-                    if let Err(message) = ensure_workspace_allowed(
+                    if let Err(message) = ensure_chatgpt_restrictions_allowed(
                         opts.forced_chatgpt_workspace_id.as_deref(),
+                        opts.forced_chatgpt_org_id.as_deref(),
                         &tokens.id_token,
                     ) {
                         eprintln!("Workspace restriction error: {message}");
@@ -472,6 +477,7 @@ fn build_authorize_url(
     pkce: &PkceCodes,
     state: &str,
     forced_chatgpt_workspace_ids: Option<&[String]>,
+    forced_chatgpt_org_ids: Option<&[String]>,
 ) -> String {
     let mut query = vec![
         ("response_type".to_string(), "code".to_string()),
@@ -498,6 +504,14 @@ fn build_authorize_url(
                 .iter()
                 .cloned()
                 .map(|workspace_id| ("allowed_workspace_id".to_string(), workspace_id)),
+        );
+    }
+    if let Some(org_ids) = forced_chatgpt_org_ids {
+        query.extend(
+            org_ids
+                .iter()
+                .cloned()
+                .map(|org_id| ("allowed_org_id".to_string(), org_id)),
         );
     }
     let qs = query
@@ -873,28 +887,40 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-/// Validates the ID token against an optional workspace restriction.
-pub(crate) fn ensure_workspace_allowed(
-    expected: Option<&[String]>,
+/// Validates the ID token against optional workspace or organization restrictions.
+pub(crate) fn ensure_chatgpt_restrictions_allowed(
+    expected_workspace_ids: Option<&[String]>,
+    expected_org_ids: Option<&[String]>,
     id_token: &str,
 ) -> Result<(), String> {
-    let Some(expected) = expected else {
-        return Ok(());
-    };
-
     let claims = jwt_auth_claims(id_token);
-    let Some(actual) = claims.get("chatgpt_account_id").and_then(JsonValue::as_str) else {
-        return Err("Login is restricted to a specific workspace, but the token did not include an chatgpt_account_id claim.".to_string());
-    };
+    if let Some(expected) = expected_workspace_ids {
+        let Some(actual) = claims.get("chatgpt_account_id").and_then(JsonValue::as_str) else {
+            return Err("Login is restricted to a specific workspace, but the token did not include an chatgpt_account_id claim.".to_string());
+        };
 
-    if expected.iter().any(|workspace_id| workspace_id == actual) {
-        Ok(())
-    } else {
-        Err(format!(
-            "Login is restricted to workspace id(s) {}.",
-            expected.join(", ")
-        ))
+        if !expected.iter().any(|workspace_id| workspace_id == actual) {
+            return Err(format!(
+                "Login is restricted to workspace id(s) {}.",
+                expected.join(", ")
+            ));
+        }
     }
+
+    if let Some(expected) = expected_org_ids {
+        let Some(actual) = claims.get("organization_id").and_then(JsonValue::as_str) else {
+            return Err("Login is restricted to a specific org, but the token did not include an organization_id claim.".to_string());
+        };
+
+        if !expected.iter().any(|org_id| org_id == actual) {
+            return Err(format!(
+                "Login is restricted to org id(s) {}.",
+                expected.join(", ")
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Builds a terminal callback response for login failures.

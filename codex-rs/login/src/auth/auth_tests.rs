@@ -27,6 +27,7 @@ async fn refresh_without_id_token() {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
             chatgpt_account_id: None,
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -97,6 +98,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
             chatgpt_account_id: None,
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -130,6 +132,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                     chatgpt_plan_type: Some(InternalPlanType::Known(InternalKnownPlan::Pro)),
                     chatgpt_user_id: Some("user-12345".to_string()),
                     chatgpt_account_id: None,
+                    organization_id: None,
                     chatgpt_account_is_fedramp: false,
                     raw_jwt: fake_jwt,
                 },
@@ -194,6 +197,7 @@ fn chatgpt_auth_persists_agent_identity_for_workspace() {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
             chatgpt_account_id: Some("account-123".to_string()),
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -264,6 +268,7 @@ fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
             chatgpt_account_id: Some("org_mine".to_string()),
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -587,6 +592,7 @@ struct AuthFileParams {
     openai_api_key: Option<String>,
     chatgpt_plan_type: Option<String>,
     chatgpt_account_id: Option<String>,
+    organization_id: Option<String>,
 }
 
 fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
@@ -629,6 +635,9 @@ fn fake_jwt_for_auth_file_params(params: &AuthFileParams) -> std::io::Result<Str
     if let Some(chatgpt_account_id) = params.chatgpt_account_id.as_ref() {
         auth_payload["chatgpt_account_id"] = serde_json::Value::String(chatgpt_account_id.clone());
     }
+    if let Some(organization_id) = params.organization_id.as_ref() {
+        auth_payload["organization_id"] = serde_json::Value::String(organization_id.clone());
+    }
 
     let payload = serde_json::json!({
         "email": "user@example.com",
@@ -646,12 +655,14 @@ async fn build_config(
     codex_home: &Path,
     forced_login_method: Option<ForcedLoginMethod>,
     forced_chatgpt_workspace_id: Option<Vec<String>>,
+    forced_chatgpt_org_id: Option<Vec<String>>,
 ) -> AuthConfig {
     AuthConfig {
         codex_home: codex_home.to_path_buf(),
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         forced_login_method,
         forced_chatgpt_workspace_id,
+        forced_chatgpt_org_id,
     }
 }
 
@@ -696,6 +707,7 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
         codex_home.path(),
         Some(ForcedLoginMethod::Chatgpt),
         /*forced_chatgpt_workspace_id*/ None,
+        /*forced_chatgpt_org_id*/ None,
     )
     .await;
 
@@ -717,6 +729,7 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
             chatgpt_account_id: Some("org_another_org".to_string()),
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -726,6 +739,7 @@ async fn enforce_login_restrictions_logs_out_for_workspace_mismatch() {
         codex_home.path(),
         /*forced_login_method*/ None,
         Some(vec!["org_mine".to_string()]),
+        /*forced_chatgpt_org_id*/ None,
     )
     .await;
 
@@ -747,6 +761,7 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
             chatgpt_account_id: Some("org_mine".to_string()),
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -756,10 +771,73 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
         codex_home.path(),
         /*forced_login_method*/ None,
         Some(vec!["org_mine".to_string()]),
+        /*forced_chatgpt_org_id*/ None,
     )
     .await;
 
     super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+    assert!(
+        codex_home.path().join("auth.json").exists(),
+        "auth.json should remain when restrictions pass"
+    );
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_logs_out_for_org_mismatch() {
+    let codex_home = tempdir().unwrap();
+    let _jwt = write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("workspace_mine".to_string()),
+            organization_id: Some("org_other".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        /*forced_chatgpt_workspace_id*/ None,
+        Some(vec!["org_mine".to_string()]),
+    )
+    .await;
+
+    let err =
+        super::enforce_login_restrictions(&config).expect_err("expected org mismatch to error");
+    assert!(err.to_string().contains("org(s) org_mine"));
+    assert!(
+        !codex_home.path().join("auth.json").exists(),
+        "auth.json should be removed on mismatch"
+    );
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_allows_matching_org() {
+    let codex_home = tempdir().unwrap();
+    let _jwt = write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("workspace_mine".to_string()),
+            organization_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        /*forced_chatgpt_workspace_id*/ None,
+        Some(vec!["org_mine".to_string()]),
+    )
+    .await;
+
+    super::enforce_login_restrictions(&config).expect("matching org should succeed");
     assert!(
         codex_home.path().join("auth.json").exists(),
         "auth.json should remain when restrictions pass"
@@ -775,6 +853,7 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
             chatgpt_account_id: Some("org_mine".to_string()),
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -784,6 +863,7 @@ async fn enforce_login_restrictions_allows_any_matching_workspace_in_list() {
         codex_home.path(),
         /*forced_login_method*/ None,
         Some(vec!["org_other".to_string(), "org_mine".to_string()]),
+        /*forced_chatgpt_org_id*/ None,
     )
     .await;
 
@@ -802,6 +882,7 @@ async fn enforce_login_restrictions_allows_api_key_if_login_method_not_set_but_f
         codex_home.path(),
         /*forced_login_method*/ None,
         Some(vec!["org_mine".to_string()]),
+        /*forced_chatgpt_org_id*/ None,
     )
     .await;
 
@@ -822,6 +903,7 @@ async fn enforce_login_restrictions_blocks_env_api_key_when_chatgpt_required() {
         codex_home.path(),
         Some(ForcedLoginMethod::Chatgpt),
         /*forced_chatgpt_workspace_id*/ None,
+        /*forced_chatgpt_org_id*/ None,
     )
     .await;
 
@@ -841,6 +923,7 @@ fn plan_type_maps_known_plan() {
             openai_api_key: None,
             chatgpt_plan_type: Some("pro".to_string()),
             chatgpt_account_id: None,
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -865,6 +948,7 @@ fn plan_type_maps_self_serve_business_usage_based_plan() {
             openai_api_key: None,
             chatgpt_plan_type: Some("self_serve_business_usage_based".to_string()),
             chatgpt_account_id: None,
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -892,6 +976,7 @@ fn plan_type_maps_enterprise_cbp_usage_based_plan() {
             openai_api_key: None,
             chatgpt_plan_type: Some("enterprise_cbp_usage_based".to_string()),
             chatgpt_account_id: None,
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -919,6 +1004,7 @@ fn plan_type_maps_unknown_to_unknown() {
             openai_api_key: None,
             chatgpt_plan_type: Some("mystery-tier".to_string()),
             chatgpt_account_id: None,
+            organization_id: None,
         },
         codex_home.path(),
     )
@@ -943,6 +1029,7 @@ fn missing_plan_type_maps_to_unknown() {
             openai_api_key: None,
             chatgpt_plan_type: None,
             chatgpt_account_id: None,
+            organization_id: None,
         },
         codex_home.path(),
     )

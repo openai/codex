@@ -17,6 +17,7 @@ pub(crate) fn load_local_chatgpt_auth(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: Option<&[String]>,
+    forced_chatgpt_org_id: Option<&[String]>,
 ) -> Result<LocalChatgptAuth, String> {
     let auth = load_auth_dot_json(codex_home, auth_credentials_store_mode)
         .map_err(|err| format!("failed to load local auth: {err}"))?
@@ -39,6 +40,18 @@ pub(crate) fn load_local_chatgpt_auth(
         return Err(format!(
             "local ChatGPT auth must use one of workspace(s) {expected_workspaces:?}, but found {chatgpt_account_id:?}",
         ));
+    }
+    if let Some(expected_orgs) = forced_chatgpt_org_id {
+        let organization_id = tokens
+            .id_token
+            .organization_id
+            .as_ref()
+            .ok_or_else(|| "local ChatGPT auth is missing organization id".to_string())?;
+        if !expected_orgs.contains(organization_id) {
+            return Err(format!(
+                "local ChatGPT auth must use one of org(s) {expected_orgs:?}, but found {organization_id:?}",
+            ));
+        }
     }
 
     let chatgpt_plan_type = tokens
@@ -123,6 +136,7 @@ mod tests {
             codex_home.path(),
             AuthCredentialsStoreMode::File,
             Some(&["workspace-1".to_string()]),
+            /*forced_chatgpt_org_id*/ None,
         )
         .expect("chatgpt auth should load");
 
@@ -139,6 +153,7 @@ mod tests {
             codex_home.path(),
             AuthCredentialsStoreMode::File,
             /*forced_chatgpt_workspace_id*/ None,
+            /*forced_chatgpt_org_id*/ None,
         )
         .expect_err("missing auth should fail");
 
@@ -165,6 +180,7 @@ mod tests {
             codex_home.path(),
             AuthCredentialsStoreMode::File,
             /*forced_chatgpt_workspace_id*/ None,
+            /*forced_chatgpt_org_id*/ None,
         )
         .expect_err("api key auth should fail");
 
@@ -187,6 +203,7 @@ mod tests {
             codex_home.path(),
             AuthCredentialsStoreMode::File,
             Some(&["workspace-1".to_string(), "workspace-2".to_string()]),
+            /*forced_chatgpt_org_id*/ None,
         )
         .expect("managed auth should win");
 
@@ -203,6 +220,7 @@ mod tests {
             codex_home.path(),
             AuthCredentialsStoreMode::File,
             Some(&["workspace-1".to_string()]),
+            /*forced_chatgpt_org_id*/ None,
         )
         .expect("chatgpt auth should load");
 

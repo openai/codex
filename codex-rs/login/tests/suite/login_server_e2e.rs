@@ -118,6 +118,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         open_browser: false,
         force_state: Some(state),
         forced_chatgpt_workspace_id: Some(vec![chatgpt_account_id.to_string()]),
+        forced_chatgpt_org_id: None,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -179,6 +180,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         open_browser: false,
         force_state: Some(state),
         forced_chatgpt_workspace_id: None,
+        forced_chatgpt_org_id: None,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -221,6 +223,7 @@ async fn login_server_includes_all_forced_workspace_query_params() -> Result<()>
             "org-required-a".to_string(),
             "org-required-b".to_string(),
         ]),
+        forced_chatgpt_org_id: None,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -257,6 +260,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         open_browser: false,
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: Some(vec!["org-required".to_string()]),
+        forced_chatgpt_org_id: None,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -314,6 +318,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
         open_browser: false,
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: None,
+        forced_chatgpt_org_id: None,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -381,6 +386,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         open_browser: false,
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: None,
+        forced_chatgpt_org_id: None,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -459,6 +465,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         open_browser: false,
         force_state: Some("cancel_state".to_string()),
         forced_chatgpt_workspace_id: None,
+        forced_chatgpt_org_id: None,
     };
 
     let first_server = run_login_server(first_opts)?;
@@ -479,6 +486,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         open_browser: false,
         force_state: Some("cancel_state_2".to_string()),
         forced_chatgpt_workspace_id: None,
+        forced_chatgpt_org_id: None,
     };
 
     let second_server = run_login_server(second_opts)?;

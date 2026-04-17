@@ -547,6 +547,7 @@ pub struct AuthConfig {
     pub auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
+    pub forced_chatgpt_org_id: Option<Vec<String>>,
 }
 
 pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
@@ -616,6 +617,45 @@ pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
                 ),
                 None => format!(
                     "Login is restricted to workspace(s) {expected_workspaces}, but current credentials lack a workspace identifier. Logging out."
+                ),
+            };
+            return logout_with_message(
+                &config.codex_home,
+                message,
+                config.auth_credentials_store_mode,
+            );
+        }
+    }
+
+    if let Some(expected_org_ids) = config.forced_chatgpt_org_id.as_deref() {
+        if !auth.is_chatgpt_auth() {
+            return Ok(());
+        }
+
+        let token_data = match auth.get_token_data() {
+            Ok(data) => data,
+            Err(err) => {
+                return logout_with_message(
+                    &config.codex_home,
+                    format!(
+                        "Failed to load ChatGPT credentials while enforcing org restrictions: {err}. Logging out."
+                    ),
+                    config.auth_credentials_store_mode,
+                );
+            }
+        };
+
+        let organization_id = token_data.id_token.organization_id.as_deref();
+        if !organization_id
+            .is_some_and(|actual| expected_org_ids.iter().any(|expected| expected == actual))
+        {
+            let expected_orgs = expected_org_ids.join(", ");
+            let message = match organization_id {
+                Some(actual) => format!(
+                    "Login is restricted to org(s) {expected_orgs}, but current credentials belong to {actual}. Logging out."
+                ),
+                None => format!(
+                    "Login is restricted to org(s) {expected_orgs}, but current credentials lack an organization identifier. Logging out."
                 ),
             };
             return logout_with_message(
@@ -1167,6 +1207,7 @@ pub struct AuthManager {
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<Vec<String>>>,
+    forced_chatgpt_org_id: RwLock<Option<Vec<String>>>,
     refresh_lock: AsyncMutex<()>,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     auth_state_tx: watch::Sender<()>,
@@ -1187,6 +1228,9 @@ pub trait AuthManagerConfig {
 
     /// Returns the workspace IDs that ChatGPT auth should be restricted to, if any.
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>>;
+
+    /// Returns the org IDs that ChatGPT auth should be restricted to, if any.
+    fn forced_chatgpt_org_id(&self) -> Option<Vec<String>>;
 }
 
 impl Debug for AuthManager {
@@ -1203,6 +1247,7 @@ impl Debug for AuthManager {
                 "forced_chatgpt_workspace_id",
                 &self.forced_chatgpt_workspace_id,
             )
+            .field("forced_chatgpt_org_id", &self.forced_chatgpt_org_id)
             .field("has_external_auth", &self.has_external_auth())
             .finish_non_exhaustive()
     }
@@ -1235,6 +1280,7 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            forced_chatgpt_org_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
             auth_state_tx,
@@ -1255,6 +1301,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            forced_chatgpt_org_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
             auth_state_tx,
@@ -1274,6 +1321,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            forced_chatgpt_org_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(None),
             auth_state_tx,
@@ -1291,6 +1339,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            forced_chatgpt_org_id: RwLock::new(None),
             refresh_lock: AsyncMutex::new(()),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
@@ -1472,6 +1521,22 @@ impl AuthManager {
             .and_then(|guard| guard.clone())
     }
 
+    pub fn set_forced_chatgpt_org_id(&self, org_id: Option<Vec<String>>) {
+        if let Ok(mut guard) = self.forced_chatgpt_org_id.write()
+            && *guard != org_id
+        {
+            *guard = org_id;
+            self.auth_state_tx.send_replace(());
+        }
+    }
+
+    pub fn forced_chatgpt_org_id(&self) -> Option<Vec<String>> {
+        self.forced_chatgpt_org_id
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
     pub fn subscribe_auth_state(&self) -> watch::Receiver<()> {
         self.auth_state_tx.subscribe()
     }
@@ -1514,6 +1579,7 @@ impl AuthManager {
             config.cli_auth_credentials_store_mode(),
         );
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
+        auth_manager.set_forced_chatgpt_org_id(config.forced_chatgpt_org_id());
         auth_manager
     }
 
