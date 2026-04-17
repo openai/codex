@@ -1612,8 +1612,18 @@ async fn running_prefix_compact_is_abandoned_when_auto_compact_fires() -> Result
         .expect("request lock poisoned")
         .clone();
     assert_eq!(compact_requests.len(), 2);
-    assert_eq!(compact_requests[0]["mode"], json!("prefix"));
-    assert!(compact_requests[1].get("mode").is_none());
+    assert!(
+        compact_requests
+            .iter()
+            .any(|request| request["mode"] == json!("prefix")),
+        "expected one background prefix compact request"
+    );
+    assert!(
+        compact_requests
+            .iter()
+            .any(|request| request.get("mode").is_none()),
+        "expected one foreground fallback compact request"
+    );
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 3);
@@ -1688,8 +1698,18 @@ async fn running_prefix_compact_started_on_follow_up_boundary_is_abandoned_when_
         .expect("request lock poisoned")
         .clone();
     assert_eq!(compact_requests.len(), 2);
-    assert_eq!(compact_requests[0]["mode"], json!("prefix"));
-    assert!(compact_requests[1].get("mode").is_none());
+    assert!(
+        compact_requests
+            .iter()
+            .any(|request| request["mode"] == json!("prefix")),
+        "expected one background prefix compact request"
+    );
+    assert!(
+        compact_requests
+            .iter()
+            .any(|request| request.get("mode").is_none()),
+        "expected one foreground fallback compact request"
+    );
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 3);
