@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::Semaphore;
 use tokio::sync::watch;
 
 use codex_app_server_protocol::AuthMode;
@@ -1178,7 +1178,7 @@ pub struct AuthManager {
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
-    refresh_lock: AsyncMutex<()>,
+    refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
     auth_state_tx: watch::Sender<()>,
 }
@@ -1246,7 +1246,7 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Semaphore::new(1),
             external_auth: RwLock::new(None),
             auth_state_tx,
         }
@@ -1266,7 +1266,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Semaphore::new(1),
             external_auth: RwLock::new(None),
             auth_state_tx,
         })
@@ -1285,7 +1285,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Semaphore::new(1),
             external_auth: RwLock::new(None),
             auth_state_tx,
         })
@@ -1302,7 +1302,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Semaphore::new(1),
             external_auth: RwLock::new(Some(
                 Arc::new(BearerTokenRefresher::new(config)) as Arc<dyn ExternalAuth>
             )),
@@ -1572,7 +1572,12 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
+        let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
+            RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
+            ))
+        })?;
         let auth_before_reload = self.auth_cached();
         if auth_before_reload
             .as_ref()
@@ -1604,7 +1609,12 @@ impl AuthManager {
     /// observe refreshed token. If the token refresh fails, returns the error to
     /// the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
-        let _refresh_guard = self.refresh_lock.lock().await;
+        let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
+            RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                RefreshTokenFailedReason::Other,
+                REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
+            ))
+        })?;
         self.refresh_token_from_authority_impl().await
     }
 
