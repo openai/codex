@@ -317,14 +317,16 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
                     format!("SetRemoteAddresses failed: {err:?}"),
                 ))
             })?;
-        let remote_ports = spec.remote_ports.unwrap_or("*");
-        rule.SetRemotePorts(&BSTR::from(remote_ports))
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetRemotePorts failed: {err:?}"),
-                ))
-            })?;
+        if firewall_protocol_supports_remote_ports(spec.protocol) {
+            let remote_ports = spec.remote_ports.unwrap_or("*");
+            rule.SetRemotePorts(&BSTR::from(remote_ports))
+                .map_err(|err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                        format!("SetRemotePorts failed: {err:?}"),
+                    ))
+                })?;
+        }
         rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_spec))
             .map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
@@ -352,6 +354,10 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+fn firewall_protocol_supports_remote_ports(protocol: i32) -> bool {
+    protocol == NET_FW_IP_PROTOCOL_TCP.0 || protocol == NET_FW_IP_PROTOCOL_UDP.0
 }
 
 fn blocked_loopback_tcp_remote_ports(proxy_ports: &[u16]) -> Option<String> {
@@ -399,4 +405,29 @@ fn log_line(log: &mut File, msg: &str) -> Result<()> {
     let ts = chrono::Utc::now().to_rfc3339();
     writeln!(log, "[{ts}] {msg}")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::firewall_protocol_supports_remote_ports;
+    use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_ANY;
+    use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_TCP;
+    use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_UDP;
+
+    #[test]
+    fn remote_ports_are_not_applied_to_any_protocol_rules() {
+        assert!(!firewall_protocol_supports_remote_ports(
+            NET_FW_IP_PROTOCOL_ANY.0
+        ));
+    }
+
+    #[test]
+    fn remote_ports_are_applied_to_tcp_and_udp_rules() {
+        assert!(firewall_protocol_supports_remote_ports(
+            NET_FW_IP_PROTOCOL_TCP.0
+        ));
+        assert!(firewall_protocol_supports_remote_ports(
+            NET_FW_IP_PROTOCOL_UDP.0
+        ));
+    }
 }
