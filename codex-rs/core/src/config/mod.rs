@@ -48,6 +48,7 @@ use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorPathRef;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
@@ -56,7 +57,7 @@ use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
-use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_git_utils::resolve_root_git_project_for_trust_at;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -1561,7 +1562,8 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect();
-        let repo_root = resolve_root_git_project_for_trust(fs, &resolved_cwd).await;
+        let resolved_cwd_path = ExecutorPathRef::new(fs, resolved_cwd.clone());
+        let repo_root = resolve_root_git_project_for_trust_at(&resolved_cwd_path).await;
         let active_project = cfg
             .get_active_project(
                 resolved_cwd.as_path(),
@@ -2252,16 +2254,14 @@ impl Config {
         let Some(path) = path else {
             return Ok(None);
         };
+        let path = ExecutorPathRef::new(fs, path.clone());
 
-        let contents = fs
-            .read_file_text(path, /*sandbox*/ None)
-            .await
-            .map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!("failed to read {context} {}: {e}", path.display()),
-                )
-            })?;
+        let contents = path.unsandboxed().read_file_text().await.map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("failed to read {context} {}: {e}", path.display()),
+            )
+        })?;
 
         let s = contents.trim().to_string();
         if s.is_empty() {

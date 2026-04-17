@@ -221,8 +221,9 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::config_loader::ConfigLoadFileSystems;
 use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::load_config_layers_state;
+use codex_core::config_loader::load_config_layers_state_with_file_systems;
 use codex_core::config_loader::project_trust_key;
 use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecExpiration;
@@ -6154,8 +6155,12 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
-            let config_layer_stack = match load_config_layers_state(
-                LOCAL_FS.as_ref(),
+            let project_fs = fs.as_deref().unwrap_or_else(|| LOCAL_FS.as_ref());
+            let config_layer_stack = match load_config_layers_state_with_file_systems(
+                ConfigLoadFileSystems {
+                    local: LOCAL_FS.as_ref(),
+                    project: project_fs,
+                },
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
                 &cli_overrides,

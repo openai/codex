@@ -6,6 +6,7 @@ use super::macos::load_managed_admin_config_layer;
 use codex_config::config_error_from_toml;
 use codex_config::io_error_from_config_error;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::ExecutorPathRef;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::Path;
@@ -53,16 +54,19 @@ pub(super) async fn load_config_layers_internal(
         ..
     } = overrides;
 
-    let managed_config_path = AbsolutePathBuf::from_absolute_path(
-        managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
-    )?;
+    let managed_config_path = ExecutorPathRef::new(
+        fs,
+        AbsolutePathBuf::from_absolute_path(
+            managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
+        )?,
+    );
 
     let managed_config =
-        read_config_from_path(fs, &managed_config_path, /*log_missing_as_info*/ false)
+        read_config_from_path(&managed_config_path, /*log_missing_as_info*/ false)
             .await?
             .map(|managed_config| MangedConfigFromFile {
                 managed_config,
-                file: managed_config_path.clone(),
+                file: managed_config_path.path().clone(),
             });
 
     #[cfg(target_os = "macos")]
@@ -90,16 +94,16 @@ fn map_managed_admin_layer(layer: ManagedAdminConfigLayer) -> ManagedConfigFromM
 }
 
 pub(super) async fn read_config_from_path(
-    fs: &dyn ExecutorFileSystem,
-    path: &AbsolutePathBuf,
+    path: &ExecutorPathRef<'_>,
     log_missing_as_info: bool,
 ) -> io::Result<Option<TomlValue>> {
-    match fs.read_file_text(path, /*sandbox*/ None).await {
+    match path.unsandboxed().read_file_text().await {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(value) => Ok(Some(value)),
             Err(err) => {
-                tracing::error!("Failed to parse {}: {err}", path.as_path().display());
-                let config_error = config_error_from_toml(path.as_path(), &contents, err.clone());
+                tracing::error!("Failed to parse {}: {err}", path.display());
+                let config_error =
+                    config_error_from_toml(path.path().as_path(), &contents, err.clone());
                 Err(io_error_from_config_error(
                     io::ErrorKind::InvalidData,
                     config_error,
@@ -109,14 +113,14 @@ pub(super) async fn read_config_from_path(
         },
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             if log_missing_as_info {
-                tracing::info!("{} not found, using defaults", path.as_path().display());
+                tracing::info!("{} not found, using defaults", path.display());
             } else {
-                tracing::debug!("{} not found", path.as_path().display());
+                tracing::debug!("{} not found", path.display());
             }
             Ok(None)
         }
         Err(err) => {
-            tracing::error!("Failed to read {}: {err}", path.as_path().display());
+            tracing::error!("Failed to read {}: {err}", path.display());
             Err(err)
         }
     }
