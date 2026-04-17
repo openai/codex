@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::atomic::AtomicBool;
 
 /// Context for an initialized model agent
 ///
@@ -25,7 +24,6 @@ pub(crate) struct Session {
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) js_repl: Arc<JsReplHandle>,
-    pub(super) thread_start_skill_reported: AtomicBool,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -708,7 +706,6 @@ impl Session {
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
-            thread_start_skill_reported: AtomicBool::new(false),
             next_internal_sub_id: AtomicU64::new(0),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {

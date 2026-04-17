@@ -6246,7 +6246,7 @@ impl ChatWidget {
                 if let Some(details) = details
                     && !summary.eq(details)
                 {
-                    message.push(' ');
+                    message.push_str(": ");
                     message.push_str(details);
                 }
                 self.on_warning(message)

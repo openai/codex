@@ -7,11 +7,9 @@ use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_output_truncation::approx_token_count;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
-pub const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
-pub const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
+const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
+const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillMetadataBudget {
@@ -46,7 +44,6 @@ pub enum SkillRenderSideEffects<'a> {
     None,
     ThreadStart {
         session_telemetry: &'a SessionTelemetry,
-        reported: &'a AtomicBool,
     },
 }
 
@@ -137,14 +134,7 @@ fn record_skill_render_side_effects(
 ) -> bool {
     match side_effects {
         SkillRenderSideEffects::None => false,
-        SkillRenderSideEffects::ThreadStart {
-            session_telemetry,
-            reported,
-        } => {
-            if reported.swap(true, Ordering::Relaxed) {
-                return false;
-            }
-
+        SkillRenderSideEffects::ThreadStart { session_telemetry } => {
             session_telemetry.histogram(
                 THREAD_SKILLS_ENABLED_TOTAL_METRIC,
                 i64::try_from(total_count).unwrap_or(i64::MAX),

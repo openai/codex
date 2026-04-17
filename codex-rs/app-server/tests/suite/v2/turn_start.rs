@@ -11,6 +11,7 @@ use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
+use app_test_support::write_models_cache;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ByteRange;
@@ -45,6 +46,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_app_server_protocol::WarningNotification;
 use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_features::FEATURES;
@@ -234,6 +236,95 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+    write_models_cache(codex_home.path())?;
+    let cache_path = codex_home.path().join("models_cache.json");
+    let mut cache: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache_path)?)?;
+    let models = cache["models"]
+        .as_array_mut()
+        .expect("models_cache.json models should be an array");
+    let entry = models
+        .first_mut()
+        .expect("models cache should not be empty");
+    let model = entry["slug"]
+        .as_str()
+        .expect("model slug should be present")
+        .to_string();
+    entry["context_window"] = serde_json::Value::from(100);
+    std::fs::write(&cache_path, serde_json::to_string_pretty(&cache)?)?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("model = \"mock-model\"", &format!("model = \"{model}\"")),
+    )?;
+    write_test_skill(codex_home.path(), "alpha-skill")?;
+    write_test_skill(codex_home.path(), "beta-skill")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("warning"),
+    )
+    .await??;
+    let params = notification.params.expect("warning params");
+    let warning: WarningNotification =
+        serde_json::from_value(params).expect("deserialize warning notification");
+    assert_eq!(warning.thread_id.as_deref(), Some(thread.id.as_str()));
+    assert_eq!(
+        warning.message,
+        "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it."
+    );
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -2900,5 +2991,14 @@ request_max_retries = 0
 stream_max_retries = 0
 "#
         ),
+    )
+}
+
+fn write_test_skill(codex_home: &Path, name: &str) -> std::io::Result<()> {
+    let skill_dir = codex_home.join("skills").join(name);
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: {name} description\n---\n\n# Body\n"),
     )
 }

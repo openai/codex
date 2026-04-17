@@ -113,6 +113,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use opentelemetry::trace::TraceContextExt;
@@ -3264,7 +3265,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
-        thread_start_skill_reported: AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -4228,7 +4228,6 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
-        thread_start_skill_reported: AtomicBool::new(false),
         next_internal_sub_id: AtomicU64::new(0),
     });
 
@@ -4655,7 +4654,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: PathBuf::from("/tmp/admin-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
         },
         SkillMetadata {
@@ -4665,7 +4664,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: PathBuf::from("/tmp/repo-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
         },
     ];
@@ -4692,8 +4691,6 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
 #[test]
 fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
     let session_telemetry = test_session_telemetry_without_metadata();
-    let reported = AtomicBool::new(false);
-
     let rendered = render_skills_section(
         &[SkillMetadata {
             name: "repo-skill".to_string(),
@@ -4702,13 +4699,12 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: PathBuf::from("/tmp/repo-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
         }],
         SkillMetadataBudget::Characters(1),
         SkillRenderSideEffects::ThreadStart {
             session_telemetry: &session_telemetry,
-            reported: &reported,
         },
     )
     .expect("skills should render");
@@ -4726,7 +4722,7 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
 }
 
 #[tokio::test]
-async fn build_initial_context_emits_thread_start_skill_warning_once() {
+async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_builds() {
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     let mut turn_context = Arc::into_inner(turn_context).expect("sole turn context owner");
     let mut outcome = SkillLoadOutcome::default();
@@ -4738,7 +4734,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_once() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: PathBuf::from("/tmp/admin-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
         },
         SkillMetadata {
@@ -4748,7 +4744,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_once() {
             interface: None,
             dependencies: None,
             policy: None,
-            path_to_skills_md: PathBuf::from("/tmp/repo-skill/SKILL.md").abs(),
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
         },
     ];
@@ -4767,12 +4763,15 @@ async fn build_initial_context_emits_thread_start_skill_warning_once() {
     ));
 
     let _ = session.build_initial_context(&turn_context).await;
-    assert!(
-        timeout(Duration::from_millis(100), rx.recv())
-            .await
-            .is_err(),
-        "skill warning should only be emitted once"
-    );
+    let warning_event = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("warning event should arrive on repeated build")
+        .expect("warning event should be readable");
+    assert!(matches!(
+        warning_event.msg,
+        EventMsg::Warning(WarningEvent { message })
+            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+    ));
 }
 
 #[tokio::test]

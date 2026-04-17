@@ -272,6 +272,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::Warning(warning_event) => {
             if let ApiVersion::V2 = api_version {
                 let notification = WarningNotification {
+                    thread_id: Some(conversation_id.to_string()),
                     message: warning_event.message,
                 };
                 if let Some(analytics_events_client) = analytics_events_client.as_ref() {

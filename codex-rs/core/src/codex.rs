@@ -2427,7 +2427,6 @@ impl Session {
             default_skill_metadata_budget(turn_context.model_info.context_window),
             SkillRenderSideEffects::ThreadStart {
                 session_telemetry: &self.services.session_telemetry,
-                reported: &self.thread_start_skill_reported,
             },
         );
         if let Some(rendered_skills) = rendered_skills {

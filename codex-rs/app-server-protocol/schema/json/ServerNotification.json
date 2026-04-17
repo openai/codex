@@ -3971,6 +3971,13 @@
         "message": {
           "description": "Concise warning message for the user.",
           "type": "string"
+        },
+        "threadId": {
+          "description": "Optional thread target when the warning applies to a specific thread.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

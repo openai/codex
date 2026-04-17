@@ -190,6 +190,7 @@ async fn live_app_server_warning_notification_renders_message() {
 
     chat.handle_server_notification(
         ServerNotification::Warning(WarningNotification {
+            thread_id: None,
             message: "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it.".to_string(),
         }),
         /*replay_kind*/ None,
