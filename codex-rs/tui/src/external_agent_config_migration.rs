@@ -824,7 +824,7 @@ mod tests {
             /*error*/ None,
         );
 
-        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 20);
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 21);
         assert_snapshot!("external_agent_config_migration_prompt", rendered);
     }
 
@@ -838,6 +838,7 @@ mod tests {
             /*error*/ None,
         );
 
+        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -862,12 +863,13 @@ mod tests {
         screen.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert!(screen.is_done());
         assert_eq!(
             screen.outcome(),
-            ExternalAgentConfigMigrationOutcome::Proceed(vec![items[1].clone()])
+            ExternalAgentConfigMigrationOutcome::Proceed(vec![items[1].clone(), items[2].clone(),])
         );
     }
 
@@ -901,6 +903,7 @@ mod tests {
         screen.move_down();
         screen.move_down();
         screen.move_down();
+        screen.move_down();
         screen.confirm_selection();
 
         assert_eq!(
@@ -920,6 +923,7 @@ mod tests {
         );
 
         screen.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
