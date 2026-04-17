@@ -87,6 +87,13 @@ impl CodexThread {
             .await;
     }
 
+    pub async fn account_active_goal_progress(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .account_active_thread_goal_progress()
+            .await
+    }
+
     #[doc(hidden)]
     pub async fn ensure_rollout_materialized(&self) {
         self.codex.session.ensure_rollout_materialized().await;

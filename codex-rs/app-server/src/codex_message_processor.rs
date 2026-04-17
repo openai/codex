@@ -2986,8 +2986,9 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let rollout_path = match self.thread_manager.get_thread(thread_id).await {
-            Ok(thread) => match thread.rollout_path() {
+        let running_thread = self.thread_manager.get_thread(thread_id).await.ok();
+        let rollout_path = match running_thread.as_ref() {
+            Some(thread) => match thread.rollout_path() {
                 Some(path) => path,
                 None => {
                     self.send_invalid_request_error(
@@ -2998,7 +2999,7 @@ impl CodexMessageProcessor {
                     return;
                 }
             },
-            Err(_) => {
+            None => {
                 match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
                     .await
                 {
@@ -3033,6 +3034,11 @@ impl CodexMessageProcessor {
         )
         .await;
         let status = params.status.map(thread_goal_status_to_state);
+        if let Some(thread) = running_thread.as_ref()
+            && let Err(err) = thread.account_active_goal_progress().await
+        {
+            warn!("failed to account active goal progress before app-server goal update: {err}");
+        }
 
         let goal = if let Some(objective) = params.objective {
             let objective = objective.trim();
@@ -3063,6 +3069,26 @@ impl CodexMessageProcessor {
                 self.send_invalid_request_error(request_id, message).await;
                 return;
             }
+            let existing_goal = match state_db.get_thread_goal(thread_id).await {
+                Ok(goal) => goal,
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!("failed to read existing goal for thread {thread_id}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            let status = if status == Some(codex_state::ThreadGoalStatus::Paused)
+                && existing_goal
+                    .as_ref()
+                    .is_some_and(|goal| goal.status == codex_state::ThreadGoalStatus::BudgetLimited)
+            {
+                None
+            } else {
+                status
+            };
             state_db
                 .update_thread_goal(
                     thread_id,
