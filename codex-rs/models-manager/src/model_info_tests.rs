@@ -43,3 +43,35 @@ fn reasoning_summaries_override_false_is_noop_when_model_is_false() {
 
     assert_eq!(updated, model);
 }
+
+#[test]
+fn model_context_window_override_clamps_to_max_context_window() {
+    let mut model = model_info_from_slug("unknown-model");
+    model.max_context_window = Some(1_000_000);
+    let config = ModelsManagerConfig {
+        model_context_window: Some(2_000_000),
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model.clone(), &config);
+    let mut expected = model;
+    expected.context_window = Some(1_000_000);
+
+    assert_eq!(updated, expected);
+}
+
+#[test]
+fn model_context_window_override_keeps_values_under_max_context_window() {
+    let mut model = model_info_from_slug("unknown-model");
+    model.max_context_window = Some(1_000_000);
+    let config = ModelsManagerConfig {
+        model_context_window: Some(500_000),
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model.clone(), &config);
+    let mut expected = model;
+    expected.context_window = Some(500_000);
+
+    assert_eq!(updated, expected);
+}
