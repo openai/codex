@@ -609,9 +609,9 @@ mod tests {
                 balance: Some(Some("9.99".to_string())),
                 ..Default::default()
             }))),
-            rate_limit_reached_type: Some(Some(Box::new(BackendRateLimitReachedType {
+            rate_limit_reached_type: Some(Some(BackendRateLimitReachedType {
                 kind: RateLimitReachedKind::WorkspaceMemberCreditsDepleted,
-            }))),
+            })),
         };
 
         let snapshots = Client::rate_limit_snapshots_from_payload(payload);
@@ -746,7 +746,7 @@ mod tests {
                 rate_limit: None,
                 credits: None,
                 additional_rate_limits: None,
-                rate_limit_reached_type: Some(Some(Box::new(BackendRateLimitReachedType { kind }))),
+                rate_limit_reached_type: Some(Some(BackendRateLimitReachedType { kind })),
             };
 
             let snapshots = Client::rate_limit_snapshots_from_payload(payload);

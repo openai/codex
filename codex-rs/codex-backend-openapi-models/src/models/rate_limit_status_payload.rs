@@ -43,7 +43,7 @@ pub struct RateLimitStatusPayload {
         with = "::serde_with::rust::double_option",
         skip_serializing_if = "Option::is_none"
     )]
-    pub rate_limit_reached_type: Option<Option<Box<RateLimitReachedType>>>,
+    pub rate_limit_reached_type: Option<Option<RateLimitReachedType>>,
 }
 
 impl RateLimitStatusPayload {
