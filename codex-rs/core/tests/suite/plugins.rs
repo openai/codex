@@ -413,8 +413,14 @@ async fn explicit_plugin_mentions_wait_for_plugin_apps_to_finish_starting() -> R
     assert!(
         request_tools
             .iter()
-            .any(|name| name == "mcp__codex_apps__google_calendar_create_event"),
-        "expected plugin app tools after waiting for codex apps startup: {request_tools:?}"
+            .any(|name| name == "mcp__codex_apps__google_calendar"),
+        "expected plugin app namespace after waiting for codex apps startup: {request_tools:?}"
+    );
+    assert!(
+        request
+            .tool_by_name("mcp__codex_apps__google_calendar", "_create_event")
+            .is_some(),
+        "expected plugin app create tool after waiting for codex apps startup: {request_tools:?}"
     );
 
     Ok(())
@@ -476,14 +482,20 @@ async fn explicit_plugin_mentions_directly_expose_plugin_apps_with_tool_search()
 
     let request_tools = tool_names(&mock.single_request().body_json());
     assert!(
-        request_tools.iter().any(|name| name == "tool_search"),
-        "expected tool_search when searchable apps are available: {request_tools:?}"
+        !request_tools.iter().any(|name| name == "tool_search"),
+        "expected explicit plugin mention to bypass tool_search and expose its app tools directly: {request_tools:?}"
     );
     assert!(
         request_tools
             .iter()
-            .any(|name| name == "mcp__codex_apps__calendar_create_event"),
-        "expected explicit plugin mention to directly expose its app tools: {request_tools:?}"
+            .any(|name| name == "mcp__codex_apps__calendar"),
+        "expected explicit plugin mention to directly expose its app namespace: {request_tools:?}"
+    );
+    assert!(
+        mock.single_request()
+            .tool_by_name("mcp__codex_apps__calendar", "_create_event")
+            .is_some(),
+        "expected explicit plugin mention to directly expose its app create tool: {request_tools:?}"
     );
 
     Ok(())
