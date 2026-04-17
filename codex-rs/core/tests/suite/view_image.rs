@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
+use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_exec_server::CreateDirectoryOptions;
@@ -186,7 +187,7 @@ async fn assert_user_turn_local_image_resizes_to(
 
     let body = mock.single_request().body_json();
     let image_message =
-        find_image_message(&body).expect("pending input image message not included in request");
+        find_image_message(&body).context("pending input image message not included in request")?;
     let image_url = image_message
         .get("content")
         .and_then(Value::as_array)
@@ -199,17 +200,17 @@ async fn assert_user_turn_local_image_resizes_to(
                 }
             })
         })
-        .expect("image_url present");
+        .context("image_url present")?;
 
     let (prefix, encoded) = image_url
         .split_once(',')
-        .expect("image url contains data prefix");
+        .context("image url contains data prefix")?;
     assert_eq!(prefix, "data:image/png;base64");
 
     let decoded = BASE64_STANDARD
         .decode(encoded)
-        .expect("image data decodes from base64 for request");
-    let resized = load_from_memory(&decoded).expect("load resized image");
+        .context("image data decodes from base64 for request")?;
+    let resized = load_from_memory(&decoded).context("load resized image")?;
     let (width, height) = resized.dimensions();
     assert_eq!((width, height), expected_dimensions);
 
