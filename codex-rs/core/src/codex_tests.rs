@@ -5391,6 +5391,7 @@ async fn steer_input_rejects_non_regular_turns() {
     for (task_kind, turn_kind) in [
         (TaskKind::Review, NonSteerableTurnKind::Review),
         (TaskKind::Compact, NonSteerableTurnKind::Compact),
+        (TaskKind::UserShell, NonSteerableTurnKind::UserShell),
     ] {
         let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {

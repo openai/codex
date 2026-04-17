@@ -7061,6 +7061,10 @@ impl CodexMessageProcessor {
                                 "cannot steer a compact turn".to_string(),
                                 TurnSteerRequestError::NonSteerableCompact,
                             ),
+                            codex_protocol::protocol::NonSteerableTurnKind::UserShell => (
+                                "cannot steer a user shell turn".to_string(),
+                                TurnSteerRequestError::NonSteerableUserShell,
+                            ),
                         };
                         let error = TurnError {
                             message: message.clone(),

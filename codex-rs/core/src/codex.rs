@@ -216,6 +216,7 @@ impl SteerInputError {
                 let turn_kind_label = match turn_kind {
                     NonSteerableTurnKind::Review => "review",
                     NonSteerableTurnKind::Compact => "compact",
+                    NonSteerableTurnKind::UserShell => "user shell",
                 };
                 ErrorEvent {
                     message: format!("cannot steer a {turn_kind_label} turn"),
@@ -2785,6 +2786,11 @@ impl Session {
             Some(crate::state::TaskKind::Compact) => {
                 return Err(SteerInputError::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Compact,
+                });
+            }
+            Some(crate::state::TaskKind::UserShell) => {
+                return Err(SteerInputError::ActiveTurnNotSteerable {
+                    turn_kind: NonSteerableTurnKind::UserShell,
                 });
             }
             None => return Err(SteerInputError::NoActiveTurn(input)),

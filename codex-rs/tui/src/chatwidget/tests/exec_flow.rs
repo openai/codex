@@ -1028,6 +1028,71 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
 }
 
 #[tokio::test]
+async fn user_shell_steer_rejection_queues_follow_up_until_shell_turn_completes() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.handle_codex_event(Event {
+        id: "shell-turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "shell-turn".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.submit_user_message(UserMessage::from("hi"));
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "hi".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected running-turn steer submit, got {other:?}"),
+    }
+
+    chat.handle_codex_event(Event {
+        id: "shell-steer-rejected".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a user shell turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::UserShell,
+            }),
+        }),
+    });
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.queued_user_message_texts(), vec!["hi"]);
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(Event {
+        id: "shell-turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "shell-turn".to_string(),
+            last_agent_message: None,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "hi".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued follow-up submit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

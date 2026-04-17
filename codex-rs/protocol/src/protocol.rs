@@ -1845,6 +1845,7 @@ pub enum AgentStatus {
 pub enum NonSteerableTurnKind {
     Review,
     Compact,
+    UserShell,
 }
 
 /// Codex errors that we expose to clients.

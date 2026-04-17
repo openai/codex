@@ -63,7 +63,7 @@ impl UserShellCommandTask {
 
 impl SessionTask for UserShellCommandTask {
     fn kind(&self) -> TaskKind {
-        TaskKind::Regular
+        TaskKind::UserShell
     }
 
     fn span_name(&self) -> &'static str {

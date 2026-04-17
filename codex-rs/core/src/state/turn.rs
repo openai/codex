@@ -64,6 +64,7 @@ pub(crate) enum TaskKind {
     Regular,
     Review,
     Compact,
+    UserShell,
 }
 
 pub(crate) struct RunningTask {

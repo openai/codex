@@ -139,6 +139,7 @@ macro_rules! v2_enum_from_core {
 pub enum NonSteerableTurnKind {
     Review,
     Compact,
+    UserShell,
 }
 
 /// This translation layer make sure that we expose codex error code in camel case.
@@ -181,7 +182,7 @@ pub enum CodexErrorInfo {
         http_status_code: Option<u16>,
     },
     /// Returned when `turn/start` or `turn/steer` is submitted while the current active turn
-    /// cannot accept same-turn steering, for example `/review` or manual `/compact`.
+    /// cannot accept same-turn steering, for example `/review`, manual `/compact`, or a user shell command.
     ActiveTurnNotSteerable {
         #[serde(rename = "turnKind")]
         #[ts(rename = "turnKind")]
@@ -228,6 +229,7 @@ impl From<CoreNonSteerableTurnKind> for NonSteerableTurnKind {
         match value {
             CoreNonSteerableTurnKind::Review => Self::Review,
             CoreNonSteerableTurnKind::Compact => Self::Compact,
+            CoreNonSteerableTurnKind::UserShell => Self::UserShell,
         }
     }
 }
