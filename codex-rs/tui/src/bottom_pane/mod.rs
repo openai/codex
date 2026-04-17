@@ -43,6 +43,7 @@ use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::time::Duration;
 
+mod action_required_title;
 mod app_link_view;
 mod approval_overlay;
 mod mcp_server_elicitation;
@@ -51,6 +52,8 @@ mod request_user_input;
 mod status_line_setup;
 mod status_surface_preview;
 mod title_setup;
+pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
+pub(crate) use action_required_title::build_action_required_title_text;
 pub(crate) use app_link_view::AppLinkElicitationTarget;
 pub(crate) use app_link_view::AppLinkSuggestionType;
 pub(crate) use app_link_view::AppLinkView;
@@ -930,6 +933,11 @@ impl BottomPane {
 
     pub(crate) fn is_task_running(&self) -> bool {
         self.is_task_running
+    }
+
+    pub(crate) fn terminal_title_requires_action(&self) -> bool {
+        self.active_view()
+            .is_some_and(bottom_pane_view::BottomPaneView::terminal_title_requires_action)
     }
 
     #[cfg(test)]

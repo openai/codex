@@ -295,6 +295,7 @@ pub(super) async fn make_chatwidget_manual(
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         last_terminal_title: None,
+        last_terminal_title_requires_action: false,
         terminal_title_setup_original_items: None,
         terminal_title_animation_origin: Instant::now(),
         status_line_project_root_name_cache: None,

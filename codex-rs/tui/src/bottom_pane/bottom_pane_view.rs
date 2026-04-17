@@ -121,4 +121,13 @@ pub(crate) trait BottomPaneView: Renderable {
     fn dismiss_app_server_request(&mut self, _request: &ResolvedAppServerRequest) -> bool {
         false
     }
+
+    /// Whether this view means the session is blocked waiting for the user.
+    ///
+    /// Views that return `true` surface an "Action Required" terminal title
+    /// instead of the normal working spinner so terminal tabs clearly show that
+    /// Codex needs user input.
+    fn terminal_title_requires_action(&self) -> bool {
+        false
+    }
 }
