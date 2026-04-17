@@ -126,6 +126,21 @@ common:ci-windows --config=ci-bazel
 common:ci-windows --build_metadata=TAG_os=windows
 common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
 
+# Experimental Windows cross-remote build config. CI uses this as a best-effort
+# remote cache warmup before the authoritative local Windows test run. Some
+# Windows targets still require local-only toolchain inputs, so the warmup is
+# allowed to fail while preserving full local test coverage afterward.
+common:ci-windows-cross-build --config=ci-bazel
+common:ci-windows-cross-build --build_metadata=TAG_os=windows-cross
+common:ci-windows-cross-build --config=remote
+common:ci-windows-cross-build --strategy=remote
+common:ci-windows-cross-build --strategy=CopyFile=local
+common:ci-windows-cross-build --strategy=Genrule=local
+common:ci-windows-cross-build --use_target_platform_for_tests=true
+common:ci-windows-cross-build --platforms=//:local_windows
+common:ci-windows-cross-build --remote_download_toplevel
+common:ci-windows-cross-build --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
+
 # We prefer to run the build actions entirely remotely so we can dial up the concurrency.
 # We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
 

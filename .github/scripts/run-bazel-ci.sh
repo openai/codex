@@ -6,6 +6,7 @@ print_failed_bazel_test_logs=0
 use_node_test_env=0
 remote_download_toplevel=0
 windows_msvc_host_platform=0
+ci_config_override=
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
       windows_msvc_host_platform=1
       shift
       ;;
+    --ci-config=*)
+      ci_config_override="${1#--ci-config=}"
+      shift
+      ;;
     --)
       shift
       break
@@ -37,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] [--ci-config=<config>] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -64,6 +69,9 @@ case "${RUNNER_OS:-}" in
     ci_config=ci-windows
     ;;
 esac
+if [[ -n "$ci_config_override" ]]; then
+  ci_config="$ci_config_override"
+fi
 
 print_bazel_test_log_tails() {
   local console_log="$1"

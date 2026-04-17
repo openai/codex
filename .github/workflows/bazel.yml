@@ -86,21 +86,208 @@ jobs:
             --print-failed-test-logs
             --use-node-test-env
           )
-          bazel_test_args=(
-            test
+          bazel_common_args=(
             --test_tag_filters=-argument-comment-lint
-            --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             bazel_wrapper_args+=(--windows-msvc-host-platform)
-            bazel_test_args+=(--jobs=8)
+
+            # Temporary smoke test for Windows remote-build/local-test reuse:
+            # exclude the V8-dependent slice, which currently mixes Windows
+            # GNU targets with Linux RBE-hosted V8 generators/toolchains.
+            # Keep this list static so Windows CI does not spend disk/IO on a
+            # transitive `bazel query` before the actual smoke build starts.
+            bazel_windows_smoke_targets=(
+              //codex-rs/analytics:analytics-unit-tests
+              //codex-rs/analytics:analytics-unit-tests-bin
+              //codex-rs/ansi-escape:ansi-escape-unit-tests
+              //codex-rs/ansi-escape:ansi-escape-unit-tests-bin
+              //codex-rs/app-server-protocol:app-server-protocol-schema_fixtures-test
+              //codex-rs/app-server-protocol:app-server-protocol-unit-tests
+              //codex-rs/app-server-protocol:app-server-protocol-unit-tests-bin
+              //codex-rs/apply-patch:apply-patch-all-test
+              //codex-rs/apply-patch:apply-patch-unit-tests
+              //codex-rs/apply-patch:apply-patch-unit-tests-bin
+              //codex-rs/arg0:arg0-unit-tests
+              //codex-rs/arg0:arg0-unit-tests-bin
+              //codex-rs/async-utils:async-utils-unit-tests
+              //codex-rs/async-utils:async-utils-unit-tests-bin
+              //codex-rs/backend-client:backend-client-unit-tests
+              //codex-rs/backend-client:backend-client-unit-tests-bin
+              //codex-rs/cloud-tasks-client:cloud-tasks-client-unit-tests
+              //codex-rs/cloud-tasks-client:cloud-tasks-client-unit-tests-bin
+              //codex-rs/cloud-tasks-mock-client:cloud-tasks-mock-client-unit-tests
+              //codex-rs/cloud-tasks-mock-client:cloud-tasks-mock-client-unit-tests-bin
+              //codex-rs/codex-api:codex-api-clients-test
+              //codex-rs/codex-api:codex-api-models_integration-test
+              //codex-rs/codex-api:codex-api-realtime_websocket_e2e-test
+              //codex-rs/codex-api:codex-api-sse_end_to_end-test
+              //codex-rs/codex-api:codex-api-unit-tests
+              //codex-rs/codex-api:codex-api-unit-tests-bin
+              //codex-rs/codex-backend-openapi-models:codex-backend-openapi-models-unit-tests
+              //codex-rs/codex-backend-openapi-models:codex-backend-openapi-models-unit-tests-bin
+              //codex-rs/codex-client:codex-client-ca_env-test
+              //codex-rs/codex-client:codex-client-unit-tests
+              //codex-rs/codex-client:codex-client-unit-tests-bin
+              //codex-rs/codex-experimental-api-macros:codex-experimental-api-macros-unit-tests
+              //codex-rs/codex-experimental-api-macros:codex-experimental-api-macros-unit-tests-bin
+              //codex-rs/codex-mcp:codex-mcp-unit-tests
+              //codex-rs/codex-mcp:codex-mcp-unit-tests-bin
+              //codex-rs/collaboration-mode-templates:collaboration-mode-templates-unit-tests
+              //codex-rs/collaboration-mode-templates:collaboration-mode-templates-unit-tests-bin
+              //codex-rs/config:config-unit-tests
+              //codex-rs/config:config-unit-tests-bin
+              //codex-rs/connectors:connectors-unit-tests
+              //codex-rs/connectors:connectors-unit-tests-bin
+              //codex-rs/core-plugins:core-plugins-unit-tests
+              //codex-rs/core-plugins:core-plugins-unit-tests-bin
+              //codex-rs/core-skills:core-skills-unit-tests
+              //codex-rs/core-skills:core-skills-unit-tests-bin
+              //codex-rs/exec-server:exec-server-exec_process-test
+              //codex-rs/exec-server:exec-server-file_system-test
+              //codex-rs/exec-server:exec-server-initialize-test
+              //codex-rs/exec-server:exec-server-process-test
+              //codex-rs/exec-server:exec-server-unit-tests
+              //codex-rs/exec-server:exec-server-websocket-test
+              //codex-rs/execpolicy:execpolicy-basic-test
+              //codex-rs/execpolicy:execpolicy-unit-tests
+              //codex-rs/execpolicy:execpolicy-unit-tests-bin
+              //codex-rs/execpolicy-legacy:execpolicy-legacy-all-test
+              //codex-rs/execpolicy-legacy:execpolicy-legacy-unit-tests
+              //codex-rs/execpolicy-legacy:execpolicy-legacy-unit-tests-bin
+              //codex-rs/features:features-unit-tests
+              //codex-rs/features:features-unit-tests-bin
+              //codex-rs/feedback:feedback-unit-tests
+              //codex-rs/feedback:feedback-unit-tests-bin
+              //codex-rs/file-search:file-search-unit-tests
+              //codex-rs/file-search:file-search-unit-tests-bin
+              //codex-rs/git-utils:git-utils-unit-tests
+              //codex-rs/git-utils:git-utils-unit-tests-bin
+              //codex-rs/hooks:hooks-unit-tests
+              //codex-rs/hooks:hooks-unit-tests-bin
+              //codex-rs/install-context:install-context-unit-tests
+              //codex-rs/install-context:install-context-unit-tests-bin
+              //codex-rs/instructions:instructions-unit-tests
+              //codex-rs/instructions:instructions-unit-tests-bin
+              //codex-rs/keyring-store:keyring-store-unit-tests
+              //codex-rs/keyring-store:keyring-store-unit-tests-bin
+              //codex-rs/model-provider-info:model-provider-info-unit-tests
+              //codex-rs/model-provider-info:model-provider-info-unit-tests-bin
+              //codex-rs/network-proxy:network-proxy-unit-tests
+              //codex-rs/network-proxy:network-proxy-unit-tests-bin
+              //codex-rs/otel:otel-tests-test
+              //codex-rs/otel:otel-unit-tests
+              //codex-rs/otel:otel-unit-tests-bin
+              //codex-rs/plugin:plugin-unit-tests
+              //codex-rs/plugin:plugin-unit-tests-bin
+              //codex-rs/process-hardening:process-hardening-unit-tests
+              //codex-rs/process-hardening:process-hardening-unit-tests-bin
+              //codex-rs/protocol:protocol-unit-tests
+              //codex-rs/protocol:protocol-unit-tests-bin
+              //codex-rs/realtime-webrtc:realtime-webrtc-unit-tests
+              //codex-rs/realtime-webrtc:realtime-webrtc-unit-tests-bin
+              //codex-rs/response-debug-context:response-debug-context-unit-tests
+              //codex-rs/response-debug-context:response-debug-context-unit-tests-bin
+              //codex-rs/responses-api-proxy:responses-api-proxy-unit-tests
+              //codex-rs/responses-api-proxy:responses-api-proxy-unit-tests-bin
+              //codex-rs/rmcp-client:rmcp-client-process_group_cleanup-test
+              //codex-rs/rmcp-client:rmcp-client-resources-test
+              //codex-rs/rmcp-client:rmcp-client-streamable_http_recovery-test
+              //codex-rs/rmcp-client:rmcp-client-unit-tests
+              //codex-rs/rollout:rollout-unit-tests
+              //codex-rs/rollout:rollout-unit-tests-bin
+              //codex-rs/sandboxing:sandboxing-unit-tests
+              //codex-rs/sandboxing:sandboxing-unit-tests-bin
+              //codex-rs/secrets:secrets-unit-tests
+              //codex-rs/secrets:secrets-unit-tests-bin
+              //codex-rs/shell-command:shell-command-unit-tests
+              //codex-rs/shell-command:shell-command-unit-tests-bin
+              //codex-rs/shell-escalation:shell-escalation-unit-tests
+              //codex-rs/shell-escalation:shell-escalation-unit-tests-bin
+              //codex-rs/skills:skills-unit-tests
+              //codex-rs/skills:skills-unit-tests-bin
+              //codex-rs/state:state-unit-tests
+              //codex-rs/state:state-unit-tests-bin
+              //codex-rs/stdio-to-uds:stdio-to-uds-stdio_to_uds-test
+              //codex-rs/stdio-to-uds:stdio-to-uds-unit-tests
+              //codex-rs/stdio-to-uds:stdio-to-uds-unit-tests-bin
+              //codex-rs/terminal-detection:terminal-detection-unit-tests
+              //codex-rs/terminal-detection:terminal-detection-unit-tests-bin
+              //codex-rs/test-binary-support:test-binary-support-unit-tests
+              //codex-rs/test-binary-support:test-binary-support-unit-tests-bin
+              //codex-rs/thread-store:thread-store-unit-tests
+              //codex-rs/thread-store:thread-store-unit-tests-bin
+              //codex-rs/utils/absolute-path:absolute-path-unit-tests
+              //codex-rs/utils/absolute-path:absolute-path-unit-tests-bin
+              //codex-rs/utils/approval-presets:approval-presets-unit-tests
+              //codex-rs/utils/approval-presets:approval-presets-unit-tests-bin
+              //codex-rs/utils/cache:cache-unit-tests
+              //codex-rs/utils/cache:cache-unit-tests-bin
+              //codex-rs/utils/cargo-bin:cargo-bin-unit-tests
+              //codex-rs/utils/cargo-bin:cargo-bin-unit-tests-bin
+              //codex-rs/utils/cli:cli-unit-tests
+              //codex-rs/utils/cli:cli-unit-tests-bin
+              //codex-rs/utils/elapsed:elapsed-unit-tests
+              //codex-rs/utils/elapsed:elapsed-unit-tests-bin
+              //codex-rs/utils/fuzzy-match:fuzzy-match-unit-tests
+              //codex-rs/utils/fuzzy-match:fuzzy-match-unit-tests-bin
+              //codex-rs/utils/home-dir:home-dir-unit-tests
+              //codex-rs/utils/home-dir:home-dir-unit-tests-bin
+              //codex-rs/utils/image:image-unit-tests
+              //codex-rs/utils/image:image-unit-tests-bin
+              //codex-rs/utils/json-to-toml:json-to-toml-unit-tests
+              //codex-rs/utils/json-to-toml:json-to-toml-unit-tests-bin
+              //codex-rs/utils/output-truncation:output-truncation-unit-tests
+              //codex-rs/utils/output-truncation:output-truncation-unit-tests-bin
+              //codex-rs/utils/path-utils:path-utils-unit-tests
+              //codex-rs/utils/path-utils:path-utils-unit-tests-bin
+              //codex-rs/utils/plugins:plugins-unit-tests
+              //codex-rs/utils/plugins:plugins-unit-tests-bin
+              //codex-rs/utils/pty:pty-unit-tests
+              //codex-rs/utils/readiness:readiness-unit-tests
+              //codex-rs/utils/readiness:readiness-unit-tests-bin
+              //codex-rs/utils/rustls-provider:rustls-provider-unit-tests
+              //codex-rs/utils/rustls-provider:rustls-provider-unit-tests-bin
+              //codex-rs/utils/sleep-inhibitor:sleep-inhibitor-unit-tests
+              //codex-rs/utils/sleep-inhibitor:sleep-inhibitor-unit-tests-bin
+              //codex-rs/utils/stream-parser:stream-parser-unit-tests
+              //codex-rs/utils/stream-parser:stream-parser-unit-tests-bin
+              //codex-rs/utils/string:string-unit-tests
+              //codex-rs/utils/string:string-unit-tests-bin
+              //codex-rs/utils/template:template-unit-tests
+              //codex-rs/utils/template:template-unit-tests-bin
+              //codex-rs/windows-sandbox-rs:windows-sandbox-rs-unit-tests
+              //codex-rs/windows-sandbox-rs:windows-sandbox-rs-unit-tests-bin
+            )
+
+            ./.github/scripts/run-bazel-ci.sh \
+              --ci-config=ci-windows-cross-build \
+              -- \
+              build \
+              --build_tests_only \
+              "${bazel_common_args[@]}" \
+              -- \
+              "${bazel_windows_smoke_targets[@]}"
+
+            ./.github/scripts/run-bazel-ci.sh \
+              "${bazel_wrapper_args[@]}" \
+              -- \
+              test \
+              --jobs=8 \
+              --test_verbose_timeout_warnings \
+              "${bazel_common_args[@]}" \
+              -- \
+              "${bazel_windows_smoke_targets[@]}"
+            exit 0
           fi
 
           ./.github/scripts/run-bazel-ci.sh \
             "${bazel_wrapper_args[@]}" \
             -- \
-            "${bazel_test_args[@]}" \
+            test \
+            --test_verbose_timeout_warnings \
+            "${bazel_common_args[@]}" \
             -- \
             "${bazel_targets[@]}"
 
