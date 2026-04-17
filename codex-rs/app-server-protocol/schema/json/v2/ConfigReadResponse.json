@@ -233,6 +233,15 @@
             "null"
           ]
         },
+        "forced_chatgpt_org_id": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "forced_chatgpt_workspace_id": {
           "items": {
             "type": "string"

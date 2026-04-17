@@ -62,15 +62,15 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
 
-/// Backward-compatible shape for workspace restrictions in config.toml.
+/// Backward-compatible shape for ChatGPT restriction lists in config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
-pub enum ForcedChatgptWorkspaceIds {
+pub enum ForcedChatgptIds {
     Single(String),
     Multiple(Vec<String>),
 }
 
-impl ForcedChatgptWorkspaceIds {
+impl ForcedChatgptIds {
     pub fn into_vec(self) -> Vec<String> {
         match self {
             Self::Single(value) => vec![value],
@@ -168,7 +168,11 @@ pub struct ConfigToml {
 
     /// When set, restricts ChatGPT login to one or more workspace identifiers.
     #[serde(default)]
-    pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
+    pub forced_chatgpt_workspace_id: Option<ForcedChatgptIds>,
+
+    /// When set, restricts ChatGPT login to one or more organization identifiers.
+    #[serde(default)]
+    pub forced_chatgpt_org_id: Option<ForcedChatgptIds>,
 
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
@@ -426,7 +430,10 @@ impl From<ConfigToml> for UserSavedConfig {
             sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
             forced_chatgpt_workspace_id: config_toml
                 .forced_chatgpt_workspace_id
-                .map(ForcedChatgptWorkspaceIds::into_vec),
+                .map(ForcedChatgptIds::into_vec),
+            forced_chatgpt_org_id: config_toml
+                .forced_chatgpt_org_id
+                .map(ForcedChatgptIds::into_vec),
             forced_login_method: config_toml.forced_login_method,
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,

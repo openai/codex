@@ -884,6 +884,7 @@ pub async fn run_main(
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+            forced_chatgpt_org_id: config.forced_chatgpt_org_id.clone(),
         }) {
             eprintln!("{err}");
             std::process::exit(1);

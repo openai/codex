@@ -4797,6 +4797,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             compact_prompt: None,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
+            forced_chatgpt_org_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
@@ -4947,6 +4948,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
+        forced_chatgpt_org_id: None,
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
@@ -5095,6 +5097,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
+        forced_chatgpt_org_id: None,
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
@@ -5228,6 +5231,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
+        forced_chatgpt_org_id: None,
         forced_login_method: None,
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
@@ -5503,6 +5507,37 @@ async fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error
         error
             .to_string()
             .contains(OLLAMA_CHAT_PROVIDER_REMOVED_ERROR)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_config_rejects_mixing_forced_chatgpt_workspace_and_org_ids() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        forced_chatgpt_workspace_id: Some(codex_config::config_toml::ForcedChatgptIds::Single(
+            "workspace-123".to_string(),
+        )),
+        forced_chatgpt_org_id: Some(codex_config::config_toml::ForcedChatgptIds::Single(
+            "org-123".to_string(),
+        )),
+        ..Default::default()
+    };
+
+    let result = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await;
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.to_string().contains(
+            "Only one of forced_chatgpt_workspace_id or forced_chatgpt_org_id may be set."
+        )
     );
 
     Ok(())

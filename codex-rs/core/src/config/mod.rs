@@ -524,6 +524,8 @@ pub struct Config {
     pub experimental_realtime_start_instructions: Option<String>,
     /// When set, restricts ChatGPT login to one or more workspace identifiers.
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
+    /// When set, restricts ChatGPT login to one or more organization identifiers.
+    pub forced_chatgpt_org_id: Option<Vec<String>>,
 
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
@@ -624,6 +626,10 @@ impl AuthManagerConfig for Config {
 
     fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id.clone()
+    }
+
+    fn forced_chatgpt_org_id(&self) -> Option<Vec<String>> {
+        self.forced_chatgpt_org_id.clone()
     }
 }
 
@@ -1863,7 +1869,7 @@ impl Config {
         let forced_chatgpt_workspace_id = cfg
             .forced_chatgpt_workspace_id
             .clone()
-            .map(codex_config::config_toml::ForcedChatgptWorkspaceIds::into_vec)
+            .map(codex_config::config_toml::ForcedChatgptIds::into_vec)
             .map(|values| {
                 values
                     .into_iter()
@@ -1872,6 +1878,24 @@ impl Config {
                     .collect::<Vec<_>>()
             })
             .filter(|values| !values.is_empty());
+        let forced_chatgpt_org_id = cfg
+            .forced_chatgpt_org_id
+            .clone()
+            .map(codex_config::config_toml::ForcedChatgptIds::into_vec)
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty());
+        if forced_chatgpt_workspace_id.is_some() && forced_chatgpt_org_id.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Only one of forced_chatgpt_workspace_id or forced_chatgpt_org_id may be set.",
+            ));
+        }
 
         let forced_login_method = cfg.forced_login_method;
 
@@ -2186,6 +2210,7 @@ impl Config {
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             forced_chatgpt_workspace_id,
+            forced_chatgpt_org_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,

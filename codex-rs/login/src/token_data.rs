@@ -36,6 +36,8 @@ pub struct IdTokenInfo {
     pub chatgpt_user_id: Option<String>,
     /// Organization/workspace identifier associated with the token, if present.
     pub chatgpt_account_id: Option<String>,
+    /// Organization identifier associated with the token, if present.
+    pub organization_id: Option<String>,
     /// Whether the selected ChatGPT workspace must route through the FedRAMP edge.
     pub chatgpt_account_is_fedramp: bool,
     pub raw_jwt: String,
@@ -95,6 +97,8 @@ struct AuthClaims {
     #[serde(default)]
     chatgpt_account_id: Option<String>,
     #[serde(default)]
+    organization_id: Option<String>,
+    #[serde(default)]
     chatgpt_account_is_fedramp: bool,
 }
 
@@ -147,6 +151,7 @@ pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoErr
             chatgpt_plan_type: auth.chatgpt_plan_type,
             chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
             chatgpt_account_id: auth.chatgpt_account_id,
+            organization_id: auth.organization_id,
             chatgpt_account_is_fedramp: auth.chatgpt_account_is_fedramp,
         }),
         None => Ok(IdTokenInfo {
@@ -155,6 +160,7 @@ pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoErr
             chatgpt_plan_type: None,
             chatgpt_user_id: None,
             chatgpt_account_id: None,
+            organization_id: None,
             chatgpt_account_is_fedramp: false,
         }),
     }
