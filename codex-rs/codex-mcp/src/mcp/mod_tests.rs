@@ -21,7 +21,32 @@ fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         use_legacy_landlock: false,
         apps_enabled: false,
         configured_mcp_servers: HashMap::new(),
+        mcp_server_allowlist: None,
         plugin_capability_summaries: Vec::new(),
+    }
+}
+
+fn http_mcp_server(url: &str) -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: url.to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        experimental_environment: None,
+        enabled: true,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
     }
 }
 
@@ -186,51 +211,11 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
 
     config.configured_mcp_servers.insert(
         "sample".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
-                url: "https://user.example/mcp".to_string(),
-                bearer_token_env_var: None,
-                http_headers: None,
-                env_http_headers: None,
-            },
-            experimental_environment: None,
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+        http_mcp_server("https://user.example/mcp"),
     );
     config.configured_mcp_servers.insert(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
-                url: "https://docs.example/mcp".to_string(),
-                bearer_token_env_var: None,
-                http_headers: None,
-                env_http_headers: None,
-            },
-            experimental_environment: None,
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+        http_mcp_server("https://docs.example/mcp"),
     );
 
     let effective = effective_mcp_servers(&config, Some(&auth));
@@ -261,4 +246,36 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
         }
         other => panic!("expected streamable http transport, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn effective_mcp_servers_respects_session_allowlist() {
+    let mut config = test_mcp_config(PathBuf::from("/tmp"));
+    config.apps_enabled = true;
+    config.configured_mcp_servers.insert(
+        "docs".to_string(),
+        http_mcp_server("https://docs.example/mcp"),
+    );
+    config.configured_mcp_servers.insert(
+        "linear".to_string(),
+        http_mcp_server("https://linear.example/mcp"),
+    );
+    config.mcp_server_allowlist = Some(vec![
+        "docs".to_string(),
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+    ]);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let effective = effective_mcp_servers(&config, Some(&auth));
+
+    assert_eq!(
+        effective
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "docs".to_string(),
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        ])
+    );
 }

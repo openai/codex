@@ -42,6 +42,22 @@ default_tools_approval_mode = "approve"
 approval_mode = "prompt"
 ```
 
+## Spawned agent MCP defaults
+
+Use `[agents.spawn]` to set MCP defaults for newly spawned agents. `mcp_servers`
+is an optional allowlist of MCP server names; omit it to inherit all effective
+MCP servers, or set it to an empty list to disable MCP servers in spawned
+agents.
+
+```toml
+[agents.spawn]
+mcp_servers = ["docs"]
+```
+
+The `spawn_agent` tool can override this setting per spawned agent. Full
+history forks inherit the parent session MCP settings and reject these
+overrides.
+
 ## Apps (Connectors)
 
 Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible

@@ -65,6 +65,7 @@ impl ToolHandler for Handler {
                 role_name,
                 args.model.as_deref(),
                 args.reasoning_effort,
+                args.mcp_servers.as_deref(),
             )?;
         } else {
             apply_requested_spawn_agent_model_overrides(
@@ -78,6 +79,12 @@ impl ToolHandler for Handler {
             apply_role_to_config(&mut config, role_name)
                 .await
                 .map_err(FunctionCallError::RespondToModel)?;
+            apply_spawn_agent_capability_overrides(
+                &session,
+                &mut config,
+                args.mcp_servers,
+            )
+            .await?;
         }
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
@@ -182,6 +189,7 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    mcp_servers: Option<Vec<String>>,
     #[serde(default)]
     fork_context: bool,
 }

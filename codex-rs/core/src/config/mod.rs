@@ -21,6 +21,7 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
+use codex_config::config_toml::AgentSpawnToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
@@ -376,6 +377,9 @@ pub struct Config {
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
+    /// Optional MCP server allowlist for the current session.
+    pub mcp_server_allowlist: Option<Vec<String>>,
+
     /// Preferred store for MCP OAuth credentials.
     /// keyring: Use an OS-specific keyring service.
     ///          Credentials stored in the keyring will only be readable by Codex unless the user explicitly grants access via OS-level keyring access.
@@ -416,6 +420,9 @@ pub struct Config {
 
     /// Maximum nesting depth allowed for spawned agent threads.
     pub agent_max_depth: i32,
+
+    /// Defaults applied when this session spawns child agents.
+    pub agent_spawn: AgentSpawnConfig,
 
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
@@ -604,6 +611,17 @@ pub struct MultiAgentV2Config {
     pub hide_spawn_agent_metadata: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSpawnConfig {
+    pub mcp_servers: Option<Vec<String>>,
+}
+
+impl Default for AgentSpawnConfig {
+    fn default() -> Self {
+        Self { mcp_servers: None }
+    }
+}
+
 impl Default for MultiAgentV2Config {
     fn default() -> Self {
         Self {
@@ -774,6 +792,7 @@ impl Config {
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
             configured_mcp_servers,
+            mcp_server_allowlist: self.mcp_server_allowlist.clone(),
             plugin_capability_summaries: loaded_plugins.capability_summaries().to_vec(),
         }
     }
@@ -1407,6 +1426,42 @@ fn resolve_multi_agent_v2_config(
     }
 }
 
+fn resolve_agent_spawn_config(spawn: Option<&AgentSpawnToml>) -> std::io::Result<AgentSpawnConfig> {
+    let Some(spawn) = spawn else {
+        return Ok(AgentSpawnConfig { mcp_servers: None });
+    };
+
+    let mcp_servers = spawn
+        .mcp_servers
+        .as_ref()
+        .map(|servers| normalize_mcp_server_allowlist(servers, "agents.spawn.mcp_servers"))
+        .transpose()?;
+    Ok(AgentSpawnConfig { mcp_servers })
+}
+
+fn normalize_mcp_server_allowlist(
+    servers: &[String],
+    field_label: &str,
+) -> std::io::Result<Vec<String>> {
+    let mut normalized = Vec::with_capacity(servers.len());
+    let mut seen = std::collections::BTreeSet::new();
+
+    for server in servers {
+        let server = server.trim();
+        if server.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{field_label} cannot contain blank MCP server names"),
+            ));
+        }
+        if seen.insert(server.to_string()) {
+            normalized.push(server.to_string());
+        }
+    }
+
+    Ok(normalized)
+}
+
 fn multi_agent_v2_toml_config(features: Option<&FeaturesToml>) -> Option<&MultiAgentV2ConfigToml> {
     match features?.multi_agent_v2.as_ref()? {
         FeatureToml::Enabled(_) => None,
@@ -1839,6 +1894,11 @@ impl Config {
                 "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
             ));
         }
+        let agent_spawn = resolve_agent_spawn_config(
+            cfg.agents
+                .as_ref()
+                .and_then(|agents| agents.spawn.as_ref()),
+        )?;
         let background_terminal_max_timeout = cfg
             .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
@@ -2151,6 +2211,7 @@ impl Config {
                 env!("CARGO_PKG_VERSION"),
             ),
             mcp_servers,
+            mcp_server_allowlist: None,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
@@ -2177,6 +2238,7 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
             agent_max_depth,
+            agent_spawn,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,

@@ -538,6 +538,16 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
                     .to_string(),
             )),
         ),
+        (
+            "mcp_servers".to_string(),
+            JsonSchema::array(
+                JsonSchema::string(None),
+                Some(
+                    "Optional MCP server allowlist for the new agent. Omit to use spawn defaults; pass an empty array to disable MCP servers."
+                        .to_string(),
+                ),
+            ),
+        ),
     ])
 }
 
@@ -571,6 +581,16 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
                 "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
                     .to_string(),
             )),
+        ),
+        (
+            "mcp_servers".to_string(),
+            JsonSchema::array(
+                JsonSchema::string(None),
+                Some(
+                    "Optional MCP server allowlist for the new agent. Omit to use spawn defaults; pass an empty array to disable MCP servers."
+                        .to_string(),
+                ),
+            ),
         ),
     ])
 }

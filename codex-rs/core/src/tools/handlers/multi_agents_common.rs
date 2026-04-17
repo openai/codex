@@ -7,6 +7,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use codex_features::Feature;
+use codex_mcp::effective_mcp_servers;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -23,6 +24,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
@@ -240,13 +242,97 @@ pub(crate) fn reject_full_fork_spawn_overrides(
     agent_type: Option<&str>,
     model: Option<&str>,
     reasoning_effort: Option<ReasoningEffort>,
+    mcp_servers: Option<&[String]>,
 ) -> Result<(), FunctionCallError> {
-    if agent_type.is_some() || model.is_some() || reasoning_effort.is_some() {
+    if agent_type.is_some()
+        || model.is_some()
+        || reasoning_effort.is_some()
+        || mcp_servers.is_some()
+    {
         return Err(FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
         ));
     }
     Ok(())
+}
+
+pub(crate) async fn apply_spawn_agent_capability_overrides(
+    session: &Session,
+    config: &mut Config,
+    requested_mcp_servers: Option<Vec<String>>,
+) -> Result<(), FunctionCallError> {
+    let mcp_server_allowlist = match requested_mcp_servers {
+        Some(servers) => Some(normalize_spawn_mcp_server_allowlist(
+            &servers,
+            "mcp_servers",
+        )?),
+        None => config.agent_spawn.mcp_servers.clone(),
+    };
+
+    if let Some(allowlist) = mcp_server_allowlist.as_ref() {
+        validate_spawn_mcp_server_allowlist(session, config, allowlist).await?;
+    }
+
+    config.mcp_server_allowlist = mcp_server_allowlist;
+    Ok(())
+}
+
+fn normalize_spawn_mcp_server_allowlist(
+    servers: &[String],
+    field_label: &str,
+) -> Result<Vec<String>, FunctionCallError> {
+    let mut normalized = Vec::with_capacity(servers.len());
+    let mut seen = BTreeSet::new();
+
+    for server in servers {
+        let server = server.trim();
+        if server.is_empty() {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "{field_label} cannot contain blank MCP server names"
+            )));
+        }
+        if seen.insert(server.to_string()) {
+            normalized.push(server.to_string());
+        }
+    }
+
+    Ok(normalized)
+}
+
+async fn validate_spawn_mcp_server_allowlist(
+    session: &Session,
+    config: &Config,
+    allowlist: &[String],
+) -> Result<(), FunctionCallError> {
+    let auth = session.services.auth_manager.auth().await;
+    let mut unfiltered_config = config.clone();
+    unfiltered_config.mcp_server_allowlist = None;
+    let mcp_config = unfiltered_config
+        .to_mcp_config(session.services.plugins_manager.as_ref())
+        .await;
+    let available_servers = effective_mcp_servers(&mcp_config, auth.as_ref())
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let unknown_servers = allowlist
+        .iter()
+        .filter(|server| !available_servers.contains(*server))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if unknown_servers.is_empty() {
+        return Ok(());
+    }
+
+    let available = if available_servers.is_empty() {
+        "none".to_string()
+    } else {
+        available_servers.into_iter().collect::<Vec<_>>().join(", ")
+    };
+    Err(FunctionCallError::RespondToModel(format!(
+        "Unknown MCP server(s) for spawned agent: {}. Available MCP servers: {available}",
+        unknown_servers.join(", ")
+    )))
 }
 
 /// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.

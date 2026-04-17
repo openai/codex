@@ -14,6 +14,7 @@ pub use skill_dependencies::canonical_mcp_server_key;
 pub use skill_dependencies::collect_missing_mcp_dependencies;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -131,6 +132,8 @@ pub struct McpConfig {
     pub apps_enabled: bool,
     /// User-configured and plugin-provided MCP servers keyed by server name.
     pub configured_mcp_servers: HashMap<String, McpServerConfig>,
+    /// Optional allowlist of MCP server names for the current session.
+    pub mcp_server_allowlist: Option<Vec<String>>,
     /// Plugin metadata used to attribute MCP tools/connectors to plugin display names.
     pub plugin_capability_summaries: Vec<PluginCapabilitySummary>,
 }
@@ -298,19 +301,34 @@ pub fn with_codex_apps_mcp(
     } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
     }
-    servers
+    filter_mcp_servers_by_allowlist(servers, config.mcp_server_allowlist.as_deref())
 }
 
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
-    config.configured_mcp_servers.clone()
+    filter_mcp_servers_by_allowlist(
+        config.configured_mcp_servers.clone(),
+        config.mcp_server_allowlist.as_deref(),
+    )
 }
 
 pub fn effective_mcp_servers(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, McpServerConfig> {
-    let servers = configured_mcp_servers(config);
-    with_codex_apps_mcp(servers, auth, config)
+    with_codex_apps_mcp(config.configured_mcp_servers.clone(), auth, config)
+}
+
+fn filter_mcp_servers_by_allowlist(
+    mut servers: HashMap<String, McpServerConfig>,
+    allowlist: Option<&[String]>,
+) -> HashMap<String, McpServerConfig> {
+    let Some(allowlist) = allowlist else {
+        return servers;
+    };
+
+    let allowlist = allowlist.iter().map(String::as_str).collect::<HashSet<_>>();
+    servers.retain(|name, _| allowlist.contains(name.as_str()));
+    servers
 }
 
 pub fn tool_plugin_provenance(config: &McpConfig) -> ToolPluginProvenance {

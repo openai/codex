@@ -17,6 +17,8 @@ use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHa
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
 use codex_config::types::ShellEnvironmentPolicy;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -90,6 +92,30 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
+}
+
+fn test_mcp_server(url: &str) -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: url.to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        experimental_environment: None,
+        enabled: false,
+        required: false,
+        supports_parallel_tool_calls: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        default_tools_approval_mode: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth_resource: None,
+        tools: HashMap::new(),
+    }
 }
 
 async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
@@ -403,6 +429,304 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 }
 
 #[tokio::test]
+async fn spawn_agent_applies_per_call_mcp_settings() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+        nickname: Option<String>,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let mut config = (*turn.config).clone();
+    let mut mcp_servers = config.mcp_servers.get().clone();
+    mcp_servers.insert(
+        "docs".to_string(),
+        test_mcp_server("https://docs.example/mcp"),
+    );
+    mcp_servers.insert(
+        "linear".to_string(),
+        test_mcp_server("https://linear.example/mcp"),
+    );
+    config
+        .mcp_servers
+        .set(mcp_servers)
+        .expect("test config should allow MCP updates");
+    turn.config = Arc::new(config);
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "mcp_servers": [" docs ", "docs"]
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert!(result.nickname.is_some());
+
+    let child_config = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .codex
+        .session
+        .get_config()
+        .await;
+    assert_eq!(
+        child_config.mcp_server_allowlist,
+        Some(vec!["docs".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_uses_role_spawn_defaults_and_allows_per_call_override() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+
+    let role_name = "scoped".to_string();
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn.config.codex_home.as_path().join("scoped.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"[mcp_servers.docs]
+url = "https://docs.example/mcp"
+enabled = false
+
+[mcp_servers.linear]
+url = "https://linear.example/mcp"
+enabled = false
+
+[agents.spawn]
+mcp_servers = ["linear"]
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    let mut mcp_servers = config.mcp_servers.get().clone();
+    mcp_servers.insert(
+        "docs".to_string(),
+        test_mcp_server("https://docs.example/mcp"),
+    );
+    mcp_servers.insert(
+        "linear".to_string(),
+        test_mcp_server("https://linear.example/mcp"),
+    );
+    config
+        .mcp_servers
+        .set(mcp_servers)
+        .expect("test config should allow MCP updates");
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Scoped tools".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name,
+                "mcp_servers": ["docs"]
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+
+    let child_config = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .codex
+        .session
+        .get_config()
+        .await;
+    assert_eq!(
+        child_config.agent_spawn.mcp_servers,
+        Some(vec!["linear".to_string()])
+    );
+    assert_eq!(
+        child_config.mcp_server_allowlist,
+        Some(vec!["docs".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_applies_role_spawn_defaults_without_per_call_overrides() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+
+    let role_name = "scoped_defaults".to_string();
+    tokio::fs::create_dir_all(&turn.config.codex_home)
+        .await
+        .expect("codex home should be created");
+    let role_config_path = turn
+        .config
+        .codex_home
+        .as_path()
+        .join("scoped-defaults.toml");
+    tokio::fs::write(
+        &role_config_path,
+        r#"[mcp_servers.linear]
+url = "https://linear.example/mcp"
+enabled = false
+
+[agents.spawn]
+mcp_servers = ["linear"]
+"#,
+    )
+    .await
+    .expect("role config should be written");
+
+    let mut config = (*turn.config).clone();
+    let mut mcp_servers = config.mcp_servers.get().clone();
+    mcp_servers.insert(
+        "linear".to_string(),
+        test_mcp_server("https://linear.example/mcp"),
+    );
+    config
+        .mcp_servers
+        .set(mcp_servers)
+        .expect("test config should allow MCP updates");
+    config.agent_roles.insert(
+        role_name.clone(),
+        AgentRoleConfig {
+            description: Some("Scoped defaults".to_string()),
+            config_file: Some(role_config_path),
+            nickname_candidates: None,
+        },
+    );
+    turn.config = Arc::new(config);
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "agent_type": role_name
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+
+    let child_config = manager
+        .get_thread(parse_agent_id(&result.agent_id))
+        .await
+        .expect("spawned agent thread should exist")
+        .codex
+        .session
+        .get_config()
+        .await;
+    assert_eq!(
+        child_config.mcp_server_allowlist,
+        Some(vec!["linear".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_rejects_unknown_mcp_server() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let mut config = (*turn.config).clone();
+    let mut mcp_servers = config.mcp_servers.get().clone();
+    mcp_servers.insert(
+        "docs".to_string(),
+        test_mcp_server("https://docs.example/mcp"),
+    );
+    config
+        .mcp_servers
+        .set(mcp_servers)
+        .expect("test config should allow MCP updates");
+    turn.config = Arc::new(config);
+
+    let err = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "mcp_servers": ["missing"]
+            })),
+        ))
+        .await
+        .expect_err("unknown MCP server should be rejected");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Unknown MCP server(s) for spawned agent: missing. Available MCP servers: docs"
+                .to_string()
+        )
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_context_rejects_capability_overrides() {
+    let (session, turn) = make_session_and_context().await;
+
+    let err = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "fork_context": true,
+                "mcp_servers": []
+            })),
+        ))
+        .await
+        .expect_err("fork_context should reject capability overrides");
+
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
+        )
+    );
+}
+
+#[tokio::test]
 async fn spawn_agent_fork_context_rejects_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
@@ -430,7 +754,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -464,7 +788,7 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
     assert_eq!(
         err,
             FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -508,7 +832,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -549,7 +873,7 @@ async fn multi_agent_v2_spawn_fork_turns_rejects_child_model_overrides() {
     assert_eq!(
         err,
             FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, and reasoning effort; omit agent_type, model, and reasoning_effort, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -827,6 +1151,68 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && !communication.trigger_turn
             )
     }));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_applies_per_call_mcp_settings() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let mut mcp_servers = config.mcp_servers.get().clone();
+    mcp_servers.insert(
+        "docs".to_string(),
+        test_mcp_server("https://docs.example/mcp"),
+    );
+    config
+        .mcp_servers
+        .set(mcp_servers)
+        .expect("test config should allow MCP updates");
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    SpawnAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "test_process",
+                "mcp_servers": ["docs"]
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+
+    let child_thread_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(root.thread_id, &SessionSource::Cli, "test_process")
+        .await
+        .expect("relative path should resolve");
+    let child_config = manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should exist")
+        .codex
+        .session
+        .get_config()
+        .await;
+    assert_eq!(
+        child_config.mcp_server_allowlist,
+        Some(vec!["docs".to_string()])
+    );
 }
 
 #[tokio::test]

@@ -3547,6 +3547,7 @@ async fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            spawn: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4413,6 +4414,7 @@ async fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Res
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            spawn: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4455,6 +4457,7 @@ async fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            spawn: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4491,6 +4494,7 @@ async fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            spawn: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4527,6 +4531,7 @@ async fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io:
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
+            spawn: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4767,6 +4772,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
+            mcp_server_allowlist: None,
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
                 Default::default(),
                 LOCAL_DEV_BUILD_VERSION,
@@ -4779,6 +4785,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+            agent_spawn: AgentSpawnConfig::default(),
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -4917,6 +4924,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
+        mcp_server_allowlist: None,
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
             Default::default(),
             LOCAL_DEV_BUILD_VERSION,
@@ -4929,6 +4937,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+        agent_spawn: AgentSpawnConfig::default(),
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -5065,6 +5074,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
+        mcp_server_allowlist: None,
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
             Default::default(),
             LOCAL_DEV_BUILD_VERSION,
@@ -5077,6 +5087,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+        agent_spawn: AgentSpawnConfig::default(),
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -5198,6 +5209,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
+        mcp_server_allowlist: None,
         mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(
             Default::default(),
             LOCAL_DEV_BUILD_VERSION,
@@ -5210,6 +5222,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
+        agent_spawn: AgentSpawnConfig::default(),
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -6505,6 +6518,59 @@ hide_spawn_agent_metadata = false
         Some("profile hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn agents_spawn_config_sets_child_defaults_only() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[agents.spawn]
+mcp_servers = ["docs", " linear ", "docs"]
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.agent_spawn,
+        AgentSpawnConfig {
+            mcp_servers: Some(vec!["docs".to_string(), "linear".to_string()]),
+        }
+    );
+    assert_eq!(config.mcp_server_allowlist, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn agents_spawn_config_rejects_blank_mcp_server_names() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[agents.spawn]
+mcp_servers = ["docs", " "]
+"#,
+    )?;
+
+    let err = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("blank MCP server names should be rejected");
+
+    assert!(
+        err.to_string()
+            .contains("agents.spawn.mcp_servers cannot contain blank MCP server names"),
+        "unexpected error: {err}"
+    );
 
     Ok(())
 }

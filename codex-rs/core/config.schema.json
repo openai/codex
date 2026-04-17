@@ -31,6 +31,19 @@
       },
       "type": "object"
     },
+    "AgentSpawnToml": {
+      "additionalProperties": false,
+      "properties": {
+        "mcp_servers": {
+          "description": "MCP server names to start in spawned agents. When unset, spawned agents inherit all effective MCP servers. An empty list disables MCP servers for spawned agents.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "AgentsToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AgentRoleToml"
@@ -53,6 +66,14 @@
           "format": "uint",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "spawn": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentSpawnToml"
+            }
+          ],
+          "description": "Defaults applied to agents when they are spawned."
         }
       },
       "type": "object"
