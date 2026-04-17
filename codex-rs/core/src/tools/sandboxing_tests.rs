@@ -9,7 +9,7 @@ use serde_json::json;
 #[test]
 fn bash_permission_request_payload_omits_missing_description() {
     assert_eq!(
-        PermissionRequestPayload::bash("echo hi".to_string(), None),
+        PermissionRequestPayload::bash("echo hi".to_string(), /*description*/ None),
         PermissionRequestPayload {
             tool_name: HookToolName::bash(),
             tool_input: json!({ "command": "echo hi" }),
