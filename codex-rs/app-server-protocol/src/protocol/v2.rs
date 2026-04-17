@@ -5476,6 +5476,7 @@ pub struct ThreadNameUpdatedNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadGoalUpdatedNotification {
     pub thread_id: String,
+    pub turn_id: Option<String>,
     pub goal: ThreadGoal,
 }
 

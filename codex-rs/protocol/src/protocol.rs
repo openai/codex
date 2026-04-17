@@ -3595,6 +3595,9 @@ pub struct ThreadGoal {
 #[ts(export_to = "protocol/")]
 pub struct ThreadGoalUpdatedEvent {
     pub thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
     pub goal: ThreadGoal,
 }
 
