@@ -2766,9 +2766,13 @@ impl fmt::Display for SubAgentSource {
 }
 
 /// Persisted agent-task details that let a resumed thread keep using the same backend task.
+///
+/// `agent_runtime_id` is validation metadata for the globally registered agent identity, not a
+/// separate session-scoped identity. Resume only restores this task after confirming that runtime
+/// id still matches the globally registered identity; otherwise the cached task is discarded and a
+/// fresh task can be registered.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 pub struct SessionAgentTask {
-    /// Validation metadata only. Restored tasks must match the globally registered identity.
     pub agent_runtime_id: String,
     pub task_id: String,
     pub registered_at: String,
