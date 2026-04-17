@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -150,22 +151,62 @@ pub(crate) struct OutboundConnectionState {
     pub(crate) experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     pub(crate) writer: mpsc::Sender<QueuedOutgoingMessage>,
+    overflow_writer: Option<mpsc::Sender<QueuedOutgoingMessage>>,
+    overflow_depth: Arc<AtomicUsize>,
     disconnect_sender: Option<CancellationToken>,
 }
 
 impl OutboundConnectionState {
     pub(crate) fn new(
+        connection_id: ConnectionId,
         writer: mpsc::Sender<QueuedOutgoingMessage>,
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
         disconnect_sender: Option<CancellationToken>,
     ) -> Self {
+        let overflow_depth = Arc::new(AtomicUsize::new(0));
+        let overflow_writer = disconnect_sender.as_ref().map(|disconnect_sender| {
+            let (overflow_tx, mut overflow_rx) = mpsc::channel(CHANNEL_CAPACITY);
+            let writer = writer.clone();
+            let disconnect_sender = disconnect_sender.clone();
+            let overflow_depth = Arc::clone(&overflow_depth);
+            tokio::spawn(async move {
+                while let Some(queued_message) = overflow_rx.recv().await {
+                    match writer
+                        .send_timeout(queued_message, OUTBOUND_QUEUE_FULL_GRACE)
+                        .await
+                    {
+                        Ok(()) => {
+                            overflow_depth.fetch_sub(1, Ordering::AcqRel);
+                        }
+                        Err(mpsc::error::SendTimeoutError::Timeout(_)) => {
+                            overflow_depth.fetch_sub(1, Ordering::AcqRel);
+                            warn!(
+                                "disconnecting slow connection after outbound queue remained full for {:?}: {connection_id:?}",
+                                OUTBOUND_QUEUE_FULL_GRACE
+                            );
+                            disconnect_sender.cancel();
+                            break;
+                        }
+                        Err(mpsc::error::SendTimeoutError::Closed(_)) => {
+                            overflow_depth.fetch_sub(1, Ordering::AcqRel);
+                            disconnect_sender.cancel();
+                            break;
+                        }
+                    }
+                }
+            });
+            overflow_tx
+        });
+
         Self {
             initialized,
             experimental_api_enabled,
             opted_out_notification_methods,
             writer,
+            overflow_writer,
+            overflow_depth,
             disconnect_sender,
         }
     }
@@ -312,45 +353,59 @@ async fn send_message_to_connection(
         write_complete_tx,
     };
     if connection_state.can_disconnect() {
-        match writer.try_send(queued_message) {
-            Ok(()) => false,
-            Err(mpsc::error::TrySendError::Full(queued_message)) => {
-                let Some(disconnect_sender) = connection_state.disconnect_sender.clone() else {
-                    unreachable!("disconnectable connection must have a disconnect sender");
-                };
-                // WebSocket clients are marked disconnectable so a stuck writer
-                // cannot block the outbound router forever. Still, normal turns
-                // can briefly burst past the per-connection queue capacity while
-                // the writer task is healthy, so wait for capacity off the
-                // router path before treating the client as slow.
-                tokio::spawn(async move {
-                    match writer
-                        .send_timeout(queued_message, OUTBOUND_QUEUE_FULL_GRACE)
-                        .await
-                    {
-                        Ok(()) => {}
-                        Err(mpsc::error::SendTimeoutError::Timeout(_)) => {
-                            warn!(
-                                "disconnecting slow connection after outbound queue remained full for {:?}: {connection_id:?}",
-                                OUTBOUND_QUEUE_FULL_GRACE
-                            );
-                            disconnect_sender.cancel();
-                        }
-                        Err(mpsc::error::SendTimeoutError::Closed(_)) => {
-                            disconnect_sender.cancel();
-                        }
-                    }
-                });
-                false
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                disconnect_connection(connections, connection_id)
+        if connection_state.overflow_depth.load(Ordering::Acquire) > 0 {
+            queue_overflow_message(connections, connection_id, queued_message)
+        } else {
+            match writer.try_send(queued_message) {
+                Ok(()) => false,
+                Err(mpsc::error::TrySendError::Full(queued_message)) => {
+                    queue_overflow_message(connections, connection_id, queued_message)
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    disconnect_connection(connections, connection_id)
+                }
             }
         }
     } else if writer.send(queued_message).await.is_err() {
         disconnect_connection(connections, connection_id)
     } else {
         false
+    }
+}
+
+fn queue_overflow_message(
+    connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
+    connection_id: ConnectionId,
+    queued_message: QueuedOutgoingMessage,
+) -> bool {
+    let Some(connection_state) = connections.get(&connection_id) else {
+        warn!("dropping overflow message for disconnected connection: {connection_id:?}");
+        return false;
+    };
+    let Some(overflow_writer) = connection_state.overflow_writer.clone() else {
+        unreachable!("disconnectable connection must have an overflow writer");
+    };
+    let overflow_depth = Arc::clone(&connection_state.overflow_depth);
+
+    // WebSocket clients are marked disconnectable so a stuck writer cannot
+    // block the outbound router forever. Still, normal turns can briefly burst
+    // past the per-connection queue capacity while the writer task is healthy.
+    // Queue the overflow on a bounded, ordered side channel so the router stays
+    // non-blocking without creating unbounded detached send waiters.
+    overflow_depth.fetch_add(1, Ordering::AcqRel);
+    match overflow_writer.try_send(queued_message) {
+        Ok(()) => false,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            overflow_depth.fetch_sub(1, Ordering::AcqRel);
+            warn!(
+                "disconnecting slow connection after outbound overflow queue filled: {connection_id:?}"
+            );
+            disconnect_connection(connections, connection_id)
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            overflow_depth.fetch_sub(1, Ordering::AcqRel);
+            disconnect_connection(connections, connection_id)
+        }
     }
 }
 
@@ -652,6 +707,7 @@ mod tests {
         connections.insert(
             connection_id,
             OutboundConnectionState::new(
+                connection_id,
                 writer_tx,
                 initialized,
                 Arc::new(AtomicBool::new(true)),
@@ -692,6 +748,7 @@ mod tests {
         connections.insert(
             connection_id,
             OutboundConnectionState::new(
+                connection_id,
                 writer_tx,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
@@ -732,6 +789,7 @@ mod tests {
         connections.insert(
             connection_id,
             OutboundConnectionState::new(
+                connection_id,
                 writer_tx,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
@@ -778,6 +836,7 @@ mod tests {
         connections.insert(
             connection_id,
             OutboundConnectionState::new(
+                connection_id,
                 writer_tx,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(false)),
@@ -840,6 +899,7 @@ mod tests {
         connections.insert(
             connection_id,
             OutboundConnectionState::new(
+                connection_id,
                 writer_tx,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
@@ -927,6 +987,7 @@ mod tests {
         connections.insert(
             connection_id,
             OutboundConnectionState::new(
+                connection_id,
                 writer_tx,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
@@ -978,6 +1039,163 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disconnectable_connection_preserves_order_while_overflow_is_draining() {
+        let connection_id = ConnectionId(12);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+        let disconnect_token = CancellationToken::new();
+
+        writer_tx
+            .send(QueuedOutgoingMessage::new(
+                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "queued".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
+            ))
+            .await
+            .expect("channel should accept the first queued message");
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                connection_id,
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                Some(disconnect_token.clone()),
+            ),
+        );
+
+        for summary in ["second", "third"] {
+            route_outgoing_envelope(
+                &mut connections,
+                OutgoingEnvelope::ToConnection {
+                    connection_id,
+                    message: OutgoingMessage::AppServerNotification(
+                        ServerNotification::ConfigWarning(ConfigWarningNotification {
+                            summary: summary.to_string(),
+                            details: None,
+                            path: None,
+                            range: None,
+                        }),
+                    ),
+                    write_complete_tx: None,
+                },
+            )
+            .await;
+        }
+
+        let mut summaries = Vec::new();
+        for _ in 0..3 {
+            let message = timeout(Duration::from_millis(100), writer_rx.recv())
+                .await
+                .expect("queued notification should be delivered")
+                .expect("queued notification should exist");
+            let OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                ConfigWarningNotification { summary, .. },
+            )) = message.message
+            else {
+                panic!("expected config warning notification");
+            };
+            summaries.push(summary);
+        }
+
+        assert_eq!(summaries, vec!["queued", "second", "third"]);
+        assert!(connections.contains_key(&connection_id));
+        assert!(!disconnect_token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn disconnectable_connection_disconnects_when_overflow_queue_fills() {
+        let connection_id = ConnectionId(13);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+        let disconnect_token = CancellationToken::new();
+
+        writer_tx
+            .send(QueuedOutgoingMessage::new(
+                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "already-buffered".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
+            ))
+            .await
+            .expect("channel should accept the first queued message");
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                connection_id,
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                Some(disconnect_token.clone()),
+            ),
+        );
+
+        for index in 0..CHANNEL_CAPACITY {
+            route_outgoing_envelope(
+                &mut connections,
+                OutgoingEnvelope::ToConnection {
+                    connection_id,
+                    message: OutgoingMessage::AppServerNotification(
+                        ServerNotification::ConfigWarning(ConfigWarningNotification {
+                            summary: format!("overflow-{index}"),
+                            details: None,
+                            path: None,
+                            range: None,
+                        }),
+                    ),
+                    write_complete_tx: None,
+                },
+            )
+            .await;
+        }
+
+        assert!(connections.contains_key(&connection_id));
+        assert!(!disconnect_token.is_cancelled());
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "too-many".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
+                write_complete_tx: None,
+            },
+        )
+        .await;
+
+        assert!(!connections.contains_key(&connection_id));
+        assert!(disconnect_token.is_cancelled());
+        let original_message = writer_rx
+            .try_recv()
+            .expect("full queue should retain its original buffered message");
+        assert!(matches!(
+            original_message.message,
+            OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                ConfigWarningNotification { summary, .. }
+            )) if summary == "already-buffered"
+        ));
+    }
+
+    #[tokio::test]
     async fn disconnectable_connection_requests_disconnect_after_queue_grace_expires() {
         let connection_id = ConnectionId(2);
         let (writer_tx, mut writer_rx) = mpsc::channel(1);
@@ -1001,6 +1219,7 @@ mod tests {
         connections.insert(
             connection_id,
             OutboundConnectionState::new(
+                connection_id,
                 writer_tx,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
@@ -1071,6 +1290,7 @@ mod tests {
         connections.insert(
             connection_id,
             OutboundConnectionState::new(
+                connection_id,
                 writer_tx,
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),

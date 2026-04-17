@@ -613,6 +613,7 @@ pub async fn run_main_with_transport(
                                 outbound_connections.insert(
                                     connection_id,
                                     OutboundConnectionState::new(
+                                        connection_id,
                                         writer,
                                         initialized,
                                         experimental_api_enabled,
