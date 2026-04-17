@@ -1154,19 +1154,27 @@ pub struct AdditionalFileSystemPermissions {
 
 impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
     fn from(value: CoreFileSystemPermissions) -> Self {
-        Self {
-            read: value.read,
-            write: value.write,
-        }
+        let (read, write) = value.legacy_read_write_roots().unwrap_or_else(|| {
+            let read = value
+                .explicit_path_entries()
+                .filter_map(|(path, access)| access.can_read().then_some(path.clone()))
+                .collect::<Vec<_>>();
+            let write = value
+                .explicit_path_entries()
+                .filter_map(|(path, access)| access.can_write().then_some(path.clone()))
+                .collect::<Vec<_>>();
+            (
+                (!read.is_empty()).then_some(read),
+                (!write.is_empty()).then_some(write),
+            )
+        });
+        Self { read, write }
     }
 }
 
 impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
     fn from(value: AdditionalFileSystemPermissions) -> Self {
-        Self {
-            read: value.read,
-            write: value.write,
-        }
+        CoreFileSystemPermissions::from_read_write_roots(value.read, value.write)
     }
 }
 
@@ -6761,16 +6769,16 @@ mod tests {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(CoreFileSystemPermissions {
-                    read: Some(vec![
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
-                    write: Some(vec![
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
-                }),
+                )),
             }
         );
     }
@@ -6854,16 +6862,16 @@ mod tests {
                 network: Some(CoreNetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(CoreFileSystemPermissions {
-                    read: Some(vec![
+                file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
-                    write: Some(vec![
+                    Some(vec![
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
-                }),
+                )),
             }
         );
     }
