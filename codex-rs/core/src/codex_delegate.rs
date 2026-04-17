@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
 use codex_exec_server::EnvironmentManager;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
@@ -753,6 +754,7 @@ fn spawn_guardian_review(
             review_id,
             request,
             retry_reason,
+            GuardianApprovalRequestSource::DelegatedSubagent,
             cancel_token,
         ));
         let _ = tx.send(decision);
