@@ -38,6 +38,54 @@ fn ignores_non_proc_mount_errors() {
 }
 
 #[test]
+fn bwrap_child_success_requires_clean_exit_status() {
+    assert!(bwrap_child_succeeded(wait_status_for_exit_code(
+        /*exit_code*/ 0
+    )));
+    assert!(!bwrap_child_succeeded(wait_status_for_exit_code(
+        /*exit_code*/ 1
+    )));
+}
+
+#[test]
+fn cleanup_removes_empty_synthetic_mount_point() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let git_path = temp_dir.path().join(".git");
+    File::create(&git_path).expect("create empty git file");
+
+    remove_bwrap_mount_point_if_safe(&git_path);
+
+    assert!(!git_path.exists());
+}
+
+#[test]
+fn cleanup_preserves_real_git_file() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let git_path = temp_dir.path().join(".git");
+    std::fs::write(&git_path, "gitdir: /tmp/worktree\n").expect("write git file");
+
+    remove_bwrap_mount_point_if_safe(&git_path);
+
+    assert_eq!(
+        std::fs::read_to_string(&git_path).expect("read git file"),
+        "gitdir: /tmp/worktree\n"
+    );
+}
+
+#[test]
+fn cleanup_preserves_nonempty_git_directory() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let git_path = temp_dir.path().join(".git");
+    std::fs::create_dir(&git_path).expect("create git dir");
+    std::fs::write(git_path.join("config"), "[core]\n").expect("write git config");
+
+    remove_bwrap_mount_point_if_safe(&git_path);
+
+    assert!(git_path.exists());
+    assert!(git_path.join("config").exists());
+}
+
+#[test]
 fn inserts_bwrap_argv0_before_command_separator() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let mut argv = build_bwrap_argv(
@@ -535,4 +583,9 @@ fn valid_inner_stage_modes_do_not_panic() {
     ensure_inner_stage_mode_is_valid(
         /*apply_seccomp_then_exec*/ true, /*use_legacy_landlock*/ false,
     );
+}
+
+#[cfg(test)]
+fn wait_status_for_exit_code(exit_code: libc::c_int) -> libc::c_int {
+    exit_code << 8
 }
