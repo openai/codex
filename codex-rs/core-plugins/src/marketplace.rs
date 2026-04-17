@@ -575,10 +575,7 @@ fn normalize_git_plugin_source_url(
         || url.starts_with(".\\")
         || url.starts_with("..\\")
     {
-        return Ok(normalize_relative_git_plugin_source_url(
-            marketplace_path,
-            url,
-        )?);
+        return normalize_relative_git_plugin_source_url(marketplace_path, url);
     }
     if url.starts_with("file://") || url.starts_with('/') {
         return Ok(url.to_string());
