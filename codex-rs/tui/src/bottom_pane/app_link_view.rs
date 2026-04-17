@@ -494,6 +494,10 @@ impl BottomPaneView for AppLinkView {
         self.complete = true;
         true
     }
+
+    fn terminal_title_requires_action(&self) -> bool {
+        true
+    }
 }
 
 impl crate::render::renderable::Renderable for AppLinkView {

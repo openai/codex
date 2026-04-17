@@ -529,6 +529,10 @@ impl BottomPaneView for ApprovalOverlay {
     fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
         self.dismiss_resolved_request(request)
     }
+
+    fn terminal_title_requires_action(&self) -> bool {
+        true
+    }
 }
 
 impl Renderable for ApprovalOverlay {
