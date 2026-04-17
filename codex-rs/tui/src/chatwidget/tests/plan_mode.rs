@@ -1350,7 +1350,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(
         chat.current_model(),
-        codex_core::test_support::get_model_offline(chat.config.model.as_deref())
+        crate::legacy_core::test_support::get_model_offline(chat.config.model.as_deref())
     );
 }
 

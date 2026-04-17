@@ -1561,6 +1561,7 @@ mod tests {
                 ..Default::default()
             },
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
         view.set_search_query("beta".to_string());
 
@@ -1623,6 +1624,7 @@ mod tests {
                 ..Default::default()
             },
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         assert_eq!(view.active_tab_id(), Some("beta"));
@@ -1693,6 +1695,7 @@ mod tests {
                 ..Default::default()
             },
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
         let (wrapped_tx_raw, _wrapped_rx) = unbounded_channel::<AppEvent>();
         let wrapped_tx = AppEventSender::new(wrapped_tx_raw);
@@ -1711,6 +1714,7 @@ mod tests {
                 ..Default::default()
             },
             wrapped_tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         let rendered = render_lines_with_width(&single_line_view, /*width*/ 36);
@@ -1766,6 +1770,7 @@ mod tests {
                 ..Default::default()
             },
             auto_tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
         let (widened_tx_raw, _widened_rx) = unbounded_channel::<AppEvent>();
         let widened_tx = AppEventSender::new(widened_tx_raw);
@@ -1778,6 +1783,7 @@ mod tests {
                 ..Default::default()
             },
             widened_tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
 
         let auto_rendered = render_lines_with_width(&auto_view, /*width*/ 48);

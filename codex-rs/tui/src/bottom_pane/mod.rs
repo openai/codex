@@ -92,9 +92,9 @@ mod skills_toggle_view;
 pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
-pub(crate) use list_selection_view::SelectionRowDisplay;
 #[cfg(test)]
 pub(crate) use list_selection_view::ListSelectionView;
+pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionToggle;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;

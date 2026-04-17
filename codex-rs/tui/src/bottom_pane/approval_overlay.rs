@@ -1143,7 +1143,14 @@ mod tests {
     fn resolved_request_dismisses_overlay_without_emitting_abort() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_exec_request(), tx, Features::with_defaults());
+        let keymap = crate::keymap::RuntimeKeymap::defaults();
+        let mut view = ApprovalOverlay::new(
+            make_exec_request(),
+            tx,
+            Features::with_defaults(),
+            keymap.approval,
+            keymap.list,
+        );
 
         assert!(
             view.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {

@@ -223,6 +223,12 @@ impl ChatWidget {
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
+            SlashCommand::Vim => {
+                self.toggle_vim_mode_and_notify();
+            }
+            SlashCommand::Keymap => {
+                self.open_keymap_picker();
+            }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
