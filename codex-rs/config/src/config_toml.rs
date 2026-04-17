@@ -565,6 +565,9 @@ pub struct AgentSpawnToml {
     /// MCP server names to start in spawned agents. When unset, spawned agents inherit all
     /// effective MCP servers. An empty list disables MCP servers for spawned agents.
     pub mcp_servers: Option<Vec<String>>,
+
+    /// Whether to inject the skills developer message in spawned agents.
+    pub inject_skills_message: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

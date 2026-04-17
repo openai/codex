@@ -560,6 +560,9 @@ pub struct Config {
     /// Settings specific to the task-path-based multi-agent tool surface.
     pub multi_agent_v2: MultiAgentV2Config,
 
+    /// Whether to inject the `<skills_instructions>` developer block for this session.
+    pub inject_skills_message: bool,
+
     /// Centralized feature flags; source of truth for feature gating.
     pub features: ManagedFeatures,
 
@@ -614,11 +617,15 @@ pub struct MultiAgentV2Config {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentSpawnConfig {
     pub mcp_servers: Option<Vec<String>>,
+    pub inject_skills_message: bool,
 }
 
 impl Default for AgentSpawnConfig {
     fn default() -> Self {
-        Self { mcp_servers: None }
+        Self {
+            mcp_servers: None,
+            inject_skills_message: true,
+        }
     }
 }
 
@@ -1427,8 +1434,9 @@ fn resolve_multi_agent_v2_config(
 }
 
 fn resolve_agent_spawn_config(spawn: Option<&AgentSpawnToml>) -> std::io::Result<AgentSpawnConfig> {
+    let default = AgentSpawnConfig::default();
     let Some(spawn) = spawn else {
-        return Ok(AgentSpawnConfig { mcp_servers: None });
+        return Ok(default);
     };
 
     let mcp_servers = spawn
@@ -1436,7 +1444,12 @@ fn resolve_agent_spawn_config(spawn: Option<&AgentSpawnToml>) -> std::io::Result
         .as_ref()
         .map(|servers| normalize_mcp_server_allowlist(servers, "agents.spawn.mcp_servers"))
         .transpose()?;
-    Ok(AgentSpawnConfig { mcp_servers })
+    Ok(AgentSpawnConfig {
+        mcp_servers,
+        inject_skills_message: spawn
+            .inject_skills_message
+            .unwrap_or(default.inject_skills_message),
+    })
 }
 
 fn normalize_mcp_server_allowlist(
@@ -2309,6 +2322,7 @@ impl Config {
             background_terminal_max_timeout,
             ghost_snapshot,
             multi_agent_v2,
+            inject_skills_message: true,
             features,
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning

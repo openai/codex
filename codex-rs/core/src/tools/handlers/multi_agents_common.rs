@@ -243,14 +243,16 @@ pub(crate) fn reject_full_fork_spawn_overrides(
     model: Option<&str>,
     reasoning_effort: Option<ReasoningEffort>,
     mcp_servers: Option<&[String]>,
+    inject_skills_message: Option<bool>,
 ) -> Result<(), FunctionCallError> {
     if agent_type.is_some()
         || model.is_some()
         || reasoning_effort.is_some()
         || mcp_servers.is_some()
+        || inject_skills_message.is_some()
     {
         return Err(FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, MCP servers, and skills-message setting; omit agent_type, model, reasoning_effort, mcp_servers, and inject_skills_message, or spawn without fork_context/fork_turns=all.".to_string(),
         ));
     }
     Ok(())
@@ -260,6 +262,7 @@ pub(crate) async fn apply_spawn_agent_capability_overrides(
     session: &Session,
     config: &mut Config,
     requested_mcp_servers: Option<Vec<String>>,
+    requested_inject_skills_message: Option<bool>,
 ) -> Result<(), FunctionCallError> {
     let mcp_server_allowlist = match requested_mcp_servers {
         Some(servers) => Some(normalize_spawn_mcp_server_allowlist(
@@ -274,6 +277,8 @@ pub(crate) async fn apply_spawn_agent_capability_overrides(
     }
 
     config.mcp_server_allowlist = mcp_server_allowlist;
+    config.inject_skills_message =
+        requested_inject_skills_message.unwrap_or(config.agent_spawn.inject_skills_message);
     Ok(())
 }
 

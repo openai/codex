@@ -1481,6 +1481,67 @@ async fn skills_append_to_developer_message() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inject_skills_message_false_suppresses_developer_skills_section() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let skill_dir = codex_home.path().join("skills/demo");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: build charts\n---\n\n# body\n",
+    )
+    .expect("write skill");
+
+    let codex_home_path = codex_home.path().to_path_buf();
+    let codex = test_codex()
+        .with_home(codex_home.clone())
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            config.cwd = codex_home_path.abs();
+            config.inject_skills_message = false;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let developer_messages = request.message_input_texts("developer");
+    let developer_text = developer_messages.join("\n\n");
+    assert!(
+        !developer_text.contains("## Skills"),
+        "did not expect skills section: {developer_messages:?}"
+    );
+    assert!(
+        !developer_text.contains("demo: build charts"),
+        "did not expect skill summary: {developer_messages:?}"
+    );
+    let _codex_home_guard = codex_home;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;

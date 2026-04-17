@@ -34,6 +34,10 @@
     "AgentSpawnToml": {
       "additionalProperties": false,
       "properties": {
+        "inject_skills_message": {
+          "description": "Whether to inject the skills developer message in spawned agents.",
+          "type": "boolean"
+        },
         "mcp_servers": {
           "description": "MCP server names to start in spawned agents. When unset, spawned agents inherit all effective MCP servers. An empty list disables MCP servers for spawned agents.",
           "items": {

@@ -429,7 +429,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 }
 
 #[tokio::test]
-async fn spawn_agent_applies_per_call_mcp_settings() {
+async fn spawn_agent_applies_per_call_mcp_and_skills_settings() {
     #[derive(Debug, Deserialize)]
     struct SpawnAgentResult {
         agent_id: String,
@@ -462,7 +462,8 @@ async fn spawn_agent_applies_per_call_mcp_settings() {
             "spawn_agent",
             function_payload(json!({
                 "message": "inspect this repo",
-                "mcp_servers": [" docs ", "docs"]
+                "mcp_servers": [" docs ", "docs"],
+                "inject_skills_message": false
             })),
         ))
         .await
@@ -484,6 +485,7 @@ async fn spawn_agent_applies_per_call_mcp_settings() {
         child_config.mcp_server_allowlist,
         Some(vec!["docs".to_string()])
     );
+    assert!(!child_config.inject_skills_message);
 }
 
 #[tokio::test]
@@ -514,6 +516,7 @@ enabled = false
 
 [agents.spawn]
 mcp_servers = ["linear"]
+inject_skills_message = false
 "#,
     )
     .await
@@ -551,7 +554,8 @@ mcp_servers = ["linear"]
             function_payload(json!({
                 "message": "inspect this repo",
                 "agent_type": role_name,
-                "mcp_servers": ["docs"]
+                "mcp_servers": ["docs"],
+                "inject_skills_message": true
             })),
         ))
         .await
@@ -576,6 +580,7 @@ mcp_servers = ["linear"]
         child_config.mcp_server_allowlist,
         Some(vec!["docs".to_string()])
     );
+    assert!(child_config.inject_skills_message);
 }
 
 #[tokio::test]
@@ -606,6 +611,7 @@ enabled = false
 
 [agents.spawn]
 mcp_servers = ["linear"]
+inject_skills_message = false
 "#,
     )
     .await
@@ -659,6 +665,7 @@ mcp_servers = ["linear"]
         child_config.mcp_server_allowlist,
         Some(vec!["linear".to_string()])
     );
+    assert!(!child_config.inject_skills_message);
 }
 
 #[tokio::test]
@@ -712,7 +719,8 @@ async fn spawn_agent_fork_context_rejects_capability_overrides() {
             function_payload(json!({
                 "message": "inspect this repo",
                 "fork_context": true,
-                "mcp_servers": []
+                "mcp_servers": [],
+                "inject_skills_message": false
             })),
         ))
         .await
@@ -721,7 +729,7 @@ async fn spawn_agent_fork_context_rejects_capability_overrides() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, MCP servers, and skills-message setting; omit agent_type, model, reasoning_effort, mcp_servers, and inject_skills_message, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -754,7 +762,7 @@ async fn spawn_agent_fork_context_rejects_agent_type_override() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, MCP servers, and skills-message setting; omit agent_type, model, reasoning_effort, mcp_servers, and inject_skills_message, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -788,7 +796,7 @@ async fn spawn_agent_fork_context_rejects_child_model_overrides() {
     assert_eq!(
         err,
             FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, MCP servers, and skills-message setting; omit agent_type, model, reasoning_effort, mcp_servers, and inject_skills_message, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -832,7 +840,7 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, MCP servers, and skills-message setting; omit agent_type, model, reasoning_effort, mcp_servers, and inject_skills_message, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -873,7 +881,7 @@ async fn multi_agent_v2_spawn_fork_turns_rejects_child_model_overrides() {
     assert_eq!(
         err,
             FunctionCallError::RespondToModel(
-            "Full-history forked agents inherit the parent agent type, model, reasoning effort, and MCP servers; omit agent_type, model, reasoning_effort, and mcp_servers, or spawn without fork_context/fork_turns=all.".to_string(),
+            "Full-history forked agents inherit the parent agent type, model, reasoning effort, MCP servers, and skills-message setting; omit agent_type, model, reasoning_effort, mcp_servers, and inject_skills_message, or spawn without fork_context/fork_turns=all.".to_string(),
         )
     );
 }
@@ -1154,7 +1162,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_applies_per_call_mcp_settings() {
+async fn multi_agent_v2_spawn_applies_per_call_mcp_and_skills_settings() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1189,7 +1197,8 @@ async fn multi_agent_v2_spawn_applies_per_call_mcp_settings() {
             function_payload(json!({
                 "message": "inspect this repo",
                 "task_name": "test_process",
-                "mcp_servers": ["docs"]
+                "mcp_servers": ["docs"],
+                "inject_skills_message": false
             })),
         ))
         .await
@@ -1213,6 +1222,7 @@ async fn multi_agent_v2_spawn_applies_per_call_mcp_settings() {
         child_config.mcp_server_allowlist,
         Some(vec!["docs".to_string()])
     );
+    assert!(!child_config.inject_skills_message);
 }
 
 #[tokio::test]

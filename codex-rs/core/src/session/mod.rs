@@ -2411,12 +2411,14 @@ impl Session {
                 developer_sections.push(apps_section);
             }
         }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        if let Some(skills_section) = render_skills_section(&implicit_skills) {
-            developer_sections.push(skills_section);
+        if turn_context.config.inject_skills_message {
+            let implicit_skills = turn_context
+                .turn_skills
+                .outcome
+                .allowed_skills_for_implicit_invocation();
+            if let Some(skills_section) = render_skills_section(&implicit_skills) {
+                developer_sections.push(skills_section);
+            }
         }
         let loaded_plugins = self
             .services

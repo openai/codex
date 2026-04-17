@@ -76,6 +76,7 @@ impl ToolHandler for Handler {
                 args.model.as_deref(),
                 args.reasoning_effort,
                 args.mcp_servers.as_deref(),
+                args.inject_skills_message,
             )?;
         } else {
             apply_requested_spawn_agent_model_overrides(
@@ -93,6 +94,7 @@ impl ToolHandler for Handler {
                 &session,
                 &mut config,
                 args.mcp_servers,
+                args.inject_skills_message,
             )
             .await?;
         }
@@ -242,6 +244,7 @@ struct SpawnAgentArgs {
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     mcp_servers: Option<Vec<String>>,
+    inject_skills_message: Option<bool>,
     fork_turns: Option<String>,
     fork_context: Option<bool>,
 }

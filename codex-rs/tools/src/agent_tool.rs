@@ -548,6 +548,13 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
                 ),
             ),
         ),
+        (
+            "inject_skills_message".to_string(),
+            JsonSchema::boolean(Some(
+                "Optional override for whether the new agent receives the skills developer message."
+                    .to_string(),
+            )),
+        ),
     ])
 }
 
@@ -591,6 +598,13 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
                         .to_string(),
                 ),
             ),
+        ),
+        (
+            "inject_skills_message".to_string(),
+            JsonSchema::boolean(Some(
+                "Optional override for whether the new agent receives the skills developer message."
+                    .to_string(),
+            )),
         ),
     ])
 }
