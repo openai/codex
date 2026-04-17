@@ -2441,9 +2441,9 @@ impl CodexMessageProcessor {
                         | codex_protocol::protocol::SandboxPolicy::ExternalSandbox { .. }
                 ))
         {
-            let trust_target = resolve_root_git_project_for_trust(config.cwd.as_path())
+            let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)
                 .await
-                .unwrap_or_else(|| config.cwd.to_path_buf());
+                .unwrap_or_else(|| config.cwd.clone());
             let cli_overrides_with_trust;
             let cli_overrides_for_reload = if let Err(err) =
                 codex_core::config::set_project_trust_level(
@@ -6155,6 +6155,7 @@ impl CodexMessageProcessor {
                 }
             };
             let config_layer_stack = match load_config_layers_state(
+                LOCAL_FS.as_ref(),
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
                 &cli_overrides,

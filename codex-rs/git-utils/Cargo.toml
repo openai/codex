@@ -9,6 +9,8 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+codex-exec-server = { workspace = true }
+codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 once_cell = { workspace = true }
