@@ -81,20 +81,20 @@ fn workspace_write_excluding_tmp() -> SandboxPolicy {
 
 fn requested_directory_write_permissions(path: &Path) -> RequestPermissionProfile {
     RequestPermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![absolute_path(path)]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![absolute_path(path)]),
+        )),
         ..RequestPermissionProfile::default()
     }
 }
 
 fn normalized_directory_write_permissions(path: &Path) -> Result<RequestPermissionProfile> {
     Ok(RequestPermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: Some(vec![]),
-            write: Some(vec![AbsolutePathBuf::try_from(path.canonicalize()?)?]),
-        }),
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![AbsolutePathBuf::try_from(path.canonicalize()?)?]),
+        )),
         ..RequestPermissionProfile::default()
     })
 }

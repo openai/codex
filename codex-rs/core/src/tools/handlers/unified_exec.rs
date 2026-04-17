@@ -227,6 +227,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let requested_additional_permissions = additional_permissions.clone();
                 let effective_additional_permissions = apply_granted_turn_permissions(
                     context.session.as_ref(),
+                    context.turn.cwd.as_path(),
                     sandbox_permissions,
                     additional_permissions,
                 )
