@@ -3237,7 +3237,7 @@ impl ChatWidget {
         Some(merge_user_messages(to_merge))
     }
 
-    fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
+    pub(crate) fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
         let UserMessage {
             text,
             local_images,

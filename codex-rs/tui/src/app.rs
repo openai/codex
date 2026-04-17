@@ -9612,6 +9612,19 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn side_restore_user_message_puts_inline_question_back_in_composer() {
+        let mut app = make_test_app().await;
+        let user_message = crate::chatwidget::UserMessage::from("side question");
+
+        app.restore_side_user_message(Some(user_message));
+
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "side question"
+        );
+    }
+
+    #[tokio::test]
     async fn side_discard_selection_keeps_current_side_thread() {
         let mut app = make_test_app().await;
         let parent_thread_id = ThreadId::new();

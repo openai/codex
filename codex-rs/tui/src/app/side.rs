@@ -187,6 +187,16 @@ impl App {
         (!self.side_threads.is_empty()).then_some(SIDE_ALREADY_OPEN_MESSAGE)
     }
 
+    pub(super) fn restore_side_user_message(
+        &mut self,
+        user_message: Option<crate::chatwidget::UserMessage>,
+    ) {
+        if let Some(user_message) = user_message {
+            self.chat_widget
+                .restore_user_message_to_composer(user_message);
+        }
+    }
+
     pub(super) fn install_side_thread_snapshot(
         store: &mut ThreadEventStore,
         mut session: ThreadSessionState,
@@ -219,9 +229,10 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         parent_thread_id: ThreadId,
-        user_message: Option<crate::chatwidget::UserMessage>,
+        mut user_message: Option<crate::chatwidget::UserMessage>,
     ) -> Result<AppRunControl> {
         if let Some(message) = self.side_start_block_message() {
+            self.restore_side_user_message(user_message.take());
             self.chat_widget.add_error_message(message.to_string());
             return Ok(AppRunControl::Continue);
         }
@@ -257,25 +268,28 @@ impl App {
                     .await
                 {
                     self.discard_side_thread(app_server, child_thread_id).await;
+                    self.restore_side_user_message(user_message.take());
                     self.chat_widget.add_error_message(format!(
                         "Failed to switch into side conversation {child_thread_id}: {err}"
                     ));
                     return Ok(AppRunControl::Continue);
                 }
                 if self.active_thread_id == Some(child_thread_id) {
-                    if let Some(user_message) = user_message {
+                    if let Some(user_message) = user_message.take() {
                         let _ = self
                             .chat_widget
                             .submit_user_message_as_plain_user_turn(user_message);
                     }
                 } else {
                     self.discard_side_thread(app_server, child_thread_id).await;
+                    self.restore_side_user_message(user_message.take());
                     self.chat_widget.add_error_message(format!(
                         "Failed to switch into side conversation {child_thread_id}."
                     ));
                 }
             }
             Err(err) => {
+                self.restore_side_user_message(user_message.take());
                 self.chat_widget
                     .set_thread_footer_hint_override(/*items*/ None);
                 self.chat_widget.add_error_message(format!(
