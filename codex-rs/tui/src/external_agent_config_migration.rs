@@ -52,7 +52,7 @@ impl ActionMenuOption {
         match self {
             Self::Proceed => "Proceed with selected",
             Self::Skip => "Skip for now",
-            Self::SkipForever => "Don't ask again for these locations",
+            Self::SkipForever => "Don't ask again",
         }
     }
 
@@ -145,6 +145,14 @@ struct ExternalAgentConfigMigrationScreen {
 }
 
 impl ExternalAgentConfigMigrationScreen {
+    fn proceed_label(&self) -> String {
+        if self.selected_count() == 0 {
+            format!("{} (disabled)", ActionMenuOption::Proceed.label())
+        } else {
+            ActionMenuOption::Proceed.label().to_string()
+        }
+    }
+
     fn display_description(item: &ExternalAgentConfigMigrationItem) -> String {
         let Some(cwd) = item.cwd.as_deref() else {
             return item.description.clone();
@@ -622,10 +630,7 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
         ])
         .areas(inner_area);
 
-        let heading = Line::from(vec![
-            "> ".into(),
-            "Migratable external agent config detected".bold(),
-        ]);
+        let heading = Line::from(vec!["> ".into(), "External agent config detected".bold()]);
         heading.render(header_area, buf);
 
         Paragraph::new(vec![
@@ -666,10 +671,10 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
             .render(actions_intro_area, buf);
         selection_option_row_with_dim(
             /*index*/ 0,
-            ActionMenuOption::Proceed.label().to_string(),
+            self.proceed_label(),
             self.focus == FocusArea::Actions
                 && self.highlighted_action == ActionMenuOption::Proceed,
-            /*dim*/ self.focus != FocusArea::Actions,
+            /*dim*/ self.focus != FocusArea::Actions || self.selected_count() == 0,
         )
         .render(proceed_area, buf);
         selection_option_row_with_dim(
@@ -922,6 +927,25 @@ mod tests {
         assert!(
             rendered.contains("Select at least one item or choose a skip option."),
             "expected inline validation error, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn proceed_action_is_marked_disabled_when_no_items_are_selected() {
+        let items = sample_items();
+        let mut screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+
+        screen.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+
+        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 21);
+        assert!(
+            rendered.contains("Proceed with selected (disabled)"),
+            "expected disabled proceed label, got:\n{rendered}"
         );
     }
 

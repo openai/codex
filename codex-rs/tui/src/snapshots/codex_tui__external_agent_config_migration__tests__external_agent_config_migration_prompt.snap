@@ -1,10 +1,10 @@
 ---
 source: tui/src/external_agent_config_migration.rs
-assertion_line: 818
+assertion_line: 824
 expression: rendered
 ---
 
-  > Migratable external agent config detected
+  > External agent config detected
   We found settings from another agent that you can add to this project.
   Select what to import
   Home
@@ -21,5 +21,5 @@ expression: rendered
   Selected 3 of 3 item(s).
     1. Proceed with selected                                                  
     2. Skip for now                                                           
-    3. Don't ask again for these locations                                    
+    3. Don't ask again                                                        
   Use ↑/↓ to move, space to toggle, 1/2/3 to choose, a/n for all/none
