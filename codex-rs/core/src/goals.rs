@@ -486,6 +486,7 @@ impl Session {
             turn_context,
             EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
                 thread_id: self.conversation_id,
+                turn_id: Some(turn_context.sub_id.clone()),
                 goal,
             }),
         )
@@ -635,6 +636,7 @@ impl Session {
             id: event_id,
             msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
                 thread_id: self.conversation_id,
+                turn_id: None,
                 goal,
             }),
         })
