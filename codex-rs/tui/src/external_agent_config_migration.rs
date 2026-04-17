@@ -178,16 +178,21 @@ impl ExternalAgentConfigMigrationScreen {
             return reformatted;
         }
 
+        if let Some(reformatted) = reformat_description(&item.description, "Migrate ", " to ", cwd)
+        {
+            return reformatted;
+        }
+
         if let Some(reformatted) = reformat_description(&item.description, "Import ", " to ", cwd) {
             return reformatted;
         }
 
         if let Some(source) = item
             .description
-            .strip_prefix("Import enabled plugins from ")
+            .strip_prefix("Migrate enabled plugins from ")
         {
             let description = format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 display_path_for(std::path::Path::new(source), cwd)
             );
             if let Some(details) = &item.details {
@@ -742,8 +747,9 @@ mod tests {
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Plugins,
-                description: "Import enabled plugins from /workspace/project/.claude/settings.json"
-                    .to_string(),
+                description:
+                    "Migrate enabled plugins from /workspace/project/.claude/settings.json"
+                        .to_string(),
                 cwd: Some(PathBuf::from("/workspace/project")),
                 details: Some(codex_app_server_protocol::MigrationDetails {
                     plugins: vec![
@@ -772,7 +778,7 @@ mod tests {
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-                description: "Import /workspace/project/CLAUDE.md to /workspace/project/AGENTS.md"
+                description: "Migrate /workspace/project/CLAUDE.md to /workspace/project/AGENTS.md"
                     .to_string(),
                 cwd: Some(PathBuf::from("/workspace/project")),
                 details: None,
