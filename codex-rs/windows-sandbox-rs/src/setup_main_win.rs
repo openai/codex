@@ -16,6 +16,7 @@ use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
+use codex_windows_sandbox::ensure_allow_write_aces_recursively;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::is_command_cwd_root;
@@ -705,6 +706,8 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     root.display()
                 ),
             )?;
+        }
+        if need_grant || root.is_dir() {
             grant_tasks.push(root.clone());
         }
     }
@@ -712,6 +715,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
     std::thread::scope(|scope| {
         for root in grant_tasks {
+            let recurse_existing_descendants = root.is_dir();
             let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
             let sid_strings = if is_command_cwd {
                 vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
@@ -731,7 +735,16 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     }
                 }
 
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+                // Existing descendants may have missed inherited ACEs from earlier setups,
+                // so directory write roots need a recursive DACL refresh in addition to the
+                // top-level grant.
+                let res = unsafe {
+                    if recurse_existing_descendants {
+                        ensure_allow_write_aces_recursively(&root, &psids)
+                    } else {
+                        ensure_allow_write_aces(&root, &psids)
+                    }
+                };
 
                 for psid in psids {
                     unsafe {

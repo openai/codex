@@ -58,6 +58,8 @@ pub use acl::ensure_allow_mask_aces_with_inheritance;
 #[cfg(target_os = "windows")]
 pub use acl::ensure_allow_write_aces;
 #[cfg(target_os = "windows")]
+pub use acl::ensure_allow_write_aces_recursively;
+#[cfg(target_os = "windows")]
 pub use acl::fetch_dacl_handle;
 #[cfg(target_os = "windows")]
 pub use acl::path_mask_allows;
