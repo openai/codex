@@ -95,7 +95,7 @@ impl EnvironmentManager {
         )
     }
 
-    pub(crate) fn with_current_id(&self, current_environment_id: Option<String>) -> Self {
+    pub fn with_current_id(&self, current_environment_id: Option<String>) -> Self {
         let current_environment_id = current_environment_id
             .filter(|environment_id| self.environment_configs.contains_key(environment_id));
         Self {
@@ -235,7 +235,22 @@ impl Environment {
         exec_server_url: Option<String>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Result<Self, ExecServerError> {
-        Self::create_with_config(EnvironmentConfig { exec_server_url }, local_runtime_paths).await
+        let (exec_server_url, disabled) = normalize_exec_server_url(exec_server_url);
+        let id = if disabled {
+            LOCAL_ENVIRONMENT_ID.to_string()
+        } else if exec_server_url.is_some() {
+            REMOTE_ENVIRONMENT_ID.to_string()
+        } else {
+            LOCAL_ENVIRONMENT_ID.to_string()
+        };
+        Self::create_with_config(
+            EnvironmentConfig {
+                id,
+                exec_server_url,
+            },
+            local_runtime_paths,
+        )
+        .await
     }
 
     async fn create_with_config(

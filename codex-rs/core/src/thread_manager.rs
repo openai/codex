@@ -975,24 +975,26 @@ impl ThreadManagerState {
             self.inherited_environment_manager_for_source(&session_source)
                 .await
         };
-        let effective_environments = environments
-            .filter(|environments| !environments.is_empty())
-            .or_else(|| {
-                self.inherited_environments_for_source(&session_source)
-                    .await
-            })
-            .unwrap_or_else(|| {
-                environment_manager
-                    .current_config()
-                    .map(codex_exec_server::EnvironmentConfig::id)
-                    .map(|environment_id| {
-                        vec![codex_protocol::protocol::TurnEnvironment {
-                            environment_id: environment_id.to_string(),
-                            cwd: None,
-                        }]
-                    })
-                    .unwrap_or_default()
-            });
+        let effective_environments = if let Some(environments) =
+            environments.filter(|environments| !environments.is_empty())
+        {
+            environments
+        } else if let Some(environments) = self
+            .inherited_environments_for_source(&session_source)
+            .await
+        {
+            environments
+        } else {
+            environment_manager
+                .current_config()
+                .map(|environment| {
+                    vec![codex_protocol::protocol::TurnEnvironment {
+                        environment_id: environment.id().to_string(),
+                        cwd: None,
+                    }]
+                })
+                .unwrap_or_default()
+        };
         let selected_environment_id = effective_environments
             .first()
             .map(|environment| environment.environment_id.clone());
@@ -1041,6 +1043,7 @@ impl ThreadManagerState {
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
+            .await
     }
 
     async fn finalize_thread_spawn(

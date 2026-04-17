@@ -2275,6 +2275,7 @@ impl CodexMessageProcessor {
             environments,
             persist_extended_history,
         } = params;
+        let environment_fallback_cwd = cwd.clone();
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2325,7 +2326,9 @@ impl CodexMessageProcessor {
                         .into_iter()
                         .map(|environment| codex_protocol::protocol::TurnEnvironment {
                             environment_id: environment.environment_id,
-                            cwd: environment.cwd,
+                            cwd: environment
+                                .cwd
+                                .or_else(|| environment_fallback_cwd.clone().map(Into::into)),
                         })
                         .collect()
                 }),
