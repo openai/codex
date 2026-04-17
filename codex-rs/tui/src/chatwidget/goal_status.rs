@@ -105,7 +105,10 @@ mod tests {
     #[test]
     fn active_goal_usage_reports_time_without_budget() {
         assert_eq!(
-            active_goal_usage(None, /*tokens_used*/ 12_500, 120),
+            active_goal_usage(
+                /*token_budget*/ None, /*tokens_used*/ 12_500,
+                /*time_used_seconds*/ 120,
+            ),
             Some("2m".to_string())
         );
     }
@@ -121,7 +124,7 @@ mod tests {
     #[test]
     fn stopped_goal_budget_usage_omits_unbudgeted_usage() {
         assert_eq!(
-            stopped_goal_budget_usage(None, /*tokens_used*/ 12_500),
+            stopped_goal_budget_usage(/*token_budget*/ None, /*tokens_used*/ 12_500),
             None
         );
     }
