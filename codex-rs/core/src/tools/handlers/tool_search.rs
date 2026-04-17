@@ -5,12 +5,10 @@ use crate::tools::context::ToolSearchOutput;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::tool_search_entry::ToolSearchEntry;
-use crate::tools::tool_search_entry::ToolSearchEntryOutput;
 use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
 use bm25::SearchEngineBuilder;
-use codex_tools::ResponsesApiNamespace;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSearchOutputTool;
@@ -138,29 +136,23 @@ impl ToolSearchHandler {
                 continue;
             };
             match &entry.output {
-                ToolSearchEntryOutput::Function(tool) => {
+                ToolSearchOutputTool::Function(tool) => {
                     tools.push(ToolSearchOutputTool::Function(tool.clone()));
                 }
-                ToolSearchEntryOutput::NamespacedFunction {
-                    namespace,
-                    namespace_description,
-                    tool: namespace_tool,
-                } => {
+                ToolSearchOutputTool::Namespace(namespace) => {
                     if let Some(output) = tools.iter_mut().find_map(|tool| match tool {
-                        ToolSearchOutputTool::Namespace(output) if output.name == *namespace => {
+                        ToolSearchOutputTool::Namespace(output)
+                            if output.name == namespace.name =>
+                        {
                             Some(output)
                         }
                         ToolSearchOutputTool::Namespace(_) | ToolSearchOutputTool::Function(_) => {
                             None
                         }
                     }) {
-                        output.tools.push(namespace_tool.clone());
+                        output.tools.extend(namespace.tools.clone());
                     } else {
-                        tools.push(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
-                            name: namespace.clone(),
-                            description: namespace_description.clone(),
-                            tools: vec![namespace_tool.clone()],
-                        }));
+                        tools.push(ToolSearchOutputTool::Namespace(namespace.clone()));
                     }
                 }
             }
@@ -251,7 +243,7 @@ mod tests {
             vec![
                 ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
                     name: "mcp__calendar__".to_string(),
-                    description: "Tools from the calendar MCP server.".to_string(),
+                    description: "Tools in the mcp__calendar__ namespace.".to_string(),
                     tools: vec![
                         ResponsesApiNamespaceTool::Function(ResponsesApiTool {
                             name: "create_event".to_string(),
@@ -288,7 +280,7 @@ mod tests {
                     parameters: codex_tools::JsonSchema::object(
                         std::collections::BTreeMap::from([(
                             "mode".to_string(),
-                            codex_tools::JsonSchema::string(None),
+                            codex_tools::JsonSchema::string(/*description*/ None),
                         )]),
                         Some(vec!["mode".to_string()]),
                         Some(false.into()),

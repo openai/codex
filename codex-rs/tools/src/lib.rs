@@ -115,6 +115,7 @@ pub use tool_discovery::collect_tool_suggest_entries;
 pub use tool_discovery::create_tool_search_tool;
 pub use tool_discovery::create_tool_suggest_tool;
 pub use tool_discovery::filter_tool_suggest_discoverable_tools_for_client;
+pub use tool_discovery::tool_search_result_source_to_output_tool;
 pub use tool_registry_plan::build_tool_registry_plan;
 pub use tool_registry_plan_types::ToolHandlerKind;
 pub use tool_registry_plan_types::ToolHandlerSpec;

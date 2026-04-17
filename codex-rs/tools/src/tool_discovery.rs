@@ -224,37 +224,53 @@ pub fn collect_tool_search_output_tools<'a>(
             continue;
         };
 
-        let description = first_tool
-            .connector_description
-            .map(str::trim)
-            .filter(|description| !description.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                first_tool
-                    .connector_name
-                    .map(str::trim)
-                    .filter(|connector_name| !connector_name.is_empty())
-                    .map(|connector_name| format!("Tools for working with {connector_name}."))
-            });
-
         let tools = tools
             .iter()
-            .map(|tool| {
-                let tool_name = ToolName::namespaced(tool.tool_namespace, tool.tool_name);
-                mcp_tool_to_deferred_responses_api_tool(&tool_name, tool.tool)
-                    .map(ResponsesApiNamespaceTool::Function)
-            })
+            .map(|tool| tool_search_result_source_to_namespace_tool(*tool))
             .collect::<Result<Vec<_>, _>>()?;
 
         results.push(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
             name: tool_namespace.to_string(),
-            description: description
-                .unwrap_or_else(|| default_namespace_description(tool_namespace)),
+            description: tool_search_result_source_namespace_description(*first_tool),
             tools,
         }));
     }
 
     Ok(results)
+}
+
+pub fn tool_search_result_source_to_output_tool(
+    source: ToolSearchResultSource<'_>,
+) -> Result<ToolSearchOutputTool, serde_json::Error> {
+    Ok(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+        name: source.tool_namespace.to_string(),
+        description: tool_search_result_source_namespace_description(source),
+        tools: vec![tool_search_result_source_to_namespace_tool(source)?],
+    }))
+}
+
+fn tool_search_result_source_namespace_description(source: ToolSearchResultSource<'_>) -> String {
+    source
+        .connector_description
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            source
+                .connector_name
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())
+                .map(|connector_name| format!("Tools for working with {connector_name}."))
+        })
+        .unwrap_or_else(|| default_namespace_description(source.tool_namespace))
+}
+
+fn tool_search_result_source_to_namespace_tool(
+    source: ToolSearchResultSource<'_>,
+) -> Result<ResponsesApiNamespaceTool, serde_json::Error> {
+    let tool_name = ToolName::namespaced(source.tool_namespace, source.tool_name);
+    mcp_tool_to_deferred_responses_api_tool(&tool_name, source.tool)
+        .map(ResponsesApiNamespaceTool::Function)
 }
 
 pub fn collect_tool_search_source_infos<'a>(

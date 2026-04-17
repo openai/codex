@@ -1,26 +1,16 @@
 use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSearchOutputTool;
+use codex_tools::ToolSearchResultSource;
 use codex_tools::dynamic_tool_to_responses_api_tool;
-use codex_tools::mcp_tool_to_deferred_responses_api_tool;
+use codex_tools::tool_search_result_source_to_output_tool;
 use std::collections::HashMap;
 
 #[derive(Clone)]
 pub(crate) struct ToolSearchEntry {
     pub(crate) search_text: String,
-    pub(crate) output: ToolSearchEntryOutput,
+    pub(crate) output: ToolSearchOutputTool,
     pub(crate) limit_bucket: Option<String>,
-}
-
-#[derive(Clone)]
-pub(crate) enum ToolSearchEntryOutput {
-    Function(ResponsesApiTool),
-    NamespacedFunction {
-        namespace: String,
-        namespace_description: String,
-        tool: ResponsesApiNamespaceTool,
-    },
 }
 
 pub(crate) fn build_tool_search_entries(
@@ -63,28 +53,16 @@ pub(crate) fn build_tool_search_entries(
 }
 
 fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json::Error> {
-    let tool_name = info.canonical_tool_name();
-    let tool = mcp_tool_to_deferred_responses_api_tool(&tool_name, &info.tool)
-        .map(ResponsesApiNamespaceTool::Function)?;
-    let namespace_description = info
-        .connector_description
-        .clone()
-        .or_else(|| {
-            info.connector_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|connector_name| !connector_name.is_empty())
-                .map(|connector_name| format!("Tools for working with {connector_name}."))
-        })
-        .unwrap_or_else(|| format!("Tools from the {} MCP server.", info.server_name));
-
     Ok(ToolSearchEntry {
         search_text: build_mcp_search_text(info),
-        output: ToolSearchEntryOutput::NamespacedFunction {
-            namespace: info.callable_namespace.clone(),
-            namespace_description,
-            tool,
-        },
+        output: tool_search_result_source_to_output_tool(ToolSearchResultSource {
+            server_name: info.server_name.as_str(),
+            tool_namespace: info.callable_namespace.as_str(),
+            tool_name: info.callable_name.as_str(),
+            tool: &info.tool,
+            connector_name: info.connector_name.as_deref(),
+            connector_description: info.connector_description.as_deref(),
+        })?,
         limit_bucket: Some(info.server_name.clone()),
     })
 }
@@ -92,7 +70,7 @@ fn mcp_tool_search_entry(info: &ToolInfo) -> Result<ToolSearchEntry, serde_json:
 fn dynamic_tool_search_entry(tool: &DynamicToolSpec) -> Result<ToolSearchEntry, serde_json::Error> {
     Ok(ToolSearchEntry {
         search_text: build_dynamic_search_text(tool),
-        output: ToolSearchEntryOutput::Function(dynamic_tool_to_responses_api_tool(tool)?),
+        output: ToolSearchOutputTool::Function(dynamic_tool_to_responses_api_tool(tool)?),
         limit_bucket: None,
     })
 }
