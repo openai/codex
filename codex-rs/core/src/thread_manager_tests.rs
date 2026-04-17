@@ -1,7 +1,5 @@
 use super::*;
 use crate::codex::make_session_and_context;
-use crate::config::ConfigBuilder;
-use crate::config::ConfigOverrides;
 use crate::config::test_config;
 use crate::rollout::RolloutRecorder;
 use crate::tasks::interrupted_turn_history_marker;
@@ -43,14 +41,6 @@ fn assistant_msg(text: &str) -> ResponseItem {
         end_turn: None,
         phase: None,
     }
-}
-
-fn write_skill(codex_home: &std::path::Path, name: &str) {
-    let skill_dir = codex_home.join("skills").join(name);
-    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
-    let description = "desc ".repeat(200);
-    let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
-    std::fs::write(skill_dir.join("SKILL.md"), content).expect("write skill");
 }
 
 #[test]
@@ -242,46 +232,6 @@ async fn ignores_session_prefix_messages_when_truncating() {
         serde_json::to_value(&got_items).unwrap(),
         serde_json::to_value(&expected).unwrap()
     );
-}
-
-#[tokio::test]
-async fn start_thread_reports_skill_metadata_budget_warning() {
-    let temp_dir = tempdir().expect("tempdir");
-    let codex_home = temp_dir.path().join("codex-home");
-    let cwd = codex_home.clone();
-    std::fs::create_dir_all(&codex_home).expect("create codex home");
-    for i in 0..120 {
-        write_skill(&codex_home, &format!("demo-{i:03}"));
-    }
-    let mut config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.clone())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd),
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("load test config");
-    config.model_context_window = Some(100);
-
-    let manager = ThreadManager::with_models_provider_and_home_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-        config.codex_home.to_path_buf(),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
-    );
-
-    let new_thread = manager.start_thread(config).await.expect("start thread");
-
-    assert_eq!(new_thread.thread_start_warnings.len(), 1);
-    let warning = &new_thread.thread_start_warnings[0];
-    assert!(warning.contains("Skills list trimmed to fit the metadata budget"));
-    assert!(warning.contains("enabled skills"));
-    let _ = manager
-        .shutdown_all_threads_bounded(Duration::from_secs(10))
-        .await;
 }
 
 #[tokio::test]

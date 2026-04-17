@@ -4263,6 +4263,26 @@
           "properties": {
             "method": {
               "enum": [
+                "warning"
+              ],
+              "title": "WarningNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/WarningNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "WarningNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "deprecationNotice"
               ],
               "title": "DeprecationNoticeNotificationMethod",
@@ -15571,6 +15591,20 @@
           "high"
         ],
         "type": "string"
+      },
+      "WarningNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "message": {
+            "description": "Concise warning message for the user.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "WarningNotification",
+        "type": "object"
       },
       "WebSearchAction": {
         "oneOf": [

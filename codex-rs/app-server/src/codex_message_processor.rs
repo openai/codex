@@ -46,7 +46,6 @@ use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::CommandExecResizeParams;
 use codex_app_server_protocol::CommandExecTerminateParams;
 use codex_app_server_protocol::CommandExecWriteParams;
-use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
@@ -2558,7 +2557,7 @@ impl CodexMessageProcessor {
                     thread_id,
                     thread,
                     session_configured,
-                    thread_start_warnings,
+                    ..
                 } = new_conv;
                 if let Err(error) = Self::set_app_server_client_info(
                     thread.as_ref(),
@@ -2651,7 +2650,6 @@ impl CodexMessageProcessor {
                         );
                 }
 
-                let response_connection_id = request_id.connection_id;
                 listener_task_context
                     .outgoing
                     .send_response(request_id, response)
@@ -2670,26 +2668,6 @@ impl CodexMessageProcessor {
                         otel.name = "app_server.thread_start.notify_started",
                     ))
                     .await;
-
-                let warning_connection_ids = [response_connection_id];
-                for warning in thread_start_warnings {
-                    listener_task_context
-                        .outgoing
-                        .send_server_notification_to_connections(
-                            &warning_connection_ids,
-                            ServerNotification::ConfigWarning(ConfigWarningNotification {
-                                summary: warning,
-                                details: None,
-                                path: None,
-                                range: None,
-                            }),
-                        )
-                        .instrument(tracing::info_span!(
-                            "app_server.thread_start.notify_config_warning",
-                            otel.name = "app_server.thread_start.notify_config_warning",
-                        ))
-                        .await;
-                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {

@@ -27,4 +27,3 @@ pub use render::SkillMetadataBudget;
 pub use render::SkillRenderReport;
 pub use render::default_skill_metadata_budget;
 pub use render::render_skills_section;
-pub use render::render_skills_section_with_budget;

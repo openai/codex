@@ -40,7 +40,6 @@ pub use codex_core_skills::model;
 pub use codex_core_skills::remote;
 pub use codex_core_skills::render;
 pub use codex_core_skills::render_skills_section;
-pub use codex_core_skills::render_skills_section_with_budget;
 pub use codex_core_skills::system;
 
 pub(crate) fn skills_load_input_from_config(

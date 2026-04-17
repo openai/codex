@@ -6224,18 +6224,33 @@ impl ChatWidget {
                 self.refresh_skills_for_current_cwd(/*force_reload*/ true);
             }
             ServerNotification::ModelRerouted(_) => {}
+            ServerNotification::Warning(notification) => self.on_warning(notification.message),
             ServerNotification::DeprecationNotice(notification) => {
                 self.on_deprecation_notice(DeprecationNoticeEvent {
                     summary: notification.summary,
                     details: notification.details,
                 })
             }
-            ServerNotification::ConfigWarning(notification) => self.on_warning(
-                notification
+            ServerNotification::ConfigWarning(notification) => {
+                let summary = notification.summary.trim();
+                let details = notification
                     .details
-                    .map(|details| format!("{}: {details}", notification.summary))
-                    .unwrap_or(notification.summary),
-            ),
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|details| !details.is_empty());
+                let mut message = if summary.is_empty() {
+                    "Session warning.".to_string()
+                } else {
+                    format!("Session warning: {summary}")
+                };
+                if let Some(details) = details
+                    && !summary.eq(details)
+                {
+                    message.push(' ');
+                    message.push_str(details);
+                }
+                self.on_warning(message)
+            }
             ServerNotification::McpServerStatusUpdated(notification) => {
                 self.on_mcp_server_status_updated(notification)
             }

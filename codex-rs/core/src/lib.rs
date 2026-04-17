@@ -103,7 +103,7 @@ pub(crate) use skills::default_skill_metadata_budget;
 pub(crate) use skills::injection;
 pub(crate) use skills::manager;
 pub(crate) use skills::maybe_emit_implicit_skill_invocation;
-pub(crate) use skills::render_skills_section_with_budget;
+pub(crate) use skills::render_skills_section;
 pub(crate) use skills::resolve_skill_dependencies_for_turn;
 pub(crate) use skills::skills_load_input_from_config;
 mod skills_watcher;

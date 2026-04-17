@@ -60,6 +60,11 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
+use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -110,6 +115,11 @@ use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Metric;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -155,6 +165,54 @@ fn assistant_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+    }
+}
+
+fn test_session_telemetry_without_metadata() -> SessionTelemetry {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
+    SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics_without_metadata_tags(metrics)
+}
+
+fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
+    for scope_metrics in resource_metrics.scope_metrics() {
+        for metric in scope_metrics.metrics() {
+            if metric.name() == name {
+                return metric;
+            }
+        }
+    }
+    panic!("metric {name} missing");
+}
+
+fn histogram_sum(resource_metrics: &ResourceMetrics, name: &str) -> u64 {
+    let metric = find_metric(resource_metrics, name);
+    match metric.data() {
+        AggregatedMetrics::F64(data) => match data {
+            MetricData::Histogram(histogram) => {
+                let points: Vec<_> = histogram.data_points().collect();
+                assert_eq!(points.len(), 1);
+                points[0].sum().round() as u64
+            }
+            _ => panic!("unexpected histogram aggregation"),
+        },
+        _ => panic!("unexpected metric data type"),
     }
 }
 
@@ -4623,6 +4681,81 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             .iter()
             .all(|text| !text.contains("- admin-skill:") && !text.contains("- repo-skill:")),
         "expected no skill metadata entries to fit the tiny budget, got {developer_texts:?}"
+    );
+}
+
+#[test]
+fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
+    let session_telemetry = test_session_telemetry_without_metadata();
+
+    emit_thread_start_skill_metrics(&session_telemetry, Some((30, 12, true)));
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    assert_eq!(
+        histogram_sum(&snapshot, THREAD_SKILLS_ENABLED_TOTAL_METRIC),
+        30
+    );
+    assert_eq!(
+        histogram_sum(&snapshot, THREAD_SKILLS_KEPT_TOTAL_METRIC),
+        12
+    );
+    assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_TRUNCATED_METRIC), 1);
+}
+
+#[tokio::test]
+async fn build_initial_context_emits_thread_start_skill_warning_once() {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    let outcome = SkillLoadOutcome {
+        explicit_invocation_only: vec![],
+        allowlisted: vec![],
+        denylisted: vec![],
+        activated: vec![
+            SkillMetadata {
+                name: "admin-skill".to_string(),
+                description: "desc".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: None,
+                path_to_skills_md: PathBuf::from("/tmp/admin-skill/SKILL.md").abs(),
+                scope: SkillScope::Admin,
+            },
+            SkillMetadata {
+                name: "repo-skill".to_string(),
+                description: "desc".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: None,
+                policy: None,
+                path_to_skills_md: PathBuf::from("/tmp/repo-skill/SKILL.md").abs(),
+                scope: SkillScope::Repo,
+            },
+        ],
+        unactivated: vec![],
+        invalid: vec![],
+    };
+    turn_context.model_info.context_window = Some(100);
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+
+    let _ = session.build_initial_context(&turn_context).await;
+    let warning_event = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("warning event should arrive")
+        .expect("warning event should be readable");
+    assert!(matches!(
+        warning_event.msg,
+        EventMsg::Warning(WarningEvent { message })
+            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+    ));
+
+    let _ = session.build_initial_context(&turn_context).await;
+    assert!(
+        timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .is_err(),
+        "skill warning should only be emitted once"
     );
 }
 

@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -26,7 +28,7 @@ use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
-use crate::render_skills_section_with_budget;
+use crate::render_skills_section;
 use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills_load_input_from_config;
@@ -285,6 +287,9 @@ use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
+use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
@@ -362,12 +367,13 @@ pub struct Codex {
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 
-/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`], the
-/// unique session id, and any warnings known at thread start.
+pub(crate) const THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE: &str = "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it.";
+
+/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`] and
+/// the unique session id.
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub thread_id: ThreadId,
-    pub thread_start_warnings: Vec<String>,
 }
 
 pub(crate) struct CodexSpawnArgs {
@@ -396,6 +402,21 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+
+fn emit_thread_start_skill_metrics(
+    session_telemetry: &SessionTelemetry,
+    skill_counts: Option<(usize, usize, bool)>,
+) {
+    let (enabled_total, kept_total, truncated) = skill_counts.unwrap_or((0, 0, false));
+    let enabled_total = i64::try_from(enabled_total).unwrap_or(i64::MAX);
+    let kept_total = i64::try_from(kept_total).unwrap_or(i64::MAX);
+    let truncated = if truncated { 1 } else { 0 };
+
+    session_telemetry.histogram(THREAD_SKILLS_ENABLED_TOTAL_METRIC, enabled_total, &[]);
+    session_telemetry.histogram(THREAD_SKILLS_KEPT_TOTAL_METRIC, kept_total, &[]);
+    session_telemetry.histogram(THREAD_SKILLS_TRUNCATED_METRIC, truncated, &[]);
+}
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -545,14 +566,6 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
-        let implicit_skills = loaded_skills.allowed_skills_for_implicit_invocation();
-        let thread_start_warnings = render_skills_section_with_budget(
-            &implicit_skills,
-            default_skill_metadata_budget(model_info.context_window),
-        )
-        .and_then(|rendered| rendered.report.warning_message())
-        .into_iter()
-        .collect();
         let base_instructions = config
             .base_instructions
             .clone()
@@ -670,11 +683,7 @@ impl Codex {
             session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
         };
 
-        Ok(CodexSpawnOk {
-            codex,
-            thread_id,
-            thread_start_warnings,
-        })
+        Ok(CodexSpawnOk { codex, thread_id })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -823,6 +832,7 @@ pub(crate) struct Session {
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
+    thread_start_skill_reported: AtomicBool,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -2247,6 +2257,7 @@ impl Session {
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
+            thread_start_skill_reported: AtomicBool::new(false),
             next_internal_sub_id: AtomicU64::new(0),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
@@ -3983,10 +3994,39 @@ impl Session {
             .turn_skills
             .outcome
             .allowed_skills_for_implicit_invocation();
-        if let Some(rendered_skills) = render_skills_section_with_budget(
+        let rendered_skills = render_skills_section(
             &implicit_skills,
             default_skill_metadata_budget(turn_context.model_info.context_window),
-        ) {
+        );
+        if !self
+            .thread_start_skill_reported
+            .swap(true, Ordering::Relaxed)
+        {
+            let skill_counts = rendered_skills
+                .as_ref()
+                .map(|rendered| {
+                    (
+                        rendered.report.total_count,
+                        rendered.report.included_count,
+                        rendered.report.omitted_count > 0,
+                    )
+                })
+                .or_else(|| implicit_skills.is_empty().then_some((0, 0, false)));
+            emit_thread_start_skill_metrics(&self.services.session_telemetry, skill_counts);
+            if rendered_skills
+                .as_ref()
+                .is_some_and(|rendered| rendered.report.omitted_count > 0)
+            {
+                self.send_event_raw(Event {
+                    id: String::new(),
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
+                    }),
+                })
+                .await;
+            }
+        }
+        if let Some(rendered_skills) = rendered_skills {
             developer_sections.push(rendered_skills.text);
         }
         let loaded_plugins = self
