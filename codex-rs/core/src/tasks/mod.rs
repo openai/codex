@@ -653,7 +653,7 @@ impl Session {
         {
             warn!("failed to account thread goal progress at turn end: {err}");
         }
-        if should_clear_active_turn {
+        if should_clear_active_turn || !self.has_active_turn().await {
             let session = Arc::clone(self);
             let scheduler = tokio::spawn(async move {
                 idle_pending_work_scheduler(session).await;
