@@ -109,7 +109,6 @@ pub struct SandboxTransformRequest<'a> {
 #[derive(Debug)]
 pub enum SandboxTransformError {
     MissingLinuxSandboxExecutable,
-    UnreadableGlobPatternsUnsupported,
     #[cfg(target_os = "linux")]
     Wsl1UnsupportedForBubblewrap,
     #[cfg(not(target_os = "macos"))]
@@ -122,10 +121,6 @@ impl std::fmt::Display for SandboxTransformError {
             Self::MissingLinuxSandboxExecutable => {
                 write!(f, "missing codex-linux-sandbox executable path")
             }
-            Self::UnreadableGlobPatternsUnsupported => write!(
-                f,
-                "platform sandbox backend cannot enforce unreadable glob patterns"
-            ),
             #[cfg(target_os = "linux")]
             Self::Wsl1UnsupportedForBubblewrap => write!(f, "{WSL1_BWRAP_WARNING}"),
             #[cfg(not(target_os = "macos"))]
@@ -201,15 +196,6 @@ impl SandboxManager {
         );
         let effective_network_policy =
             effective_network_sandbox_policy(network_policy, additional_permissions.as_ref());
-        if matches!(
-            sandbox,
-            SandboxType::MacosSeatbelt | SandboxType::LinuxSeccomp
-        ) && !effective_file_system_policy
-            .get_unreadable_globs_with_cwd(sandbox_policy_cwd)
-            .is_empty()
-        {
-            return Err(SandboxTransformError::UnreadableGlobPatternsUnsupported);
-        }
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));
