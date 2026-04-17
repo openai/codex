@@ -184,6 +184,16 @@ fn run_setup_refresh_inner(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
+    let cleared_report = match clear_setup_error_report(request.codex_home) {
+        Ok(()) => true,
+        Err(err) => {
+            log_note(
+                &format!("setup refresh: failed to clear setup_error.json before launch: {err}"),
+                Some(&sandbox_dir(request.codex_home)),
+            );
+            false
+        }
+    };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -212,7 +222,17 @@ fn run_setup_refresh_inner(
             &format!("setup refresh: exited with status {status:?}"),
             Some(&sandbox_dir(request.codex_home)),
         );
-        return Err(anyhow!("setup refresh failed with status {status}"));
+        return Err(report_helper_failure(
+            request.codex_home,
+            cleared_report,
+            status.code(),
+        ));
+    }
+    if let Err(err) = clear_setup_error_report(request.codex_home) {
+        log_note(
+            &format!("setup refresh: failed to clear setup_error.json after success: {err}"),
+            Some(&sandbox_dir(request.codex_home)),
+        );
     }
     Ok(())
 }
