@@ -49,7 +49,6 @@ use crate::render::renderable::Renderable;
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
     /// The current model name.
-    #[strum(to_string = "model", serialize = "model-name")]
     ModelName,
 
     /// Model name with reasoning level suffix.
@@ -59,18 +58,10 @@ pub(crate) enum StatusLineItem {
     CurrentDir,
 
     /// Project root directory (if detected).
-    #[strum(
-        to_string = "project-name",
-        serialize = "project",
-        serialize = "project-root"
-    )]
     ProjectRoot,
 
     /// Current git branch name (if in a repository).
     GitBranch,
-
-    /// Compact runtime status text.
-    Status,
 
     /// Percentage of context window remaining.
     ContextRemaining,
@@ -110,9 +101,6 @@ pub(crate) enum StatusLineItem {
 
     /// Current thread title (if set by user).
     ThreadTitle,
-
-    /// Latest checklist task progress from `update_plan` (if available).
-    TaskProgress,
 }
 
 impl StatusLineItem {
@@ -122,9 +110,8 @@ impl StatusLineItem {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::CurrentDir => "Current working directory",
-            StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
+            StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
-            StatusLineItem::Status => "Compact session status text (Ready, Working, Thinking)",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
@@ -148,10 +135,7 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
-            StatusLineItem::ThreadTitle => "Current thread title (omitted when unavailable)",
-            StatusLineItem::TaskProgress => {
-                "Latest task progress from update_plan (omitted until available)"
-            }
+            StatusLineItem::ThreadTitle => "Current thread title (omitted unless changed by user)",
         }
     }
 
@@ -162,7 +146,6 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
             StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectName,
             StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
-            StatusLineItem::Status => StatusSurfacePreviewItem::Status,
             StatusLineItem::ContextRemaining => StatusSurfacePreviewItem::ContextRemaining,
             StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
             StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,
@@ -175,7 +158,6 @@ impl StatusLineItem {
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
-            StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
         }
     }
 }
@@ -343,58 +325,10 @@ mod tests {
     }
 
     #[test]
-    fn project_name_is_canonical_and_accepts_legacy_ids() {
-        assert_eq!(StatusLineItem::ProjectRoot.to_string(), "project-name");
-        assert_eq!(
-            "project-name".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ProjectRoot)
-        );
-        assert_eq!(
-            "project".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ProjectRoot)
-        );
-        assert_eq!(
-            "project-root".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ProjectRoot)
-        );
-    }
-
-    #[test]
-    fn model_is_canonical_and_accepts_model_name_legacy_id() {
-        assert_eq!(StatusLineItem::ModelName.to_string(), "model");
-        assert_eq!(
-            "model".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ModelName)
-        );
-        assert_eq!(
-            "model-name".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ModelName)
-        );
-    }
-
-    #[test]
-    fn parse_status_line_items_accepts_title_only_variants() {
-        let items = ["status", "task-progress"]
-            .into_iter()
-            .map(|id| id.parse::<StatusLineItem>())
-            .collect::<Result<Vec<_>, _>>();
-        assert_eq!(
-            items,
-            Ok(vec![StatusLineItem::Status, StatusLineItem::TaskProgress,])
-        );
-    }
-
-    #[test]
     fn preview_uses_runtime_values() {
         let preview_data = StatusSurfacePreviewData::from_iter([
-            (
-                StatusLineItem::ModelName.preview_item(),
-                "gpt-5".to_string(),
-            ),
-            (
-                StatusLineItem::CurrentDir.preview_item(),
-                "/repo".to_string(),
-            ),
+            (StatusLineItem::ModelName.preview_item(), "gpt-5".to_string()),
+            (StatusLineItem::CurrentDir.preview_item(), "/repo".to_string()),
         ]);
         let items = vec![
             MultiSelectItem {
@@ -413,8 +347,7 @@ mod tests {
 
         assert_eq!(
             preview_data.line_for_items(
-                items
-                    .iter()
+                items.iter()
                     .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
                     .map(StatusLineItem::preview_item),
             ),
@@ -424,10 +357,8 @@ mod tests {
 
     #[test]
     fn preview_uses_placeholders_when_runtime_values_are_missing() {
-        let preview_data = StatusSurfacePreviewData::from_iter([(
-            StatusSurfacePreviewItem::Model,
-            "gpt-5".to_string(),
-        )]);
+        let preview_data =
+            StatusSurfacePreviewData::from_iter([(StatusSurfacePreviewItem::Model, "gpt-5".to_string())]);
         let items = vec![
             MultiSelectItem {
                 id: StatusLineItem::ModelName.to_string(),
@@ -445,8 +376,7 @@ mod tests {
 
         assert_eq!(
             preview_data.line_for_items(
-                items
-                    .iter()
+                items.iter()
                     .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
                     .map(StatusLineItem::preview_item),
             ),
@@ -457,14 +387,8 @@ mod tests {
     #[test]
     fn preview_includes_thread_title() {
         let preview_data = StatusSurfacePreviewData::from_iter([
-            (
-                StatusLineItem::ModelName.preview_item(),
-                "gpt-5".to_string(),
-            ),
-            (
-                StatusLineItem::ThreadTitle.preview_item(),
-                "Roadmap cleanup".to_string(),
-            ),
+            (StatusLineItem::ModelName.preview_item(), "gpt-5".to_string()),
+            (StatusLineItem::ThreadTitle.preview_item(), "Roadmap cleanup".to_string()),
         ]);
         let items = vec![
             MultiSelectItem {
@@ -483,8 +407,7 @@ mod tests {
 
         assert_eq!(
             preview_data.line_for_items(
-                items
-                    .iter()
+                items.iter()
                     .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
                     .map(StatusLineItem::preview_item),
             ),
@@ -502,22 +425,13 @@ mod tests {
                 StatusLineItem::GitBranch.to_string(),
             ]),
             StatusSurfacePreviewData::from_iter([
-                (
-                    StatusLineItem::ModelName.preview_item(),
-                    "gpt-5-codex".to_string(),
-                ),
-                (
-                    StatusLineItem::CurrentDir.preview_item(),
-                    "~/codex-rs".to_string(),
-                ),
+                (StatusLineItem::ModelName.preview_item(), "gpt-5-codex".to_string()),
+                (StatusLineItem::CurrentDir.preview_item(), "~/codex-rs".to_string()),
                 (
                     StatusLineItem::GitBranch.preview_item(),
                     "jif/statusline-preview".to_string(),
                 ),
-                (
-                    StatusLineItem::WeeklyLimit.preview_item(),
-                    "weekly 82%".to_string(),
-                ),
+                (StatusLineItem::WeeklyLimit.preview_item(), "weekly 82%".to_string()),
             ]),
             AppEventSender::new(tx_raw),
         );
