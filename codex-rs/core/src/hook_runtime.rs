@@ -390,6 +390,7 @@ fn hook_run_analytics_payload(
 fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 3] {
     let hook_name = match run.event_name {
         HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PermissionRequest => "PermissionRequest",
         HookEventName::PostToolUse => "PostToolUse",
         HookEventName::SessionStart => "SessionStart",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
