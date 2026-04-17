@@ -2671,25 +2671,12 @@ impl CodexMessageProcessor {
                     ))
                     .await;
 
-                let warning_connection_ids = [response_connection_id];
-                for warning in thread_start_warnings {
-                    listener_task_context
-                        .outgoing
-                        .send_server_notification_to_connections(
-                            &warning_connection_ids,
-                            ServerNotification::ConfigWarning(ConfigWarningNotification {
-                                summary: warning,
-                                details: None,
-                                path: None,
-                                range: None,
-                            }),
-                        )
-                        .instrument(tracing::info_span!(
-                            "app_server.thread_start.notify_config_warning",
-                            otel.name = "app_server.thread_start.notify_config_warning",
-                        ))
-                        .await;
-                }
+                send_thread_start_warnings_to_connection(
+                    &listener_task_context.outgoing,
+                    response_connection_id,
+                    thread_start_warnings,
+                )
+                .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4701,7 +4688,7 @@ impl CodexMessageProcessor {
             thread_id,
             thread: forked_thread,
             session_configured,
-            ..
+            thread_start_warnings,
         } = match self
             .thread_manager
             .fork_thread(
@@ -4896,6 +4883,12 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_server_notification(ServerNotification::ThreadStarted(notif))
             .await;
+        send_thread_start_warnings_to_connection(
+            &self.outgoing,
+            connection_id,
+            thread_start_warnings,
+        )
+        .await;
     }
 
     async fn get_thread_summary(
@@ -7445,7 +7438,7 @@ impl CodexMessageProcessor {
             thread_id,
             thread: review_thread,
             session_configured,
-            ..
+            thread_start_warnings,
         } = self
             .thread_manager
             .fork_thread(
@@ -7493,6 +7486,12 @@ impl CodexMessageProcessor {
                     self.outgoing
                         .send_server_notification(ServerNotification::ThreadStarted(notif))
                         .await;
+                    send_thread_start_warnings_to_connection(
+                        &self.outgoing,
+                        request_id.connection_id,
+                        thread_start_warnings,
+                    )
+                    .await;
                 }
                 Err(err) => {
                     tracing::warn!(
@@ -8380,6 +8379,31 @@ impl CodexMessageProcessor {
                 warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
                 None
             })
+    }
+}
+
+async fn send_thread_start_warnings_to_connection(
+    outgoing: &Arc<OutgoingMessageSender>,
+    connection_id: ConnectionId,
+    thread_start_warnings: Vec<String>,
+) {
+    let warning_connection_ids = [connection_id];
+    for warning in thread_start_warnings {
+        outgoing
+            .send_server_notification_to_connections(
+                &warning_connection_ids,
+                ServerNotification::ConfigWarning(ConfigWarningNotification {
+                    summary: warning,
+                    details: None,
+                    path: None,
+                    range: None,
+                }),
+            )
+            .instrument(tracing::info_span!(
+                "app_server.thread_start.notify_config_warning",
+                otel.name = "app_server.thread_start.notify_config_warning",
+            ))
+            .await;
     }
 }
 

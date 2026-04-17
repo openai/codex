@@ -189,6 +189,72 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_fork_emits_skill_metadata_budget_warning() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    insert_model_context_window(codex_home.path(), 100)?;
+    for i in 0..120 {
+        write_skill(codex_home.path(), &format!("demo-{i:03}"))?;
+    }
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    let started = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/started"),
+    )
+    .await??;
+    let started: ThreadStartedNotification =
+        serde_json::from_value(started.params.expect("params must be present"))?;
+    assert_eq!(started.thread.id, thread.id);
+
+    let warning = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("configWarning"),
+    )
+    .await??;
+    let parsed: ServerNotification = warning.try_into()?;
+    let ServerNotification::ConfigWarning(notification) = parsed else {
+        panic!("expected configWarning notification");
+    };
+
+    assert!(
+        notification
+            .summary
+            .contains("Skills list trimmed to fit the metadata budget"),
+        "unexpected warning: {}",
+        notification.summary
+    );
+    assert!(notification.summary.contains("2 tokens"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_fork_emits_restored_token_usage_before_next_turn() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -612,6 +678,33 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn insert_model_context_window(
+    codex_home: &Path,
+    model_context_window: i64,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    let mut config = std::fs::read_to_string(&config_toml)?;
+    let provider_table = "\n[model_providers.mock_provider]";
+    let Some(provider_table_index) = config.find(provider_table) else {
+        return Err(std::io::Error::other(
+            "mock provider table missing from test config",
+        ));
+    };
+    config.insert_str(
+        provider_table_index,
+        &format!("\nmodel_context_window = {model_context_window}\n"),
+    );
+    std::fs::write(config_toml, config)
+}
+
+fn write_skill(codex_home: &Path, name: &str) -> std::io::Result<()> {
+    let skill_dir = codex_home.join("skills").join(name);
+    std::fs::create_dir_all(&skill_dir)?;
+    let description = "desc ".repeat(200);
+    let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+    std::fs::write(skill_dir.join("SKILL.md"), content)
 }
 
 fn create_config_toml_with_chatgpt_base_url(

@@ -5,7 +5,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_utils_output_truncation::approx_token_count;
 
 pub const DEFAULT_SKILL_METADATA_CHAR_BUDGET: usize = 8_000;
-pub const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 1;
+pub const SKILL_METADATA_CONTEXT_WINDOW_PERCENT: usize = 2;
 const DEFAULT_OMITTED_SKILL_SAMPLE_LIMIT: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,10 +283,10 @@ mod tests {
     }
 
     #[test]
-    fn default_budget_uses_one_percent_of_full_context_window() {
+    fn default_budget_uses_two_percent_of_full_context_window() {
         assert_eq!(
             default_skill_metadata_budget(Some(200_000)),
-            SkillMetadataBudget::Tokens(2_000)
+            SkillMetadataBudget::Tokens(4_000)
         );
         assert_eq!(
             default_skill_metadata_budget(Some(99)),
