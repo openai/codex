@@ -145,11 +145,43 @@ struct ExternalAgentConfigMigrationScreen {
 }
 
 impl ExternalAgentConfigMigrationScreen {
-    fn proceed_label(&self) -> String {
-        if self.selected_count() == 0 {
-            format!("{} (disabled)", ActionMenuOption::Proceed.label())
+    fn proceed_enabled(&self) -> bool {
+        self.selected_count() > 0
+    }
+
+    fn first_available_action(&self) -> ActionMenuOption {
+        if self.proceed_enabled() {
+            ActionMenuOption::Proceed
         } else {
-            ActionMenuOption::Proceed.label().to_string()
+            ActionMenuOption::Skip
+        }
+    }
+
+    fn previous_available_action(&self, action: ActionMenuOption) -> Option<ActionMenuOption> {
+        let mut candidate = action.previous();
+        while let Some(option) = candidate {
+            if option != ActionMenuOption::Proceed || self.proceed_enabled() {
+                return Some(option);
+            }
+            candidate = option.previous();
+        }
+        None
+    }
+
+    fn next_available_action(&self, action: ActionMenuOption) -> Option<ActionMenuOption> {
+        let mut candidate = action.next();
+        while let Some(option) = candidate {
+            if option != ActionMenuOption::Proceed || self.proceed_enabled() {
+                return Some(option);
+            }
+            candidate = option.next();
+        }
+        None
+    }
+
+    fn normalize_highlighted_action(&mut self) {
+        if self.highlighted_action == ActionMenuOption::Proceed && !self.proceed_enabled() {
+            self.highlighted_action = self.first_available_action();
         }
     }
 
@@ -346,6 +378,7 @@ impl ExternalAgentConfigMigrationScreen {
             item.enabled = enabled;
         }
         self.error = None;
+        self.normalize_highlighted_action();
         self.request_frame.schedule_frame();
     }
 
@@ -362,6 +395,7 @@ impl ExternalAgentConfigMigrationScreen {
 
         item.enabled = !item.enabled;
         self.error = None;
+        self.normalize_highlighted_action();
         self.request_frame.schedule_frame();
     }
 
@@ -381,7 +415,7 @@ impl ExternalAgentConfigMigrationScreen {
                 }
             },
             FocusArea::Actions => {
-                if let Some(previous) = self.highlighted_action.previous() {
+                if let Some(previous) = self.previous_available_action(self.highlighted_action) {
                     self.highlighted_action = previous;
                 } else {
                     self.focus = FocusArea::Items;
@@ -403,11 +437,11 @@ impl ExternalAgentConfigMigrationScreen {
                 }
                 _ => {
                     self.focus = FocusArea::Actions;
-                    self.highlighted_action = ActionMenuOption::Proceed;
+                    self.highlighted_action = self.first_available_action();
                 }
             },
             FocusArea::Actions => {
-                if let Some(next) = self.highlighted_action.next() {
+                if let Some(next) = self.next_available_action(self.highlighted_action) {
                     self.highlighted_action = next;
                 } else {
                     self.focus = FocusArea::Items;
@@ -671,10 +705,10 @@ impl WidgetRef for &ExternalAgentConfigMigrationScreen {
             .render(actions_intro_area, buf);
         selection_option_row_with_dim(
             /*index*/ 0,
-            self.proceed_label(),
+            ActionMenuOption::Proceed.label().to_string(),
             self.focus == FocusArea::Actions
                 && self.highlighted_action == ActionMenuOption::Proceed,
-            /*dim*/ self.focus != FocusArea::Actions || self.selected_count() == 0,
+            /*dim*/ self.focus != FocusArea::Actions || !self.proceed_enabled(),
         )
         .render(proceed_area, buf);
         selection_option_row_with_dim(
@@ -726,6 +760,7 @@ mod tests {
     use super::ActionMenuOption;
     use super::ExternalAgentConfigMigrationOutcome;
     use super::ExternalAgentConfigMigrationScreen;
+    use super::FocusArea;
     use crate::custom_terminal::Terminal;
     use crate::test_backend::VT100Backend;
     use crate::tui::FrameRequester;
@@ -916,10 +951,7 @@ mod tests {
         );
 
         screen.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
 
         assert!(!screen.is_done());
         assert_eq!(screen.highlighted_action, ActionMenuOption::Proceed);
@@ -931,7 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn proceed_action_is_marked_disabled_when_no_items_are_selected() {
+    fn proceed_action_is_skipped_when_no_items_are_selected() {
         let items = sample_items();
         let mut screen = ExternalAgentConfigMigrationScreen::new(
             FrameRequester::test_dummy(),
@@ -941,12 +973,12 @@ mod tests {
         );
 
         screen.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
 
-        let rendered = render_screen(&screen, /*width*/ 80, /*height*/ 21);
-        assert!(
-            rendered.contains("Proceed with selected (disabled)"),
-            "expected disabled proceed label, got:\n{rendered}"
-        );
+        assert_eq!(screen.focus, FocusArea::Actions);
+        assert_eq!(screen.highlighted_action, ActionMenuOption::Skip);
     }
 
     #[test]
