@@ -686,7 +686,7 @@ impl Session {
         else {
             return Ok(());
         };
-        self.clear_queued_response_items_for_next_turn().await;
+        self.clear_queued_goal_continuations_for_next_turn().await;
         let goal = protocol_goal_from_state(goal);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
         self.thread_goal_wall_clock_accounting

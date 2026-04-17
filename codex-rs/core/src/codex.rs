@@ -2989,10 +2989,6 @@ impl Session {
         *idle_pending_input = items;
     }
 
-    pub(crate) async fn clear_queued_response_items_for_next_turn(&self) {
-        self.idle_pending_input.lock().await.clear();
-    }
-
     pub(crate) async fn clear_queued_goal_continuations_for_next_turn(&self) {
         self.idle_pending_input
             .lock()
