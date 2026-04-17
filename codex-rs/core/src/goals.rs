@@ -230,7 +230,7 @@ impl Session {
             )
             .await?;
         }
-        let previous_status = if !replacing_goal && request.status.is_some() {
+        let previous_status = if !replacing_goal {
             state_db
                 .get_thread_goal(self.conversation_id)
                 .await?

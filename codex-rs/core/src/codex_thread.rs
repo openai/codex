@@ -23,6 +23,7 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -91,6 +92,13 @@ impl CodexThread {
         self.codex
             .session
             .clear_queued_goal_continuations_for_next_turn()
+            .await;
+    }
+
+    pub async fn abort_for_goal_budget_limited(&self) {
+        self.codex
+            .session
+            .abort_all_tasks_without_restart(TurnAbortReason::BudgetLimited)
             .await;
     }
 

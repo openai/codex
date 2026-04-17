@@ -3034,25 +3034,29 @@ impl CodexMessageProcessor {
         )
         .await;
         let status = params.status.map(thread_goal_status_to_state);
-        if let Some(thread) = running_thread.as_ref()
-            && let Err(err) = thread.account_active_goal_progress().await
+        if let Some(objective) = params.objective.as_deref()
+            && objective.trim().is_empty()
         {
-            warn!("failed to account active goal progress before app-server goal update: {err}");
+            self.send_invalid_request_error(
+                request_id,
+                "goal objective must not be empty".to_string(),
+            )
+            .await;
+            return;
+        }
+        if let Err(message) = validate_goal_budget(params.token_budget.flatten()) {
+            self.send_invalid_request_error(request_id, message).await;
+            return;
         }
 
         let goal = if let Some(objective) = params.objective {
             let objective = objective.trim();
-            if objective.is_empty() {
-                self.send_invalid_request_error(
-                    request_id,
-                    "goal objective must not be empty".to_string(),
-                )
-                .await;
-                return;
-            }
-            if let Err(message) = validate_goal_budget(params.token_budget.flatten()) {
-                self.send_invalid_request_error(request_id, message).await;
-                return;
+            if let Some(thread) = running_thread.as_ref()
+                && let Err(err) = thread.account_active_goal_progress().await
+            {
+                warn!(
+                    "failed to account active goal progress before app-server goal replacement: {err}"
+                );
             }
             state_db
                 .replace_thread_goal(
@@ -3063,11 +3067,12 @@ impl CodexMessageProcessor {
                 )
                 .await
         } else {
-            if let Some(token_budget) = params.token_budget
-                && let Err(message) = validate_goal_budget(token_budget)
+            if let Some(thread) = running_thread.as_ref()
+                && let Err(err) = thread.account_active_goal_progress().await
             {
-                self.send_invalid_request_error(request_id, message).await;
-                return;
+                warn!(
+                    "failed to account active goal progress before app-server goal update: {err}"
+                );
             }
             state_db
                 .update_thread_goal(
@@ -3105,10 +3110,15 @@ impl CodexMessageProcessor {
         if self.config.features.enabled(Feature::GoalMode)
             && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
         {
-            if goal_status == ThreadGoalStatus::Active {
-                thread.continue_active_goal_if_idle().await;
-            } else {
-                thread.clear_queued_goal_continuations().await;
+            match goal_status {
+                ThreadGoalStatus::Active => thread.continue_active_goal_if_idle().await,
+                ThreadGoalStatus::BudgetLimited => {
+                    thread.clear_queued_goal_continuations().await;
+                    thread.abort_for_goal_budget_limited().await;
+                }
+                ThreadGoalStatus::Paused | ThreadGoalStatus::Complete => {
+                    thread.clear_queued_goal_continuations().await;
+                }
             }
         }
     }

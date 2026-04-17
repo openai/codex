@@ -5614,22 +5614,32 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_queued_response_items_for_next_turn() {
+async fn interrupt_clears_only_queued_goal_continuations_for_next_turn() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
-    let queued_item = ResponseInputItem::Message {
+    let queued_goal_continuation = ResponseInputItem::Message {
         role: "developer".to_string(),
         content: vec![ContentItem::InputText {
-            text: "continue the active goal".to_string(),
+            text: "Continue working toward the active thread goal.".to_string(),
+        }],
+    };
+    let queued_user_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued user input".to_string(),
         }],
     };
 
-    sess.queue_response_items_for_next_turn(vec![queued_item])
-        .await;
+    sess.queue_response_items_for_next_turn(vec![
+        queued_goal_continuation,
+        queued_user_item.clone(),
+    ])
+    .await;
     assert!(sess.has_queued_response_items_for_next_turn().await);
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-    assert!(!sess.has_queued_response_items_for_next_turn().await);
+    assert!(sess.has_active_turn().await);
+    assert_eq!(vec![queued_user_item], sess.get_pending_input().await);
 }
 
 #[tokio::test]
@@ -6819,6 +6829,74 @@ async fn budget_limited_accounting_aborts_active_turn_before_returning() -> anyh
     assert!(saw_budget_limited_update);
     assert!(saw_budget_limited_abort);
     assert!(!sess.has_active_turn().await);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn budget_only_update_that_stops_goal_keeps_accounting_current_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: Some(Some(1_000)),
+        },
+    )
+    .await?;
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
+        .await;
+    set_total_token_usage(
+        &sess,
+        TokenUsage {
+            input_tokens: 40,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 40,
+        },
+    )
+    .await;
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: None,
+            status: None,
+            token_budget: Some(Some(30)),
+        },
+    )
+    .await?;
+    set_total_token_usage(
+        &sess,
+        TokenUsage {
+            input_tokens: 60,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 60,
+        },
+    )
+    .await;
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Turn)
+        .await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(60, goal.tokens_used);
+    assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
 
     Ok(())
 }

@@ -519,7 +519,7 @@ impl Session {
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         self.abort_all_tasks_without_restart(reason.clone()).await;
         if reason == TurnAbortReason::Interrupted {
-            self.clear_queued_response_items_for_next_turn().await;
+            self.clear_queued_goal_continuations_for_next_turn().await;
             self.maybe_start_turn_for_pending_work().await;
         }
     }
