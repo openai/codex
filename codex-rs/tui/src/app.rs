@@ -4375,9 +4375,9 @@ impl App {
         {
             Ok(resumed) => {
                 if let Err(err) = self.shutdown_current_thread(app_server).await {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to stop current thread: {err}"));
-                    return Ok(AppRunControl::Continue);
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to stop current thread; continuing with resumed thread: {err}"
+                    ));
                 }
                 self.config = resume_config;
                 tui.set_notification_settings(
