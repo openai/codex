@@ -742,8 +742,9 @@ fn normalize_project_trust_lookup_key(key: String) -> String {
         key
     }
 }
-/// Convert the path to the canonical trust key we store and compare against.
-/// On Windows this also normalizes case so lookups remain case-insensitive.
+/// Canonicalize the path and convert it to a string to be used as a key in the
+/// projects trust map. On Windows, strips UNC, when possible, to try to ensure
+/// that different paths that point to the same location have the same key.
 pub fn project_trust_key(project_path: &Path) -> String {
     normalized_project_trust_key(project_path)
 }
