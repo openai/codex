@@ -41,6 +41,8 @@ pub use codex_config::ConfigRequirements;
 pub use codex_config::ConfigRequirementsToml;
 pub use codex_config::ConstrainedWithSource;
 pub use codex_config::FeatureRequirementsToml;
+pub use codex_config::FilesystemConstraints;
+pub use codex_config::FilesystemDenyReadPattern;
 pub use codex_config::LoaderOverrides;
 pub use codex_config::McpServerIdentity;
 pub use codex_config::McpServerRequirement;
@@ -378,6 +380,16 @@ async fn load_requirements_toml(
         .await
     {
         Ok(contents) => {
+            let requirements_parent = requirements_toml_file.parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Requirements file {} has no parent directory",
+                        requirements_toml_file.as_ref().display()
+                    ),
+                )
+            })?;
+            let _guard = AbsolutePathBufGuard::new(requirements_parent.as_path());
             let requirements_config: ConfigRequirementsToml =
                 toml::from_str(&contents).map_err(|e| {
                     io::Error::new(

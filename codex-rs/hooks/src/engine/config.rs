@@ -10,6 +10,8 @@ pub(crate) struct HooksFile {
 pub(crate) struct HookEvents {
     #[serde(rename = "PreToolUse", default)]
     pub pre_tool_use: Vec<MatcherGroup>,
+    #[serde(rename = "PermissionRequest", default)]
+    pub permission_request: Vec<MatcherGroup>,
     #[serde(rename = "PostToolUse", default)]
     pub post_tool_use: Vec<MatcherGroup>,
     #[serde(rename = "SessionStart", default)]
