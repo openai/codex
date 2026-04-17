@@ -1,8 +1,8 @@
 module(name = "codex")
 
-bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "llvm", version = "0.6.8")
+bazel_dep(name = "llvm", version = "0.7.1")
 # The upstream LLVM archive contains a few unix-only symlink entries and is
 # missing a couple of MinGW compatibility archives that windows-gnullvm needs
 # during extraction and linking, so patch it until upstream grows native support.
