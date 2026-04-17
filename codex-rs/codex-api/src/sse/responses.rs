@@ -1,6 +1,8 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::error::ApiError;
+use crate::error::CYBER_SAFETY_BLOCK_ADVICE;
+use crate::error::is_cyber_safety_block;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
@@ -283,6 +285,10 @@ pub fn process_responses_event(
                         response_error = ApiError::QuotaExceeded;
                     } else if is_usage_not_included(&error) {
                         response_error = ApiError::UsageNotIncluded;
+                    } else if is_cyber_safety_block(error.code.as_deref()) {
+                        response_error = ApiError::InvalidRequest {
+                            message: CYBER_SAFETY_BLOCK_ADVICE.to_string(),
+                        };
                     } else if is_invalid_prompt_error(&error) {
                         let message = error
                             .message
@@ -812,6 +818,24 @@ mod tests {
                     message,
                     "Invalid prompt: we've limited access to this content for safety reasons."
                 );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cyber_safety_block_is_invalid_request_with_guidance() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_cyber_safety","object":"response","created_at":1759771629,"status":"failed","background":false,"error":{"code":"cyber_security","message":"This request has been flagged for potentially high-risk cyber activity. Learn more here: https://platform.openai.com/docs/guides/safety-checks/cybersecurity"},"incomplete_details":null}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(ApiError::InvalidRequest { message }) => {
+                assert_eq!(message, CYBER_SAFETY_BLOCK_ADVICE);
             }
             other => panic!("unexpected event: {other:?}"),
         }
