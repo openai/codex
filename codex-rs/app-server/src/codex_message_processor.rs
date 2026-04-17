@@ -4445,7 +4445,7 @@ impl CodexMessageProcessor {
                 thread: codex_thread,
                 session_configured,
             }) => {
-                let core_thread = Arc::clone(&thread);
+                let core_thread = Arc::clone(&codex_thread);
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     self.send_internal_error(
