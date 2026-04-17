@@ -300,7 +300,9 @@ mod agent {
 
         agent_config.cwd = root.clone();
         // Consolidation threads must never feed back into phase-1 memory generation.
+        agent_config.ephemeral = true;
         agent_config.memories.generate_memories = false;
+        agent_config.memories.use_memories = false;
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
