@@ -136,6 +136,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
@@ -143,7 +144,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
-use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
@@ -227,6 +227,10 @@ use std::time::Instant;
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
+
+fn bash_mode_style() -> Style {
+    Style::default().fg(Color::LightRed)
+}
 
 fn user_input_too_large_message(actual_chars: usize) -> String {
     format!(
@@ -704,7 +708,11 @@ impl ChatComposer {
 
         let [_, _, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, state)
+        self.textarea.cursor_pos_with_state_and_hidden_prefix(
+            textarea_rect,
+            state,
+            self.shell_command_hidden_prefix_len().unwrap_or(0),
+        )
     }
     /// Returns true if the composer currently contains no user-entered input.
     pub(crate) fn is_empty(&self) -> bool {
@@ -2821,6 +2829,20 @@ impl ChatComposer {
         self.textarea.text().trim_start().starts_with('!')
     }
 
+    fn shell_command_hidden_prefix_len(&self) -> Option<usize> {
+        if !self.input_enabled {
+            return None;
+        }
+
+        self.textarea.text().strip_prefix('!')?;
+        Some(1)
+    }
+
+    fn shell_mode_footer_line(&self) -> Option<Line<'static>> {
+        self.shell_command_hidden_prefix_len()
+            .map(|_| Line::from(vec![Span::styled("Bash mode", bash_mode_style())]))
+    }
+
     /// Applies any due `PasteBurst` flush at time `now`.
     ///
     /// Converts [`PasteBurst::flush_if_due`] results into concrete textarea mutations.
@@ -3730,7 +3752,11 @@ impl Renderable for ChatComposer {
 
         let [_, _, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, state)
+        self.textarea.cursor_pos_with_state_and_hidden_prefix(
+            textarea_rect,
+            state,
+            self.shell_command_hidden_prefix_len().unwrap_or(0),
+        )
     }
 
     fn desired_height(&self, width: u16) -> u16 {
@@ -3748,8 +3774,10 @@ impl Renderable for ChatComposer {
             .try_into()
             .unwrap_or(u16::MAX);
         let remote_images_separator = u16::from(remote_images_height > 0);
-        self.textarea.desired_height(inner_width)
-            + remote_images_height
+        self.textarea.desired_height_with_hidden_prefix(
+            inner_width,
+            self.shell_command_hidden_prefix_len().unwrap_or(0),
+        ) + remote_images_height
             + remote_images_separator
             + 2
             + match &self.active_popup {
@@ -3863,6 +3891,8 @@ impl ChatComposer {
                         self.side_conversation_context_label.as_ref()
                     {
                         Some(side_conversation_context_line(label))
+                    } else if let Some(line) = self.shell_mode_footer_line() {
+                        Some(line)
                     } else if status_line_active {
                         let full =
                             mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
@@ -4032,12 +4062,25 @@ impl ChatComposer {
         if is_zellij && !textarea_rect.is_empty() {
             buf.set_style(textarea_rect, textarea_style);
         }
+        let hidden_prefix = if mask_char.is_none() {
+            self.shell_command_hidden_prefix_len()
+        } else {
+            None
+        };
         if !textarea_rect.is_empty() {
+            let prompt_symbol = if hidden_prefix.is_some() { "!" } else { "›" };
             let prompt = if self.input_enabled {
-                if is_zellij {
-                    Span::styled("›", style.fg(ratatui::style::Color::Cyan))
+                if hidden_prefix.is_some() {
+                    let prompt_style = if is_zellij {
+                        bash_mode_style()
+                    } else {
+                        bash_mode_style().add_modifier(Modifier::BOLD)
+                    };
+                    Span::styled("!", prompt_style)
+                } else if is_zellij {
+                    Span::styled(prompt_symbol, style.fg(ratatui::style::Color::Cyan))
                 } else {
-                    "›".bold()
+                    prompt_symbol.bold()
                 }
             } else if is_zellij {
                 Span::styled("›", style.fg(ratatui::style::Color::DarkGray))
@@ -4054,6 +4097,7 @@ impl ChatComposer {
 
         let mut state = self.textarea_state.borrow_mut();
         let textarea_is_empty = self.textarea.text().is_empty();
+        let hidden_prefix = hidden_prefix.unwrap_or(0);
         if let Some(mask_char) = mask_char {
             self.textarea.render_ref_masked(
                 textarea_rect,
@@ -4071,8 +4115,19 @@ impl ChatComposer {
         } else if is_zellij {
             let highlight_ranges = self.history_search_highlight_ranges();
             if highlight_ranges.is_empty() {
-                self.textarea
-                    .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
+                if hidden_prefix == 0 {
+                    self.textarea
+                        .render_ref_styled(textarea_rect, buf, &mut state, textarea_style);
+                } else {
+                    self.textarea.render_ref_styled_with_hidden_prefix(
+                        textarea_rect,
+                        buf,
+                        &mut state,
+                        textarea_style,
+                        &[],
+                        hidden_prefix,
+                    );
+                }
             } else {
                 let highlight_style =
                     textarea_style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
@@ -4080,18 +4135,26 @@ impl ChatComposer {
                     .into_iter()
                     .map(|range| (range, highlight_style))
                     .collect::<Vec<_>>();
-                self.textarea.render_ref_styled_with_highlights(
+                self.textarea.render_ref_styled_with_hidden_prefix(
                     textarea_rect,
                     buf,
                     &mut state,
                     textarea_style,
                     &highlights,
+                    hidden_prefix,
                 );
             }
         } else {
             let highlight_ranges = self.history_search_highlight_ranges();
             if highlight_ranges.is_empty() {
-                StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+                self.textarea.render_ref_styled_with_hidden_prefix(
+                    textarea_rect,
+                    buf,
+                    &mut state,
+                    Style::default(),
+                    &[],
+                    hidden_prefix,
+                );
             } else {
                 let highlight_style =
                     Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
@@ -4099,12 +4162,13 @@ impl ChatComposer {
                     .into_iter()
                     .map(|range| (range, highlight_style))
                     .collect::<Vec<_>>();
-                self.textarea.render_ref_styled_with_highlights(
+                self.textarea.render_ref_styled_with_hidden_prefix(
                     textarea_rect,
                     buf,
                     &mut state,
                     Style::default(),
                     &highlights,
+                    hidden_prefix,
                 );
             }
         }
@@ -4481,6 +4545,90 @@ mod tests {
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
             },
+        );
+
+        snapshot_composer_state(
+            "footer_mode_shell_command_absorbs_bang",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from(
+                    "gpt-5.4 high fast · ~/code/codex-1 · Context 0% used",
+                )));
+                composer.set_text_content("!git status".to_string(), Vec::new(), Vec::new());
+            },
+        );
+
+        snapshot_composer_state(
+            "footer_mode_shell_command_absorbs_bang_and_space",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from(
+                    "gpt-5.4 high fast · ~/code/codex-1 · Context 0% used",
+                )));
+                composer.set_text_content("! git status".to_string(), Vec::new(), Vec::new());
+            },
+        );
+    }
+
+    #[test]
+    fn shell_command_cursor_uses_absorbed_prefix() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        let area = Rect::new(0, 0, 40, 5);
+
+        composer.set_text_content("!git".to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+        assert_eq!(composer.cursor_pos(area), Some((5, 1)));
+
+        composer.set_text_content("! git".to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+        assert_eq!(composer.cursor_pos(area), Some((6, 1)));
+    }
+
+    #[test]
+    fn shell_command_uses_bash_accent_style() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_status_line_enabled(/*enabled*/ true);
+        composer.set_status_line(Some(Line::from(
+            "gpt-5.4 high fast · ~/code/codex-1 · Context 0% used",
+        )));
+        composer.set_text_content("!git status".to_string(), Vec::new(), Vec::new());
+
+        let area = Rect::new(0, 0, 100, 9);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let prompt_cell = &buf[(0, 1)];
+        assert_eq!(prompt_cell.symbol(), "!");
+        assert_eq!(prompt_cell.style().fg, Some(Color::LightRed));
+
+        let footer_y = area.height - 1;
+        let footer_text = (0..area.width)
+            .map(|x| buf[(x, footer_y)].symbol().chars().next().unwrap_or(' '))
+            .collect::<String>();
+        let bash_label_x = footer_text
+            .find("Bash mode")
+            .expect("expected bash mode footer label");
+        assert_eq!(
+            buf[(bash_label_x as u16, footer_y)].style().fg,
+            Some(Color::LightRed)
         );
     }
 
