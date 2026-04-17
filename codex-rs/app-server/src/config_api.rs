@@ -437,6 +437,7 @@ fn map_network_requirements_to_api(
 
     NetworkRequirements {
         enabled: network.enabled,
+        mitm: network.mitm,
         http_port: network.http_port,
         socks_port: network.socks_port,
         allow_upstream_proxy: network.allow_upstream_proxy,
@@ -579,6 +580,7 @@ mod tests {
             enforce_residency: Some(CoreResidencyRequirement::Us),
             network: Some(CoreNetworkRequirementsToml {
                 enabled: Some(true),
+                mitm: Some(true),
                 http_port: Some(8080),
                 socks_port: Some(1080),
                 allow_upstream_proxy: Some(false),
@@ -647,6 +649,7 @@ mod tests {
             mapped.network,
             Some(NetworkRequirements {
                 enabled: Some(true),
+                mitm: Some(true),
                 http_port: Some(8080),
                 socks_port: Some(1080),
                 allow_upstream_proxy: Some(false),
@@ -684,6 +687,7 @@ mod tests {
             enforce_residency: None,
             network: Some(CoreNetworkRequirementsToml {
                 enabled: None,
+                mitm: None,
                 http_port: None,
                 socks_port: None,
                 allow_upstream_proxy: None,
@@ -708,6 +712,7 @@ mod tests {
             mapped.network,
             Some(NetworkRequirements {
                 enabled: None,
+                mitm: None,
                 http_port: None,
                 socks_port: None,
                 allow_upstream_proxy: None,

@@ -10110,6 +10110,12 @@
               "null"
             ]
           },
+          "mitm": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "socksPort": {
             "format": "uint16",
             "minimum": 0.0,

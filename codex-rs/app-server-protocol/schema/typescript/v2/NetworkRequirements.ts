@@ -4,7 +4,7 @@
 import type { NetworkDomainPermission } from "./NetworkDomainPermission";
 import type { NetworkUnixSocketPermission } from "./NetworkUnixSocketPermission";
 
-export type NetworkRequirements = { enabled: boolean | null, httpPort: number | null, socksPort: number | null, allowUpstreamProxy: boolean | null, dangerouslyAllowNonLoopbackProxy: boolean | null, dangerouslyAllowAllUnixSockets: boolean | null,
+export type NetworkRequirements = { enabled: boolean | null, mitm: boolean | null, httpPort: number | null, socksPort: number | null, allowUpstreamProxy: boolean | null, dangerouslyAllowNonLoopbackProxy: boolean | null, dangerouslyAllowAllUnixSockets: boolean | null,
 /**
  * Canonical network permission map for `experimental_network`.
  */

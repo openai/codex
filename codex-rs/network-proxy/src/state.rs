@@ -11,6 +11,7 @@ use crate::policy::compile_allowlist_globset;
 use crate::policy::compile_denylist_globset;
 use crate::policy::is_global_wildcard_domain_pattern;
 use crate::runtime::ConfigState;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -73,6 +74,7 @@ pub fn build_config_state(
     let allow_set = compile_allowlist_globset(&allowed_domains)?;
     let mitm_hooks = compile_mitm_hooks(&config)?;
     let mitm = if config.network.mitm {
+        ensure_rustls_crypto_provider();
         Some(Arc::new(MitmState::new(
             config.network.allow_upstream_proxy,
         )?))

@@ -1,5 +1,12 @@
 use super::*;
 
+use crate::config_loader::ConfigLayerEntry;
+use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConfigRequirementsToml;
+use crate::config_loader::RequirementSource;
+use crate::config_loader::Sourced;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
@@ -316,4 +323,106 @@ default_permissions = "workspace"
         constraints.denied_domains,
         Some(vec!["blocked.example.com".to_string()])
     );
+}
+
+fn stack_with_user_config(config: toml::Value) -> ConfigLayerStack {
+    stack_with_user_config_and_requirements(config, ConfigRequirements::default())
+}
+
+fn stack_with_user_config_and_requirements(
+    config: toml::Value,
+    requirements: ConfigRequirements,
+) -> ConfigLayerStack {
+    ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: "/tmp/config.toml".try_into().expect("absolute path"),
+            },
+            config,
+        )],
+        requirements,
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config stack should build")
+}
+
+#[test]
+fn build_config_state_from_layers_rejects_mitm_when_requirement_is_absent() {
+    let layers = stack_with_user_config(
+        toml::from_str(
+            r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+mitm = true
+"#,
+        )
+        .expect("config should parse"),
+    );
+
+    match build_config_state_from_layers(&layers, &Policy::empty()) {
+        Ok(_) => panic!("MITM should be gated"),
+        Err(err) => {
+            assert!(
+                err.to_string().contains("network MITM settings are configured, but `experimental_network.mitm = true` is not enabled in managed requirements")
+            );
+        }
+    }
+}
+
+#[test]
+fn local_feature_table_does_not_enable_mitm_in_loader() {
+    let layers = stack_with_user_config_and_requirements(
+        toml::from_str(
+            r#"
+default_permissions = "workspace"
+
+[features]
+mitm_proxy = true
+
+[permissions.workspace.network]
+mitm = true
+"#,
+        )
+        .expect("config should parse"),
+        ConfigRequirements::default(),
+    );
+
+    match build_config_state_from_layers(&layers, &Policy::empty()) {
+        Ok(_) => panic!("local feature config should not enable MITM"),
+        Err(err) => {
+            assert!(
+                err.to_string().contains("network MITM settings are configured, but `experimental_network.mitm = true` is not enabled in managed requirements")
+            );
+        }
+    }
+}
+
+#[test]
+fn mitm_enabled_from_network_requirements_allows_mitm_config() {
+    let layers = stack_with_user_config_and_requirements(
+        toml::from_str(
+            r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+mitm = true
+"#,
+        )
+        .expect("config should parse"),
+        ConfigRequirements {
+            network: Some(Sourced::new(
+                crate::config_loader::NetworkConstraints {
+                    mitm: Some(true),
+                    ..Default::default()
+                },
+                RequirementSource::CloudRequirements,
+            )),
+            ..Default::default()
+        },
+    );
+
+    let config = config_from_layers(&layers, &Policy::empty()).expect("config should load");
+    validate_mitm_feature_gate(&config, mitm_enabled_from_network_requirements(&layers))
+        .expect("managed network MITM requirement should enable MITM config");
 }
