@@ -9621,6 +9621,12 @@ guardian_approval = true
     #[tokio::test]
     async fn side_start_block_message_tracks_open_side_conversation() {
         let mut app = make_test_app().await;
+        assert_eq!(
+            app.side_start_block_message(),
+            Some("'/side' is unavailable until the main thread is ready.")
+        );
+
+        app.primary_thread_id = Some(ThreadId::new());
         assert_eq!(app.side_start_block_message(), None);
 
         let parent_thread_id = ThreadId::new();

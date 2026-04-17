@@ -13,6 +13,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 const SIDE_RENAME_BLOCK_MESSAGE: &str = "Side conversations are ephemeral and cannot be renamed.";
+const SIDE_MAIN_THREAD_UNAVAILABLE_MESSAGE: &str =
+    "'/side' is unavailable until the main thread is ready.";
 const SIDE_ALREADY_OPEN_MESSAGE: &str =
     "A side conversation is already open. Press Esc to return before starting another.";
 const SIDE_BOUNDARY_PROMPT: &str = r#"Side conversation boundary.
@@ -100,10 +102,14 @@ impl App {
             && self.chat_widget.composer_is_empty()
             && let Some(parent_thread_id) = self.active_side_parent_thread_id()
         {
-            let _ = self
+            if self
                 .select_agent_thread_and_discard_side(tui, app_server, parent_thread_id)
-                .await;
-            true
+                .await
+                .is_err()
+            {
+                return false;
+            }
+            self.active_side_parent_thread_id().is_none()
         } else {
             false
         }
@@ -236,7 +242,13 @@ impl App {
     }
 
     pub(super) fn side_start_block_message(&self) -> Option<&'static str> {
-        (!self.side_threads.is_empty()).then_some(SIDE_ALREADY_OPEN_MESSAGE)
+        if self.primary_thread_id.is_none() {
+            Some(SIDE_MAIN_THREAD_UNAVAILABLE_MESSAGE)
+        } else if !self.side_threads.is_empty() {
+            Some(SIDE_ALREADY_OPEN_MESSAGE)
+        } else {
+            None
+        }
     }
 
     pub(super) fn restore_side_user_message(
