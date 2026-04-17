@@ -1,6 +1,9 @@
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
+use codex_analytics::HookRunFact;
+use codex_analytics::build_track_events_context;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -8,6 +11,8 @@ use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
+use codex_otel::HOOK_RUN_DURATION_METRIC;
+use codex_otel::HOOK_RUN_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -15,7 +20,10 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
@@ -316,15 +324,100 @@ async fn emit_hook_started_events(
     }
 }
 
-async fn emit_hook_completed_events(
+pub(crate) async fn emit_hook_completed_events(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     completed_events: Vec<HookCompletedEvent>,
 ) {
     for completed in completed_events {
+        emit_hook_completed_metrics(turn_context, &completed);
+        track_hook_completed_analytics(sess, turn_context, &completed);
         sess.send_event(turn_context, EventMsg::HookCompleted(completed))
             .await;
     }
+}
+
+fn emit_hook_completed_metrics(turn_context: &TurnContext, completed: &HookCompletedEvent) {
+    let tags = hook_run_metric_tags(&completed.run);
+    turn_context
+        .session_telemetry
+        .counter(HOOK_RUN_METRIC, /*inc*/ 1, &tags);
+    if let Some(duration_ms) = completed.run.duration_ms
+        && let Ok(duration_ms) = u64::try_from(duration_ms)
+    {
+        turn_context.session_telemetry.record_duration(
+            HOOK_RUN_DURATION_METRIC,
+            Duration::from_millis(duration_ms),
+            &tags,
+        );
+    }
+}
+
+fn track_hook_completed_analytics(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    completed: &HookCompletedEvent,
+) {
+    let (tracking, hook) =
+        hook_run_analytics_payload(sess.conversation_id.to_string(), turn_context, completed);
+    sess.services
+        .analytics_events_client
+        .track_hook_run(tracking, hook);
+}
+
+fn hook_run_analytics_payload(
+    thread_id: String,
+    turn_context: &TurnContext,
+    completed: &HookCompletedEvent,
+) -> (codex_analytics::TrackEventsContext, HookRunFact) {
+    (
+        build_track_events_context(
+            turn_context.model_info.slug.clone(),
+            thread_id,
+            completed
+                .turn_id
+                .clone()
+                .unwrap_or_else(|| turn_context.sub_id.clone()),
+        ),
+        HookRunFact {
+            event_name: completed.run.event_name,
+            hook_source: completed.run.source,
+            status: completed.run.status,
+        },
+    )
+}
+
+fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 3] {
+    let hook_name = match run.event_name {
+        HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::SessionStart => "SessionStart",
+        HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::Stop => "Stop",
+    };
+    let hook_source = match run.source {
+        HookSource::System => "system",
+        HookSource::User => "user",
+        HookSource::Project => "project",
+        HookSource::Mdm => "mdm",
+        HookSource::SessionFlags => "session_flags",
+        HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
+        HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
+        HookSource::Unknown => "unknown",
+    };
+    let status = match run.status {
+        HookRunStatus::Running => "running",
+        HookRunStatus::Completed => "completed",
+        HookRunStatus::Failed => "failed",
+        HookRunStatus::Blocked => "blocked",
+        HookRunStatus::Stopped => "stopped",
+    };
+
+    [
+        ("hook_name", hook_name),
+        ("source", hook_source),
+        ("status", status),
+    ]
 }
 
 fn hook_permission_mode(turn_context: &TurnContext) -> String {
@@ -341,9 +434,22 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
 #[cfg(test)]
 mod tests {
     use codex_protocol::models::ContentItem;
+    use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookExecutionMode;
+    use codex_protocol::protocol::HookHandlerType;
+    use codex_protocol::protocol::HookRunStatus;
+    use codex_protocol::protocol::HookScope;
+    use codex_protocol::protocol::HookSource;
     use pretty_assertions::assert_eq;
 
     use super::additional_context_messages;
+    use super::hook_run_analytics_payload;
+    use super::hook_run_metric_tags;
+    use crate::codex::make_session_and_context;
+    use codex_protocol::protocol::HookCompletedEvent;
+    use codex_protocol::protocol::HookRunSummary;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
 
     #[test]
     fn additional_context_messages_stay_separate_and_ordered() {
@@ -377,5 +483,87 @@ mod tests {
                 ("developer", "second tide note".to_string()),
             ],
         );
+    }
+
+    #[tokio::test]
+    async fn hook_run_analytics_payload_uses_completed_turn_id() {
+        let (_session, turn_context) = make_session_and_context().await;
+        let completed = HookCompletedEvent {
+            turn_id: Some("turn-from-hook".to_string()),
+            run: sample_hook_run(HookRunStatus::Blocked, HookSource::Project),
+        };
+
+        let (tracking, hook) =
+            hook_run_analytics_payload("thread-123".to_string(), &turn_context, &completed);
+
+        assert_eq!(tracking.thread_id, "thread-123");
+        assert_eq!(tracking.turn_id, "turn-from-hook");
+        assert_eq!(tracking.model_slug, turn_context.model_info.slug);
+        assert_eq!(hook.event_name, HookEventName::Stop);
+        assert_eq!(hook.hook_source, HookSource::Project);
+        assert_eq!(hook.status, HookRunStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn hook_run_analytics_payload_falls_back_to_turn_context_id() {
+        let (_session, turn_context) = make_session_and_context().await;
+        let completed = HookCompletedEvent {
+            turn_id: None,
+            run: sample_hook_run(HookRunStatus::Failed, HookSource::Unknown),
+        };
+
+        let (tracking, hook) =
+            hook_run_analytics_payload("thread-123".to_string(), &turn_context, &completed);
+
+        assert_eq!(tracking.turn_id, turn_context.sub_id);
+        assert_eq!(hook.hook_source, HookSource::Unknown);
+        assert_eq!(hook.status, HookRunStatus::Failed);
+    }
+
+    #[test]
+    fn hook_run_metric_tags_match_analytics_shape() {
+        let run = sample_hook_run(HookRunStatus::Blocked, HookSource::Project);
+
+        assert_eq!(
+            hook_run_metric_tags(&run),
+            [
+                ("hook_name", "Stop"),
+                ("source", "project"),
+                ("status", "blocked"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hook_run_metric_tags_include_expanded_hook_sources() {
+        let run = sample_hook_run(HookRunStatus::Completed, HookSource::LegacyManagedConfigMdm);
+
+        assert_eq!(
+            hook_run_metric_tags(&run),
+            [
+                ("hook_name", "Stop"),
+                ("source", "legacy_managed_config_mdm"),
+                ("status", "completed"),
+            ]
+        );
+    }
+
+    fn sample_hook_run(status: HookRunStatus, source: HookSource) -> HookRunSummary {
+        HookRunSummary {
+            id: "stop:0:/tmp/hooks.json".to_string(),
+            event_name: HookEventName::Stop,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
+            scope: HookScope::Turn,
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source,
+            display_order: 0,
+            status,
+            status_message: None,
+            started_at: 10,
+            completed_at: Some(37),
+            duration_ms: Some(27),
+            entries: Vec::new(),
+        }
     }
 }

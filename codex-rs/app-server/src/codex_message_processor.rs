@@ -364,12 +364,17 @@ use codex_app_server_protocol::ServerRequest;
 mod apps_list_helpers;
 mod plugin_app_helpers;
 mod plugin_mcp_oauth;
+mod token_usage_replay;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use token_usage_replay::latest_token_usage_turn_id_for_thread_path;
+use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
+use token_usage_replay::latest_token_usage_turn_id_from_rollout_path;
+use token_usage_replay::send_thread_token_usage_update_to_connection;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -4125,7 +4130,7 @@ impl CodexMessageProcessor {
         {
             Ok(NewThread {
                 thread_id,
-                thread,
+                thread: codex_thread,
                 session_configured,
                 ..
             }) => {
@@ -4155,7 +4160,7 @@ impl CodexMessageProcessor {
                 let mut thread = match self
                     .load_thread_from_resume_source_or_send_internal(
                         thread_id,
-                        thread.as_ref(),
+                        codex_thread.as_ref(),
                         &response_history,
                         rollout_path.as_path(),
                         fallback_model_provider.as_str(),
@@ -4207,7 +4212,25 @@ impl CodexMessageProcessor {
                     );
                 }
 
+                let connection_id = request_id.connection_id;
+                let token_usage_thread = response.thread.clone();
+                let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_items(
+                    &response_history.get_rollout_items(),
+                    &token_usage_thread,
+                );
                 self.outgoing.send_response(request_id, response).await;
+                // The client needs restored usage before it starts another turn.
+                // Sending after the response preserves JSON-RPC request ordering while
+                // still filling the status line before the next turn lifecycle begins.
+                send_thread_token_usage_update_to_connection(
+                    &self.outgoing,
+                    connection_id,
+                    thread_id,
+                    &token_usage_thread,
+                    codex_thread.as_ref(),
+                    token_usage_turn_id,
+                )
+                .await;
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -4843,7 +4866,31 @@ impl CodexMessageProcessor {
             );
         }
 
+        let connection_id = request_id.connection_id;
+        let token_usage_thread = response.thread.clone();
+        let token_usage_turn_id = if let Some(turn_id) =
+            latest_token_usage_turn_id_for_thread_path(&token_usage_thread).await
+        {
+            Some(turn_id)
+        } else {
+            latest_token_usage_turn_id_from_rollout_path(
+                rollout_path.as_path(),
+                &token_usage_thread,
+            )
+            .await
+        };
         self.outgoing.send_response(request_id, response).await;
+        // Mirror the resume contract for forks: the new thread is usable as soon
+        // as the response arrives, so restored usage must follow immediately.
+        send_thread_token_usage_update_to_connection(
+            &self.outgoing,
+            connection_id,
+            thread_id,
+            &token_usage_thread,
+            forked_thread.as_ref(),
+            token_usage_turn_id,
+        )
+        .await;
 
         let notif = ThreadStartedNotification { thread };
         self.outgoing
@@ -8548,7 +8595,24 @@ async fn handle_pending_thread_resume_request(
         sandbox: sandbox_policy.into(),
         reasoning_effort,
     };
+    let token_usage_thread = response.thread.clone();
+    let token_usage_turn_id = latest_token_usage_turn_id_from_rollout_path(
+        pending.rollout_path.as_path(),
+        &token_usage_thread,
+    )
+    .await;
     outgoing.send_response(request_id, response).await;
+    // Rejoining a loaded thread has the same UI contract as a cold resume, but
+    // uses the live conversation state instead of reconstructing a new session.
+    send_thread_token_usage_update_to_connection(
+        outgoing,
+        connection_id,
+        conversation_id,
+        &token_usage_thread,
+        conversation.as_ref(),
+        token_usage_turn_id,
+    )
+    .await;
     outgoing
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;

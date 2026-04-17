@@ -93,6 +93,10 @@ pub struct McpServerConfig {
     #[serde(default, with = "option_duration_secs")]
     pub tool_timeout_sec: Option<Duration>,
 
+    /// Approval mode for tools in this server unless a tool override exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+
     /// Explicit allow-list of tools exposed from this server. When set, only these tools will be registered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_tools: Option<Vec<String>>,
@@ -158,6 +162,8 @@ pub struct RawMcpServerConfig {
     #[serde(default)]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(default)]
+    pub default_tools_approval_mode: Option<AppToolApproval>,
+    #[serde(default)]
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub disabled_tools: Option<Vec<String>>,
@@ -194,6 +200,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             enabled,
             required,
             supports_parallel_tool_calls,
+            default_tools_approval_mode,
             enabled_tools,
             disabled_tools,
             scopes,
@@ -260,6 +267,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             required: required.unwrap_or_default(),
             supports_parallel_tool_calls: supports_parallel_tool_calls.unwrap_or_default(),
             disabled_reason: None,
+            default_tools_approval_mode,
             enabled_tools,
             disabled_tools,
             scopes,

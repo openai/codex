@@ -8,5 +8,6 @@ import type { HookHandlerType } from "./HookHandlerType";
 import type { HookOutputEntry } from "./HookOutputEntry";
 import type { HookRunStatus } from "./HookRunStatus";
 import type { HookScope } from "./HookScope";
+import type { HookSource } from "./HookSource";
 
-export type HookRunSummary = { id: string, eventName: HookEventName, handlerType: HookHandlerType, executionMode: HookExecutionMode, scope: HookScope, sourcePath: AbsolutePathBuf, displayOrder: bigint, status: HookRunStatus, statusMessage: string | null, startedAt: bigint, completedAt: bigint | null, durationMs: bigint | null, entries: Array<HookOutputEntry>, };
+export type HookRunSummary = { id: string, eventName: HookEventName, handlerType: HookHandlerType, executionMode: HookExecutionMode, scope: HookScope, sourcePath: AbsolutePathBuf, source: HookSource, displayOrder: bigint, status: HookRunStatus, statusMessage: string | null, startedAt: bigint, completedAt: bigint | null, durationMs: bigint | null, entries: Array<HookOutputEntry>, };
