@@ -28,8 +28,6 @@ use crate::local_file_system::current_sandbox_cwd;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
-const PATH_ENV_VAR: &str = "PATH";
-
 #[derive(Clone, Debug)]
 pub(crate) struct FileSystemSandboxRunner {
     runtime_paths: ExecServerRuntimePaths,
@@ -90,7 +88,7 @@ impl FileSystemSandboxRunner {
             program: helper.as_path().as_os_str().to_owned(),
             args: vec![CODEX_FS_HELPER_ARG1.to_string()],
             cwd: cwd.clone(),
-            env: helper_env(),
+            env: HashMap::new(),
             additional_permissions: self.helper_permissions(
                 sandbox_context.additional_permissions.as_ref(),
                 /*include_helper_read_root*/ !sandbox_context.use_legacy_landlock,
@@ -177,17 +175,6 @@ fn helper_sandbox_inputs(
         network_policy: NetworkSandboxPolicy::Restricted,
         cwd,
     })
-}
-
-fn helper_env() -> HashMap<String, String> {
-    std::env::var_os(PATH_ENV_VAR)
-        .map(|path| {
-            HashMap::from([(
-                PATH_ENV_VAR.to_string(),
-                path.to_string_lossy().into_owned(),
-            )])
-        })
-        .unwrap_or_default()
 }
 
 fn normalize_sandbox_policy_root_aliases(sandbox_policy: SandboxPolicy) -> SandboxPolicy {
@@ -359,8 +346,6 @@ mod tests {
     use crate::FileSystemSandboxContext;
 
     use super::FileSystemSandboxRunner;
-    use super::PATH_ENV_VAR;
-    use super::helper_env;
     use super::helper_sandbox_inputs;
     use super::sandbox_policy_with_helper_runtime_defaults;
 
@@ -462,22 +447,6 @@ mod tests {
             err.message,
             "fileSystemSandboxPolicy requires sandboxPolicyCwd"
         );
-    }
-
-    #[test]
-    fn helper_env_preserves_only_path() {
-        let env = helper_env();
-
-        match std::env::var_os(PATH_ENV_VAR) {
-            Some(path) => assert_eq!(
-                env,
-                std::collections::HashMap::from([(
-                    PATH_ENV_VAR.to_string(),
-                    path.to_string_lossy().into_owned()
-                )])
-            ),
-            None => assert_eq!(env, std::collections::HashMap::new()),
-        }
     }
 
     #[test]
