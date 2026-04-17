@@ -35,6 +35,7 @@ use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -600,6 +601,7 @@ impl TestCodex {
             AskForApproval::Never,
             SandboxPolicy::DangerFullAccess,
             Some(service_tier),
+            /*environments*/ None,
         )
         .await
     }
@@ -615,6 +617,22 @@ impl TestCodex {
             approval_policy,
             sandbox_policy,
             /*service_tier*/ None,
+            /*environments*/ None,
+        )
+        .await
+    }
+
+    pub async fn submit_turn_with_environments(
+        &self,
+        prompt: &str,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Result<()> {
+        self.submit_turn_with_context(
+            prompt,
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+            /*service_tier*/ None,
+            environments,
         )
         .await
     }
@@ -625,10 +643,12 @@ impl TestCodex {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
         service_tier: Option<Option<ServiceTier>>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
     ) -> Result<()> {
         let session_model = self.session_configured.model.clone();
         self.codex
             .submit(Op::UserTurn {
+                environments,
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),

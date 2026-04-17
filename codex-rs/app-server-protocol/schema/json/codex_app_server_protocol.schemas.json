@@ -16260,6 +16260,21 @@
         "title": "TurnDiffUpdatedNotification",
         "type": "object"
       },
+      "TurnEnvironmentParams": {
+        "properties": {
+          "cwd": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "environmentId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cwd",
+          "environmentId"
+        ],
+        "type": "object"
+      },
       "TurnError": {
         "properties": {
           "additionalDetails": {

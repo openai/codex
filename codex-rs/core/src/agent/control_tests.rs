@@ -430,6 +430,7 @@ async fn send_input_submits_user_message() {
     let expected = (
         thread_id,
         Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "hello from tests".to_string(),
                 text_elements: Vec::new(),
@@ -577,6 +578,7 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
     let expected = (
         thread_id,
         Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "spawned".to_string(),
                 text_elements: Vec::new(),
@@ -690,6 +692,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let expected = (
         child_thread_id,
         Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "child task".to_string(),
                 text_elements: Vec::new(),
