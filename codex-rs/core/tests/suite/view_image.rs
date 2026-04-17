@@ -18,7 +18,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
-use codex_utils_image::MAX_DIMENSION;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -128,10 +127,10 @@ async fn write_workspace_png(
     write_workspace_file(test, rel_path, png_bytes(width, height, rgba)?).await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-
+async fn assert_user_turn_local_image_resizes_to(
+    original_dimensions: (u32, u32),
+    expected_dimensions: (u32, u32),
+) -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let mut builder = test_codex();
@@ -143,8 +142,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         ..
     } = &test;
 
-    let original_width = 2304;
-    let original_height = 864;
+    let (original_width, original_height) = original_dimensions;
     let local_image_dir = tempfile::tempdir()?;
     let abs_path = local_image_dir.path().join("example.png");
     let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([20u8, 40, 60, 255]));
@@ -213,12 +211,23 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (width, height) = resized.dimensions();
-    assert!(width <= MAX_DIMENSION);
-    assert!(height <= MAX_DIMENSION);
-    assert!(width < original_width);
-    assert!(height < original_height);
+    assert_eq!((width, height), expected_dimensions);
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_user_turn_local_image_resizes_to((2304, 864), (2048, 768)).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_with_vertical_local_image_resizes_to_square_bounds() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    assert_user_turn_local_image_resizes_to((1024, 4096), (512, 2048)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -348,10 +357,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= MAX_DIMENSION);
-    assert!(resized_height <= MAX_DIMENSION);
-    assert!(resized_width < original_width);
-    assert!(resized_height < original_height);
+    assert_eq!((resized_width, resized_height), (2048, 768));
 
     Ok(())
 }
@@ -638,10 +644,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (width, height) = resized.dimensions();
-    assert!(width <= MAX_DIMENSION);
-    assert!(height <= MAX_DIMENSION);
-    assert!(width < original_width);
-    assert!(height < original_height);
+    assert_eq!((width, height), (2048, 768));
 
     Ok(())
 }
@@ -741,10 +744,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= MAX_DIMENSION);
-    assert!(resized_height <= MAX_DIMENSION);
-    assert!(resized_width < original_width);
-    assert!(resized_height < original_height);
+    assert_eq!((resized_width, resized_height), (2048, 768));
 
     Ok(())
 }
@@ -842,10 +842,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
         .expect("image data decodes from base64 for request");
     let resized = load_from_memory(&decoded).expect("load resized image");
     let (resized_width, resized_height) = resized.dimensions();
-    assert!(resized_width <= MAX_DIMENSION);
-    assert!(resized_height <= MAX_DIMENSION);
-    assert!(resized_width < original_width);
-    assert!(resized_height < original_height);
+    assert_eq!((resized_width, resized_height), (2048, 768));
 
     Ok(())
 }
