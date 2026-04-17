@@ -6316,6 +6316,7 @@ async fn reflections_config_from_strategy_and_feature_table() -> std::io::Result
 [features.reflections]
 usage_hint_enabled = false
 usage_hint_text = "Custom recovery guidance."
+storage_tools_enabled = false
 "#,
     )?;
 
@@ -6334,6 +6335,30 @@ usage_hint_text = "Custom recovery guidance."
         config.reflections.usage_hint_text.as_deref(),
         Some("Custom recovery guidance.")
     );
+    assert!(!config.reflections.storage_tools_enabled);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn reflections_config_defaults_enable_storage_tools() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"compaction_strategy = "reflections"
+
+[features.reflections]
+usage_hint_enabled = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.reflections.storage_tools_enabled);
 
     Ok(())
 }
@@ -6349,6 +6374,7 @@ compaction_strategy = "reflections"
 [features.reflections]
 usage_hint_enabled = true
 usage_hint_text = "base hint"
+storage_tools_enabled = true
 
 [profiles.default_compaction]
 compaction_strategy = "default"
@@ -6356,6 +6382,7 @@ compaction_strategy = "default"
 [profiles.default_compaction.features.reflections]
 usage_hint_enabled = false
 usage_hint_text = "profile hint"
+storage_tools_enabled = false
 "#,
     )?;
 
@@ -6374,6 +6401,7 @@ usage_hint_text = "profile hint"
         config.reflections.usage_hint_text.as_deref(),
         Some("profile hint")
     );
+    assert!(!config.reflections.storage_tools_enabled);
 
     Ok(())
 }

@@ -22,21 +22,25 @@ pub(crate) struct WrittenWindow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ReflectionsState {
+pub(super) struct ReflectionsState {
     schema: String,
     next_window_index: u64,
     latest_window: Option<String>,
     rollout_path: PathBuf,
-    windows: Vec<WindowState>,
+    pub(super) windows: Vec<WindowState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct WindowState {
-    window: String,
-    trigger: String,
-    created_at: String,
+pub(super) struct WindowState {
+    pub(super) window: String,
+    pub(super) trigger: String,
+    pub(super) created_at: String,
     transcript_path: PathBuf,
-    context_window_size: Option<i64>,
+    pub(super) context_window_size: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) rollout_start_line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) rollout_end_line: Option<usize>,
 }
 
 pub(crate) fn sidecar_path_for_rollout(rollout_path: &Path) -> PathBuf {
@@ -54,6 +58,8 @@ pub(crate) async fn write_window(
     rollout_path: &Path,
     trigger: CompactionTrigger,
     context_window_size: Option<i64>,
+    rollout_start_line: usize,
+    rollout_end_line: usize,
     transcript: String,
 ) -> std::io::Result<WrittenWindow> {
     ensure_sidecar_dirs(sidecar_path).await?;
@@ -77,6 +83,8 @@ pub(crate) async fn write_window(
         created_at,
         transcript_path: PathBuf::from("logs").join(&window).join(TRANSCRIPT_FILE),
         context_window_size,
+        rollout_start_line: Some(rollout_start_line),
+        rollout_end_line: Some(rollout_end_line),
     });
     write_state(sidecar_path, &state).await?;
 
@@ -88,7 +96,10 @@ pub(crate) async fn write_window(
     })
 }
 
-async fn read_state(sidecar_path: &Path, rollout_path: &Path) -> std::io::Result<ReflectionsState> {
+pub(super) async fn read_state(
+    sidecar_path: &Path,
+    rollout_path: &Path,
+) -> std::io::Result<ReflectionsState> {
     let state_path = sidecar_path.join("state.json");
     match tokio::fs::read_to_string(&state_path).await {
         Ok(contents) => {
@@ -135,7 +146,7 @@ async fn write_state(sidecar_path: &Path, state: &ReflectionsState) -> std::io::
     write_atomic(&sidecar_path.join("state.json"), &state_json).await
 }
 
-async fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+pub(super) async fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let tmp_path = path.with_extension("tmp");
     let mut file = tokio::fs::File::create(&tmp_path).await?;
     file.write_all(contents).await?;
@@ -156,6 +167,7 @@ mod tests {
     use super::sidecar_path_for_rollout;
     use super::write_window;
     use codex_analytics::CompactionTrigger;
+    use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn write_window_allocates_transcript_and_state() -> std::io::Result<()> {
@@ -168,6 +180,8 @@ mod tests {
             &rollout,
             CompactionTrigger::Manual,
             Some(98304),
+            1,
+            1,
             "first".to_string(),
         )
         .await?;
@@ -176,6 +190,8 @@ mod tests {
             &rollout,
             CompactionTrigger::Auto,
             Some(98304),
+            2,
+            2,
             "second".to_string(),
         )
         .await?;
@@ -190,6 +206,8 @@ mod tests {
         assert!(sidecar.join("notes").is_dir());
         let state = tokio::fs::read_to_string(sidecar.join("state.json")).await?;
         assert!(state.contains("\"latest_window\": \"cw00001\""));
+        assert!(state.contains("\"rollout_start_line\": 1"));
+        assert!(state.contains("\"rollout_end_line\": 2"));
         Ok(())
     }
 }

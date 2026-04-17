@@ -656,9 +656,16 @@ fn reflections_tools_require_config_flag() {
     );
     assert_lacks_tool_name(&tools, REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME);
     assert_lacks_tool_name(&tools, REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_LIST_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_READ_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_SEARCH_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_WRITE_NOTE_TOOL_NAME);
 
-    let reflections_tools_config =
-        default_tools_config.with_reflections(true, Some("Custom Reflections hint.".to_string()));
+    let reflections_tools_config = default_tools_config.clone().with_reflections(
+        true,
+        Some("Custom Reflections hint.".to_string()),
+        /*reflections_storage_tools*/ true,
+    );
     let (tools, handlers) = build_specs(
         &reflections_tools_config,
         /*mcp_tools*/ None,
@@ -670,6 +677,10 @@ fn reflections_tools_require_config_flag() {
         &[
             REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME,
             REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME,
+            REFLECTIONS_LIST_TOOL_NAME,
+            REFLECTIONS_READ_TOOL_NAME,
+            REFLECTIONS_SEARCH_TOOL_NAME,
+            REFLECTIONS_WRITE_NOTE_TOOL_NAME,
         ],
     );
     assert!(handlers.contains(&ToolHandlerSpec {
@@ -680,12 +691,63 @@ fn reflections_tools_require_config_flag() {
         name: ToolName::plain(REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME),
         kind: ToolHandlerKind::ReflectionsGetContextRemaining,
     }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_LIST_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsList,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_READ_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsRead,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_SEARCH_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsSearch,
+    }));
+    assert!(handlers.contains(&ToolHandlerSpec {
+        name: ToolName::plain(REFLECTIONS_WRITE_NOTE_TOOL_NAME),
+        kind: ToolHandlerKind::ReflectionsWriteNote,
+    }));
 
     let new_context_tool = find_tool(&tools, REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME);
     let ToolSpec::Function(ResponsesApiTool { description, .. }) = &new_context_tool.spec else {
         panic!("{REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME} should be a function tool");
     };
     assert!(description.contains("Custom Reflections hint."));
+
+    let path_based_reflections_tools_config = default_tools_config.with_reflections(
+        true,
+        Some("Custom Reflections hint.".to_string()),
+        /*reflections_storage_tools*/ false,
+    );
+    let (tools, handlers) = build_specs(
+        &path_based_reflections_tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    assert_contains_tool_names(
+        &tools,
+        &[
+            REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME,
+            REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME,
+        ],
+    );
+    assert_lacks_tool_name(&tools, REFLECTIONS_LIST_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_READ_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_SEARCH_TOOL_NAME);
+    assert_lacks_tool_name(&tools, REFLECTIONS_WRITE_NOTE_TOOL_NAME);
+    assert!(!handlers.iter().any(|handler| matches!(
+        handler.kind,
+        ToolHandlerKind::ReflectionsList
+            | ToolHandlerKind::ReflectionsRead
+            | ToolHandlerKind::ReflectionsSearch
+            | ToolHandlerKind::ReflectionsWriteNote
+    )));
+    let new_context_tool = find_tool(&tools, REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &new_context_tool.spec else {
+        panic!("{REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME} should be a function tool");
+    };
+    assert!(description.contains("under the Reflections notes directory"));
 }
 
 #[test]

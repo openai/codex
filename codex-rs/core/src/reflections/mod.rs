@@ -1,5 +1,7 @@
+mod log_entries;
 mod prompt;
 mod storage;
+mod storage_tools;
 mod transcript;
 
 use std::sync::Arc;
@@ -32,6 +34,13 @@ pub(crate) use prompt::near_limit_reminder_threshold;
 pub(crate) use prompt::usage_hint;
 pub(crate) use storage::ensure_sidecar_dirs;
 pub(crate) use storage::sidecar_path_for_rollout;
+pub(crate) use storage_tools::StorageToolError;
+pub(crate) use storage_tools::list_logs;
+pub(crate) use storage_tools::list_notes;
+pub(crate) use storage_tools::read_log;
+pub(crate) use storage_tools::read_note;
+pub(crate) use storage_tools::search;
+pub(crate) use storage_tools::write_note;
 
 pub(crate) async fn run_reflections_compact_task(
     sess: Arc<Session>,
@@ -130,6 +139,7 @@ async fn run_reflections_compact_task_inner_impl(
         turn_context.model_context_window(),
         &window.logs_path,
         &window.notes_path,
+        turn_context.config.reflections.storage_tools_enabled,
     );
     let mut new_history = vec![ResponseItem::Message {
         id: None,
@@ -191,6 +201,9 @@ pub(crate) async fn write_current_window(
     };
     let sidecar_path = storage::sidecar_path_for_rollout(&rollout_path);
     let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    let item_range = transcript::item_range_since_last_compaction(&rollout_items);
+    let rollout_start_line = item_range.start.saturating_add(1);
+    let rollout_end_line = item_range.end;
     let events = transcript::events_since_last_compaction(&rollout_items);
     let transcript = transcript::render(transcript::TranscriptInput {
         events: &events,
@@ -204,6 +217,8 @@ pub(crate) async fn write_current_window(
         &rollout_path,
         trigger,
         turn_context.model_context_window(),
+        rollout_start_line,
+        rollout_end_line,
         transcript,
     )
     .await

@@ -626,6 +626,7 @@ impl Default for MultiAgentV2Config {
 pub struct ReflectionsConfig {
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
+    pub storage_tools_enabled: bool,
 }
 
 impl Default for ReflectionsConfig {
@@ -633,6 +634,7 @@ impl Default for ReflectionsConfig {
         Self {
             usage_hint_enabled: true,
             usage_hint_text: None,
+            storage_tools_enabled: true,
         }
     }
 }
@@ -1415,10 +1417,15 @@ fn resolve_reflections_config(
         .or_else(|| base.and_then(|config| config.usage_hint_text.as_ref()))
         .cloned()
         .or(default.usage_hint_text);
+    let storage_tools_enabled = profile
+        .and_then(|config| config.storage_tools_enabled)
+        .or_else(|| base.and_then(|config| config.storage_tools_enabled))
+        .unwrap_or(default.storage_tools_enabled);
 
     ReflectionsConfig {
         usage_hint_enabled,
         usage_hint_text,
+        storage_tools_enabled,
     }
 }
 

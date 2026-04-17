@@ -486,7 +486,11 @@ async fn reflections_manual_compact_writes_sidecar_without_summarizer_request() 
         )
     });
     assert!(rollout.contains("Reflections is enabled"));
-    assert!(rollout.contains(&format!("{}/logs", sidecar_path.display())));
+    assert!(rollout.contains("reflections_list"));
+    assert!(rollout.contains("reflections_read"));
+    assert!(rollout.contains("reflections_search"));
+    assert!(rollout.contains("reflections_write_note"));
+    assert!(!rollout.contains(&format!("{}/logs", sidecar_path.display())));
     assert!(!rollout.contains("logs/cw00000/transcript.md"));
 }
 
@@ -580,6 +584,10 @@ async fn reflections_near_limit_reminder_is_recorded_once_and_dropped_after_comp
     assert!(
         body_contains_text(&request_bodies[1], "advised NOT to send a final answer"),
         "near-limit reminder should include the stronger note-writing guidance"
+    );
+    assert!(
+        body_contains_text(&request_bodies[1], "reflections_write_note"),
+        "near-limit reminder should point to the storage note tool"
     );
     assert!(
         request_bodies[1].contains(&format!("unsupported call: {DUMMY_FUNCTION_NAME}")),

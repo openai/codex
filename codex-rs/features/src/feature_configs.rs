@@ -29,4 +29,6 @@ pub struct ReflectionsConfigToml {
     pub usage_hint_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_hint_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_tools_enabled: Option<bool>,
 }

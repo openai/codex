@@ -1,6 +1,10 @@
 use crate::CommandToolOptions;
 use crate::REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME;
+use crate::REFLECTIONS_LIST_TOOL_NAME;
 use crate::REFLECTIONS_NEW_CONTEXT_WINDOW_TOOL_NAME;
+use crate::REFLECTIONS_READ_TOOL_NAME;
+use crate::REFLECTIONS_SEARCH_TOOL_NAME;
+use crate::REFLECTIONS_WRITE_NOTE_TOOL_NAME;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ShellToolOptions;
 use crate::SpawnAgentToolOptions;
@@ -36,7 +40,11 @@ use crate::create_list_mcp_resources_tool;
 use crate::create_local_shell_tool;
 use crate::create_read_mcp_resource_tool;
 use crate::create_reflections_get_context_remaining_tool;
+use crate::create_reflections_list_tool;
 use crate::create_reflections_new_context_window_tool;
+use crate::create_reflections_read_tool;
+use crate::create_reflections_search_tool;
+use crate::create_reflections_write_note_tool;
 use crate::create_report_agent_job_result_tool;
 use crate::create_request_permissions_tool;
 use crate::create_request_user_input_tool;
@@ -255,6 +263,7 @@ pub fn build_tool_registry_plan(
         plan.push_spec(
             create_reflections_new_context_window_tool(
                 config.reflections_usage_hint_text.as_deref(),
+                config.reflections_storage_tools,
             ),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -272,6 +281,39 @@ pub fn build_tool_registry_plan(
             REFLECTIONS_GET_CONTEXT_REMAINING_TOOL_NAME,
             ToolHandlerKind::ReflectionsGetContextRemaining,
         );
+
+        if config.reflections_storage_tools {
+            plan.push_spec(
+                create_reflections_list_tool(),
+                /*supports_parallel_tool_calls*/ true,
+                config.code_mode_enabled,
+            );
+            plan.push_spec(
+                create_reflections_read_tool(),
+                /*supports_parallel_tool_calls*/ true,
+                config.code_mode_enabled,
+            );
+            plan.push_spec(
+                create_reflections_search_tool(),
+                /*supports_parallel_tool_calls*/ true,
+                config.code_mode_enabled,
+            );
+            plan.push_spec(
+                create_reflections_write_note_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            plan.register_handler(REFLECTIONS_LIST_TOOL_NAME, ToolHandlerKind::ReflectionsList);
+            plan.register_handler(REFLECTIONS_READ_TOOL_NAME, ToolHandlerKind::ReflectionsRead);
+            plan.register_handler(
+                REFLECTIONS_SEARCH_TOOL_NAME,
+                ToolHandlerKind::ReflectionsSearch,
+            );
+            plan.register_handler(
+                REFLECTIONS_WRITE_NOTE_TOOL_NAME,
+                ToolHandlerKind::ReflectionsWriteNote,
+            );
+        }
     }
 
     if config.search_tool

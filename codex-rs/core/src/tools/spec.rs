@@ -73,7 +73,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReflectionsGetContextRemainingHandler;
+    use crate::tools::handlers::ReflectionsListHandler;
     use crate::tools::handlers::ReflectionsNewContextWindowHandler;
+    use crate::tools::handlers::ReflectionsReadHandler;
+    use crate::tools::handlers::ReflectionsSearchHandler;
+    use crate::tools::handlers::ReflectionsWriteNoteHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -214,9 +218,21 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     Arc::new(ReflectionsGetContextRemainingHandler),
                 );
             }
+            ToolHandlerKind::ReflectionsList => {
+                builder.register_handler(handler.name, Arc::new(ReflectionsListHandler));
+            }
             ToolHandlerKind::ReflectionsNewContextWindow => {
                 builder
                     .register_handler(handler.name, Arc::new(ReflectionsNewContextWindowHandler));
+            }
+            ToolHandlerKind::ReflectionsRead => {
+                builder.register_handler(handler.name, Arc::new(ReflectionsReadHandler));
+            }
+            ToolHandlerKind::ReflectionsSearch => {
+                builder.register_handler(handler.name, Arc::new(ReflectionsSearchHandler));
+            }
+            ToolHandlerKind::ReflectionsWriteNote => {
+                builder.register_handler(handler.name, Arc::new(ReflectionsWriteNoteHandler));
             }
             ToolHandlerKind::RequestPermissions => {
                 builder.register_handler(handler.name, request_permissions_handler.clone());

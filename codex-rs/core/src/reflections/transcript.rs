@@ -1,7 +1,15 @@
+use std::ops::Range;
 use std::path::Path;
 
+pub(crate) use super::log_entries::LogEntry;
+use super::log_entries::dynamic_tool_output_items_to_text;
+use super::log_entries::exec_output;
+use super::log_entries::is_reflections_storage_tool;
+pub(crate) use super::log_entries::log_entries_from_items;
+use super::log_entries::push_blank_line_if_needed;
+use super::log_entries::reflections_storage_tool_call_metadata;
+use super::log_entries::reflections_storage_tool_response_metadata;
 use codex_analytics::CompactionTrigger;
-use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use serde::Serialize;
@@ -15,12 +23,9 @@ pub(crate) struct TranscriptInput<'a> {
 }
 
 pub(crate) fn events_since_last_compaction(items: &[RolloutItem]) -> Vec<EventMsg> {
-    let start_index = items
-        .iter()
-        .rposition(|item| matches!(item, RolloutItem::Compacted(_)))
-        .map_or(0, |index| index + 1);
+    let range = item_range_since_last_compaction(items);
 
-    items[start_index..]
+    items[range]
         .iter()
         .filter_map(|item| match item {
             RolloutItem::EventMsg(event) => Some(event.clone()),
@@ -30,6 +35,14 @@ pub(crate) fn events_since_last_compaction(items: &[RolloutItem]) -> Vec<EventMs
             | RolloutItem::TurnContext(_) => None,
         })
         .collect()
+}
+
+pub(crate) fn item_range_since_last_compaction(items: &[RolloutItem]) -> Range<usize> {
+    let start_index = items
+        .iter()
+        .rposition(|item| matches!(item, RolloutItem::Compacted(_)))
+        .map_or(0, |index| index + 1);
+    start_index..items.len()
 }
 
 pub(crate) fn render(input: TranscriptInput<'_>) -> String {
@@ -205,6 +218,19 @@ fn push_event(out: &mut String, index: usize, event: &EventMsg) -> bool {
             true
         }
         EventMsg::DynamicToolCallRequest(event) => {
+            if is_reflections_storage_tool(&event.tool) {
+                push_json(
+                    out,
+                    index,
+                    &format!("tool_call {}", event.tool),
+                    &reflections_storage_tool_call_metadata(
+                        &event.tool,
+                        &event.call_id,
+                        &event.arguments,
+                    ),
+                );
+                return true;
+            }
             push_json(
                 out,
                 index,
@@ -217,6 +243,22 @@ fn push_event(out: &mut String, index: usize, event: &EventMsg) -> bool {
             true
         }
         EventMsg::DynamicToolCallResponse(event) => {
+            if is_reflections_storage_tool(&event.tool) {
+                push_json(
+                    out,
+                    index,
+                    &format!("tool_result {}", event.tool),
+                    &reflections_storage_tool_response_metadata(
+                        &event.tool,
+                        &event.call_id,
+                        event.success,
+                        event.error.as_deref(),
+                        &event.content_items,
+                        &event.arguments,
+                    ),
+                );
+                return true;
+            }
             let text = format!(
                 "call_id: {}\nsuccess: {}\nerror: {}\n\n{}",
                 event.call_id,
@@ -349,54 +391,6 @@ fn push_json<T: Serialize>(out: &mut String, index: usize, heading: &str, value:
     let text = serde_json::to_string_pretty(value)
         .unwrap_or_else(|err| format!("<failed to serialize visible event: {err}>"));
     push_fenced(out, index, heading, "json", &text);
-}
-
-fn push_blank_line_if_needed(text: &mut String) {
-    if !text.is_empty() && !text.ends_with('\n') {
-        text.push('\n');
-    }
-    if !text.is_empty() {
-        text.push('\n');
-    }
-}
-
-fn exec_output(event: &codex_protocol::protocol::ExecCommandEndEvent) -> String {
-    if !event.aggregated_output.is_empty() {
-        return event.aggregated_output.clone();
-    }
-
-    let mut output = String::new();
-    if !event.stdout.is_empty() {
-        output.push_str("stdout:\n");
-        output.push_str(&event.stdout);
-        if !event.stdout.ends_with('\n') {
-            output.push('\n');
-        }
-    }
-    if !event.stderr.is_empty() {
-        if !output.is_empty() {
-            output.push('\n');
-        }
-        output.push_str("stderr:\n");
-        output.push_str(&event.stderr);
-        if !event.stderr.ends_with('\n') {
-            output.push('\n');
-        }
-    }
-    output
-}
-
-fn dynamic_tool_output_items_to_text(items: &[DynamicToolCallOutputContentItem]) -> String {
-    let mut pieces = Vec::new();
-    for item in items {
-        match item {
-            DynamicToolCallOutputContentItem::InputText { text } => pieces.push(text.clone()),
-            DynamicToolCallOutputContentItem::InputImage { .. } => {
-                pieces.push("[image omitted from Reflections transcript]".to_string());
-            }
-        }
-    }
-    pieces.join("\n")
 }
 
 fn fence_for(text: &str) -> String {

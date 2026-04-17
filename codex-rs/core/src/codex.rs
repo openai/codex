@@ -1601,6 +1601,7 @@ impl Session {
                         context_window,
                         sidecar_path.as_path(),
                         per_turn_config.reflections.usage_hint_text.as_deref(),
+                        per_turn_config.reflections.storage_tools_enabled,
                     )
                 })
         } else {
@@ -1627,7 +1628,11 @@ impl Session {
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)
-        .with_reflections(reflections_enabled, reflections_usage_hint_text)
+        .with_reflections(
+            reflections_enabled,
+            reflections_usage_hint_text,
+            per_turn_config.reflections.storage_tools_enabled,
+        )
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -2440,7 +2445,10 @@ impl Session {
         }
 
         let remaining_tokens = auto_compact_limit.saturating_sub(total_usage_tokens).max(0);
-        let reminder = crate::reflections::near_limit_reminder(Some(remaining_tokens));
+        let reminder = crate::reflections::near_limit_reminder(
+            Some(remaining_tokens),
+            turn_context.config.reflections.storage_tools_enabled,
+        );
         self.record_conversation_items(turn_context, std::slice::from_ref(&reminder))
             .await;
     }

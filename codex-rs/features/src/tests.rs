@@ -366,6 +366,7 @@ fn reflections_feature_config_deserializes_table_without_feature_toggle() {
 [reflections]
 usage_hint_enabled = false
 usage_hint_text = "Custom recovery guidance."
+storage_tools_enabled = false
 "#,
     )
     .expect("features table should deserialize");
@@ -376,6 +377,7 @@ usage_hint_text = "Custom recovery guidance."
         Some(crate::ReflectionsConfigToml {
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom recovery guidance.".to_string()),
+            storage_tools_enabled: Some(false),
         })
     );
 }

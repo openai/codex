@@ -1670,6 +1670,9 @@
     "ReflectionsConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "storage_tools_enabled": {
+          "type": "boolean"
+        },
         "usage_hint_enabled": {
           "type": "boolean"
         },

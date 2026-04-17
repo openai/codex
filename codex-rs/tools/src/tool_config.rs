@@ -106,6 +106,7 @@ pub struct ToolsConfig {
     pub multi_agent_v2: bool,
     pub reflections: bool,
     pub reflections_usage_hint_text: Option<String>,
+    pub reflections_storage_tools: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
@@ -229,6 +230,7 @@ impl ToolsConfig {
             multi_agent_v2: include_multi_agent_v2,
             reflections: false,
             reflections_usage_hint_text: None,
+            reflections_storage_tools: true,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
@@ -262,9 +264,11 @@ impl ToolsConfig {
         mut self,
         reflections: bool,
         reflections_usage_hint_text: Option<String>,
+        reflections_storage_tools: bool,
     ) -> Self {
         self.reflections = reflections;
         self.reflections_usage_hint_text = reflections_usage_hint_text;
+        self.reflections_storage_tools = reflections_storage_tools;
         self
     }
 
