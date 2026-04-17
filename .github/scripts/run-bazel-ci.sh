@@ -3,6 +3,7 @@
 set -euo pipefail
 
 print_failed_bazel_test_logs=0
+print_failed_bazel_action_summary=0
 use_node_test_env=0
 remote_download_toplevel=0
 windows_msvc_host_platform=0
@@ -11,6 +12,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --print-failed-test-logs)
       print_failed_bazel_test_logs=1
+      shift
+      ;;
+    --print-failed-action-summary)
+      print_failed_bazel_action_summary=1
       shift
       ;;
     --use-node-test-env)
@@ -37,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $# -eq 0 ]]; then
-  echo "Usage: $0 [--print-failed-test-logs] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
+  echo "Usage: $0 [--print-failed-test-logs] [--print-failed-action-summary] [--use-node-test-env] [--remote-download-toplevel] [--windows-msvc-host-platform] -- <bazel args> -- <targets>" >&2
   exit 1
 fi
 
@@ -136,6 +141,93 @@ print_bazel_test_log_tails() {
   done
 }
 
+print_bazel_action_failure_summary() {
+  local console_log="$1"
+  local escaped_summary
+  local summary
+
+  summary="$(
+    awk '
+      function clean(line) {
+        gsub(sprintf("%c", 27) "\\[[0-9;]*m", "", line)
+        sub(/^.*\t[^\t]*\t[0-9TZ:._-]+ /, "", line)
+        return line
+      }
+
+      function is_diagnostic(line) {
+        return line ~ /^(error(\[[^]]+\])?:|warning:|note:|help:)/ ||
+          line ~ /^[[:space:]]+-->/ ||
+          line ~ /^[[:space:]]*[0-9]+[[:space:]]+\|/ ||
+          line ~ /^[[:space:]]*\|/ ||
+          line ~ /^[[:space:]]+= (note|help):/ ||
+          line ~ /^[[:space:]]*\^[[:space:]^~-]*$/ ||
+          line ~ /^For more information/ ||
+          line ~ /^error: aborting/
+      }
+
+      {
+        line = clean($0)
+      }
+
+      line ~ /^ERROR: .* failed:/ {
+        if (printed) {
+          print ""
+        }
+        print line
+        in_failure = 1
+        seen_diagnostic = 0
+        printed = 1
+        next
+      }
+
+      in_failure && is_diagnostic(line) {
+        print line
+        seen_diagnostic = 1
+        next
+      }
+
+      in_failure && seen_diagnostic && line == "" {
+        print ""
+        next
+      }
+
+      in_failure && seen_diagnostic {
+        in_failure = 0
+        seen_diagnostic = 0
+        next
+      }
+    ' "$console_log"
+  )"
+
+  if [[ -z "$summary" ]]; then
+    summary="$(grep -E '^ERROR: |^FAILED: ' "$console_log" | tail -n 50 || true)"
+  fi
+
+  if [[ -z "$summary" ]]; then
+    echo "No Bazel action failures were found in the captured console output."
+    return
+  fi
+
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    escaped_summary="$(
+      printf '%s' "$summary" \
+        | awk 'BEGIN { ORS = "" } {
+            gsub(/%/, "%25")
+            gsub(/\r/, "%0D")
+            print sep $0
+            sep = "%0A"
+          }'
+    )"
+    echo "::error title=Bazel failed action diagnostics::${escaped_summary}"
+  fi
+
+  echo
+  echo "Bazel failed action diagnostics:"
+  echo "--------------------------------"
+  printf '%s\n' "$summary"
+  echo "--------------------------------"
+}
+
 bazel_args=()
 bazel_targets=()
 found_target_separator=0
@@ -178,10 +270,10 @@ if [[ "${RUNNER_OS:-}" == "Windows" && $windows_msvc_host_platform -eq 1 ]]; the
   done
 
   if [[ $has_host_platform_override -eq 0 ]]; then
-    # Keep Windows Bazel targets on `windows-gnullvm` for cfg coverage, but opt
-    # specific jobs into an MSVC exec platform when they need helper binaries
-    # like Rust test wrappers and V8 generators to resolve a compatible host
-    # toolchain.
+    # Use the MSVC Windows platform for jobs that need helper binaries like
+    # Rust test wrappers and V8 generators to resolve a compatible toolchain.
+    # Callers that need a different Windows target platform should pass an
+    # explicit `--platforms=...` flag.
     post_config_bazel_args+=("--host_platform=//:local_windows_msvc")
   fi
 fi
@@ -302,6 +394,9 @@ else
 fi
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then
+  if [[ $print_failed_bazel_action_summary -eq 1 ]]; then
+    print_bazel_action_failure_summary "$bazel_console_log"
+  fi
   if [[ $print_failed_bazel_test_logs -eq 1 ]]; then
     print_bazel_test_log_tails "$bazel_console_log"
   fi

@@ -13,7 +13,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use super::*;
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;

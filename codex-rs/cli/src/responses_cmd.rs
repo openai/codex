@@ -1,5 +1,6 @@
 use clap::Parser;
 use codex_core::config::Config;
+use codex_model_provider::create_model_provider;
 use codex_utils_cli::CliConfigOverrides;
 use serde_json::json;
 use tokio::io::AsyncReadExt;
@@ -29,16 +30,9 @@ pub(crate) async fn run_responses_command(
     let base_auth_manager = codex_login::AuthManager::shared_from_config(
         &config, /*enable_codex_api_key_env*/ true,
     );
-    let auth_manager =
-        codex_login::auth_manager_for_provider(Some(base_auth_manager), &config.model_provider);
-    let auth = match auth_manager {
-        Some(auth_manager) => auth_manager.auth().await,
-        None => None,
-    };
-    let api_provider = config
-        .model_provider
-        .to_api_provider(auth.as_ref().map(codex_login::CodexAuth::auth_mode))?;
-    let api_auth = codex_login::auth_provider_from_auth(auth, &config.model_provider)?;
+    let model_provider = create_model_provider(config.model_provider, Some(base_auth_manager));
+    let api_provider = model_provider.api_provider().await?;
+    let api_auth = model_provider.api_auth().await?;
     let client = codex_api::ResponsesClient::new(
         codex_api::ReqwestTransport::new(codex_login::default_client::build_reqwest_client()),
         api_provider,
@@ -103,6 +97,18 @@ fn response_event_to_json(event: codex_api::ResponseEvent) -> serde_json::Value 
         }
         codex_api::ResponseEvent::OutputTextDelta(delta) => {
             json!({ "type": "response.output_text.delta", "delta": delta })
+        }
+        codex_api::ResponseEvent::ToolCallInputDelta {
+            item_id,
+            call_id,
+            delta,
+        } => {
+            json!({
+                "type": "response.tool_call_input.delta",
+                "item_id": item_id,
+                "call_id": call_id,
+                "delta": delta,
+            })
         }
         codex_api::ResponseEvent::ReasoningSummaryDelta {
             delta,
@@ -213,6 +219,24 @@ mod tests {
                 "type": "response.reasoning_text.delta",
                 "delta": "detail",
                 "content_index": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn tool_call_input_delta_uses_responses_event_name() {
+        let delta = response_event_to_json(codex_api::ResponseEvent::ToolCallInputDelta {
+            item_id: "item-1".to_string(),
+            call_id: Some("call-1".to_string()),
+            delta: "patch".to_string(),
+        });
+        assert_eq!(
+            delta,
+            json!({
+                "type": "response.tool_call_input.delta",
+                "item_id": "item-1",
+                "call_id": "call-1",
+                "delta": "patch",
             })
         );
     }

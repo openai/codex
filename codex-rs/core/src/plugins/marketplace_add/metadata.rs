@@ -1,5 +1,5 @@
 use super::MarketplaceAddError;
-use super::MarketplaceSource;
+use super::source::MarketplaceSource;
 use crate::plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
