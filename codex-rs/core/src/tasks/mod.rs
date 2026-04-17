@@ -511,7 +511,6 @@ impl Session {
             .cancel_git_enrichment_task();
 
         let mut pending_input = Vec::<ResponseInputItem>::new();
-        let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_tool_calls = 0_u64;
         let turn_state = {
@@ -519,11 +518,8 @@ impl Session {
             if let Some(at) = active.as_mut()
                 && at.remove_task(&turn_context.sub_id)
             {
-                should_clear_active_turn = true;
                 let turn_state = Arc::clone(&at.turn_state);
-                if should_clear_active_turn {
-                    *active = None;
-                }
+                *active = None;
                 Some(turn_state)
             } else {
                 None
@@ -653,15 +649,10 @@ impl Session {
         {
             warn!("failed to account thread goal progress at turn end: {err}");
         }
-        if should_clear_active_turn || !self.has_active_turn().await {
-            let session = Arc::clone(self);
-            let scheduler = tokio::spawn(async move {
-                idle_pending_work_scheduler(session).await;
-            });
-            if let Err(err) = scheduler.await {
-                warn!("goal continuation scheduler failed after turn completion: {err}");
-            }
-        }
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            idle_pending_work_scheduler(session).await;
+        });
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {
@@ -771,6 +762,18 @@ fn idle_pending_work_scheduler(session: Arc<Session>) -> BoxFuture<'static, ()> 
     // Erase the future type so `on_task_finished` and `start_task` do not recursively depend on
     // each other's inferred async state machines.
     Box::pin(async move {
+        tokio::task::yield_now().await;
+        {
+            let mut active = session.active_turn.lock().await;
+            if let Some(active_turn) = active.as_mut() {
+                active_turn
+                    .tasks
+                    .retain(|_, task| !task.handle.is_finished());
+                if active_turn.tasks.is_empty() {
+                    *active = None;
+                }
+            }
+        }
         session
             .maybe_start_turn_for_pending_work_or_goal_continuation()
             .await;
