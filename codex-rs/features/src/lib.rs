@@ -843,8 +843,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GuardianApproval,
         key: "guardian_approval",
         stage: Stage::Experimental {
-            name: "Auto-Review",
-            menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to the auto-reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
+            name: "Auto-review",
+            menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
             announcement: "",
         },
         default_enabled: false,

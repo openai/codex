@@ -271,8 +271,8 @@ struct GuardianApprovalsMode {
     sandbox_policy: SandboxPolicy,
 }
 
-/// Enabling the Auto-Review experiment in the TUI should also switch the
-/// current `/approvals` settings to the matching Auto-Review mode. Users
+/// Enabling the Auto-review experiment in the TUI should also switch the
+/// current `/approvals` settings to the matching Auto-review mode. Users
 /// can still change `/approvals` afterward; this just assumes that opting into
 /// the experiment means they want guardian review enabled immediately.
 fn guardian_approvals_mode() -> GuardianApprovalsMode {
@@ -1312,7 +1312,7 @@ impl App {
                 && root_approvals_reviewer_blocks_profile_disable
             {
                 self.chat_widget.add_error_message(
-                        "Cannot disable Auto-Review in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
+                        "Cannot disable Auto-review in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
                     );
                 continue;
             }
@@ -1345,7 +1345,7 @@ impl App {
                             .into(),
                     });
                     if previous_approvals_reviewer != guardian_approvals_preset.approvals_reviewer {
-                        permissions_history_label = Some("Auto-Review");
+                        permissions_history_label = Some("Auto-review");
                     }
                 } else if !effective_enabled {
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
@@ -1362,13 +1362,13 @@ impl App {
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 // The feature flag alone is not enough for the live session.
-                // We also align approval policy + sandbox to the Auto-Review
+                // We also align approval policy + sandbox to the Auto-review
                 // preset so enabling the experiment immediately
                 // makes guardian review observable in the current thread.
                 if !self.try_set_approval_policy_on_config(
                     &mut feature_config,
                     guardian_approvals_preset.approval_policy,
-                    "Failed to enable Auto-Review",
+                    "Failed to enable Auto-review",
                     "failed to set guardian approvals approval policy on staged config",
                 ) {
                     continue;
@@ -1376,7 +1376,7 @@ impl App {
                 if !self.try_set_sandbox_policy_on_config(
                     &mut feature_config,
                     guardian_approvals_preset.sandbox_policy.clone(),
-                    "Failed to enable Auto-Review",
+                    "Failed to enable Auto-review",
                     "failed to set guardian approvals sandbox policy on staged config",
                 ) {
                     continue;
@@ -1439,7 +1439,7 @@ impl App {
                 "failed to set guardian approvals sandbox policy on chat config"
             );
             self.chat_widget
-                .add_error_message(format!("Failed to enable Auto-Review: {err}"));
+                .add_error_message(format!("Failed to enable Auto-review: {err}"));
         }
 
         if approval_policy_override.is_some()
@@ -8407,7 +8407,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Permissions updated to Auto-Review"));
+        assert!(rendered.contains("Permissions updated to Auto-review"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("guardian_approval = true"));

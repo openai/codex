@@ -500,7 +500,7 @@ You can optionally specify config overrides on the new turn. If specified, these
 `approvalsReviewer` accepts:
 
 - `"user"` — default. Review approval requests directly in the client.
-- `"guardian_subagent"` — route approval requests to the auto-reviewer subagent, which gathers relevant context and applies a risk-based decision framework before approving or denying the request.
+- `"guardian_subagent"` — route approval requests to a carefully prompted subagent, which gathers relevant context and applies a risk-based decision framework before approving or denying the request.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {

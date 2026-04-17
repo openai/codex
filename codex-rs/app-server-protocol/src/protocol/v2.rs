@@ -303,8 +303,8 @@ impl From<CoreAskForApproval> for AskForApproval {
 #[ts(rename_all = "snake_case", export_to = "v2/")]
 /// Configures who approval requests are routed to for review. Examples
 /// include sandbox escapes, blocked network access, MCP approval prompts, and
-/// ARC escalations. Defaults to `user`. `guardian_subagent` uses the
-/// auto-reviewer subagent to gather relevant context and apply a risk-based
+/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     User,

@@ -329,7 +329,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    if popup.contains("Auto-Review") {
+    if popup.contains("Auto-review") {
         chat.handle_key_event(KeyEvent::from(KeyCode::Up));
     }
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -400,8 +400,8 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        !popup.contains("Auto-Review"),
-        "expected Auto-Review to stay hidden until the experimental feature is enabled: {popup}"
+        !popup.contains("Auto-review"),
+        "expected Auto-review to stay hidden until the experimental feature is enabled: {popup}"
     );
 }
 
@@ -432,8 +432,8 @@ async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_ev
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        !popup.contains("Auto-Review"),
-        "expected Auto-Review to stay hidden when the experimental feature is disabled: {popup}"
+        !popup.contains("Auto-review"),
+        "expected Auto-review to stay hidden when the experimental feature is disabled: {popup}"
     );
 }
 
@@ -477,8 +477,8 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        popup.contains("Auto-Review (current)"),
-        "expected Auto-Review to be current after SessionConfigured sync: {popup}"
+        popup.contains("Auto-review (current)"),
+        "expected Auto-review to be current after SessionConfigured sync: {popup}"
     );
 }
 
@@ -531,8 +531,8 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        popup.contains("Auto-Review (current)"),
-        "expected Auto-Review to be current even with custom workspace-write details: {popup}"
+        popup.contains("Auto-review (current)"),
+        "expected Auto-review to be current even with custom workspace-write details: {popup}"
     );
 }
 
@@ -567,7 +567,7 @@ async fn permissions_selection_can_disable_guardian_approvals() {
             event,
             AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User)
         )),
-        "expected selecting Default from Auto-Review to switch back to manual approval review: {events:?}"
+        "expected selecting Default from Auto-review to switch back to manual approval review: {events:?}"
     );
     assert!(
         !events
@@ -613,8 +613,8 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     assert!(
         popup
             .lines()
-            .any(|line| line.contains("Auto-Review") && line.contains('›')),
-        "expected one Down from Default to select Auto-Review: {popup}"
+            .any(|line| line.contains("Auto-review") && line.contains('›')),
+        "expected one Down from Default to select Auto-review: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
