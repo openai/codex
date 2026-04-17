@@ -9,6 +9,7 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -118,8 +119,16 @@ fn file_system_sandbox_context_uses_active_attempt() {
     let sandbox = ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt)
         .expect("sandbox context");
 
-    assert_eq!(sandbox.sandbox_policy, sandbox_policy);
-    assert_eq!(sandbox.additional_permissions, Some(additional_permissions));
+    let base_permissions = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let Some(expected_permissions) =
+        merge_permission_profiles(Some(&base_permissions), Some(&additional_permissions))
+    else {
+        panic!("merged permissions should not be empty");
+    };
+    assert_eq!(sandbox.permissions, expected_permissions);
     assert_eq!(
         sandbox.windows_sandbox_level,
         WindowsSandboxLevel::RestrictedToken
