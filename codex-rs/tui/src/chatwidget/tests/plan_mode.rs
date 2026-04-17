@@ -61,10 +61,10 @@ async fn plan_implementation_popup_clear_context_emits_clear_submit_event() {
     };
     assert_eq!(
         text,
-        format!(
-            "{prefix}\n\n{plan_markdown}",
-            prefix = plan_implementation::PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX
-        )
+        "A previous agent produced the plan below to accomplish the user's task. \
+        Implement the plan in a fresh context. Treat the plan as the source of \
+        user intent, re-read files as needed, and carry the work through \
+        implementation and verification.\n\n- Step 1\n- Step 2\n"
     );
 }
 
