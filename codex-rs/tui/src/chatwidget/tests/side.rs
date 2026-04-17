@@ -262,7 +262,7 @@ async fn slash_side_requests_forked_side_question_while_task_running() {
         .expect("draw side conversation footer");
     assert_chatwidget_snapshot!(
         "slash_side_requests_forked_side_question_while_task_running",
-        terminal.backend()
+        normalized_backend_snapshot(terminal.backend())
     );
 }
 
