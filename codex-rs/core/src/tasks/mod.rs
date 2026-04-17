@@ -248,6 +248,12 @@ impl Session {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
+        let turn_state = {
+            let mut active = self.active_turn.lock().await;
+            let turn = active.get_or_insert_with(ActiveTurn::default);
+            debug_assert!(turn.tasks.is_empty());
+            Arc::clone(&turn.turn_state)
+        };
         let started_at = Instant::now();
         turn_context
             .turn_timing_state
@@ -265,12 +271,6 @@ impl Session {
 
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
-        let turn_state = {
-            let mut active = self.active_turn.lock().await;
-            let turn = active.get_or_insert_with(ActiveTurn::default);
-            debug_assert!(turn.tasks.is_empty());
-            Arc::clone(&turn.turn_state)
-        };
         {
             let mut turn_state = turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
