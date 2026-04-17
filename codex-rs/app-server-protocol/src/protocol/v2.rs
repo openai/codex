@@ -3802,6 +3802,14 @@ pub enum PluginSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Local { path: AbsolutePathBuf },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Git {
+        url: String,
+        path: Option<String>,
+        ref_name: Option<String>,
+        sha: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
