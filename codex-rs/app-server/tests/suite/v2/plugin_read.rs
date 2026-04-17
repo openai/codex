@@ -512,11 +512,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
     .await??;
 
     assert_eq!(err.error.code, -32600);
-    assert!(
-        err.error
-            .message
-            .contains("missing or invalid .codex-plugin/plugin.json")
-    );
+    assert!(err.error.message.contains("missing or invalid plugin.json"));
     Ok(())
 }
 

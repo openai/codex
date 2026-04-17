@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package codex.thread_store.v1;
+
+service ThreadStore {
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
+}
+
+message ListThreadsRequest {
+  uint32 page_size = 1;
+  optional string cursor = 2;
+  ThreadSortKey sort_key = 3;
+  repeated SessionSource allowed_sources = 4;
+  optional ModelProviderFilter model_provider_filter = 5;
+  bool archived = 6;
+  optional string search_term = 7;
+}
+
+message ModelProviderFilter {
+  repeated string values = 1;
+}
+
+enum ThreadSortKey {
+  THREAD_SORT_KEY_CREATED_AT = 0;
+  THREAD_SORT_KEY_UPDATED_AT = 1;
+}
+
+message ListThreadsResponse {
+  repeated StoredThread threads = 1;
+  optional string next_cursor = 2;
+}
+
+message StoredThread {
+  // Mirrors Rust's StoredThread. Domain types that are not protobuf-native,
+  // such as ThreadId, DateTime<Utc>, and PathBuf, are represented as their
+  // stable scalar forms on the wire.
+  string thread_id = 1;
+  optional string forked_from_id = 2;
+  string preview = 3;
+  optional string name = 4;
+  string model_provider = 5;
+  optional string model = 6;
+  int64 created_at = 7;
+  int64 updated_at = 8;
+  optional int64 archived_at = 9;
+  string cwd = 10;
+  string cli_version = 11;
+  SessionSource source = 12;
+  optional GitInfo git_info = 13;
+  optional string agent_nickname = 14;
+  optional string agent_role = 15;
+  optional string agent_path = 16;
+  optional string reasoning_effort = 17;
+  optional string first_user_message = 18;
+}
+
+message SessionSource {
+  SessionSourceKind kind = 1;
+  optional string custom = 2;
+  optional string sub_agent_parent_thread_id = 3;
+  optional int32 sub_agent_depth = 4;
+  optional string sub_agent_other = 5;
+  optional string sub_agent_path = 6;
+  optional string sub_agent_nickname = 7;
+  optional string sub_agent_role = 8;
+}
+
+enum SessionSourceKind {
+  SESSION_SOURCE_KIND_UNKNOWN = 0;
+  SESSION_SOURCE_KIND_CLI = 1;
+  SESSION_SOURCE_KIND_VSCODE = 2;
+  SESSION_SOURCE_KIND_EXEC = 3;
+  SESSION_SOURCE_KIND_APP_SERVER = 4;
+  SESSION_SOURCE_KIND_CUSTOM = 5;
+  SESSION_SOURCE_KIND_SUB_AGENT_REVIEW = 6;
+  SESSION_SOURCE_KIND_SUB_AGENT_COMPACT = 7;
+  SESSION_SOURCE_KIND_SUB_AGENT_THREAD_SPAWN = 8;
+  SESSION_SOURCE_KIND_SUB_AGENT_MEMORY_CONSOLIDATION = 9;
+  SESSION_SOURCE_KIND_SUB_AGENT_OTHER = 10;
+}
+
+message GitInfo {
+  optional string sha = 1;
+  optional string branch = 2;
+  optional string origin_url = 3;
+}

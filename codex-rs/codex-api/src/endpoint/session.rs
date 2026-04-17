@@ -1,4 +1,4 @@
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::telemetry::run_with_request_telemetry;
@@ -14,15 +14,15 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::instrument;
 
-pub(crate) struct EndpointSession<T: HttpTransport, A: AuthProvider> {
+pub(crate) struct EndpointSession<T: HttpTransport> {
     transport: T,
     provider: Provider,
-    auth: A,
+    auth: SharedAuthProvider,
     request_telemetry: Option<Arc<dyn RequestTelemetry>>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> EndpointSession<T, A> {
-    pub(crate) fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> EndpointSession<T> {
+    pub(crate) fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             transport,
             provider,

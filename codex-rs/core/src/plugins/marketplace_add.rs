@@ -20,7 +20,7 @@ use metadata::find_marketplace_root_by_name;
 use metadata::installed_marketplace_root_for_source;
 use metadata::record_added_marketplace_entry;
 use source::MarketplaceSource;
-use source::parse_marketplace_source;
+pub(crate) use source::parse_marketplace_source;
 use source::stage_marketplace_source;
 use source::validate_marketplace_source_root;
 
@@ -77,6 +77,11 @@ where
         sparse_paths,
     } = request;
     let source = parse_marketplace_source(&source, ref_name)?;
+    if !sparse_paths.is_empty() && !matches!(source, MarketplaceSource::Git { .. }) {
+        return Err(MarketplaceAddError::InvalidRequest(
+            "--sparse is only supported for git marketplace sources".to_string(),
+        ));
+    }
 
     let install_root = marketplace_install_root(codex_home);
     fs::create_dir_all(&install_root).map_err(|err| {
@@ -283,6 +288,38 @@ mod tests {
         assert_eq!(
             config["marketplaces"]["debug"]["source"].as_str(),
             Some(expected_source.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn add_marketplace_sync_rejects_sparse_checkout_for_local_directory_source() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let source_root = TempDir::new()?;
+        write_marketplace_source(source_root.path(), "local copy")?;
+
+        let err = add_marketplace_sync_with_cloner(
+            codex_home.path(),
+            MarketplaceAddRequest {
+                source: source_root.path().display().to_string(),
+                ref_name: None,
+                sparse_paths: vec![".agents".to_string()],
+            },
+            |_url, _ref_name, _sparse_paths, _destination| {
+                panic!("git cloner should not be called for local marketplace sources")
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "--sparse is only supported for git marketplace sources"
+        );
+        assert!(
+            !codex_home
+                .path()
+                .join(codex_config::CONFIG_TOML_FILE)
+                .exists()
         );
         Ok(())
     }

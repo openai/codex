@@ -1,6 +1,5 @@
 //! Shared plugin identifiers and telemetry-facing summaries.
 
-pub use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
 pub use codex_utils_plugins::mention_syntax;
 pub use codex_utils_plugins::plugin_namespace_for_skill_path;
 
