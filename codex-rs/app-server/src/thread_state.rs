@@ -1,7 +1,6 @@
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
@@ -32,7 +31,7 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) config_snapshot: ThreadConfigSnapshot,
     pub(crate) instruction_sources: Vec<AbsolutePathBuf>,
     pub(crate) thread_summary: codex_app_server_protocol::Thread,
-    pub(crate) thread_goal: Option<ThreadGoal>,
+    pub(crate) emit_thread_goal_update: bool,
     pub(crate) continue_goal_if_idle: bool,
 }
 
