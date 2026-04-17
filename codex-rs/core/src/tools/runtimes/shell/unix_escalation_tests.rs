@@ -258,12 +258,12 @@ fn map_exec_result_preserves_stdout_and_stderr() {
 #[test]
 fn shell_request_escalation_execution_is_explicit() {
     let requested_permissions = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: None,
-            write: Some(vec![
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            None,
+            Some(vec![
                 AbsolutePathBuf::from_absolute_path("/tmp/output").unwrap(),
             ]),
-        }),
+        )),
         ..Default::default()
     };
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
