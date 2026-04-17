@@ -65,6 +65,7 @@ use codex_protocol::protocol::HookOutputEntryKind as CoreHookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus as CoreHookRunStatus;
 use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
+use codex_protocol::protocol::HookSource as CoreHookSource;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
@@ -403,6 +404,23 @@ v2_enum_from_core!(
 );
 
 v2_enum_from_core!(
+    pub enum HookSource from CoreHookSource {
+        System,
+        User,
+        Project,
+        Mdm,
+        SessionFlags,
+        LegacyManagedConfigFile,
+        LegacyManagedConfigMdm,
+        Unknown,
+    }
+);
+
+fn default_hook_source() -> HookSource {
+    HookSource::Unknown
+}
+
+v2_enum_from_core!(
     pub enum HookRunStatus from CoreHookRunStatus {
         Running, Completed, Failed, Blocked, Stopped
     }
@@ -449,6 +467,8 @@ pub struct HookRunSummary {
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
     pub source_path: AbsolutePathBuf,
+    #[serde(default = "default_hook_source")]
+    pub source: HookSource,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
@@ -467,6 +487,7 @@ impl From<CoreHookRunSummary> for HookRunSummary {
             execution_mode: value.execution_mode.into(),
             scope: value.scope.into(),
             source_path: value.source_path,
+            source: value.source.into(),
             display_order: value.display_order,
             status: value.status.into(),
             status_message: value.status_message,
