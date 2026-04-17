@@ -3556,6 +3556,11 @@ impl App {
             .copied()
             .filter(|thread_id| Some(*thread_id) != current_thread_id)
             .collect();
+        if let Err(err) = self.shutdown_current_thread(app_server).await {
+            self.chat_widget
+                .add_error_message(format!("Failed to stop current thread: {err}"));
+            return;
+        }
         for thread_id in &tracked_thread_ids {
             if let Err(err) = Self::unsubscribe_thread_with_timeout(app_server, *thread_id).await {
                 self.chat_widget
@@ -3565,11 +3570,6 @@ impl App {
         }
         for thread_id in tracked_thread_ids {
             self.abort_thread_event_listener(thread_id);
-        }
-        if let Err(err) = self.shutdown_current_thread(app_server).await {
-            self.chat_widget
-                .add_error_message(format!("Failed to stop current thread: {err}"));
-            return;
         }
         self.config = config.clone();
         match app_server

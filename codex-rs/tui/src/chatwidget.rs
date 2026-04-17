@@ -1353,31 +1353,36 @@ fn merge_user_messages_with_history_record(
     {
         UserMessageHistoryRecord::UserMessageText
     } else {
-        let history_text = messages
-            .iter()
-            .filter_map(|(message, record)| match record {
+        let mut history_text = String::new();
+        let mut history_text_elements = Vec::new();
+        let mut history_segment_count = 0usize;
+        let mut append_history_segment = |text: &str, text_elements: Vec<TextElement>| {
+            if history_segment_count > 0 {
+                history_text.push('\n');
+            }
+            append_text_with_rebased_elements(
+                &mut history_text,
+                &mut history_text_elements,
+                text,
+                text_elements,
+            );
+            history_segment_count += 1;
+        };
+        for (message, record) in &messages {
+            match record {
                 UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
-                    Some(history.text.clone())
+                    append_history_segment(&history.text, history.text_elements.clone());
                 }
-                UserMessageHistoryRecord::Override(_) if message.text.is_empty() => None,
+                UserMessageHistoryRecord::Override(_) if message.text.is_empty() => {}
                 UserMessageHistoryRecord::Override(_)
                 | UserMessageHistoryRecord::UserMessageText => {
-                    let encoded_mentions = message
-                        .mention_bindings
-                        .iter()
-                        .map(|binding| LinkedMention {
-                            mention: binding.mention.clone(),
-                            path: binding.path.clone(),
-                        })
-                        .collect::<Vec<_>>();
-                    Some(encode_history_mentions(&message.text, &encoded_mentions))
+                    append_history_segment(&message.text, message.text_elements.clone());
                 }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+            }
+        }
         UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
             text: history_text,
-            text_elements: Vec::new(),
+            text_elements: history_text_elements,
         })
     };
     let messages = messages

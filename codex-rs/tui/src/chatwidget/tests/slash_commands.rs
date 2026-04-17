@@ -577,6 +577,103 @@ async fn interrupted_goal_slash_command_resubmit_records_original_command_in_his
     assert_eq!(next_add_to_history_op(&mut op_rx), command);
 }
 
+#[test]
+fn merged_history_record_preserves_raw_text_and_rebased_elements() {
+    let first = UserMessage {
+        text: "Ask $figma".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: vec![TextElement::new((4..10).into(), Some("$figma".to_string()))],
+        mention_bindings: vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: "app://figma".to_string(),
+        }],
+    };
+    let second = UserMessage::from("internal prompt");
+
+    let (_message, history_record) = merge_user_messages_with_history_record(vec![
+        (first, UserMessageHistoryRecord::UserMessageText),
+        (
+            second,
+            UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+                text: "/goal inspect [Image #1]".to_string(),
+                text_elements: vec![TextElement::new(
+                    (14..24).into(),
+                    Some("[Image #1]".to_string()),
+                )],
+            }),
+        ),
+    ]);
+
+    assert_eq!(
+        history_record,
+        UserMessageHistoryRecord::Override(UserMessageHistoryOverride {
+            text: "Ask $figma\n/goal inspect [Image #1]".to_string(),
+            text_elements: vec![
+                TextElement::new((4..10).into(), Some("$figma".to_string())),
+                TextElement::new((25..35).into(), Some("[Image #1]".to_string())),
+            ],
+        })
+    );
+}
+
+#[tokio::test]
+async fn interrupted_merged_message_history_encodes_mentions_once() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    let text = "use $figma now";
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        text.to_string(),
+        Vec::new(),
+        Vec::new(),
+        vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: "app://figma".to_string(),
+        }],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [
+                UserInput::Text {
+                    text: submitted, ..
+                },
+            ] = items.as_slice()
+            else {
+                panic!("expected text item, got {items:?}");
+            };
+            assert_eq!(submitted, text);
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    let encoded = "use [$figma](app://figma) now";
+    assert_eq!(next_add_to_history_op(&mut op_rx), encoded);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    next_interrupt_op(&mut op_rx);
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [
+                UserInput::Text {
+                    text: submitted, ..
+                },
+            ] = items.as_slice()
+            else {
+                panic!("expected resubmitted text item, got {items:?}");
+            };
+            assert_eq!(submitted, text);
+        }
+        other => panic!("expected resubmitted user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut op_rx), encoded);
+}
+
 #[tokio::test]
 async fn slash_rename_prefills_existing_thread_name() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
