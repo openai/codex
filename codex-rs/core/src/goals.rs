@@ -423,7 +423,9 @@ impl Session {
                     Some(goal) => {
                         let status = goal.status;
                         *self.thread_goal_cache.lock().await = Some(protocol_goal_from_state(goal));
-                        if completed_this_turn || status == codex_state::ThreadGoalStatus::Complete
+                        if completed_this_turn
+                            || (turn_context.goal_accounting.active_this_turn()
+                                && status == codex_state::ThreadGoalStatus::Complete)
                         {
                             codex_state::ThreadGoalAccountingMode::ActiveOrComplete
                         } else if turn_context.goal_accounting.active_this_turn()
@@ -728,13 +730,6 @@ impl Session {
 
 impl Session {
     async fn state_db_for_thread_goals(&self) -> anyhow::Result<Option<StateDbHandle>> {
-        if let Some(state_db) = self.state_db() {
-            return Ok(Some(state_db));
-        }
-        if let Some(state_db) = self.thread_goal_state_db.lock().await.clone() {
-            return Ok(Some(state_db));
-        }
-
         let config = self.get_config().await;
         if config.ephemeral {
             return Ok(None);
@@ -743,6 +738,13 @@ impl Session {
         self.try_ensure_rollout_materialized()
             .await
             .context("failed to materialize rollout before opening state db for thread goals")?;
+
+        if let Some(state_db) = self.state_db() {
+            return Ok(Some(state_db));
+        }
+        if let Some(state_db) = self.thread_goal_state_db.lock().await.clone() {
+            return Ok(Some(state_db));
+        }
 
         let state_db = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),

@@ -2937,6 +2937,19 @@ impl Session {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
     }
 
+    pub(crate) async fn requeue_response_items_for_next_turn_front(
+        &self,
+        mut items: Vec<ResponseInputItem>,
+    ) {
+        if items.is_empty() {
+            return;
+        }
+
+        let mut idle_pending_input = self.idle_pending_input.lock().await;
+        items.append(&mut idle_pending_input);
+        *idle_pending_input = items;
+    }
+
     pub(crate) async fn clear_queued_response_items_for_next_turn(&self) {
         self.idle_pending_input.lock().await.clear();
     }
