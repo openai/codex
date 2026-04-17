@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_hooks::PermissionRequestDecision;
+use codex_hooks::PermissionRequestOutcome;
+use codex_hooks::PermissionRequestRequest;
 use codex_hooks::PostToolUseOutcome;
 use codex_hooks::PostToolUseRequest;
 use codex_hooks::PreToolUseOutcome;
@@ -31,6 +34,7 @@ use serde_json::Value;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
+use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -151,6 +155,39 @@ pub(crate) async fn run_pre_tool_use_hooks(
     emit_hook_completed_events(sess, turn_context, hook_events).await;
 
     if should_block { block_reason } else { None }
+}
+
+// PermissionRequest hooks share the same preview/start/completed event flow as
+// other hook types, but they return an optional decision instead of mutating
+// tool input or post-run state.
+pub(crate) async fn run_permission_request_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    run_id_suffix: &str,
+    payload: PermissionRequestPayload,
+) -> Option<PermissionRequestDecision> {
+    let request = PermissionRequestRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name: payload.tool_name,
+        run_id_suffix: run_id_suffix.to_string(),
+        command: payload.command,
+        description: payload.description,
+    };
+    let preview_runs = sess.hooks().preview_permission_request(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let PermissionRequestOutcome {
+        hook_events,
+        decision,
+    } = sess.hooks().run_permission_request(request).await;
+    emit_hook_completed_events(sess, turn_context, hook_events).await;
+
+    decision
 }
 
 pub(crate) async fn run_post_tool_use_hooks(
