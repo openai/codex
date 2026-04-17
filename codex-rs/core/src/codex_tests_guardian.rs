@@ -406,7 +406,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         .expect("load parent exec policy");
     assert_eq!(
         parent_exec_policy
-            .current()
+            .default_environment()
             .check_multiple(command.iter(), &|_| Decision::Allow),
         Evaluation {
             decision: Decision::Forbidden,
@@ -433,12 +433,21 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_watcher = Arc::new(SkillsWatcher::noop());
+    let environment = EnvironmentManager::new(/*exec_server_url*/ None)
+        .environment(Some("local"))
+        .await
+        .expect("resolve local environment")
+        .expect("local environment");
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
-        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        resolved_environments: vec![environment],
+        environments: vec![codex_protocol::protocol::TurnEnvironment {
+            environment_id: "local".to_string(),
+            cwd: None,
+        }],
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -456,10 +465,6 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         user_shell_override: None,
         parent_trace: None,
         analytics_events_client: None,
-        environments: vec![codex_protocol::protocol::TurnEnvironment {
-            environment_id: "local".to_string(),
-            cwd: None,
-        }],
     })
     .await
     .expect("spawn guardian subagent");
@@ -469,7 +474,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             .session
             .services
             .exec_policy
-            .current()
+            .default_environment()
             .check_multiple(command.iter(), &|_| Decision::Allow),
         Evaluation {
             decision: Decision::Allow,

@@ -2020,7 +2020,7 @@ mod tests {
         assert!(
             runtime_args
                 .environment_manager
-                .current_config()
+                .default_config()
                 .is_some_and(codex_exec_server::EnvironmentConfig::is_remote)
         );
     }

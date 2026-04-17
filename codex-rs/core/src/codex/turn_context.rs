@@ -38,6 +38,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) environments: Vec<SessionEnvironment>,
     pub(crate) environment: Option<Arc<Environment>>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -165,6 +166,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            environments: self.environments.clone(),
             environment: self.environment.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
@@ -408,6 +410,7 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            environments: session_configuration.environments.clone(),
             environment,
             cwd,
             current_date: Some(current_date),

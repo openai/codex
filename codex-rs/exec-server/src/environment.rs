@@ -39,13 +39,13 @@ impl EnvironmentConfig {
     }
 }
 
-/// Lazily creates and caches the active environment for a session.
+/// Registry of environments available to the process.
 ///
-/// The manager keeps the session's environment selection stable so subagents
-/// and follow-up turns preserve an explicit disabled state.
+/// The manager owns environment metadata and lazy environment construction. A
+/// thread or turn carries its selected environment id separately.
 #[derive(Debug)]
 pub struct EnvironmentManager {
-    current_environment_id: Option<EnvironmentId>,
+    default_environment_id: Option<EnvironmentId>,
     environment_configs: HashMap<EnvironmentId, EnvironmentConfig>,
     environment_cache: HashMap<EnvironmentId, Arc<OnceCell<Arc<Environment>>>>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
@@ -69,10 +69,10 @@ impl EnvironmentManager {
         exec_server_url: Option<String>,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let (current_environment_id, environment_configs) =
+        let (default_environment_id, environment_configs) =
             bootstrap_environment_set(exec_server_url);
         Self {
-            current_environment_id,
+            default_environment_id,
             environment_cache: build_environment_cache(&environment_configs),
             environment_configs,
             local_runtime_paths,
@@ -95,19 +95,19 @@ impl EnvironmentManager {
         )
     }
 
-    pub fn current_config(&self) -> Option<&EnvironmentConfig> {
-        self.current_environment_id
+    pub fn default_config(&self) -> Option<&EnvironmentConfig> {
+        self.default_environment_id
             .as_ref()
             .and_then(|environment_id| self.environment_configs.get(environment_id))
     }
 
     fn is_disabled(&self) -> bool {
-        self.current_environment_id.is_none() && self.environment_configs.is_empty()
+        self.default_environment_id.is_none() && self.environment_configs.is_empty()
     }
 
-    /// Returns the cached environment, creating it on first access.
-    pub async fn current(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
-        match self.current_environment_id.as_deref() {
+    /// Returns the cached default environment, creating it on first access.
+    pub async fn default_environment(&self) -> Result<Option<Arc<Environment>>, ExecServerError> {
+        match self.default_environment_id.as_deref() {
             Some(environment_id) => self.environment_by_id(environment_id).await.map(Some),
             None => Ok(None),
         }
@@ -118,7 +118,7 @@ impl EnvironmentManager {
         environment_id: Option<&str>,
     ) -> Result<Option<Arc<Environment>>, ExecServerError> {
         match normalize_environment_id(environment_id) {
-            None => self.current().await,
+            None => self.default_environment().await,
             Some(environment_id) => self.environment_by_id(&environment_id).await.map(Some),
         }
     }
@@ -330,13 +330,13 @@ fn normalize_environment_id(environment_id: Option<&str>) -> Option<EnvironmentI
 /// Bootstraps the built-in environment registry from `CODEX_EXEC_SERVER_URL`.
 ///
 /// Supported modes:
-/// - unset or empty: register only `local` and make it current
+/// - unset or empty: register only `local` and make it default
 /// - `none`: register nothing and leave the manager disabled
 /// - websocket URL: register both `local` and `remote`, and make `remote`
-///   current
+///   default
 ///
 /// The returned map is the authoritative environment registry for the manager;
-/// the current environment id is just the default selection over that map.
+/// the default environment id is just the startup selection over that map.
 fn bootstrap_environment_set(
     exec_server_url: Option<String>,
 ) -> (
@@ -406,18 +406,18 @@ mod tests {
         let manager = EnvironmentManager::new(Some(String::new()));
 
         assert_eq!(
-            manager.current_config().map(EnvironmentConfig::id),
+            manager.default_config().map(EnvironmentConfig::id),
             Some("local")
         );
         assert_eq!(
             manager
-                .current_config()
+                .default_config()
                 .and_then(EnvironmentConfig::exec_server_url),
             None
         );
         assert!(
             !manager
-                .current_config()
+                .default_config()
                 .is_some_and(EnvironmentConfig::is_remote)
         );
     }
@@ -426,16 +426,16 @@ mod tests {
     fn environment_manager_treats_none_value_as_disabled() {
         let manager = EnvironmentManager::new(Some("none".to_string()));
 
-        assert_eq!(manager.current_config().map(EnvironmentConfig::id), None);
+        assert_eq!(manager.default_config().map(EnvironmentConfig::id), None);
         assert_eq!(
             manager
-                .current_config()
+                .default_config()
                 .and_then(EnvironmentConfig::exec_server_url),
             None
         );
         assert!(
             !manager
-                .current_config()
+                .default_config()
                 .is_some_and(EnvironmentConfig::is_remote)
         );
     }
@@ -446,12 +446,12 @@ mod tests {
 
         assert!(
             manager
-                .current_config()
+                .default_config()
                 .is_some_and(EnvironmentConfig::is_remote)
         );
         assert_eq!(
             manager
-                .current_config()
+                .default_config()
                 .and_then(EnvironmentConfig::exec_server_url),
             Some("ws://127.0.0.1:8765")
         );
@@ -462,7 +462,7 @@ mod tests {
         let manager = EnvironmentManager::new(Some("ws://127.0.0.1:8765".to_string()));
 
         assert_eq!(
-            manager.current_config().map(EnvironmentConfig::id),
+            manager.default_config().map(EnvironmentConfig::id),
             Some("remote")
         );
         assert_eq!(manager.environment_configs.len(), 2);
@@ -483,11 +483,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn environment_manager_current_caches_environment() {
+    async fn environment_manager_default_environment_caches_environment() {
         let manager = EnvironmentManager::new(/*exec_server_url*/ None);
 
-        let first = manager.current().await.expect("get current environment");
-        let second = manager.current().await.expect("get current environment");
+        let first = manager
+            .default_environment()
+            .await
+            .expect("get default environment");
+        let second = manager
+            .default_environment()
+            .await
+            .expect("get default environment");
 
         let first = first.expect("local environment");
         let second = second.expect("local environment");
@@ -508,9 +514,9 @@ mod tests {
         );
 
         let environment = manager
-            .current()
+            .default_environment()
             .await
-            .expect("get current environment")
+            .expect("get default environment")
             .expect("local environment");
 
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
@@ -523,9 +529,9 @@ mod tests {
 
         assert!(
             manager
-                .current()
+                .default_environment()
                 .await
-                .expect("get current environment")
+                .expect("get default environment")
                 .is_none()
         );
     }

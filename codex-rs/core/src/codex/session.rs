@@ -78,10 +78,20 @@ pub(crate) struct SessionConfiguration {
     pub(super) app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
+    /// Ordered environment selections attached to this thread/session. Existing
+    /// runtime consumers use the first resolved environment while follow-up work
+    /// migrates tools to become multi-environment aware.
+    pub(super) environments: Vec<SessionEnvironment>,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
     pub(super) persist_extended_history: bool,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionEnvironment {
+    pub(crate) environment_id: String,
+    pub(crate) cwd: Option<AbsolutePathBuf>,
 }
 
 impl SessionConfiguration {
@@ -103,6 +113,18 @@ impl SessionConfiguration {
             personality: self.personality,
             session_source: self.session_source.clone(),
         }
+    }
+
+    fn normalize_session_environment_cwd(
+        &self,
+        cwd: &PathBuf,
+        fallback_cwd: &AbsolutePathBuf,
+    ) -> AbsolutePathBuf {
+        AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(cwd.as_path()))
+            .unwrap_or_else(|e| {
+                warn!("failed to normalize update cwd: {cwd:?}: {e}");
+                fallback_cwd.clone()
+            })
     }
 
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
@@ -140,20 +162,28 @@ impl SessionConfiguration {
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
-
-        let absolute_cwd = updates
-            .cwd
-            .as_ref()
-            .map(|cwd| {
-                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
-                    cwd.as_path(),
-                ))
-                .unwrap_or_else(|e| {
-                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
-                    self.cwd.clone()
+        if let Some(environments) = updates.environments.as_ref() {
+            next_configuration.environments = environments
+                .iter()
+                .map(|environment| SessionEnvironment {
+                    environment_id: environment.environment_id.clone(),
+                    cwd: environment
+                        .cwd
+                        .as_ref()
+                        .map(|cwd| self.normalize_session_environment_cwd(cwd, &self.cwd)),
                 })
-            })
-            .unwrap_or_else(|| self.cwd.clone());
+                .collect();
+        }
+
+        let absolute_cwd = if let Some(cwd) = updates.cwd.as_ref() {
+            self.normalize_session_environment_cwd(cwd, &self.cwd)
+        } else {
+            next_configuration
+                .environments
+                .first()
+                .and_then(|environment| environment.cwd.clone())
+                .unwrap_or_else(|| self.cwd.clone())
+        };
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
@@ -185,6 +215,7 @@ impl SessionConfiguration {
 
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
+    pub(crate) environments: Option<Vec<codex_protocol::protocol::TurnEnvironment>>,
     pub(crate) cwd: Option<PathBuf>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
@@ -222,6 +253,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
+        environments: Vec<Arc<Environment>>,
         environment: Option<Arc<Environment>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
@@ -676,6 +708,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
+            environments,
             environment,
         };
         services

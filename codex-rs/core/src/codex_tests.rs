@@ -2982,13 +2982,11 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
+        Vec::new(),
         Some(Arc::new(
             codex_exec_server::Environment::create(/*exec_server_url*/ None)
                 .await
                 .expect("create environment"),
-        )),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
         )),
         /*analytics_events_client*/ None,
     )
@@ -3153,10 +3151,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
+        environments: vec![Arc::clone(&environment)],
         environment: Some(Arc::clone(&environment)),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3312,13 +3308,11 @@ async fn make_session_with_config_and_rx(
         mcp_manager,
         Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
+        Vec::new(),
         Some(Arc::new(
             codex_exec_server::Environment::create(/*exec_server_url*/ None)
                 .await
                 .expect("create environment"),
-        )),
-        Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
         )),
         /*analytics_events_client*/ None,
     )
@@ -4125,10 +4119,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
+        environments: vec![Arc::clone(&environment)],
         environment: Some(Arc::clone(&environment)),
-        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::new(
-            /*exec_server_url*/ None,
-        )),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),

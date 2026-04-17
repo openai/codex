@@ -18,6 +18,7 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
+use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -904,22 +905,6 @@ impl ThreadManagerState {
         .await
     }
 
-    async fn inherited_environment_manager_for_source(
-        &self,
-        session_source: &SessionSource,
-    ) -> Arc<EnvironmentManager> {
-        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) = session_source
-        else {
-            return Arc::clone(&self.environment_manager);
-        };
-        let Ok(parent_thread) = self.get_thread(*parent_thread_id).await else {
-            return Arc::clone(&self.environment_manager);
-        };
-        parent_thread.environment_manager()
-    }
-
     async fn inherited_environments_for_source(
         &self,
         session_source: &SessionSource,
@@ -949,6 +934,28 @@ impl ThreadManagerState {
         }
     }
 
+    async fn resolve_environments(
+        &self,
+        environments: &[codex_protocol::protocol::TurnEnvironment],
+    ) -> CodexResult<Vec<Arc<Environment>>> {
+        let mut resolved = Vec::with_capacity(environments.len());
+        for environment in environments {
+            let environment = self
+                .environment_manager
+                .environment(Some(environment.environment_id.as_str()))
+                .await
+                .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?
+                .ok_or_else(|| {
+                    CodexErr::Fatal(format!(
+                        "environment `{}` did not resolve to an execution environment",
+                        environment.environment_id
+                    ))
+                })?;
+            resolved.push(environment);
+        }
+        Ok(resolved)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_thread_with_source(
         &self,
@@ -966,15 +973,6 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
         environments: Option<Vec<codex_protocol::protocol::TurnEnvironment>>,
     ) -> CodexResult<NewThread> {
-        let environment_manager = if environments
-            .as_ref()
-            .is_some_and(|environments| !environments.is_empty())
-        {
-            Arc::clone(&self.environment_manager)
-        } else {
-            self.inherited_environment_manager_for_source(&session_source)
-                .await
-        };
         let effective_environments = if let Some(environments) =
             environments.filter(|environments| !environments.is_empty())
         {
@@ -985,8 +983,8 @@ impl ThreadManagerState {
         {
             environments
         } else {
-            environment_manager
-                .current_config()
+            self.environment_manager
+                .default_config()
                 .map(|environment| {
                     vec![codex_protocol::protocol::TurnEnvironment {
                         environment_id: environment.id().to_string(),
@@ -995,13 +993,8 @@ impl ThreadManagerState {
                 })
                 .unwrap_or_default()
         };
-        let selected_environment_id = effective_environments
-            .first()
-            .map(|environment| environment.environment_id.clone());
-        let environment = environment_manager
-            .environment(selected_environment_id.as_deref())
-            .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let resolved_environments = self.resolve_environments(&effective_environments).await?;
+        let environment = resolved_environments.first().cloned();
         let watch_registration = match environment.as_ref() {
             Some(environment) if !environment.is_remote() => {
                 self.skills_watcher
@@ -1021,7 +1014,8 @@ impl ThreadManagerState {
             config,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
-            environment_manager,
+            resolved_environments,
+            environments: effective_environments,
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
@@ -1037,7 +1031,6 @@ impl ThreadManagerState {
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),
-            environments: effective_environments,
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)

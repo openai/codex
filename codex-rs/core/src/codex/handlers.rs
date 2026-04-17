@@ -153,6 +153,7 @@ pub(super) async fn user_input_or_turn_inner(
             (
                 items,
                 SessionSettingsUpdate {
+                    environments: None,
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy),
                     approvals_reviewer,
@@ -1041,6 +1042,7 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::OverrideTurnContext {
+                    environments,
                     cwd,
                     approval_policy,
                     approvals_reviewer,
@@ -1067,6 +1069,7 @@ pub(super) async fn submission_loop(
                         &sess,
                         sub.id.clone(),
                         SessionSettingsUpdate {
+                            environments,
                             cwd,
                             approval_policy,
                             approvals_reviewer,

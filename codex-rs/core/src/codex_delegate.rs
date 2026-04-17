@@ -78,7 +78,15 @@ pub(crate) async fn run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
-        environment_manager: Arc::clone(&parent_session.services.environment_manager),
+        resolved_environments: parent_session.services.environments.clone(),
+        environments: parent_ctx
+            .environments
+            .iter()
+            .map(|environment| codex_protocol::protocol::TurnEnvironment {
+                environment_id: environment.environment_id.clone(),
+                cwd: environment.cwd.as_ref().map(|cwd| cwd.to_path_buf()),
+            })
+            .collect(),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
@@ -94,14 +102,6 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_trace: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
-        environments: parent_ctx
-            .environments
-            .iter()
-            .map(|environment| codex_protocol::protocol::TurnEnvironment {
-                environment_id: environment.environment_id.clone(),
-                cwd: environment.cwd.as_ref().map(|cwd| cwd.to_path_buf()),
-            })
-            .collect(),
     }))
     .await?;
     if parent_session.enabled(codex_features::Feature::GeneralAnalytics) {

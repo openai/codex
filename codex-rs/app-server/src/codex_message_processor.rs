@@ -6131,7 +6131,12 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let fs = match self.thread_manager.environment_manager().current().await {
+        let fs = match self
+            .thread_manager
+            .environment_manager()
+            .default_environment()
+            .await
+        {
             Ok(Some(environment)) => Some(environment.get_filesystem()),
             Ok(None) => None,
             Err(err) => {

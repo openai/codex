@@ -1,10 +1,10 @@
 use crate::agent::AgentStatus;
 use crate::codex::Codex;
+use crate::codex::SessionEnvironment;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
 use crate::file_watcher::WatchRegistration;
 use codex_exec_server::Environment;
-use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
@@ -162,11 +162,11 @@ impl CodexThread {
         self.codex.session.services.environment.clone()
     }
 
-    pub(crate) fn environment_manager(&self) -> std::sync::Arc<EnvironmentManager> {
-        self.codex.session.services.environment_manager.clone()
+    pub(crate) fn selected_environments(&self) -> Vec<std::sync::Arc<Environment>> {
+        self.codex.session.services.environments.clone()
     }
 
-    pub(crate) async fn environments(&self) -> Vec<crate::codex::SessionEnvironment> {
+    pub(crate) async fn environments(&self) -> Vec<SessionEnvironment> {
         self.codex.environments().await
     }
 
