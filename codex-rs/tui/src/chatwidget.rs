@@ -5865,19 +5865,19 @@ impl ChatWidget {
 
         // Persist the submitted text to cross-session message history. Mentions are encoded into
         // placeholder syntax so recall can reconstruct the mention bindings in a future session.
+        let encoded_mentions = mention_bindings
+            .iter()
+            .map(|binding| LinkedMention {
+                mention: binding.mention.clone(),
+                path: binding.path.clone(),
+            })
+            .collect::<Vec<_>>();
         let history_text = match &history_record {
             UserMessageHistoryRecord::UserMessageText if !text.is_empty() => {
-                let encoded_mentions = mention_bindings
-                    .iter()
-                    .map(|binding| LinkedMention {
-                        mention: binding.mention.clone(),
-                        path: binding.path.clone(),
-                    })
-                    .collect::<Vec<_>>();
                 Some(encode_history_mentions(&text, &encoded_mentions))
             }
             UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
-                Some(history.text.clone())
+                Some(encode_history_mentions(&history.text, &encoded_mentions))
             }
             UserMessageHistoryRecord::UserMessageText | UserMessageHistoryRecord::Override(_) => {
                 None

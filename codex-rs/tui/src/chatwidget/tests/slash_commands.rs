@@ -200,6 +200,43 @@ async fn goal_slash_command_records_original_command_in_history() {
 }
 
 #[tokio::test]
+async fn goal_slash_command_records_mentions_in_history() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    chat.bottom_pane.set_composer_text_with_mention_bindings(
+        "/goal use $figma for the mockup".to_string(),
+        Vec::new(),
+        Vec::new(),
+        vec![MentionBinding {
+            mention: "figma".to_string(),
+            path: "app://figma".to_string(),
+        }],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    assert_eq!(
+        next_add_to_history_op(&mut op_rx),
+        "/goal use [$figma](app://figma) for the mockup"
+    );
+}
+
+#[tokio::test]
 async fn goal_slash_command_preserves_attached_images() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
