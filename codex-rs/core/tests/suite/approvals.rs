@@ -194,10 +194,13 @@ impl ActionKind {
                 Ok((event, Some(command)))
             }
             ActionKind::RunCommand { command } => {
+                // Bazel Linux runners can be heavily oversubscribed while this
+                // matrix runs, so avoid making scheduling latency look like an
+                // approval behavior failure.
                 let event = shell_event(
                     call_id,
                     command,
-                    /*timeout_ms*/ 2_000,
+                    /*timeout_ms*/ 30_000,
                     sandbox_permissions,
                 )?;
                 Ok((event, Some(command.to_string())))
