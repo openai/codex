@@ -10102,6 +10102,16 @@
               "null"
             ]
           },
+          "detailsUnavailableReason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginDetailsUnavailableReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "marketplaceName": {
             "type": "string"
           },
@@ -10133,6 +10143,12 @@
           "summary"
         ],
         "type": "object"
+      },
+      "PluginDetailsUnavailableReason": {
+        "enum": [
+          "installRequiredForRemoteSource"
+        ],
+        "type": "string"
       },
       "PluginInstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

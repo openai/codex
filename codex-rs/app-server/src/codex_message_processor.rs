@@ -98,6 +98,7 @@ use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PluginDetail;
+use codex_app_server_protocol::PluginDetailsUnavailableReason;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginInterface;
@@ -235,6 +236,7 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
 use codex_core::plugins::MarketplaceAddError;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core::plugins::PluginDetailsUnavailableReason as CorePluginDetailsUnavailableReason;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
@@ -6407,6 +6409,13 @@ impl CodexMessageProcessor {
             skills: plugin_skills_to_info(&visible_skills, &outcome.plugin.disabled_skill_paths),
             apps: app_summaries,
             mcp_servers: outcome.plugin.mcp_server_names,
+            details_unavailable_reason: outcome.plugin.details_unavailable_reason.map(|reason| {
+                match reason {
+                    CorePluginDetailsUnavailableReason::InstallRequiredForRemoteSource => {
+                        PluginDetailsUnavailableReason::InstallRequiredForRemoteSource
+                    }
+                }
+            }),
         };
 
         self.outgoing
