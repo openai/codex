@@ -105,7 +105,7 @@ jobs:
             sudo grep bwrap /sys/kernel/security/apparmor/profiles || true
             exit 1
           fi
-          if ! sudo grep -Eq '^bwrap//.*unpriv_bwrap \(enforce\)$' /sys/kernel/security/apparmor/profiles; then
+          if ! sudo grep -Eq '(^bwrap//.*unpriv_bwrap \(enforce\)$|^unpriv_bwrap \(enforce\)$)' /sys/kernel/security/apparmor/profiles; then
             echo "Ubuntu's unprivileged bwrap child profile is not loaded in enforce mode."
             sudo grep bwrap /sys/kernel/security/apparmor/profiles || true
             exit 1

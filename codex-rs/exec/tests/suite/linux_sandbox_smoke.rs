@@ -106,7 +106,7 @@ set -euo pipefail
 aa_profile="$(cat /proc/self/attr/current)"
 echo "payload.apparmor=$aa_profile"
 case "$aa_profile" in
-  *bwrap*unpriv_bwrap*) ;;
+  *unpriv_bwrap*) ;;
   *)
     echo "Expected payload to run under Ubuntu's unprivileged bwrap AppArmor profile." >&2
     exit 1
@@ -131,7 +131,7 @@ set -euo pipefail
 aa_profile="$(cat /proc/self/attr/current)"
 echo "payload.apparmor=$aa_profile"
 case "$aa_profile" in
-  *bwrap*unpriv_bwrap*)
+  *unpriv_bwrap*)
     echo "Expected legacy Landlock smoke to avoid the bwrap AppArmor profile." >&2
     exit 1
     ;;
