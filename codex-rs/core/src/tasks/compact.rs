@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::SessionTask;
 use super::SessionTaskContext;
-use crate::codex::TurnContext;
+use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;

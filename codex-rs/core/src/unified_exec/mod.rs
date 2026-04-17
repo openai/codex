@@ -34,9 +34,9 @@ use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 
 mod async_watcher;
 mod errors;

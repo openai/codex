@@ -1,4 +1,3 @@
-use crate::codex::Session;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
@@ -7,6 +6,7 @@ use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
+use crate::session::session::Session;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use codex_hooks::PermissionRequestDecision;
@@ -285,7 +285,9 @@ impl NetworkApprovalService {
             .await;
     }
 
-    async fn active_turn_context(session: &Session) -> Option<Arc<crate::codex::TurnContext>> {
+    async fn active_turn_context(
+        session: &Session,
+    ) -> Option<Arc<crate::session::turn_context::TurnContext>> {
         let active_turn = session.active_turn.lock().await;
         active_turn
             .as_ref()
