@@ -29,7 +29,6 @@ use crate::types::WindowsToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
-use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -51,6 +50,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path::normalize_for_path_comparison;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -601,7 +601,7 @@ impl ConfigToml {
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
-        resolved_cwd: &Path,
+        active_project: Option<&ProjectConfig>,
         sandbox_policy_constraint: Option<&crate::Constrained<SandboxPolicy>>,
     ) -> SandboxPolicy {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
@@ -616,7 +616,7 @@ impl ConfigToml {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                self.get_active_project(resolved_cwd).await.and_then(|p| {
+                active_project.and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
@@ -677,8 +677,13 @@ impl ConfigToml {
     }
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
-    /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub async fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+    /// does not contain a project corresponding to cwd or the resolved git repo
+    /// root for cwd.
+    pub fn get_active_project(
+        &self,
+        resolved_cwd: &Path,
+        repo_root: Option<&Path>,
+    ) -> Option<ProjectConfig> {
         let projects = self.projects.as_ref()?;
 
         for normalized_cwd in normalized_project_lookup_keys(resolved_cwd) {
@@ -687,11 +692,8 @@ impl ConfigToml {
             }
         }
 
-        // If cwd lives inside a git repo/worktree, check whether the root git project
-        // (the primary repository working directory) is trusted. This lets
-        // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd).await {
-            for normalized_repo_root in normalized_project_lookup_keys(&repo_root) {
+        if let Some(repo_root) = repo_root {
+            for normalized_repo_root in normalized_project_lookup_keys(repo_root) {
                 if let Some(project_config_for_root) =
                     project_config_for_lookup_key(projects, &normalized_repo_root)
                 {
@@ -731,7 +733,7 @@ impl ConfigToml {
 fn normalized_project_lookup_keys(path: &Path) -> Vec<String> {
     let normalized_path = normalize_project_lookup_key(path.to_string_lossy().to_string());
     let normalized_canonical_path = normalize_project_lookup_key(
-        dunce::canonicalize(path)
+        normalize_for_path_comparison(path)
             .unwrap_or_else(|_| path.to_path_buf())
             .to_string_lossy()
             .to_string(),
