@@ -164,6 +164,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
 async fn thread_turns_list_can_page_backward_and_forward() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -748,22 +749,6 @@ fn append_user_message(path: &Path, timestamp: &str, text: &str) -> std::io::Res
                 "message": text,
                 "text_elements": [],
                 "local_images": []
-            }
-        })
-    )
-}
-
-fn append_thread_rollback(path: &Path, timestamp: &str, num_turns: u32) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
-    writeln!(
-        file,
-        "{}",
-        json!({
-            "timestamp": timestamp,
-            "type":"event_msg",
-            "payload": {
-                "type":"thread_rolled_back",
-                "num_turns": num_turns
             }
         })
     )
