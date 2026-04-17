@@ -384,10 +384,20 @@ impl Session {
             .await?;
         let goal = match outcome {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
+                let clear_active_goal = turn_context.goal_accounting.active_this_turn()
+                    && matches!(
+                        goal.status,
+                        codex_state::ThreadGoalStatus::Paused
+                            | codex_state::ThreadGoalStatus::BudgetLimited
+                            | codex_state::ThreadGoalStatus::Complete
+                    );
                 turn_context
                     .goal_accounting
                     .mark_accounted(current_token_usage, time_delta_seconds)
                     .await;
+                if clear_active_goal {
+                    turn_context.goal_accounting.clear_active_goal().await;
+                }
                 goal
             }
             codex_state::ThreadGoalAccountingOutcome::Unchanged(goal) => {
@@ -476,6 +486,7 @@ impl Session {
         }
 
         let _continuation_guard = self.goal_continuation_lock.lock().await;
+        self.clear_queued_response_items_for_next_turn().await;
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
