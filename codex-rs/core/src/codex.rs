@@ -878,6 +878,13 @@ pub(crate) struct TurnContext {
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
 }
 impl TurnContext {
+    pub(crate) fn permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
+
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
         self.model_info.context_window.map(|context_window| {
@@ -1012,10 +1019,7 @@ impl TurnContext {
         &self,
         additional_permissions: Option<PermissionProfile>,
     ) -> FileSystemSandboxContext {
-        let base_permissions = PermissionProfile::from_runtime_permissions(
-            &self.file_system_sandbox_policy,
-            self.network_sandbox_policy,
-        );
+        let base_permissions = self.permission_profile();
         let permissions =
             merge_permission_profiles(Some(&base_permissions), additional_permissions.as_ref())
                 .unwrap_or(base_permissions);
@@ -1186,6 +1190,13 @@ impl SessionConfiguration {
         &self.codex_home
     }
 
+    fn permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
+
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
@@ -1194,6 +1205,7 @@ impl SessionConfiguration {
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
+            permission_profile: self.permission_profile(),
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
