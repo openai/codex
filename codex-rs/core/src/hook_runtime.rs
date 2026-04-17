@@ -31,9 +31,9 @@ use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
 pub(crate) struct HookRuntimeOutcome {
@@ -483,7 +483,7 @@ mod tests {
     use super::additional_context_messages;
     use super::hook_run_analytics_payload;
     use super::hook_run_metric_tags;
-    use crate::codex::make_session_and_context;
+    use crate::session::tests::make_session_and_context;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookRunSummary;
     use codex_utils_absolute_path::test_support::PathBufExt;

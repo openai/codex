@@ -2348,6 +2348,8 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
+    use codex_config::Constrained;
+
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
