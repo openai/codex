@@ -117,7 +117,25 @@ where
 const COMMON_CORE_VARS: &[&str] = &["PATH", "SHELL", "TMPDIR", "TEMP", "TMP"];
 
 #[cfg(target_os = "windows")]
-const PLATFORM_CORE_VARS: &[&str] = &["PATHEXT", "USERNAME", "USERPROFILE"];
+const PLATFORM_CORE_VARS: &[&str] = &[
+    "APPDATA",
+    "COMMONPROGRAMFILES",
+    "COMMONPROGRAMFILES(X86)",
+    "COMMONPROGRAMW6432",
+    "COMSPEC",
+    "HOME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LOCALAPPDATA",
+    "PATHEXT",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "SYSTEMROOT",
+    "USERNAME",
+    "USERPROFILE",
+];
 
 #[cfg(unix)]
 const PLATFORM_CORE_VARS: &[&str] = &["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "USER"];

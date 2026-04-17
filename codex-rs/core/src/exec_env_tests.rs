@@ -171,8 +171,16 @@ fn test_inherit_all_with_default_excludes() {
 #[cfg(target_os = "windows")]
 fn test_core_inherit_respects_case_insensitive_names_on_windows() {
     let vars = make_vars(&[
+        ("AppData", "C:\\Users\\alice\\AppData\\Roaming"),
+        ("ComSpec", "C:\\Windows\\System32\\cmd.exe"),
+        ("HomeDrive", "C:"),
+        ("HomePath", "\\Users\\alice"),
+        ("LOCALAPPDATA", "C:\\Users\\alice\\AppData\\Local"),
         ("Path", "C:\\Windows\\System32"),
         ("PathExt", ".COM;.EXE;.BAT;.CMD"),
+        ("ProgramFiles", "C:\\Program Files"),
+        ("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+        ("SystemRoot", "C:\\Windows"),
         ("TEMP", "C:\\Temp"),
         ("FOO", "bar"),
     ]);
@@ -186,8 +194,16 @@ fn test_core_inherit_respects_case_insensitive_names_on_windows() {
     let thread_id = ThreadId::new();
     let result = populate_env(vars, &policy, Some(thread_id));
     let mut expected: HashMap<String, String> = hashmap! {
+        "AppData".to_string() => "C:\\Users\\alice\\AppData\\Roaming".to_string(),
+        "ComSpec".to_string() => "C:\\Windows\\System32\\cmd.exe".to_string(),
+        "HomeDrive".to_string() => "C:".to_string(),
+        "HomePath".to_string() => "\\Users\\alice".to_string(),
+        "LOCALAPPDATA".to_string() => "C:\\Users\\alice\\AppData\\Local".to_string(),
         "Path".to_string() => "C:\\Windows\\System32".to_string(),
         "PathExt".to_string() => ".COM;.EXE;.BAT;.CMD".to_string(),
+        "ProgramFiles".to_string() => "C:\\Program Files".to_string(),
+        "ProgramFiles(x86)".to_string() => "C:\\Program Files (x86)".to_string(),
+        "SystemRoot".to_string() => "C:\\Windows".to_string(),
         "TEMP".to_string() => "C:\\Temp".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
