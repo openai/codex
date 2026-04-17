@@ -350,13 +350,12 @@ impl TestCodexBuilder {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
-        let environment_manager =
-            Arc::new(codex_exec_server::EnvironmentManager::from_exec_server_url(
-                codex_exec_server::EnvironmentManagerArgs {
-                    exec_server_url: test_env.exec_server_url().map(str::to_owned),
-                    local_runtime_paths: None,
-                },
-            ));
+        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
+            codex_exec_server::EnvironmentManagerArgs {
+                exec_server_url: test_env.exec_server_url().map(str::to_owned),
+                local_runtime_paths: None,
+            },
+        ));
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);

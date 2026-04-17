@@ -70,7 +70,7 @@ impl LazyRemoteExecServerClient {
 
 impl Default for EnvironmentManager {
     fn default() -> Self {
-        Self::from_exec_server_url(EnvironmentManagerArgs::default())
+        Self::new(EnvironmentManagerArgs::default())
     }
 }
 
@@ -85,7 +85,7 @@ impl EnvironmentManager {
     pub fn from_env_with_runtime_paths(
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        Self::from_exec_server_url(EnvironmentManagerArgs {
+        Self::new(EnvironmentManagerArgs {
             exec_server_url: std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok(),
             local_runtime_paths,
         })
@@ -93,7 +93,7 @@ impl EnvironmentManager {
 
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value and local
     /// runtime paths used when creating local filesystem helpers.
-    pub fn from_exec_server_url(args: EnvironmentManagerArgs) -> Self {
+    pub fn new(args: EnvironmentManagerArgs) -> Self {
         let EnvironmentManagerArgs {
             exec_server_url,
             local_runtime_paths,
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn environment_manager_normalizes_empty_url() {
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs {
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some(String::new()),
             local_runtime_paths: None,
         });
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn environment_manager_treats_none_value_as_disabled() {
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs {
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("none".to_string()),
             local_runtime_paths: None,
         });
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn environment_manager_reports_remote_url() {
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs {
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
             local_runtime_paths: None,
         });
@@ -345,7 +345,7 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_default_environment_caches_environment() {
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs::default());
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs::default());
 
         let first = manager.default_environment().expect("local environment");
         let second = manager.default_environment().expect("local environment");
@@ -360,7 +360,7 @@ mod tests {
             /*codex_linux_sandbox_exe*/ None,
         )
         .expect("runtime paths");
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs {
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: None,
             local_runtime_paths: Some(runtime_paths.clone()),
         });
@@ -368,7 +368,7 @@ mod tests {
         let environment = manager.default_environment().expect("local environment");
 
         assert_eq!(environment.local_runtime_paths(), Some(&runtime_paths));
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs {
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: environment.exec_server_url().map(str::to_owned),
             local_runtime_paths: environment.local_runtime_paths().cloned(),
         });
@@ -378,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_environment_manager_has_default_environment_but_no_tool_environment() {
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs {
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("none".to_string()),
             local_runtime_paths: None,
         });
@@ -389,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn environment_manager_allows_local_lookup_when_disabled() {
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs {
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs {
             exec_server_url: Some("none".to_string()),
             local_runtime_paths: None,
         });
@@ -402,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_environment_returns_none_for_unknown_id() {
-        let manager = EnvironmentManager::from_exec_server_url(EnvironmentManagerArgs::default());
+        let manager = EnvironmentManager::new(EnvironmentManagerArgs::default());
 
         assert!(manager.get_environment("does-not-exist").is_none());
     }

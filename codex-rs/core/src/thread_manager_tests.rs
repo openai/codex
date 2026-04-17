@@ -246,7 +246,7 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.to_path_buf(),
-        Arc::new(codex_exec_server::EnvironmentManager::from_exec_server_url(
+        Arc::new(codex_exec_server::EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs::default(),
         )),
     );
@@ -297,7 +297,7 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         auth_manager,
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::from_exec_server_url(
+        Arc::new(codex_exec_server::EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs::default(),
         )),
         /*analytics_events_client*/ None,
@@ -434,7 +434,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::from_exec_server_url(
+        Arc::new(codex_exec_server::EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs::default(),
         )),
         /*analytics_events_client*/ None,
@@ -537,7 +537,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::from_exec_server_url(
+        Arc::new(codex_exec_server::EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs::default(),
         )),
         /*analytics_events_client*/ None,
@@ -630,7 +630,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
-        Arc::new(codex_exec_server::EnvironmentManager::from_exec_server_url(
+        Arc::new(codex_exec_server::EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs::default(),
         )),
         /*analytics_events_client*/ None,

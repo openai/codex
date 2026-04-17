@@ -738,7 +738,7 @@ mod tests {
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),
             log_db: None,
-            environment_manager: Arc::new(EnvironmentManager::from_exec_server_url(
+            environment_manager: Arc::new(EnvironmentManager::new(
                 codex_exec_server::EnvironmentManagerArgs::default(),
             )),
             config_warnings: Vec::new(),
