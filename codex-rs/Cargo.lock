@@ -1472,6 +1472,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-core-plugins",
+ "codex-device-key",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",

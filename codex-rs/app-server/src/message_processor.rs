@@ -11,6 +11,7 @@ use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::config_manager::ConfigManager;
+use crate::device_key_api::DeviceKeyApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
@@ -20,6 +21,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
+use crate::transport::ConnectionOrigin;
 use crate::transport::RemoteControlHandle;
 use async_trait::async_trait;
 use axum::http::HeaderValue;
@@ -37,6 +39,9 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
+use codex_app_server_protocol::DeviceKeyCreateParams;
+use codex_app_server_protocol::DeviceKeyPublicParams;
+use codex_app_server_protocol::DeviceKeySignParams;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
@@ -170,6 +175,7 @@ pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
     thread_manager: Arc<ThreadManager>,
     config_api: ConfigApi,
+    device_key_api: DeviceKeyApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
     auth_manager: Arc<AuthManager>,
@@ -181,8 +187,9 @@ pub(crate) struct MessageProcessor {
     remote_control_handle: Option<RemoteControlHandle>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
+    origin: ConnectionOrigin,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
 
@@ -194,9 +201,26 @@ struct InitializedConnectionSessionState {
     client_version: String,
 }
 
+impl Default for ConnectionSessionState {
+    fn default() -> Self {
+        Self::new(ConnectionOrigin::WebSocket)
+    }
+}
+
 impl ConnectionSessionState {
+    pub(crate) fn new(origin: ConnectionOrigin) -> Self {
+        Self {
+            origin,
+            initialized: OnceLock::new(),
+        }
+    }
+
     pub(crate) fn initialized(&self) -> bool {
         self.initialized.get().is_some()
+    }
+
+    fn allows_device_key_requests(&self) -> bool {
+        self.origin.allows_device_key_requests()
     }
 
     pub(crate) fn experimental_api_enabled(&self) -> bool {
@@ -325,6 +349,7 @@ impl MessageProcessor {
             thread_manager.clone(),
             analytics_events_client.clone(),
         );
+        let device_key_api = DeviceKeyApi::default();
         let external_agent_config_api =
             ExternalAgentConfigApi::new(config.codex_home.to_path_buf());
         let fs_api = FsApi::default();
@@ -335,6 +360,7 @@ impl MessageProcessor {
             codex_message_processor,
             thread_manager: Arc::clone(&thread_manager),
             config_api,
+            device_key_api,
             external_agent_config_api,
             fs_api,
             auth_manager,
@@ -772,6 +798,7 @@ impl MessageProcessor {
 
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
+        let device_key_requests_allowed = session.allows_device_key_requests();
         Arc::clone(self)
             .handle_initialized_client_request(
                 connection_request_id,
@@ -779,6 +806,7 @@ impl MessageProcessor {
                 request_context,
                 app_server_client_name,
                 client_version,
+                device_key_requests_allowed,
             )
             .await;
     }
@@ -790,6 +818,7 @@ impl MessageProcessor {
         request_context: RequestContext,
         app_server_client_name: Option<String>,
         client_version: Option<String>,
+        device_key_requests_allowed: bool,
     ) {
         let connection_id = connection_request_id.connection_id;
 
@@ -862,6 +891,39 @@ impl MessageProcessor {
                     connection_id,
                     request_id,
                 })
+                .await;
+            }
+            ClientRequest::DeviceKeyCreate { request_id, params } => {
+                self.handle_device_key_create(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                    device_key_requests_allowed,
+                )
+                .await;
+            }
+            ClientRequest::DeviceKeyPublic { request_id, params } => {
+                self.handle_device_key_public(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                    device_key_requests_allowed,
+                )
+                .await;
+            }
+            ClientRequest::DeviceKeySign { request_id, params } => {
+                self.handle_device_key_sign(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                    device_key_requests_allowed,
+                )
                 .await;
             }
             ClientRequest::FsReadFile { request_id, params } => {
@@ -1125,6 +1187,98 @@ impl MessageProcessor {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
+    }
+
+    async fn handle_device_key_create(
+        &self,
+        request_id: ConnectionRequestId,
+        params: DeviceKeyCreateParams,
+        device_key_requests_allowed: bool,
+    ) {
+        if self
+            .reject_device_key_request_over_remote_transport(
+                request_id.clone(),
+                "device/key/create",
+                device_key_requests_allowed,
+            )
+            .await
+        {
+            return;
+        }
+
+        match self.device_key_api.create(params) {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_device_key_public(
+        &self,
+        request_id: ConnectionRequestId,
+        params: DeviceKeyPublicParams,
+        device_key_requests_allowed: bool,
+    ) {
+        if self
+            .reject_device_key_request_over_remote_transport(
+                request_id.clone(),
+                "device/key/public",
+                device_key_requests_allowed,
+            )
+            .await
+        {
+            return;
+        }
+
+        match self.device_key_api.public(params) {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_device_key_sign(
+        &self,
+        request_id: ConnectionRequestId,
+        params: DeviceKeySignParams,
+        device_key_requests_allowed: bool,
+    ) {
+        if self
+            .reject_device_key_request_over_remote_transport(
+                request_id.clone(),
+                "device/key/sign",
+                device_key_requests_allowed,
+            )
+            .await
+        {
+            return;
+        }
+
+        match self.device_key_api.sign(params) {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn reject_device_key_request_over_remote_transport(
+        &self,
+        request_id: ConnectionRequestId,
+        method: &str,
+        device_key_requests_allowed: bool,
+    ) -> bool {
+        if device_key_requests_allowed {
+            return false;
+        }
+
+        self.outgoing
+            .send_error(
+                request_id,
+                JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("{method} is not available over remote transports"),
+                    data: None,
+                },
+            )
+            .await;
+        true
     }
 
     async fn handle_external_agent_config_detect(

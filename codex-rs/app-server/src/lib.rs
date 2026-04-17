@@ -74,6 +74,7 @@ mod config;
 mod config_api;
 mod config_manager;
 mod config_manager_service;
+mod device_key_api;
 mod dynamic_tools;
 mod error_code;
 mod external_agent_config_api;
@@ -716,6 +717,7 @@ pub async fn run_main_with_transport(
                         match event {
                             TransportEvent::ConnectionOpened {
                                 connection_id,
+                                origin,
                                 writer,
                                 disconnect_sender,
                             } => {
@@ -745,6 +747,7 @@ pub async fn run_main_with_transport(
                                 connections.insert(
                                     connection_id,
                                     ConnectionState::new(
+                                        origin,
                                         outbound_initialized,
                                         outbound_experimental_api_enabled,
                                         outbound_opted_out_notification_methods,

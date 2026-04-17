@@ -133,6 +133,7 @@ codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
 codex-core-plugins = { path = "core-plugins" }
 codex-core-skills = { path = "core-skills" }
+codex-device-key = { path = "device-key" }
 codex-exec = { path = "exec" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
