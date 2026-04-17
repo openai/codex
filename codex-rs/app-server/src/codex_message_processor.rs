@@ -3069,26 +3069,6 @@ impl CodexMessageProcessor {
                 self.send_invalid_request_error(request_id, message).await;
                 return;
             }
-            let existing_goal = match state_db.get_thread_goal(thread_id).await {
-                Ok(goal) => goal,
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!("failed to read existing goal for thread {thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
-            let status = if status == Some(codex_state::ThreadGoalStatus::Paused)
-                && existing_goal
-                    .as_ref()
-                    .is_some_and(|goal| goal.status == codex_state::ThreadGoalStatus::BudgetLimited)
-            {
-                None
-            } else {
-                status
-            };
             state_db
                 .update_thread_goal(
                     thread_id,
@@ -3120,11 +3100,16 @@ impl CodexMessageProcessor {
                 ThreadGoalSetResponse { goal: goal.clone() },
             )
             .await;
+        let goal_status = goal.status;
         self.emit_thread_goal_updated_ordered(thread_id, goal).await;
         if self.config.features.enabled(Feature::GoalMode)
             && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
         {
-            thread.continue_active_goal_if_idle().await;
+            if goal_status == ThreadGoalStatus::Active {
+                thread.continue_active_goal_if_idle().await;
+            } else {
+                thread.clear_queued_goal_continuations().await;
+            }
         }
     }
 

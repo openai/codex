@@ -854,6 +854,22 @@ If the goal has not been achieved and cannot be achieved within the remaining bu
     )
 }
 
+pub(crate) fn is_goal_continuation_item(item: &ResponseInputItem) -> bool {
+    const GOAL_CONTINUATION_PROMPT_PREFIX: &str = "Continue working toward the active thread goal.";
+
+    let ResponseInputItem::Message { role, content } = item else {
+        return false;
+    };
+    role == "developer"
+        && content.iter().any(|item| {
+            matches!(
+                item,
+                ContentItem::InputText { text }
+                    if text.starts_with(GOAL_CONTINUATION_PROMPT_PREFIX)
+            )
+        })
+}
+
 pub(crate) fn protocol_goal_from_state(goal: codex_state::ThreadGoal) -> ThreadGoal {
     ThreadGoal {
         thread_id: goal.thread_id,

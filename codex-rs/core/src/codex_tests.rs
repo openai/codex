@@ -5906,6 +5906,51 @@ async fn active_goal_continuation_waits_for_trigger_turn_mailbox_prompt() -> any
     Ok(())
 }
 
+#[tokio::test]
+async fn inactive_goal_does_not_start_stale_queued_continuation() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.queue_goal_continuation_if_active().await;
+    assert!(
+        sess.has_queued_response_items_for_next_turn().await,
+        "active goal should queue a continuation"
+    );
+
+    let state_db = sess
+        .thread_goal_state_db
+        .lock()
+        .await
+        .clone()
+        .expect("goal state DB should be initialized");
+    state_db
+        .update_thread_goal(
+            sess.conversation_id,
+            codex_state::ThreadGoalUpdate {
+                status: Some(codex_state::ThreadGoalStatus::Paused),
+                token_budget: None,
+            },
+        )
+        .await?;
+
+    sess.maybe_start_turn_for_active_goal_continuation().await;
+
+    assert!(!sess.has_active_turn().await);
+    assert!(
+        sess.has_queued_response_items_for_next_turn().await,
+        "non-goal startup should not consume the stale continuation"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn finished_active_goal_turn_starts_continuation() -> anyhow::Result<()> {
     let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
