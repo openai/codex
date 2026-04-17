@@ -46,6 +46,10 @@ use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailability
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::permissions::FileSystemAccessMode as CoreFileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath as CoreFileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry as CoreFileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialPath;
 use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
@@ -1221,6 +1225,180 @@ impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
 
 impl From<RequestPermissionProfile> for CoreRequestPermissionProfile {
     fn from(value: RequestPermissionProfile) -> Self {
+        Self {
+            network: value.network.map(CoreNetworkPermissions::from),
+            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        }
+    }
+}
+
+v2_enum_from_core!(
+    pub enum FileSystemAccessMode from CoreFileSystemAccessMode {
+        Read,
+        Write,
+        None
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(tag = "kind")]
+#[ts(export_to = "v2/")]
+pub enum FileSystemSpecialPath {
+    Root,
+    Minimal,
+    CurrentWorkingDirectory,
+    ProjectRoots {
+        subpath: Option<PathBuf>,
+    },
+    Tmpdir,
+    SlashTmp,
+    Unknown {
+        path: String,
+        subpath: Option<PathBuf>,
+    },
+}
+
+impl From<CoreFileSystemSpecialPath> for FileSystemSpecialPath {
+    fn from(value: CoreFileSystemSpecialPath) -> Self {
+        match value {
+            CoreFileSystemSpecialPath::Root => Self::Root,
+            CoreFileSystemSpecialPath::Minimal => Self::Minimal,
+            CoreFileSystemSpecialPath::CurrentWorkingDirectory => Self::CurrentWorkingDirectory,
+            CoreFileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
+            CoreFileSystemSpecialPath::Tmpdir => Self::Tmpdir,
+            CoreFileSystemSpecialPath::SlashTmp => Self::SlashTmp,
+            CoreFileSystemSpecialPath::Unknown { path, subpath } => Self::Unknown { path, subpath },
+        }
+    }
+}
+
+impl From<FileSystemSpecialPath> for CoreFileSystemSpecialPath {
+    fn from(value: FileSystemSpecialPath) -> Self {
+        match value {
+            FileSystemSpecialPath::Root => Self::Root,
+            FileSystemSpecialPath::Minimal => Self::Minimal,
+            FileSystemSpecialPath::CurrentWorkingDirectory => Self::CurrentWorkingDirectory,
+            FileSystemSpecialPath::ProjectRoots { subpath } => Self::ProjectRoots { subpath },
+            FileSystemSpecialPath::Tmpdir => Self::Tmpdir,
+            FileSystemSpecialPath::SlashTmp => Self::SlashTmp,
+            FileSystemSpecialPath::Unknown { path, subpath } => Self::Unknown { path, subpath },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum FileSystemPath {
+    Path { path: AbsolutePathBuf },
+    GlobPattern { pattern: String },
+    Special { value: FileSystemSpecialPath },
+}
+
+impl From<CoreFileSystemPath> for FileSystemPath {
+    fn from(value: CoreFileSystemPath) -> Self {
+        match value {
+            CoreFileSystemPath::Path { path } => Self::Path { path },
+            CoreFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
+            CoreFileSystemPath::Special { value } => Self::Special {
+                value: value.into(),
+            },
+        }
+    }
+}
+
+impl From<FileSystemPath> for CoreFileSystemPath {
+    fn from(value: FileSystemPath) -> Self {
+        match value {
+            FileSystemPath::Path { path } => Self::Path { path },
+            FileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
+            FileSystemPath::Special { value } => Self::Special {
+                value: value.into(),
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FileSystemSandboxEntry {
+    pub path: FileSystemPath,
+    pub access: FileSystemAccessMode,
+}
+
+impl From<CoreFileSystemSandboxEntry> for FileSystemSandboxEntry {
+    fn from(value: CoreFileSystemSandboxEntry) -> Self {
+        Self {
+            path: value.path.into(),
+            access: value.access.into(),
+        }
+    }
+}
+
+impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
+    fn from(value: FileSystemSandboxEntry) -> Self {
+        Self {
+            path: value.path.into(),
+            access: value.access.to_core(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfileFileSystemPermissions {
+    pub entries: Vec<FileSystemSandboxEntry>,
+}
+
+impl From<CoreFileSystemPermissions> for PermissionProfileFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<PermissionProfileFileSystemPermissions> for CoreFileSystemPermissions {
+    fn from(value: PermissionProfileFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(CoreFileSystemSandboxEntry::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfile {
+    pub network: Option<AdditionalNetworkPermissions>,
+    pub file_system: Option<PermissionProfileFileSystemPermissions>,
+}
+
+impl From<CorePermissionProfile> for PermissionProfile {
+    fn from(value: CorePermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value
+                .file_system
+                .map(PermissionProfileFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<PermissionProfile> for CorePermissionProfile {
+    fn from(value: PermissionProfile) -> Self {
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
@@ -2784,6 +2962,7 @@ pub struct ThreadStartResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -2873,6 +3052,7 @@ pub struct ThreadResumeResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -2953,6 +3133,7 @@ pub struct ThreadForkResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
