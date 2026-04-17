@@ -2574,10 +2574,14 @@ impl ChatWidget {
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
-        // Emit a notification when the turn completes (suppressed if focused).
-        self.notify(Notification::AgentTurnComplete {
-            response: notification_response,
-        });
+        // Emit a notification when the agent is truly waiting for the user. An
+        // active goal will immediately continue with hidden follow-up input, so
+        // notifying at this boundary would feel like a false "needs attention".
+        if !self.active_goal_in_progress() {
+            self.notify(Notification::AgentTurnComplete {
+                response: notification_response,
+            });
+        }
 
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -10019,6 +10023,14 @@ impl ChatWidget {
         self.current_goal_status
             .as_ref()
             .and_then(|state| state.indicator(now, self.goal_status_active_turn_started_at))
+    }
+
+    fn active_goal_in_progress(&self) -> bool {
+        self.config.features.enabled(Feature::GoalMode)
+            && self
+                .current_goal_status
+                .as_ref()
+                .is_some_and(GoalStatusState::is_active)
     }
 
     fn on_thread_goal_updated(&mut self, goal: AppThreadGoal) {

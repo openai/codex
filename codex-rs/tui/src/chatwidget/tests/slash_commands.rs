@@ -1040,6 +1040,37 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
 }
 
 #[tokio::test]
+async fn active_goal_suppresses_agent_turn_complete_notification() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                goal: codex_app_server_protocol::ThreadGoal {
+                    thread_id: "thread-1".to_string(),
+                    objective: "finish the benchmark".to_string(),
+                    status: codex_app_server_protocol::ThreadGoalStatus::Active,
+                    token_budget: None,
+                    tokens_used: 0,
+                    time_used_seconds: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                },
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("Still working"))),
+    });
+
+    assert_matches!(chat.pending_notification, None);
+}
+
+#[tokio::test]
 async fn slash_exit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
