@@ -116,11 +116,11 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
     Ok(())
 }
 
-/// Scenario: GPT-5.4 advertises a default 273k context window and a 1M max
+/// Scenario: the model advertises a default 273k context window and a 400k max
 /// context window, and the user explicitly configures 1M. This verifies the
-/// runtime turn uses the configured 1M window instead of the lower default.
+/// runtime turn clamps the override to the advertised max window.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_config_context_window_override_can_use_max_context_window() -> Result<()> {
+async fn remote_models_config_context_window_override_clamps_to_max_context_window() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -129,7 +129,7 @@ async fn remote_models_config_context_window_override_can_use_max_context_window
     let mut remote_model =
         test_remote_model("gpt-5.4", ModelVisibility::List, /*priority*/ 1_000);
     remote_model.context_window = Some(273_000);
-    remote_model.max_context_window = Some(1_000_000);
+    remote_model.max_context_window = Some(400_000);
     remote_model.effective_context_window_percent = 100;
     mount_models_once(
         &server,
@@ -179,7 +179,7 @@ async fn remote_models_config_context_window_override_can_use_max_context_window
         matches!(
             event,
             EventMsg::TurnStarted(started)
-                if started.model_context_window == Some(1_000_000)
+                if started.model_context_window == Some(400_000)
         )
     })
     .await;
@@ -187,16 +187,16 @@ async fn remote_models_config_context_window_override_can_use_max_context_window
         unreachable!("wait_for_event returned unexpected event");
     };
 
-    assert_eq!(turn_started.model_context_window, Some(1_000_000));
+    assert_eq!(turn_started.model_context_window, Some(400_000));
 
     Ok(())
 }
 
 /// Scenario: the user explicitly configures a context window above the model's
-/// default. This verifies the config override remains the runtime window even
-/// when model metadata also includes a separate max_context_window value.
+/// max_context_window. This verifies the runtime window is clamped to the max
+/// instead of using the oversized config value.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_config_context_window_override_wins_over_max_context_window() -> Result<()> {
+async fn remote_models_config_override_above_max_uses_max_context_window() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -255,7 +255,7 @@ async fn remote_models_config_context_window_override_wins_over_max_context_wind
         matches!(
             event,
             EventMsg::TurnStarted(started)
-                if started.model_context_window == Some(500_000)
+                if started.model_context_window == Some(400_000)
         )
     })
     .await;
@@ -263,7 +263,7 @@ async fn remote_models_config_context_window_override_wins_over_max_context_wind
         unreachable!("wait_for_event returned unexpected event");
     };
 
-    assert_eq!(turn_started.model_context_window, Some(500_000));
+    assert_eq!(turn_started.model_context_window, Some(400_000));
 
     Ok(())
 }

@@ -27,12 +27,11 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         model.supports_reasoning_summaries = true;
     }
     if let Some(context_window) = config.model_context_window {
-        model.context_window = Some(context_window);
-        model.max_context_window = Some(
+        model.context_window = Some(
             model
                 .max_context_window
                 .map_or(context_window, |max_context_window| {
-                    max_context_window.max(context_window)
+                    context_window.min(max_context_window)
                 }),
         );
     }

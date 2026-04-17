@@ -45,7 +45,7 @@ fn reasoning_summaries_override_false_is_noop_when_model_is_false() {
 }
 
 #[test]
-fn model_context_window_override_wins_over_max_context_window() {
+fn model_context_window_override_clamps_to_max_context_window() {
     let mut model = model_info_from_slug("unknown-model");
     model.context_window = Some(273_000);
     model.max_context_window = Some(400_000);
@@ -56,8 +56,7 @@ fn model_context_window_override_wins_over_max_context_window() {
 
     let updated = with_config_overrides(model.clone(), &config);
     let mut expected = model;
-    expected.context_window = Some(500_000);
-    expected.max_context_window = Some(500_000);
+    expected.context_window = Some(400_000);
 
     assert_eq!(updated, expected);
 }
