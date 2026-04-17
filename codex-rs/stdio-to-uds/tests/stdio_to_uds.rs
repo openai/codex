@@ -1,6 +1,5 @@
 use std::io::ErrorKind;
 use std::io::Read;
-use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
@@ -10,13 +9,10 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::anyhow;
+use codex_uds::UnixListener;
 use pretty_assertions::assert_eq;
-
-#[cfg(unix)]
-use std::os::unix::net::UnixListener;
-
-#[cfg(windows)]
-use uds_windows::UnixListener;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 
 #[test]
 fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
@@ -32,7 +28,8 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
     let request = b"request";
     let request_path = dir.path().join("request.txt");
     std::fs::write(&request_path, request).context("failed to write child stdin fixture")?;
-    let listener = match UnixListener::bind(&socket_path) {
+    let runtime = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
+    let listener = match runtime.block_on(UnixListener::bind(&socket_path)) {
         Ok(listener) => listener,
         Err(err) if err.kind() == ErrorKind::PermissionDenied => {
             eprintln!("skipping test: failed to bind unix socket: {err}");
@@ -46,20 +43,21 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
     let server_thread = thread::spawn(move || -> anyhow::Result<()> {
+        let mut listener = listener;
         let _ = event_tx.send("waiting for accept".to_string());
-        let (mut connection, _) = listener
-            .accept()
+        let mut connection = runtime
+            .block_on(listener.accept())
             .context("failed to accept test connection")?;
         let _ = event_tx.send("accepted connection".to_string());
         let mut received = vec![0; request.len()];
-        connection
-            .read_exact(&mut received)
+        runtime
+            .block_on(connection.read_exact(&mut received))
             .context("failed to read data from client")?;
         let _ = event_tx.send(format!("read {} bytes", received.len()));
         tx.send(received)
             .map_err(|_| anyhow!("failed to send received bytes to test thread"))?;
-        connection
-            .write_all(b"response")
+        runtime
+            .block_on(connection.write_all(b"response"))
             .context("failed to write response to client")?;
         let _ = event_tx.send("wrote response".to_string());
         Ok(())

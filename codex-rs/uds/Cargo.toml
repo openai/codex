@@ -1,0 +1,29 @@
+[package]
+name = "codex-uds"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_uds"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["net"] }
+
+[target.'cfg(windows)'.dependencies]
+async-io = { workspace = true }
+tokio-util = { workspace = true, features = ["compat"] }
+uds_windows = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-util",
+    "macros",
+    "rt-multi-thread",
+] }

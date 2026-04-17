@@ -90,6 +90,7 @@ members = [
     "terminal-detection",
     "test-binary-support",
     "thread-store",
+    "uds",
     "codex-experimental-api-macros",
     "plugin",
     "model-provider",
@@ -175,6 +176,7 @@ codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
+codex-uds = { path = "uds" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
@@ -212,6 +214,7 @@ arc-swap = "1.9.0"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
+async-io = "2.6.0"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 axum = { version = "0.8", default-features = false }
