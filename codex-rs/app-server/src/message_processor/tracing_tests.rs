@@ -279,7 +279,7 @@ fn build_test_processor(
         arg0_paths: Arg0DispatchPaths::default(),
         config,
         config_manager,
-        environment_manager: Arc::new(EnvironmentManager::from_exec_server_url(
+        environment_manager: Arc::new(EnvironmentManager::new(
             codex_exec_server::EnvironmentManagerArgs::default(),
         )),
         feedback: CodexFeedback::new(),

@@ -301,7 +301,7 @@ impl ThreadManager {
             auth,
             provider,
             codex_home.clone(),
-            Arc::new(EnvironmentManager::from_exec_server_url(
+            Arc::new(EnvironmentManager::new(
                 codex_exec_server::EnvironmentManagerArgs::default(),
             )),
         );

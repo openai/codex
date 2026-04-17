@@ -969,7 +969,7 @@ mod tests {
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             log_db: None,
-            environment_manager: Arc::new(EnvironmentManager::from_exec_server_url(
+            environment_manager: Arc::new(EnvironmentManager::new(
                 codex_exec_server::EnvironmentManagerArgs::default(),
             )),
             config_warnings: Vec::new(),
@@ -1972,12 +1972,10 @@ mod tests {
     #[tokio::test]
     async fn runtime_start_args_forward_environment_manager() {
         let config = Arc::new(build_test_config().await);
-        let environment_manager = Arc::new(EnvironmentManager::from_exec_server_url(
-            EnvironmentManagerArgs {
-                exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
-                local_runtime_paths: None,
-            },
-        ));
+        let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
+            exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
+            local_runtime_paths: None,
+        }));
 
         let runtime_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
