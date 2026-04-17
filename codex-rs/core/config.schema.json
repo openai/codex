@@ -497,7 +497,7 @@
             "tool_search": {
               "type": "boolean"
             },
-            "tool_search_token_budget_deferral": {
+            "tool_search_always_defer_mcp_tools": {
               "type": "boolean"
             },
             "tool_suggest": {
@@ -2393,7 +2393,7 @@
         "tool_search": {
           "type": "boolean"
         },
-        "tool_search_token_budget_deferral": {
+        "tool_search_always_defer_mcp_tools": {
           "type": "boolean"
         },
         "tool_suggest": {

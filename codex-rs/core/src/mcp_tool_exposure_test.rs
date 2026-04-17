@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use codex_connectors::metadata::sanitize_name;
 use codex_features::Feature;
 use codex_features::Features;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -44,25 +45,9 @@ fn make_mcp_tool(
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> ToolInfo {
-    make_mcp_tool_with_description(
-        server_name,
-        tool_name,
-        connector_id,
-        connector_name,
-        format!("Test tool: {tool_name}"),
-    )
-}
-
-fn make_mcp_tool_with_description(
-    server_name: &str,
-    tool_name: &str,
-    connector_id: Option<&str>,
-    connector_name: Option<&str>,
-    description: String,
-) -> ToolInfo {
     let tool_namespace = if server_name == CODEX_APPS_MCP_SERVER_NAME {
         connector_name
-            .map(crate::connectors::sanitize_name)
+            .map(sanitize_name)
             .map(|connector_name| format!("mcp__{server_name}__{connector_name}"))
             .unwrap_or_else(|| server_name.to_string())
     } else {
@@ -77,7 +62,7 @@ fn make_mcp_tool_with_description(
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,
-            description: Some(description.into()),
+            description: Some(format!("Test tool: {tool_name}").into()),
             input_schema: Arc::new(JsonObject::default()),
             output_schema: None,
             annotations: None,
@@ -225,22 +210,18 @@ async fn directly_exposes_explicit_apps_without_deferred_overlap() {
 }
 
 #[tokio::test]
-async fn token_budget_feature_preserves_explicit_apps() {
+async fn always_defer_feature_preserves_explicit_apps() {
     let mut config = test_config().await;
     config
         .features
-        .enable(Feature::ToolSearchTokenBudgetDeferral)
+        .enable(Feature::ToolSearchAlwaysDeferMcpTools)
         .expect("test config should allow feature update");
     let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
     let mcp_tools = HashMap::from([
         (
-            "mcp__rmcp__expensive_tool".to_string(),
-            make_mcp_tool_with_description(
-                "rmcp",
-                "expensive_tool",
-                /*connector_id*/ None,
-                /*connector_name*/ None,
-                "x".repeat(9_000),
+            "mcp__rmcp__tool".to_string(),
+            make_mcp_tool(
+                "rmcp", "tool", /*connector_id*/ None, /*connector_name*/ None,
             ),
         ),
         (
@@ -272,7 +253,7 @@ async fn token_budget_feature_preserves_explicit_apps() {
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
-        .expect("expensive tool sets should be discoverable through tool_search");
-    assert!(deferred_tools.contains_key("mcp__rmcp__expensive_tool"));
+        .expect("MCP tools should be discoverable through tool_search");
+    assert!(deferred_tools.contains_key("mcp__rmcp__tool"));
     assert!(!deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
 }

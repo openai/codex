@@ -38,32 +38,13 @@ impl AppsTestServer {
     }
 
     pub async fn mount_searchable(server: &MockServer) -> Result<Self> {
-        Self::mount_with_options(
-            server, /*searchable*/ true, /*expensive_tool*/ false,
-        )
-        .await
-    }
-
-    pub async fn mount_with_expensive_tool(server: &MockServer) -> Result<Self> {
-        Self::mount_with_options(
-            server, /*searchable*/ false, /*expensive_tool*/ true,
-        )
-        .await
-    }
-
-    async fn mount_with_options(
-        server: &MockServer,
-        searchable: bool,
-        expensive_tool: bool,
-    ) -> Result<Self> {
         mount_oauth_metadata(server).await;
         mount_connectors_directory(server).await;
         mount_streamable_http_json_rpc(
             server,
             CONNECTOR_NAME.to_string(),
             CONNECTOR_DESCRIPTION.to_string(),
-            searchable,
-            expensive_tool,
+            /*searchable*/ true,
         )
         .await;
         Ok(Self {
@@ -82,7 +63,6 @@ impl AppsTestServer {
             connector_name.to_string(),
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ false,
-            /*expensive_tool*/ false,
         )
         .await;
         Ok(Self {
@@ -139,7 +119,6 @@ async fn mount_streamable_http_json_rpc(
     connector_name: String,
     connector_description: String,
     searchable: bool,
-    expensive_tool: bool,
 ) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
@@ -147,7 +126,6 @@ async fn mount_streamable_http_json_rpc(
             connector_name,
             connector_description,
             searchable,
-            expensive_tool,
         })
         .mount(server)
         .await;
@@ -157,7 +135,6 @@ struct CodexAppsJsonRpcResponder {
     connector_name: String,
     connector_description: String,
     searchable: bool,
-    expensive_tool: bool,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -204,11 +181,6 @@ impl Respond for CodexAppsJsonRpcResponder {
             "notifications/initialized" => ResponseTemplate::new(202),
             "tools/list" => {
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
-                let create_event_description = if self.expensive_tool {
-                    "x".repeat(9_000)
-                } else {
-                    "Create a calendar event.".to_string()
-                };
                 let mut response = json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -216,7 +188,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                         "tools": [
                             {
                                 "name": "calendar_create_event",
-                                "description": create_event_description,
+                                "description": "Create a calendar event.",
                                 "annotations": {
                                     "readOnlyHint": false,
                                     "destructiveHint": false,

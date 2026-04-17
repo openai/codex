@@ -5,15 +5,12 @@ use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::filter_non_codex_apps_mcp_tools_only;
-use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolsConfig;
-use codex_utils_string::approx_bytes_for_tokens;
 
 use crate::config::Config;
 use crate::connectors;
 
 pub(crate) const DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
-const DIRECT_MCP_TOOL_EXPOSURE_TOKEN_THRESHOLD: usize = 2_000;
 
 pub(crate) struct McpToolExposure {
     pub(crate) direct_tools: HashMap<String, McpToolInfo>,
@@ -45,10 +42,9 @@ pub(crate) fn build_mcp_tool_exposure(
 
     let should_defer = if config
         .features
-        .enabled(Feature::ToolSearchTokenBudgetDeferral)
+        .enabled(Feature::ToolSearchAlwaysDeferMcpTools)
     {
-        estimate_direct_mcp_tool_schema_bytes(&deferred_tools)
-            >= approx_bytes_for_tokens(DIRECT_MCP_TOOL_EXPOSURE_TOKEN_THRESHOLD)
+        true
     } else {
         deferred_tools.len() >= DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD
     };
@@ -95,22 +91,6 @@ fn filter_codex_apps_mcp_tools(
         })
         .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
-}
-
-fn estimate_direct_mcp_tool_schema_bytes(mcp_tools: &HashMap<String, McpToolInfo>) -> usize {
-    mcp_tools
-        .values()
-        .filter_map(|tool| {
-            let responses_tool = codex_tools::mcp_tool_to_responses_api_tool(
-                &tool.canonical_tool_name(),
-                &tool.tool,
-            )
-            .ok()?;
-            serde_json::to_vec(&ResponsesApiNamespaceTool::Function(responses_tool))
-                .ok()
-                .map(|bytes| bytes.len())
-        })
-        .sum()
 }
 
 #[cfg(test)]

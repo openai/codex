@@ -148,8 +148,8 @@ pub enum Feature {
     Apps,
     /// Enable the tool_search tool for apps.
     ToolSearch,
-    /// Use estimated tool-schema tokens instead of tool count for tool_search deferral.
-    ToolSearchTokenBudgetDeferral,
+    /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
+    ToolSearchAlwaysDeferMcpTools,
     /// Expose placeholder tools for unavailable historical tool calls.
     UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
@@ -821,8 +821,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::ToolSearchTokenBudgetDeferral,
-        key: "tool_search_token_budget_deferral",
+        id: Feature::ToolSearchAlwaysDeferMcpTools,
+        key: "tool_search_always_defer_mcp_tools",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

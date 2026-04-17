@@ -190,11 +190,11 @@ async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_deferral_hides_expensive_app_tools() -> Result<()> {
+async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount_with_expensive_tool(&server).await?;
+    let apps_server = AppsTestServer::mount(&server).await?;
     let mock = mount_sse_once(
         &server,
         sse(vec![
@@ -209,7 +209,7 @@ async fn token_budget_deferral_hides_expensive_app_tools() -> Result<()> {
         configured_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
             config
                 .features
-                .enable(Feature::ToolSearchTokenBudgetDeferral)
+                .enable(Feature::ToolSearchAlwaysDeferMcpTools)
                 .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
@@ -225,15 +225,15 @@ async fn token_budget_deferral_hides_expensive_app_tools() -> Result<()> {
     let tools = tool_names(&body);
     assert!(
         tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "expensive app tools should be deferred behind tool_search: {tools:?}"
+        "small app tool sets should be deferred behind tool_search: {tools:?}"
     );
     assert!(
         !tools.iter().any(|name| name == CALENDAR_CREATE_TOOL),
-        "expensive app tool should not be directly exposed: {tools:?}"
+        "app tool should not be directly exposed: {tools:?}"
     );
     assert!(
         !tools.iter().any(|name| name == SEARCH_CALENDAR_NAMESPACE),
-        "expensive app namespace should not be directly exposed: {tools:?}"
+        "app namespace should not be directly exposed: {tools:?}"
     );
 
     Ok(())
