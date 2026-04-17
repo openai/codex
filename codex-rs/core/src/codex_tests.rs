@@ -1580,6 +1580,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -1638,6 +1639,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        permission_profile: None,
         network: None,
         file_system_sandbox_policy: None,
         model: previous_model.to_string(),
@@ -3607,6 +3609,7 @@ fn op_kind_distinguishes_turn_ops() {
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
@@ -3646,6 +3649,7 @@ async fn user_turn_updates_approvals_reviewer() {
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            permission_profile: None,
             model: turn_context.model_info.slug.clone(),
             effort: config.model_reasoning_effort,
             summary: config.model_reasoning_summary,
@@ -4182,7 +4186,7 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn fail_agent_identity_registration_emits_error_and_shutdown() {
+async fn fail_agent_identity_registration_emits_error_without_shutdown() {
     let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
 
     session
@@ -4200,21 +4204,14 @@ async fn fail_agent_identity_registration_emits_error_and_shutdown() {
         }) => {
             assert_eq!(
                 message,
-                "Agent identity registration failed. Codex cannot continue while `features.use_agent_identity` is enabled: registration exploded".to_string()
+                "Agent identity registration failed while `features.use_agent_identity` is enabled: registration exploded".to_string()
             );
             assert_eq!(codex_error_info, Some(CodexErrorInfo::Other));
         }
         other => panic!("expected error event, got {other:?}"),
     }
 
-    let shutdown_event = timeout(Duration::from_secs(1), rx_event.recv())
-        .await
-        .expect("shutdown event should arrive")
-        .expect("shutdown event should be readable");
-    match shutdown_event.msg {
-        EventMsg::ShutdownComplete => {}
-        other => panic!("expected shutdown event, got {other:?}"),
-    }
+    assert!(rx_event.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -4740,6 +4737,10 @@ async fn turn_context_item_omits_legacy_equivalent_file_system_sandbox_policy() 
     let item = turn_context.to_turn_context_item();
 
     assert_eq!(item.file_system_sandbox_policy, None);
+    assert_eq!(
+        item.permission_profile,
+        Some(turn_context.permission_profile())
+    );
 }
 
 #[tokio::test]
@@ -4753,6 +4754,10 @@ async fn turn_context_item_stores_split_file_system_sandbox_policy_when_differen
     assert_eq!(
         item.file_system_sandbox_policy,
         Some(file_system_sandbox_policy)
+    );
+    assert_eq!(
+        item.permission_profile,
+        Some(turn_context.permission_profile())
     );
 }
 

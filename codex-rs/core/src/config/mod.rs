@@ -72,6 +72,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -210,6 +211,17 @@ pub struct Permissions {
     pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
     /// Whether the final Windows sandboxed child should run on a private desktop.
     pub windows_sandbox_private_desktop: bool,
+}
+
+impl Permissions {
+    /// Effective runtime permissions after config requirements and runtime
+    /// readable-root additions have been applied.
+    pub fn permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -1251,6 +1263,7 @@ pub struct ConfigOverrides {
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
+    pub permission_profile: Option<PermissionProfile>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<ServiceTier>>,
     pub config_profile: Option<String>,
@@ -1459,6 +1472,7 @@ impl Config {
             approval_policy: approval_policy_override,
             approvals_reviewer: approvals_reviewer_override,
             sandbox_mode,
+            permission_profile,
             model_provider,
             service_tier: service_tier_override,
             config_profile: config_profile_key,
@@ -1478,6 +1492,13 @@ impl Config {
             ephemeral,
             additional_writable_roots,
         } = overrides;
+
+        if sandbox_mode.is_some() && permission_profile.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "`sandbox_mode` and `permission_profile` overrides cannot both be set",
+            ));
+        }
 
         let active_profile_name = config_profile_key
             .as_ref()
@@ -1596,7 +1617,34 @@ impl Config {
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-        ) = if profiles_are_active {
+        ) = if let Some(permission_profile) = permission_profile {
+            let configured_network_proxy_config = NetworkProxyConfig::default();
+            let (mut file_system_sandbox_policy, network_sandbox_policy) =
+                permission_profile.to_runtime_permissions();
+            let mut sandbox_policy = permission_profile
+                .to_legacy_sandbox_policy(resolved_cwd.as_path())
+                .map_err(|err| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("invalid permission_profile override: {err}"),
+                    )
+                })?;
+            if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+                file_system_sandbox_policy = file_system_sandbox_policy
+                    .with_additional_writable_roots(
+                        resolved_cwd.as_path(),
+                        &additional_writable_roots,
+                    );
+                sandbox_policy = file_system_sandbox_policy
+                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
+            }
+            (
+                configured_network_proxy_config,
+                sandbox_policy,
+                file_system_sandbox_policy,
+                network_sandbox_policy,
+            )
+        } else if profiles_are_active {
             let permissions = cfg.permissions.as_ref().ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
