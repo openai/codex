@@ -1951,6 +1951,12 @@
         "callId": {
           "type": "string"
         },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "threadId": {
           "type": "string"
         },
@@ -7278,6 +7284,12 @@
           "inputSchema": true,
           "name": {
             "type": "string"
+          },
+          "namespace": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -13571,6 +13583,12 @@
               },
               "id": {
                 "type": "string"
+              },
+              "namespace": {
+                "type": [
+                  "null",
+                  "string"
+                ]
               },
               "status": {
                 "$ref": "#/definitions/v2/DynamicToolCallStatus"

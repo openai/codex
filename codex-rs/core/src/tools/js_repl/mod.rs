@@ -1587,7 +1587,11 @@ impl JsReplManager {
                         ResponsesApiNamespaceTool::Function(tool) => {
                             let tool_name =
                                 ToolName::namespaced(namespace.name.clone(), tool.name.clone());
-                            (tool_name.display() == req.tool_name).then_some(tool_name)
+                            let code_mode_name =
+                                codex_tools::code_mode_name_for_tool_name(&tool_name);
+                            (code_mode_name == req.tool_name
+                                || tool_name.display() == req.tool_name)
+                                .then_some(tool_name)
                         }
                     })
                 }

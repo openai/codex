@@ -209,6 +209,7 @@ mod tests {
     #[test]
     fn mixed_search_results_coalesce_mcp_namespaces() {
         let dynamic_tools = vec![DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
             name: "automation_update".to_string(),
             description: "Create, update, view, or delete recurring automations.".to_string(),
             input_schema: serde_json::json!({
@@ -277,21 +278,25 @@ mod tests {
                         }),
                     ],
                 }),
-                ToolSearchOutputTool::Function(ResponsesApiTool {
-                    name: "automation_update".to_string(),
-                    description: "Create, update, view, or delete recurring automations."
-                        .to_string(),
-                    strict: false,
-                    defer_loading: Some(true),
-                    parameters: codex_tools::JsonSchema::object(
-                        std::collections::BTreeMap::from([(
-                            "mode".to_string(),
-                            codex_tools::JsonSchema::string(/*description*/ None),
-                        )]),
-                        Some(vec!["mode".to_string()]),
-                        Some(false.into()),
-                    ),
-                    output_schema: None,
+                ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+                    name: "codex_app".to_string(),
+                    description: "Tools provided by the current Codex thread.".to_string(),
+                    tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                        name: "automation_update".to_string(),
+                        description: "Create, update, view, or delete recurring automations."
+                            .to_string(),
+                        strict: false,
+                        defer_loading: Some(true),
+                        parameters: codex_tools::JsonSchema::object(
+                            std::collections::BTreeMap::from([(
+                                "mode".to_string(),
+                                codex_tools::JsonSchema::string(/*description*/ None),
+                            )]),
+                            Some(vec!["mode".to_string()]),
+                            Some(false.into()),
+                        ),
+                        output_schema: None,
+                    })],
                 }),
             ],
         );

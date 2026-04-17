@@ -37,7 +37,7 @@ pub fn augment_tool_spec_for_code_mode(spec: ToolSpec) -> ToolSpec {
                         let tool_name =
                             ToolName::namespaced(namespace.name.clone(), tool.name.clone());
                         let definition = CodeModeToolDefinition {
-                            name: tool_name.display(),
+                            name: code_mode_name_for_tool_name(&tool_name),
                             tool_name,
                             description: tool.description.clone(),
                             kind: CodeModeToolKind::Function,
@@ -208,7 +208,7 @@ fn code_mode_tool_definitions_for_spec(spec: &ToolSpec) -> Vec<CodeModeToolDefin
                 ResponsesApiNamespaceTool::Function(tool) => {
                     let tool_name = ToolName::namespaced(namespace.name.clone(), tool.name.clone());
                     CodeModeToolDefinition {
-                        name: tool_name.display(),
+                        name: code_mode_name_for_tool_name(&tool_name),
                         tool_name,
                         description: tool.description.clone(),
                         kind: CodeModeToolKind::Function,
@@ -222,6 +222,18 @@ fn code_mode_tool_definitions_for_spec(spec: &ToolSpec) -> Vec<CodeModeToolDefin
         | ToolSpec::ImageGeneration { .. }
         | ToolSpec::ToolSearch { .. }
         | ToolSpec::WebSearch { .. } => Vec::new(),
+    }
+}
+
+pub fn code_mode_name_for_tool_name(tool_name: &ToolName) -> String {
+    if tool_name
+        .namespace
+        .as_deref()
+        .is_some_and(|namespace| namespace.starts_with("mcp__"))
+    {
+        tool_name.display()
+    } else {
+        tool_name.name.clone()
     }
 }
 

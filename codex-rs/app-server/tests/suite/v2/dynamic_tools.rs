@@ -63,6 +63,7 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
         "additionalProperties": false,
     });
     let dynamic_tool = DynamicToolSpec {
+        namespace: None,
         name: "demo_tool".to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: input_schema.clone(),
@@ -136,6 +137,7 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
+        namespace: Some("codex_app".to_string()),
         name: "hidden_tool".to_string(),
         description: "Hidden dynamic tool".to_string(),
         input_schema: json!({
@@ -222,6 +224,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
+        namespace: None,
         name: tool_name.to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: json!({
@@ -273,6 +276,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     assert_eq!(started.turn_id, turn_id.clone());
     let ThreadItem::DynamicToolCall {
         id,
+        namespace,
         tool,
         arguments,
         status,
@@ -284,6 +288,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         panic!("expected dynamic tool call item");
     };
     assert_eq!(id, call_id);
+    assert_eq!(namespace, None);
     assert_eq!(tool, tool_name);
     assert_eq!(arguments, tool_args);
     assert_eq!(status, DynamicToolCallStatus::InProgress);
@@ -306,6 +311,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         thread_id: thread_id.clone(),
         turn_id: turn_id.clone(),
         call_id: call_id.to_string(),
+        namespace: None,
         tool: tool_name.to_string(),
         arguments: tool_args.clone(),
     };
@@ -326,6 +332,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     assert_eq!(completed.turn_id, turn_id);
     let ThreadItem::DynamicToolCall {
         id,
+        namespace,
         tool,
         arguments,
         status,
@@ -337,6 +344,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         panic!("expected dynamic tool call item");
     };
     assert_eq!(id, call_id);
+    assert_eq!(namespace, None);
     assert_eq!(tool, tool_name);
     assert_eq!(arguments, tool_args);
     assert_eq!(status, DynamicToolCallStatus::Completed);
@@ -391,6 +399,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
+        namespace: None,
         name: tool_name.to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: json!({
@@ -454,6 +463,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
         thread_id,
         turn_id: turn_id.clone(),
         call_id: call_id.to_string(),
+        namespace: None,
         tool: tool_name.to_string(),
         arguments: tool_args,
     };

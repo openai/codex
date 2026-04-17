@@ -608,6 +608,8 @@ pub struct ToolsV2 {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolSpec {
+    #[ts(optional)]
+    pub namespace: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
@@ -618,6 +620,7 @@ pub struct DynamicToolSpec {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DynamicToolSpecDe {
+    namespace: Option<String>,
     name: String,
     description: String,
     input_schema: JsonValue,
@@ -631,6 +634,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
         D: serde::Deserializer<'de>,
     {
         let DynamicToolSpecDe {
+            namespace,
             name,
             description,
             input_schema,
@@ -639,6 +643,7 @@ impl<'de> Deserialize<'de> for DynamicToolSpec {
         } = DynamicToolSpecDe::deserialize(deserializer)?;
 
         Ok(Self {
+            namespace,
             name,
             description,
             input_schema,
@@ -4680,6 +4685,7 @@ pub enum ThreadItem {
     #[ts(rename_all = "camelCase")]
     DynamicToolCall {
         id: String,
+        namespace: Option<String>,
         tool: String,
         arguments: JsonValue,
         status: DynamicToolCallStatus,
@@ -6405,6 +6411,7 @@ pub struct DynamicToolCallParams {
     pub thread_id: String,
     pub turn_id: String,
     pub call_id: String,
+    pub namespace: Option<String>,
     pub tool: String,
     pub arguments: JsonValue,
 }
@@ -8783,6 +8790,7 @@ mod tests {
         assert_eq!(
             actual,
             DynamicToolSpec {
+                namespace: None,
                 name: "lookup_ticket".to_string(),
                 description: "Fetch a ticket".to_string(),
                 input_schema: json!({

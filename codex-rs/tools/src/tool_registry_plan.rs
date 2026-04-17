@@ -8,6 +8,7 @@ use crate::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::TOOL_SEARCH_TOOL_NAME;
 use crate::TOOL_SUGGEST_TOOL_NAME;
 use crate::ToolHandlerKind;
+use crate::ToolName;
 use crate::ToolRegistryPlan;
 use crate::ToolRegistryPlanParams;
 use crate::ToolSearchSource;
@@ -558,12 +559,22 @@ pub fn build_tool_registry_plan(
     for tool in params.dynamic_tools {
         match dynamic_tool_to_responses_api_tool(tool) {
             Ok(converted_tool) => {
+                let handler_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
+                let spec = if let Some(namespace) = tool.namespace.as_ref() {
+                    ToolSpec::Namespace(ResponsesApiNamespace {
+                        name: namespace.clone(),
+                        description: default_namespace_description(namespace),
+                        tools: vec![ResponsesApiNamespaceTool::Function(converted_tool)],
+                    })
+                } else {
+                    ToolSpec::Function(converted_tool)
+                };
                 plan.push_spec(
-                    ToolSpec::Function(converted_tool),
+                    spec,
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
-                plan.register_handler(tool.name.clone(), ToolHandlerKind::DynamicTool);
+                plan.register_handler(handler_name, ToolHandlerKind::DynamicTool);
             }
             Err(error) => {
                 tracing::error!(

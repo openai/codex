@@ -4,6 +4,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 
 pub fn parse_dynamic_tool(tool: &DynamicToolSpec) -> Result<ToolDefinition, serde_json::Error> {
     let DynamicToolSpec {
+        namespace: _,
         name,
         description,
         input_schema,
