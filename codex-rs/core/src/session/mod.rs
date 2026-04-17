@@ -812,6 +812,28 @@ async fn thread_title_from_state_db(
         .flatten()
 }
 
+struct CancelTokenOnDrop {
+    token: Option<CancellationToken>,
+}
+
+impl CancelTokenOnDrop {
+    fn new(token: CancellationToken) -> Self {
+        Self { token: Some(token) }
+    }
+
+    fn disarm(&mut self) {
+        self.token = None;
+    }
+}
+
+impl Drop for CancelTokenOnDrop {
+    fn drop(&mut self) {
+        if let Some(token) = self.token.take() {
+            token.cancel();
+        }
+    }
+}
+
 impl Session {
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
@@ -1894,12 +1916,13 @@ impl Session {
     }
 
     pub async fn request_permissions(
-        &self,
-        turn_context: &TurnContext,
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
         call_id: String,
         args: RequestPermissionsArgs,
+        cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
-        match turn_context.approval_policy.value() {
+        match turn_context.as_ref().approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
                     permissions: RequestPermissionProfile::default(),
@@ -1920,6 +1943,71 @@ impl Session {
             | AskForApproval::Granular(_) => {}
         }
 
+        if crate::guardian::routes_approval_to_guardian(turn_context.as_ref()) {
+            let requested_permissions = args.permissions;
+            let originating_turn_state = {
+                let active = self.active_turn.lock().await;
+                active.as_ref().map(|active| Arc::clone(&active.turn_state))
+            };
+            let review_id = crate::guardian::new_guardian_review_id();
+            let session = Arc::clone(self);
+            let turn = Arc::clone(turn_context);
+            let request = crate::guardian::GuardianApprovalRequest::RequestPermissions {
+                id: call_id,
+                turn_id: turn_context.sub_id.clone(),
+                reason: args.reason,
+                permissions: requested_permissions.clone(),
+            };
+            let review_cancel_token = cancellation_token.child_token();
+            let mut cancel_review_on_drop = CancelTokenOnDrop::new(review_cancel_token.clone());
+            let review_rx = crate::guardian::spawn_approval_request_review_with_cancel(
+                session,
+                turn,
+                review_id,
+                request,
+                /*retry_reason*/ None,
+                review_cancel_token,
+            );
+            let decision = review_rx.await.unwrap_or(ReviewDecision::Abort);
+            cancel_review_on_drop.disarm();
+            let response = match decision {
+                ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                    RequestPermissionsResponse {
+                        permissions: requested_permissions,
+                        scope: PermissionGrantScope::Turn,
+                    }
+                }
+                ReviewDecision::ApprovedForSession => RequestPermissionsResponse {
+                    permissions: requested_permissions,
+                    scope: PermissionGrantScope::Session,
+                },
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment,
+                } => match network_policy_amendment.action {
+                    NetworkPolicyRuleAction::Allow => RequestPermissionsResponse {
+                        permissions: requested_permissions,
+                        scope: PermissionGrantScope::Turn,
+                    },
+                    NetworkPolicyRuleAction::Deny => RequestPermissionsResponse {
+                        permissions: RequestPermissionProfile::default(),
+                        scope: PermissionGrantScope::Turn,
+                    },
+                },
+                ReviewDecision::Abort | ReviewDecision::Denied | ReviewDecision::TimedOut => {
+                    RequestPermissionsResponse {
+                        permissions: RequestPermissionProfile::default(),
+                        scope: PermissionGrantScope::Turn,
+                    }
+                }
+            };
+            self.record_granted_request_permissions_for_turn(
+                &response,
+                originating_turn_state.as_ref(),
+            )
+            .await;
+            return Some(response);
+        }
+
         let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
@@ -1935,16 +2023,13 @@ impl Session {
             warn!("Overwriting existing pending request_permissions for call_id: {call_id}");
         }
 
-        // TODO(ccunningham): Support auto-review for request_permissions /
-        // with_additional_permissions. V0 still routes this surface through
-        // the existing manual RequestPermissions event flow.
         let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
             call_id,
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
             permissions: args.permissions,
         });
-        self.send_event(turn_context, event).await;
+        self.send_event(turn_context.as_ref(), event).await;
         rx_response.await.ok()
     }
 
@@ -2010,31 +2095,24 @@ impl Session {
         call_id: &str,
         response: RequestPermissionsResponse,
     ) {
-        let mut granted_for_session = None;
-        let entry = {
+        let (entry, originating_turn_state) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
                     let entry = ts.remove_pending_request_permissions(call_id);
-                    if entry.is_some() && !response.permissions.is_empty() {
-                        match response.scope {
-                            PermissionGrantScope::Turn => {
-                                ts.record_granted_permissions(response.permissions.clone().into());
-                            }
-                            PermissionGrantScope::Session => {
-                                granted_for_session = Some(response.permissions.clone());
-                            }
-                        }
-                    }
-                    entry
+                    let originating_turn_state = entry.as_ref().map(|_| Arc::clone(&at.turn_state));
+                    (entry, originating_turn_state)
                 }
-                None => None,
+                None => (None, None),
             }
         };
-        if let Some(permissions) = granted_for_session {
-            let mut state = self.state.lock().await;
-            state.record_granted_permissions(permissions.into());
+        if entry.is_some() {
+            self.record_granted_request_permissions_for_turn(
+                &response,
+                originating_turn_state.as_ref(),
+            )
+            .await;
         }
         match entry {
             Some(tx_response) => {
@@ -2042,6 +2120,28 @@ impl Session {
             }
             None => {
                 warn!("No pending request_permissions found for call_id: {call_id}");
+            }
+        }
+    }
+
+    async fn record_granted_request_permissions_for_turn(
+        &self,
+        response: &RequestPermissionsResponse,
+        originating_turn_state: Option<&Arc<Mutex<crate::state::TurnState>>>,
+    ) {
+        if response.permissions.is_empty() {
+            return;
+        }
+        match response.scope {
+            PermissionGrantScope::Turn => {
+                if let Some(turn_state) = originating_turn_state {
+                    let mut ts = turn_state.lock().await;
+                    ts.record_granted_permissions(response.permissions.clone().into());
+                }
+            }
+            PermissionGrantScope::Session => {
+                let mut state = self.state.lock().await;
+                state.record_granted_permissions(response.permissions.clone().into());
             }
         }
     }

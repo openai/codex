@@ -11,6 +11,7 @@ use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::session::Session;
@@ -333,6 +334,36 @@ pub(crate) async fn review_approval_request_with_cancel(
         Some(cancel_token),
     ))
     .await
+}
+
+pub(crate) fn spawn_approval_request_review_with_cancel(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    review_id: String,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    cancel_token: CancellationToken,
+) -> oneshot::Receiver<ReviewDecision> {
+    let (tx, rx) = oneshot::channel();
+    std::thread::spawn(move || {
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            let _ = tx.send(ReviewDecision::Denied);
+            return;
+        };
+        let decision = runtime.block_on(review_approval_request_with_cancel(
+            &session,
+            &turn,
+            review_id,
+            request,
+            retry_reason,
+            cancel_token,
+        ));
+        let _ = tx.send(decision);
+    });
+    rx
 }
 
 /// Runs the guardian in a locked-down reusable review session.
