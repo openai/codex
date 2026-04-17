@@ -1199,6 +1199,43 @@ async fn bang_after_user_turn_submit_before_turn_started_does_not_mark_standalon
 }
 
 #[tokio::test]
+async fn completion_without_seen_shell_start_clears_pending_marker() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.pending_standalone_user_shell_command = true;
+    chat.queued_user_messages
+        .push_back(UserMessage::from("follow up".to_string()));
+
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "shell-turn".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: Some(0),
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert!(!chat.pending_standalone_user_shell_command);
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "follow up".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued follow-up submit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

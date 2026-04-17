@@ -2379,6 +2379,9 @@ impl ChatWidget {
         if should_clear {
             self.standalone_user_shell_turn_id = None;
         }
+        if self.standalone_user_shell_turn_id.is_none() {
+            self.pending_standalone_user_shell_command = false;
+        }
     }
 
     fn should_hold_user_input_for_standalone_shell_turn(&self) -> bool {
@@ -2860,6 +2863,9 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     fn finalize_turn(&mut self) {
+        self.pending_turn_start_after_submit = false;
+        self.pending_standalone_user_shell_command = false;
+        self.standalone_user_shell_turn_id = None;
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
