@@ -749,8 +749,14 @@ deny_read = ["./sensitive", "../shared/secret.txt"]
     )
     .await?;
 
+    let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
-    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &requirements_file,
+    )
+    .await?;
 
     let permissions = config_requirements_toml
         .permissions
@@ -775,7 +781,7 @@ deny_read = ["./sensitive", "../shared/secret.txt"]
     assert_eq!(
         permissions.source,
         RequirementSource::SystemRequirementsToml {
-            file: AbsolutePathBuf::try_from(requirements_file)?,
+            file: requirements_file,
         }
     );
 
@@ -797,8 +803,14 @@ deny_read = ["./sensitive/**/*.txt"]
     )
     .await?;
 
+    let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
-    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &requirements_file,
+    )
+    .await?;
 
     let permissions = config_requirements_toml
         .permissions
@@ -824,7 +836,7 @@ deny_read = ["./sensitive/**/*.txt"]
     assert_eq!(
         permissions.source,
         RequirementSource::SystemRequirementsToml {
-            file: AbsolutePathBuf::try_from(requirements_file)?,
+            file: requirements_file,
         }
     );
 
