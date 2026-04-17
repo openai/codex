@@ -879,6 +879,13 @@ pub(crate) struct TurnContext {
     pub(crate) turn_timing_state: Arc<TurnTimingState>,
 }
 impl TurnContext {
+    pub(crate) fn permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
+
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
         self.model_info.context_window.map(|context_window| {
@@ -1013,10 +1020,7 @@ impl TurnContext {
         &self,
         additional_permissions: Option<PermissionProfile>,
     ) -> FileSystemSandboxContext {
-        let base_permissions = PermissionProfile::from_runtime_permissions(
-            &self.file_system_sandbox_policy,
-            self.network_sandbox_policy,
-        );
+        let base_permissions = self.permission_profile();
         let permissions =
             merge_permission_profiles(Some(&base_permissions), additional_permissions.as_ref())
                 .unwrap_or(base_permissions);
@@ -1123,6 +1127,191 @@ async fn thread_title_from_state_db(
         .await
         .ok()
         .flatten()
+}
+
+#[derive(Clone)]
+pub(crate) struct SessionConfiguration {
+    /// Provider identifier ("openai", "openrouter", ...).
+    provider: ModelProviderInfo,
+
+    collaboration_mode: CollaborationMode,
+    model_reasoning_summary: Option<ReasoningSummaryConfig>,
+    service_tier: Option<ServiceTier>,
+
+    /// Developer instructions that supplement the base instructions.
+    developer_instructions: Option<String>,
+
+    /// Model instructions that are appended to the base instructions.
+    user_instructions: Option<String>,
+
+    /// Personality preference for the model.
+    personality: Option<Personality>,
+
+    /// Base instructions for the session.
+    base_instructions: String,
+
+    /// Compact prompt override.
+    compact_prompt: Option<String>,
+
+    /// When to escalate for approval for execution
+    approval_policy: Constrained<AskForApproval>,
+    approvals_reviewer: ApprovalsReviewer,
+    /// How to sandbox commands executed in the system
+    sandbox_policy: Constrained<SandboxPolicy>,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    windows_sandbox_level: WindowsSandboxLevel,
+
+    /// Absolute working directory that should be treated as the *root* of the
+    /// session. All relative paths supplied by the model as well as the
+    /// execution sandbox are resolved against this directory **instead** of
+    /// the process-wide current working directory.
+    cwd: AbsolutePathBuf,
+    /// Directory containing all Codex state for this session.
+    codex_home: AbsolutePathBuf,
+    /// Optional user-facing name for the thread, updated during the session.
+    thread_name: Option<String>,
+
+    // TODO(pakrym): Remove config from here
+    original_config_do_not_use: Arc<Config>,
+    /// Optional service name tag for session metrics.
+    metrics_service_name: Option<String>,
+    app_server_client_name: Option<String>,
+    app_server_client_version: Option<String>,
+    /// Source of the session (cli, vscode, exec, mcp, ...)
+    session_source: SessionSource,
+    dynamic_tools: Vec<DynamicToolSpec>,
+    persist_extended_history: bool,
+    inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    user_shell_override: Option<shell::Shell>,
+}
+
+impl SessionConfiguration {
+    pub(crate) fn codex_home(&self) -> &AbsolutePathBuf {
+        &self.codex_home
+    }
+
+    fn permission_profile(&self) -> PermissionProfile {
+        PermissionProfile::from_runtime_permissions(
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+        )
+    }
+
+    fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
+        ThreadConfigSnapshot {
+            model: self.collaboration_mode.model().to_string(),
+            model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
+            service_tier: self.service_tier,
+            approval_policy: self.approval_policy.value(),
+            approvals_reviewer: self.approvals_reviewer,
+            sandbox_policy: self.sandbox_policy.get().clone(),
+            permission_profile: self.permission_profile(),
+            cwd: self.cwd.clone(),
+            ephemeral: self.original_config_do_not_use.ephemeral,
+            reasoning_effort: self.collaboration_mode.reasoning_effort(),
+            personality: self.personality,
+            session_source: self.session_source.clone(),
+        }
+    }
+
+    pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
+        let mut next_configuration = self.clone();
+        let file_system_policy_matches_legacy = self.file_system_sandbox_policy
+            == FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                self.sandbox_policy.get(),
+                &self.cwd,
+            );
+        if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
+            next_configuration.collaboration_mode = collaboration_mode;
+        }
+        if let Some(summary) = updates.reasoning_summary {
+            next_configuration.model_reasoning_summary = Some(summary);
+        }
+        if let Some(service_tier) = updates.service_tier {
+            next_configuration.service_tier = service_tier;
+        }
+        if let Some(personality) = updates.personality {
+            next_configuration.personality = Some(personality);
+        }
+        if let Some(approval_policy) = updates.approval_policy {
+            next_configuration.approval_policy.set(approval_policy)?;
+        }
+        if let Some(approvals_reviewer) = updates.approvals_reviewer {
+            next_configuration.approvals_reviewer = approvals_reviewer;
+        }
+        let mut sandbox_policy_changed = false;
+        if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
+            next_configuration.sandbox_policy.set(sandbox_policy)?;
+            next_configuration.network_sandbox_policy =
+                NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
+            sandbox_policy_changed = true;
+        }
+        if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
+            next_configuration.windows_sandbox_level = windows_sandbox_level;
+        }
+
+        let absolute_cwd = updates
+            .cwd
+            .as_ref()
+            .map(|cwd| {
+                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
+                    cwd.as_path(),
+                ))
+                .unwrap_or_else(|e| {
+                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
+                    self.cwd.clone()
+                })
+            })
+            .unwrap_or_else(|| self.cwd.clone());
+
+        let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
+        next_configuration.cwd = absolute_cwd;
+        if sandbox_policy_changed {
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
+                    next_configuration.sandbox_policy.get(),
+                    &next_configuration.cwd,
+                    &self.file_system_sandbox_policy,
+                );
+        } else if cwd_changed && file_system_policy_matches_legacy {
+            // Preserve richer split policies across cwd-only updates; only
+            // rederive when the session is already using the legacy bridge.
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                    next_configuration.sandbox_policy.get(),
+                    &next_configuration.cwd,
+                );
+        }
+        if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
+            next_configuration.app_server_client_name = Some(app_server_client_name);
+        }
+        if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
+            next_configuration.app_server_client_version = Some(app_server_client_version);
+        }
+        Ok(next_configuration)
+    }
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct SessionSettingsUpdate {
+    pub(crate) cwd: Option<PathBuf>,
+    pub(crate) approval_policy: Option<AskForApproval>,
+    pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
+    pub(crate) sandbox_policy: Option<SandboxPolicy>,
+    pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
+    pub(crate) collaboration_mode: Option<CollaborationMode>,
+    pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
+    pub(crate) service_tier: Option<Option<ServiceTier>>,
+    pub(crate) final_output_json_schema: Option<Option<Value>>,
+    pub(crate) personality: Option<Personality>,
+    pub(crate) app_server_client_name: Option<String>,
+    pub(crate) app_server_client_version: Option<String>,
+}
+
+pub(crate) struct AppServerClientMetadata {
+    pub(crate) client_name: Option<String>,
+    pub(crate) client_version: Option<String>,
 }
 
 impl Session {
