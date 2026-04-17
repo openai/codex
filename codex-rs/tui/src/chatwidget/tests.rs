@@ -76,6 +76,7 @@ pub(super) use codex_app_server_protocol::PatchChangeKind;
 pub(super) use codex_app_server_protocol::PermissionsRequestApprovalParams as AppServerPermissionsRequestApprovalParams;
 pub(super) use codex_app_server_protocol::PluginAuthPolicy;
 pub(super) use codex_app_server_protocol::PluginDetail;
+pub(super) use codex_app_server_protocol::PluginDetailsUnavailableReason;
 pub(super) use codex_app_server_protocol::PluginInstallPolicy;
 pub(super) use codex_app_server_protocol::PluginInterface;
 pub(super) use codex_app_server_protocol::PluginListResponse;

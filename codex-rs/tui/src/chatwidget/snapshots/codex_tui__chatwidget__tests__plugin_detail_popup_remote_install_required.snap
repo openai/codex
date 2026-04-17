@@ -1,0 +1,18 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: strip_osc8_for_snapshot(&popup)
+---
+  Plugins
+  Toolkit · Can be installed · ChatGPT Marketplace
+  Data shared with this app is subject to the app's terms of service and privacy policy. Learn
+  more.
+  Remote tools.
+  Remote Git plugin. Install it to download and view bundled skills, apps, and MCP servers.
+
+› 1. Back to plugins  Return to the plugin list.
+  2. Install plugin   Install this plugin now.
+     Skills           Install required to view bundled skills.
+     Apps             Install required to view bundled apps.
+     MCP Servers      Install required to view bundled MCP servers.
+
+  Press esc to close.
