@@ -10,6 +10,7 @@ import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
+import type { TurnEnvironmentParams } from "./TurnEnvironmentParams";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
@@ -51,4 +52,8 @@ outputSchema?: JsonValue | null, /**
  * For `collaboration_mode.settings.developer_instructions`, `null` means
  * "use the built-in instructions for the selected mode".
  */
-collaborationMode?: CollaborationMode | null};
+collaborationMode?: CollaborationMode | null, /**
+ * Optional ordered environment ids with per-environment cwd overrides for
+ * this turn. For now only the first entry is used to drive execution.
+ */
+environments?: Array<TurnEnvironmentParams> | null};

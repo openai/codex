@@ -7,6 +7,7 @@ import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxMode } from "./SandboxMode";
+import type { ThreadEnvironmentParams } from "./ThreadEnvironmentParams";
 import type { ThreadStartSource } from "./ThreadStartSource";
 
 export type ThreadStartParams = {model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
@@ -14,11 +15,11 @@ export type ThreadStartParams = {model?: string | null, modelProvider?: string |
  * and subsequent turns.
  */
 approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, sessionStartSource?: ThreadStartSource | null, /**
- * Optional ordered environment ids to use for this thread. For now only
- * the first id is used. When omitted or empty, the default environment is
+ * Optional ordered environments to use for this thread. For now only the
+ * first entry is used. When omitted or empty, the default environment is
  * used.
  */
-environmentIds?: Array<string> | null, /**
+environments?: Array<ThreadEnvironmentParams> | null, /**
  * If true, opt into emitting raw Responses API items on the event stream.
  * This is for internal use only (e.g. Codex Cloud).
  */

@@ -8817,6 +8817,7 @@ mod tests {
             output_schema: None,
             collaboration_mode: None,
             personality: None,
+            environments: None,
         };
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");

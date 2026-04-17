@@ -377,6 +377,23 @@
       ],
       "type": "object"
     },
+    "TurnEnvironmentParams": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "environmentId"
+      ],
+      "type": "object"
+    },
     "UserInput": {
       "oneOf": [
         {
@@ -538,6 +555,16 @@
         }
       ],
       "description": "Override the reasoning effort for this turn and subsequent turns."
+    },
+    "environments": {
+      "description": "Optional ordered environment ids with per-environment cwd overrides for this turn. For now only the first entry is used to drive execution.",
+      "items": {
+        "$ref": "#/definitions/TurnEnvironmentParams"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "input": {
       "items": {

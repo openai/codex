@@ -256,9 +256,7 @@ async fn thread_start_rejects_explicit_remote_environment_when_not_configured() 
     .await??;
 
     assert!(
-        err.error
-            .message
-            .contains("unknown environment id: remote"),
+        err.error.message.contains("unknown environment id: remote"),
         "unexpected error message: {}",
         err.error.message
     );

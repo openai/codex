@@ -102,6 +102,23 @@
       ],
       "type": "string"
     },
+    "ThreadEnvironmentParams": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "environmentId"
+      ],
+      "type": "object"
+    },
     "ThreadStartSource": {
       "enum": [
         "startup",
@@ -157,10 +174,10 @@
         "null"
       ]
     },
-    "environmentIds": {
-      "description": "Optional ordered environment ids to use for this thread. For now only the first id is used. When omitted or empty, the default environment is used.",
+    "environments": {
+      "description": "Optional ordered environments to use for this thread. For now only the first entry is used. When omitted or empty, the default environment is used.",
       "items": {
-        "type": "string"
+        "$ref": "#/definitions/ThreadEnvironmentParams"
       },
       "type": [
         "array",

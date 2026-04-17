@@ -10734,6 +10734,23 @@
       "title": "ThreadCompactStartResponse",
       "type": "object"
     },
+    "ThreadEnvironmentParams": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "environmentId"
+      ],
+      "type": "object"
+    },
     "ThreadForkParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -12427,10 +12444,10 @@
             "null"
           ]
         },
-        "environmentIds": {
-          "description": "Optional ordered environment ids to use for this thread. For now only the first id is used. When omitted or empty, the default environment is used.",
+        "environments": {
+          "description": "Optional ordered environments to use for this thread. For now only the first entry is used. When omitted or empty, the default environment is used.",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/ThreadEnvironmentParams"
           },
           "type": [
             "array",
@@ -12996,6 +13013,23 @@
       "title": "TurnDiffUpdatedNotification",
       "type": "object"
     },
+    "TurnEnvironmentParams": {
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "environmentId"
+      ],
+      "type": "object"
+    },
     "TurnError": {
       "properties": {
         "additionalDetails": {
@@ -13141,6 +13175,16 @@
             }
           ],
           "description": "Override the reasoning effort for this turn and subsequent turns."
+        },
+        "environments": {
+          "description": "Optional ordered environment ids with per-environment cwd overrides for this turn. For now only the first entry is used to drive execution.",
+          "items": {
+            "$ref": "#/definitions/TurnEnvironmentParams"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "input": {
           "items": {
