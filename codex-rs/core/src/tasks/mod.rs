@@ -622,7 +622,6 @@ impl Session {
                 && at.remove_task(&turn_context.sub_id)
             {
                 let turn_state = Arc::clone(&at.turn_state);
-                *active = None;
                 Some(turn_state)
             } else {
                 None
@@ -751,6 +750,14 @@ impl Session {
             .await
         {
             warn!("failed to account thread goal progress at turn end: {err}");
+        }
+        {
+            let mut active = self.active_turn.lock().await;
+            if let Some(active_turn) = active.as_ref()
+                && active_turn.tasks.is_empty()
+            {
+                *active = None;
+            }
         }
         let session = Arc::clone(self);
         tokio::spawn(async move {

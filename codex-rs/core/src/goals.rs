@@ -501,6 +501,25 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn account_active_thread_goal_progress(
+        self: &Arc<Self>,
+    ) -> anyhow::Result<()> {
+        let turn_context = {
+            let active = self.active_turn.lock().await;
+            active.as_ref().and_then(|active_turn| {
+                active_turn
+                    .tasks
+                    .first()
+                    .map(|(_, task)| Arc::clone(&task.turn_context))
+            })
+        };
+        let Some(turn_context) = turn_context else {
+            return Ok(());
+        };
+        self.account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Tool)
+            .await
+    }
+
     async fn account_thread_goal_wall_clock_usage(
         &self,
         state_db: &StateDbHandle,
