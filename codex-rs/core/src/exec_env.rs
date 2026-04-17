@@ -7,6 +7,40 @@ use std::collections::HashSet;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 
+#[cfg(windows)]
+const CORE_VARS: &[&str] = &[
+    // Core path resolution
+    "PATH",
+    "PATHEXT",
+    // Shell and system roots
+    "COMSPEC",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    // User context and profiles
+    "HOME",
+    "USERNAME",
+    "USERDOMAIN",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    // Program locations
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "PROGRAMDATA",
+    // App data and caches
+    "LOCALAPPDATA",
+    "APPDATA",
+    // Temp locations
+    "TEMP",
+    "TMP",
+];
+
+#[cfg(not(windows))]
+const CORE_VARS: &[&str] = &[
+    "HOME", "LOGNAME", "PATH", "SHELL", "USER", "USERNAME", "TMPDIR", "TEMP", "TMP",
+];
+
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
 /// `env_clear()` to ensure no unintended variables are leaked to the spawned
@@ -38,9 +72,6 @@ where
         ShellEnvironmentPolicyInherit::All => vars.into_iter().collect(),
         ShellEnvironmentPolicyInherit::None => HashMap::new(),
         ShellEnvironmentPolicyInherit::Core => {
-            const CORE_VARS: &[&str] = &[
-                "HOME", "LOGNAME", "PATH", "SHELL", "USER", "USERNAME", "TMPDIR", "TEMP", "TMP",
-            ];
             let allow: HashSet<&str> = CORE_VARS.iter().copied().collect();
             let is_core_var = |name: &str| {
                 if cfg!(target_os = "windows") {

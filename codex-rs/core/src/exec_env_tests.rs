@@ -172,6 +172,9 @@ fn test_core_inherit_respects_case_insensitive_names_on_windows() {
     let vars = make_vars(&[
         ("Path", "C:\\Windows\\System32"),
         ("TEMP", "C:\\Temp"),
+        ("SystemRoot", "C:\\Windows"),
+        ("APPDATA", "C:\\Users\\codex\\AppData\\Roaming"),
+        ("ProgramFiles", "C:\\Program Files"),
         ("FOO", "bar"),
     ]);
 
@@ -186,6 +189,9 @@ fn test_core_inherit_respects_case_insensitive_names_on_windows() {
     let mut expected: HashMap<String, String> = hashmap! {
         "Path".to_string() => "C:\\Windows\\System32".to_string(),
         "TEMP".to_string() => "C:\\Temp".to_string(),
+        "SystemRoot".to_string() => "C:\\Windows".to_string(),
+        "APPDATA".to_string() => "C:\\Users\\codex\\AppData\\Roaming".to_string(),
+        "ProgramFiles".to_string() => "C:\\Program Files".to_string(),
     };
     expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
 
