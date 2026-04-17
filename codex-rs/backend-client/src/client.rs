@@ -525,7 +525,10 @@ impl Client {
                 self.base_url
             ),
             PathStyle::ChatGptApi => {
-                format!("{}/accounts/send_add_credits_nudge_email", self.base_url)
+                format!(
+                    "{}/wham/accounts/send_add_credits_nudge_email",
+                    self.base_url
+                )
             }
         }
     }
@@ -835,7 +838,7 @@ mod tests {
         };
         assert_eq!(
             chatgpt_client.send_add_credits_nudge_email_url(),
-            "https://chatgpt.com/backend-api/accounts/send_add_credits_nudge_email"
+            "https://chatgpt.com/backend-api/wham/accounts/send_add_credits_nudge_email"
         );
 
         assert_eq!(
