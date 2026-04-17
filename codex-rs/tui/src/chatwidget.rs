@@ -7662,13 +7662,7 @@ impl ChatWidget {
     fn terminal_title_preview_data(&mut self) -> StatusSurfacePreviewData {
         let mut preview_data = self.status_surface_preview_data();
         let now = Instant::now();
-        for item in [
-            TerminalTitleItem::Project,
-            TerminalTitleItem::Thread,
-            TerminalTitleItem::GitBranch,
-            TerminalTitleItem::Model,
-            TerminalTitleItem::TaskProgress,
-        ] {
+        for item in TerminalTitleItem::iter() {
             let Some(preview_item) = item.preview_item() else {
                 continue;
             };
@@ -7679,7 +7673,6 @@ impl ChatWidget {
         }
         preview_data
     }
-
     fn open_theme_picker(&mut self) {
         let codex_home = crate::legacy_core::config::find_codex_home().ok();
         let terminal_width = self

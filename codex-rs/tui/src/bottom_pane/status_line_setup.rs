@@ -49,6 +49,7 @@ use crate::render::renderable::Renderable;
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
     /// The current model name.
+    #[strum(to_string = "model", serialize = "model-name")]
     ModelName,
 
     /// Model name with reasoning level suffix.
@@ -58,10 +59,18 @@ pub(crate) enum StatusLineItem {
     CurrentDir,
 
     /// Project root directory (if detected).
+    #[strum(
+        to_string = "project-name",
+        serialize = "project",
+        serialize = "project-root"
+    )]
     ProjectRoot,
 
     /// Current git branch name (if in a repository).
     GitBranch,
+
+    /// Compact runtime status text.
+    Status,
 
     /// Percentage of context window remaining.
     ContextRemaining,
@@ -101,6 +110,9 @@ pub(crate) enum StatusLineItem {
 
     /// Current thread title (if set by user).
     ThreadTitle,
+
+    /// Latest checklist task progress from `update_plan` (if available).
+    TaskProgress,
 }
 
 impl StatusLineItem {
@@ -110,8 +122,9 @@ impl StatusLineItem {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::CurrentDir => "Current working directory",
-            StatusLineItem::ProjectRoot => "Project root directory (omitted when unavailable)",
+            StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::Status => "Compact session status text (Ready, Working, Thinking)",
             StatusLineItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }
@@ -135,7 +148,10 @@ impl StatusLineItem {
                 "Current session identifier (omitted until session starts)"
             }
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
-            StatusLineItem::ThreadTitle => "Current thread title (omitted unless changed by user)",
+            StatusLineItem::ThreadTitle => "Current thread title (omitted when unavailable)",
+            StatusLineItem::TaskProgress => {
+                "Latest task progress from update_plan (omitted until available)"
+            }
         }
     }
 
@@ -146,6 +162,7 @@ impl StatusLineItem {
             StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
             StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
             StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
+            StatusLineItem::Status => StatusSurfacePreviewItem::Status,
             StatusLineItem::ContextRemaining => StatusSurfacePreviewItem::ContextRemaining,
             StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
             StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,
@@ -158,6 +175,7 @@ impl StatusLineItem {
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
+            StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
         }
     }
 }
@@ -289,7 +307,15 @@ impl Renderable for StatusLineSetupView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_event_sender::AppEventSender;
+    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::text::Line;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use crate::app_event::AppEvent;
 
     #[test]
     fn context_used_accepts_context_usage_legacy_id() {
@@ -314,5 +340,210 @@ mod tests {
             StatusLineItem::ContextRemaining.to_string(),
             "context-remaining"
         );
+    }
+    #[test]
+    fn project_name_is_canonical_and_accepts_legacy_ids() {
+        assert_eq!(StatusLineItem::ProjectRoot.to_string(), "project-name");
+        assert_eq!(
+            "project-name".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+        assert_eq!(
+            "project".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+        assert_eq!(
+            "project-root".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ProjectRoot)
+        );
+    }
+
+    #[test]
+    fn model_is_canonical_and_accepts_model_name_legacy_id() {
+        assert_eq!(StatusLineItem::ModelName.to_string(), "model");
+        assert_eq!(
+            "model".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ModelName)
+        );
+        assert_eq!(
+            "model-name".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::ModelName)
+        );
+    }
+
+    #[test]
+    fn parse_status_line_items_accepts_title_only_variants() {
+        let items = ["status", "task-progress"]
+            .into_iter()
+            .map(|id| id.parse::<StatusLineItem>())
+            .collect::<Result<Vec<_>, _>>();
+        assert_eq!(
+            items,
+            Ok(vec![StatusLineItem::Status, StatusLineItem::TaskProgress,])
+        );
+    }
+
+    #[test]
+    fn preview_uses_runtime_values() {
+        let preview_data = StatusSurfacePreviewData::from_iter([
+            (
+                StatusLineItem::ModelName.preview_item(),
+                "gpt-5".to_string(),
+            ),
+            (
+                StatusLineItem::CurrentDir.preview_item(),
+                "/repo".to_string(),
+            ),
+        ]);
+        let items = [
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::CurrentDir.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            preview_data.line_for_items(
+                items
+                    .iter()
+                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                    .map(StatusLineItem::preview_item),
+            ),
+            Some(Line::from("gpt-5 · /repo"))
+        );
+    }
+
+    #[test]
+    fn preview_uses_placeholders_when_runtime_values_are_missing() {
+        let preview_data = StatusSurfacePreviewData::from_iter([(
+            StatusSurfacePreviewItem::Model,
+            "gpt-5".to_string(),
+        )]);
+        let items = [
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::GitBranch.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            preview_data.line_for_items(
+                items
+                    .iter()
+                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                    .map(StatusLineItem::preview_item),
+            ),
+            Some(Line::from("gpt-5 · feat/awesome-feature"))
+        );
+    }
+
+    #[test]
+    fn preview_includes_thread_title() {
+        let preview_data = StatusSurfacePreviewData::from_iter([
+            (
+                StatusLineItem::ModelName.preview_item(),
+                "gpt-5".to_string(),
+            ),
+            (
+                StatusLineItem::ThreadTitle.preview_item(),
+                "Roadmap cleanup".to_string(),
+            ),
+        ]);
+        let items = [
+            MultiSelectItem {
+                id: StatusLineItem::ModelName.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+            MultiSelectItem {
+                id: StatusLineItem::ThreadTitle.to_string(),
+                name: String::new(),
+                description: None,
+                enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            preview_data.line_for_items(
+                items
+                    .iter()
+                    .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
+                    .map(StatusLineItem::preview_item),
+            ),
+            Some(Line::from("gpt-5 · Roadmap cleanup"))
+        );
+    }
+
+    #[test]
+    fn setup_view_snapshot_uses_runtime_preview_values() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let view = StatusLineSetupView::new(
+            Some(&[
+                StatusLineItem::ModelName.to_string(),
+                StatusLineItem::CurrentDir.to_string(),
+                StatusLineItem::GitBranch.to_string(),
+            ]),
+            StatusSurfacePreviewData::from_iter([
+                (
+                    StatusLineItem::ModelName.preview_item(),
+                    "gpt-5-codex".to_string(),
+                ),
+                (
+                    StatusLineItem::CurrentDir.preview_item(),
+                    "~/codex-rs".to_string(),
+                ),
+                (
+                    StatusLineItem::GitBranch.preview_item(),
+                    "jif/statusline-preview".to_string(),
+                ),
+                (
+                    StatusLineItem::WeeklyLimit.preview_item(),
+                    "weekly 82%".to_string(),
+                ),
+            ]),
+            AppEventSender::new(tx_raw),
+        );
+
+        assert_snapshot!(render_lines(&view, /*width*/ 72));
+    }
+
+    fn render_lines(view: &StatusLineSetupView, width: u16) -> String {
+        let height = view.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        (0..area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for col in 0..area.width {
+                    let symbol = buf[(area.x + col, area.y + row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(symbol);
+                    }
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
