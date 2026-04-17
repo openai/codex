@@ -78,8 +78,8 @@ use_repo(osx, "macos_sdk")
 bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
-bazel_dep(name = "rules_rs", version = "0.0.43")
-# `rules_rs` 0.0.43 does not model `windows-gnullvm` as a distinct Windows exec
+bazel_dep(name = "rules_rs", version = "0.0.58")
+# `rules_rs` still does not model `windows-gnullvm` as a distinct Windows exec
 # platform, so patch it until upstream grows that support for both x86_64 and
 # aarch64.
 single_version_override(
@@ -87,10 +87,9 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "//patches:rules_rs_windows_gnullvm_exec.patch",
-        "//patches:rules_rs_delete_git_worktree_pointer.patch",
         "//patches:rules_rs_windows_exec_linker.patch",
     ],
-    version = "0.0.43",
+    version = "0.0.58",
 )
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
@@ -108,7 +107,6 @@ rules_rust.patch(
         "//patches:rules_rust_windows_exec_bin_target.patch",
         "//patches:rules_rust_windows_exec_std.patch",
         "//patches:rules_rust_windows_exec_rustc_dev_rlib.patch",
-        "//patches:rules_rust_repository_set_exec_constraints.patch",
     ],
     strip = 1,
 )
