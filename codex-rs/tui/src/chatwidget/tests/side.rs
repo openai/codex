@@ -224,6 +224,8 @@ async fn slash_side_requests_forked_side_question_while_task_running() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let parent_thread_id = ThreadId::new();
     chat.thread_id = Some(parent_thread_id);
+    chat.config.tui_status_line = Some(vec!["model-with-reasoning".to_string()]);
+    chat.refresh_status_line();
     chat.on_task_started();
     chat.show_welcome_banner = false;
     chat.bottom_pane.set_composer_text(
