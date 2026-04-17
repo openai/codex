@@ -209,7 +209,6 @@ impl ToolHandler for ShellHandler {
         shell_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": command }),
-            display_command: Some(command),
         })
     }
 
@@ -324,7 +323,6 @@ impl ToolHandler for ShellCommandHandler {
         shell_command_payload_command(&invocation.payload).map(|command| PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": command }),
-            display_command: Some(command),
         })
     }
 

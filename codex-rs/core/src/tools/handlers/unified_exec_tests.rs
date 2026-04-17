@@ -220,7 +220,6 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: serde_json::json!({ "command": "printf exec command" }),
-            display_command: Some("printf exec command".to_string()),
         })
     );
 }

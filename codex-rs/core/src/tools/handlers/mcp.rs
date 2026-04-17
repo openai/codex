@@ -31,7 +31,6 @@ impl ToolHandler for McpHandler {
         Some(PreToolUsePayload {
             tool_name: HookToolName::new(invocation.tool_name.display()),
             tool_input: mcp_hook_tool_input(raw_arguments),
-            display_command: None,
         })
     }
 
@@ -148,7 +147,6 @@ mod tests {
                         "entityType": "person"
                     }]
                 }),
-                display_command: None,
             })
         );
     }

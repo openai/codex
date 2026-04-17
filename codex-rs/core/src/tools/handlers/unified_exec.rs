@@ -140,7 +140,6 @@ impl ToolHandler for UnifiedExecHandler {
             .map(|args| PreToolUsePayload {
                 tool_name: HookToolName::bash(),
                 tool_input: serde_json::json!({ "command": args.cmd }),
-                display_command: Some(args.cmd),
             })
     }
 

@@ -235,7 +235,6 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: json!({ "command": "bash -lc 'printf hi'" }),
-            display_command: Some("bash -lc 'printf hi'".to_string()),
         })
     );
 }
@@ -263,7 +262,6 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
         Some(crate::tools::registry::PreToolUsePayload {
             tool_name: HookToolName::bash(),
             tool_input: json!({ "command": "printf shell command" }),
-            display_command: Some("printf shell command".to_string()),
         })
     );
 }
