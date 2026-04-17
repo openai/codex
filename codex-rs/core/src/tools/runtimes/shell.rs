@@ -16,7 +16,6 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
-use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_sandbox_command;
@@ -201,13 +200,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
     }
 
     fn permission_request_payload(&self, req: &ShellRequest) -> Option<PermissionRequestPayload> {
-        Some(PermissionRequestPayload {
-            tool_name: HookToolName::bash(),
-            tool_input: serde_json::json!({
-                "command": req.hook_command,
-                "description": req.justification,
-            }),
-        })
+        Some(PermissionRequestPayload::bash(
+            req.hook_command.clone(),
+            req.justification.clone(),
+        ))
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ShellRequest) -> SandboxOverride {

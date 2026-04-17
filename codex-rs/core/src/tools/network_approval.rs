@@ -7,7 +7,6 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::session::session::Session;
-use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use codex_hooks::PermissionRequestDecision;
@@ -383,13 +382,7 @@ impl NetworkApprovalService {
             &session,
             &turn_context,
             &guardian_approval_id,
-            PermissionRequestPayload {
-                tool_name: HookToolName::bash(),
-                tool_input: serde_json::json!({
-                    "command": command,
-                    "description": format!("network-access {target}"),
-                }),
-            },
+            PermissionRequestPayload::bash(command, Some(format!("network-access {target}"))),
         )
         .await
         {
