@@ -545,11 +545,11 @@ pub(crate) fn build_network_policy_decider(
         let network_policy_decider_session = Arc::clone(&network_policy_decider_session);
         async move {
             let Some(session) = network_policy_decider_session.read().await.upgrade() else {
-                return Ok(NetworkDecision::ask("not_allowed"));
+                return NetworkDecision::ask("not_allowed");
             };
-            Ok(network_approval
+            network_approval
                 .handle_inline_policy_request(session, request)
-                .await)
+                .await
         }
     })
 }

@@ -1,5 +1,5 @@
 mod browser;
 mod error;
 
-pub use browser::BrowserCodex;
+pub use browser::BrowserAppServer;
 pub use error::HarnessError;

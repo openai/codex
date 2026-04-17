@@ -3234,6 +3234,12 @@ impl Session {
                 "Overwriting existing pending elicitation for server_name: {server_name}, request_id: {request_id}"
             );
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let id = match request_id.clone() {
+            RequestId::String(value) => codex_protocol::mcp::RequestId::String(value.to_string()),
+            RequestId::Number(value) => codex_protocol::mcp::RequestId::Integer(value),
+        };
+        #[cfg(target_arch = "wasm32")]
         let id = request_id.clone();
         let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
             turn_id: params.turn_id,
@@ -4644,6 +4650,8 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::mcp_types::RequestId;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
@@ -4836,6 +4844,12 @@ mod handlers {
             content,
             meta,
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let request_id = match request_id {
+            ProtocolRequestId::String(value) => RequestId::String(value.into()),
+            ProtocolRequestId::Integer(value) => RequestId::Number(value),
+        };
+        #[cfg(target_arch = "wasm32")]
         let request_id = request_id;
         if let Err(err) = sess
             .resolve_elicitation(server_name, request_id, response)

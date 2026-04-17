@@ -4,9 +4,11 @@ This crate is the first browser-facing seam for a Codex harness prototype.
 
 It exposes one browser-facing layer:
 
-- `BrowserCodex`: a `wasm_bindgen` adapter that starts a real
-  `codex-core::CodexThread`, calls `CodexThread::submit(Op::UserTurn { ... })`,
-  and streams real Codex protocol events back to JavaScript.
+- `BrowserAppServer`: a `wasm_bindgen` adapter that exposes an app-server-shaped
+  browser boundary. It keeps a live `codex-core::CodexThread` behind a
+  request/event interface, accepts app-server request envelopes such as
+  `thread/start` and `turn/start`, and streams notifications plus raw core
+  events back to JavaScript.
 
 The demo page passes the user's API key into the WASM facade so Rust can make
 browser `fetch` requests to the Responses API through the wasm-compatible
@@ -17,9 +19,12 @@ The API key field is for local prototype use only: it stores the key in browser
 integration should use a proxy or an ephemeral-token flow instead of persisting
 long-lived API keys in the page origin.
 
-The remaining work is to replace the current browser-only host shims with more
-complete browser implementations for persistence, richer tools, and other
-host-heavy services.
+This replaces the earlier `BrowserCodex.submit_turn(...)` prototype. The
+browser example now uses the same high-level control plane as native Codex:
+create or reuse a thread, start turns against it, and listen for async events.
+The remaining work is to swap the direct core bridge under this wrapper for a
+deeper reuse of the in-process app-server runtime once the storage/runtime
+dependencies are wasm-compatible.
 
 ## Library Boundary
 
@@ -27,7 +32,7 @@ The intended downstream integration point is the crate itself. Downstream
 webapps can:
 
 - depend on `codex-wasm-harness` from a Git branch or local path;
-- construct `BrowserCodex` from JavaScript or wrap the crate with their own
+- construct `BrowserAppServer` from JavaScript or wrap the crate with their own
   browser bindings;
 - provide session-scoped prompt inputs such as `cwd`, developer instructions,
   and user/project-doc instructions;
@@ -45,22 +50,39 @@ The intended boundary is:
 Example:
 
 ```js
-const codex = new BrowserCodex(apiKey);
-codex.setSessionOptions({
+const app = new BrowserAppServer(apiKey);
+app.setSessionOptions({
   cwd: "/workspace",
   instructions: {
     developer: "Code runs inside AppKernel. OPFS and network APIs are available.",
     user: "# AGENTS.md instructions for /workspace\n\n<INSTRUCTIONS>\n...\n</INSTRUCTIONS>",
   },
 });
+app.setEventHandler((event) => console.log(event));
+
+const thread = await app.request({
+  method: "thread/start",
+  id: 1,
+  params: {},
+});
+
+await app.request({
+  method: "turn/start",
+  id: 2,
+  params: {
+    threadId: thread.thread.id,
+    input: [{ type: "text", text: "Say hello." }],
+  },
+});
 ```
 
 ## Current Limitations
 
-This is a minimal browser port of the Codex turn loop, not full desktop Codex.
+This is a minimal browser port of the Codex app-server boundary, not full
+desktop Codex.
 
-- It uses the real `CodexThread` turn path, but many host-heavy services are
-  still compiled into degraded wasm implementations.
+- It keeps real Codex threads alive across turns, but many host-heavy services
+  are still compiled into degraded wasm implementations.
 - It currently relies on a single injected browser code executor for code mode.
 - Native shell, PTY, MCP, plugin runtime, and filesystem-backed persistence are
   not available in the browser prototype.

@@ -2913,6 +2913,7 @@ name = "codex-wasm-harness"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "codex-app-server-protocol",
  "codex-code-mode",
  "codex-core",
  "codex-exec-server",

@@ -137,7 +137,14 @@ impl NetworkProxySpec {
                 None => builder.policy_decider(|_request| async {
                     // In restricted sandbox modes, allowlist misses should ask for
                     // explicit network approval instead of hard-denying.
-                    Ok(NetworkDecision::ask("not_allowed"))
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        NetworkDecision::ask("not_allowed")
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        Ok(NetworkDecision::ask("not_allowed"))
+                    }
                 }),
             };
         }

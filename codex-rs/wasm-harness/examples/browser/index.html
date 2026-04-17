@@ -202,9 +202,11 @@
       <section id="events" aria-live="polite"></section>
     </main>
     <script type="module">
-      import init, { BrowserCodex } from "../pkg/codex_wasm_harness.js?v=20260414s";
+      import init, {
+        BrowserAppServer,
+      } from "../pkg/codex_wasm_harness.js?v=20260416a";
 
-      await init("../pkg/codex_wasm_harness_bg.wasm?v=20260414s");
+      await init("../pkg/codex_wasm_harness_bg.wasm?v=20260416a");
 
       const form = document.querySelector("#prompt-form");
       const input = document.querySelector("#prompt");
@@ -213,8 +215,10 @@
       const apiKeyStatus = document.querySelector("#api-key-status");
       const clearApiKeyButton = document.querySelector("#clear-api-key");
       const API_KEY_STORAGE_KEY = "codexWasmHarness.apiKey";
-      const codex = new BrowserCodex(readStoredApiKey());
+      const app = new BrowserAppServer(readStoredApiKey());
       const sandbox = createSandboxKernel();
+      let nextRequestId = 1;
+      let threadId = null;
       const browserSessionOptions = {
         cwd: "/workspace",
         instructions: {
@@ -235,23 +239,27 @@
 
       apiKeyInput.value = readStoredApiKey();
       updateApiKeyStatus();
-      codex.setSessionOptions(browserSessionOptions);
-      codex.set_code_executor(async (requestJson) =>
+      app.setSessionOptions(browserSessionOptions);
+      app.setEventHandler(handleServerEvent);
+      app.set_code_executor(async (requestJson) =>
         sandbox.execute(requestJson),
       );
+      await app.notify({ method: "initialized" });
       renderEvent({ type: "page_ready" });
 
       apiKeyInput.addEventListener("input", () => {
         const apiKey = apiKeyInput.value.trim();
         writeStoredApiKey(apiKey);
-        codex.set_api_key(apiKey);
+        threadId = null;
+        app.set_api_key(apiKey);
         updateApiKeyStatus();
       });
 
       clearApiKeyButton.addEventListener("click", () => {
         apiKeyInput.value = "";
         writeStoredApiKey("");
-        codex.set_api_key("");
+        threadId = null;
+        app.set_api_key("");
         updateApiKeyStatus();
       });
 
@@ -260,7 +268,11 @@
         events.replaceChildren();
         renderEvent({ type: "submit_clicked" });
         try {
-          await codex.submit_turn(input.value, renderEvent);
+          const currentThreadId = await ensureThread();
+          await request("turn/start", {
+            threadId: currentThreadId,
+            input: [{ type: "text", text: input.value }],
+          });
         } catch (error) {
           renderEvent({
             type: "page_error",
@@ -321,11 +333,35 @@
           : "No API key stored. Enter a key to run the real Codex harness.";
       }
 
+      async function ensureThread() {
+        if (threadId) {
+          return threadId;
+        }
+        const response = await request("thread/start", {});
+        threadId = response.thread.id;
+        return threadId;
+      }
+
+      async function request(method, params) {
+        const payload = { method, id: nextRequestId++, params };
+        renderEvent({ type: "client_request", payload });
+        const response = await app.request(payload);
+        renderEvent({ type: "client_response", method, response });
+        return response;
+      }
+
+      function handleServerEvent(event) {
+        if (event?.method === "thread/started") {
+          threadId = event.params?.thread?.id ?? threadId;
+        }
+        renderEvent(event);
+      }
+
       function renderEvent(event) {
         const card = document.createElement("article");
         card.className = "event";
         const title = document.createElement("strong");
-        title.textContent = event.type;
+        title.textContent = event.method ?? event.type ?? "event";
         const body = document.createElement("pre");
         body.textContent = JSON.stringify(event, null, 2);
         card.append(title, body);

@@ -794,7 +794,7 @@ async fn maybe_request_mcp_tool_approval(
         mcp_tool_approval_question_text(question.question, monitor_reason.as_deref());
     if tool_call_mcp_elicitation_enabled {
         let request_id =
-            RequestId::String(format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}"));
+            RequestId::String(format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}").into());
         let params = build_mcp_tool_approval_elicitation_request(
             sess.as_ref(),
             turn_context.as_ref(),
