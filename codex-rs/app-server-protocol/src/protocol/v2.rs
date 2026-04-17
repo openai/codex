@@ -4641,6 +4641,14 @@ pub enum TurnStatus {
 }
 
 // Turn APIs
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnEnvironmentParams {
+    pub environment_id: String,
+    pub cwd: AbsolutePathBuf,
+}
+
 #[derive(
     Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
 )]
@@ -4653,6 +4661,10 @@ pub struct TurnStartParams {
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// Optional turn-scoped environment selections.
+    #[experimental("turn/start.environments")]
+    #[ts(optional = nullable)]
+    pub environments: Option<Vec<TurnEnvironmentParams>>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -9741,13 +9753,27 @@ mod tests {
 
     #[test]
     fn turn_start_params_preserve_explicit_null_service_tier() {
+        let cwd = test_absolute_path();
         let params: TurnStartParams = serde_json::from_value(json!({
             "threadId": "thread_123",
             "input": [],
+            "environments": [
+                {
+                    "environmentId": "local",
+                    "cwd": cwd
+                }
+            ],
             "serviceTier": null
         }))
         .expect("params should deserialize");
         assert_eq!(params.service_tier, Some(None));
+        assert_eq!(
+            params.environments,
+            Some(vec![TurnEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd,
+            }])
+        );
 
         let serialized = serde_json::to_value(&params).expect("params should serialize");
         assert_eq!(
@@ -9759,6 +9785,7 @@ mod tests {
             thread_id: "thread_123".to_string(),
             input: vec![],
             responsesapi_client_metadata: None,
+            environments: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,
@@ -9774,5 +9801,26 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn turn_start_params_reject_relative_environment_cwd() {
+        let err = serde_json::from_value::<TurnStartParams>(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "environments": [
+                {
+                    "environmentId": "local",
+                    "cwd": "relative"
+                }
+            ],
+        }))
+        .expect_err("relative environment cwd should fail");
+
+        assert!(
+            err.to_string()
+                .contains("AbsolutePathBuf deserialized without a base path"),
+            "unexpected error: {err}"
+        );
     }
 }

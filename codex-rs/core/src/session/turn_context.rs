@@ -1,6 +1,7 @@
 use super::*;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 
 pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManager>) -> bool {
     matches!(
@@ -24,6 +25,14 @@ impl TurnSkillsContext {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct TurnEnvironment {
+    #[allow(dead_code)]
+    pub(crate) environment_id: String,
+    pub(crate) environment: Arc<Environment>,
+    pub(crate) cwd: AbsolutePathBuf,
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -39,6 +48,7 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) environment: Option<Arc<Environment>>,
+    pub(crate) environments: Option<Vec<TurnEnvironment>>,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -168,6 +178,7 @@ impl TurnContext {
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
             environment: self.environment.clone(),
+            environments: self.environments.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -346,6 +357,8 @@ impl Session {
         models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
         environment: Option<Arc<Environment>>,
+        environments: Option<Vec<TurnEnvironment>>,
+        cwd: AbsolutePathBuf,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
         skills_outcome: Arc<SkillLoadOutcome>,
@@ -389,8 +402,6 @@ impl Session {
             &per_turn_config.agent_roles,
         ));
 
-        let cwd = session_configuration.cwd.clone();
-
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             conversation_id.to_string(),
@@ -414,6 +425,7 @@ impl Session {
             reasoning_summary,
             session_source,
             environment,
+            environments,
             cwd,
             current_date: Some(current_date),
             timezone: Some(timezone),
@@ -450,7 +462,22 @@ impl Session {
         &self,
         sub_id: String,
         updates: SessionSettingsUpdate,
+        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
     ) -> ConstraintResult<Arc<TurnContext>> {
+        let turn_environments = match self.resolve_turn_environments(environment_selections) {
+            Ok(turn_environments) => turn_environments,
+            Err(err) => {
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(err);
+            }
+        };
         let update_result = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
@@ -511,8 +538,40 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
+                turn_environments,
             )
             .await)
+    }
+
+    fn resolve_turn_environments(
+        &self,
+        environment_selections: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> ConstraintResult<Option<Vec<TurnEnvironment>>> {
+        let Some(environment_selections) = environment_selections else {
+            return Ok(None);
+        };
+
+        let mut turn_environments = Vec::with_capacity(environment_selections.len());
+        for environment_selection in environment_selections {
+            let environment = self
+                .services
+                .environment_manager
+                .get_environment(&environment_selection.environment_id)
+                .ok_or_else(|| codex_config::ConstraintError::InvalidValue {
+                    field_name: "environments.environment_id",
+                    candidate: environment_selection.environment_id.clone(),
+                    allowed: "configured environment ids".to_string(),
+                    requirement_source: codex_config::RequirementSource::Unknown,
+                })?;
+            let cwd = environment_selection.cwd;
+            turn_environments.push(TurnEnvironment {
+                environment_id: environment_selection.environment_id,
+                environment,
+                cwd,
+            });
+        }
+
+        Ok(Some(turn_environments))
     }
 
     async fn new_turn_from_configuration(
@@ -520,8 +579,9 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
+        turn_environments: Option<Vec<TurnEnvironment>>,
     ) -> Arc<TurnContext> {
-        let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        let mut per_turn_config = Self::build_per_turn_config(&session_configuration);
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
@@ -537,6 +597,21 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
+        let environment = match turn_environments.as_ref() {
+            Some(turn_environments) => turn_environments
+                .first()
+                .map(|turn_environment| Arc::clone(&turn_environment.environment)),
+            None => self.services.environment_manager.default_environment(),
+        };
+        let cwd = turn_environments
+            .as_ref()
+            .and_then(|turn_environments| {
+                turn_environments
+                    .first()
+                    .map(|turn_environment| turn_environment.cwd.clone())
+            })
+            .unwrap_or_else(|| session_configuration.cwd.clone());
+        per_turn_config.cwd = cwd.clone();
         let plugin_outcome = self
             .services
             .plugins_manager
@@ -544,7 +619,6 @@ impl Session {
             .await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let environment = self.services.environment_manager.default_environment();
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
@@ -576,6 +650,8 @@ impl Session {
                     .then(|| started_proxy.proxy())
                 }),
             environment,
+            turn_environments,
+            cwd,
             sub_id,
             Arc::clone(&self.js_repl),
             skills_outcome,
@@ -619,6 +695,7 @@ impl Session {
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
+            /*turn_environments*/ None,
         )
         .await
     }

@@ -44,6 +44,7 @@ async fn submit_turn_with_policies(
 ) -> Result<()> {
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: prompt.to_string(),
                 text_elements: Vec::new(),

@@ -707,6 +707,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
             ClientRequest::TurnStart {
                 request_id: RequestId::Integer(3),
                 params: TurnStartParams {
+                    environments: None,
                     thread_id,
                     input: vec![UserInput::Text {
                         text: "hello".to_string(),

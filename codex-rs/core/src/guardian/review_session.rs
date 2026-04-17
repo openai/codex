@@ -585,6 +585,7 @@ async fn run_review_on_session(
             review_session
                 .codex
                 .submit(Op::UserTurn {
+                    environments: None,
                     items: prompt_items.items,
                     cwd: params.parent_turn.cwd.to_path_buf(),
                     approval_policy: AskForApproval::Never,
