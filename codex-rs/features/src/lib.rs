@@ -91,6 +91,8 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
+    /// Stream structured progress while apply_patch input is being generated.
+    ApplyPatchStreamingEvents,
     /// Allow exec tools to request additional permissions while staying sandboxed.
     ExecPermissionApprovals,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
@@ -371,6 +373,12 @@ impl Features {
                 "image_detail_original" => {
                     continue;
                 }
+                "use_legacy_landlock" => {
+                    self.record_legacy_usage_force(
+                        "features.use_legacy_landlock",
+                        Feature::UseLegacyLandlock,
+                    );
+                }
                 _ => {}
             }
             match feature_for_key(k) {
@@ -455,6 +463,19 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
             let summary =
                 format!("`{label}` is deprecated because web search is enabled by default.");
             (summary, Some(web_search_details().to_string()))
+        }
+        Feature::UseLegacyLandlock => {
+            let label = match alias {
+                "features.use_legacy_landlock" | "use_legacy_landlock" => {
+                    "[features].use_legacy_landlock"
+                }
+                _ => alias,
+            };
+            let summary = format!("`{label}` is deprecated and will be removed soon.");
+            let details =
+                "Remove this setting to stop opting into the legacy Linux sandbox behavior."
+                    .to_string();
+            (summary, Some(details))
         }
         _ => {
             let label = if alias.contains('.') || alias.starts_with('[') {
@@ -702,6 +723,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ApplyPatchStreamingEvents,
+        key: "apply_patch_streaming_events",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ExecPermissionApprovals,
         key: "exec_permission_approvals",
         stage: Stage::UnderDevelopment,
@@ -728,7 +755,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UseLegacyLandlock,
         key: "use_legacy_landlock",
-        stage: Stage::Stable,
+        stage: Stage::Deprecated,
         default_enabled: false,
     },
     FeatureSpec {

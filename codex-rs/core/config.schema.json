@@ -335,6 +335,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "apply_patch_streaming_events": {
+              "type": "boolean"
+            },
             "apps": {
               "type": "boolean"
             },
@@ -673,6 +676,14 @@
       ]
     },
     "FilesystemPermissionsToml": {
+      "properties": {
+        "glob_scan_max_depth": {
+          "description": "Optional maximum depth for expanding unreadable glob patterns on platforms that snapshot glob matches before sandbox startup.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
       "type": "object"
     },
     "ForcedLoginMethod": {
@@ -2215,6 +2226,9 @@
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
         "apply_patch_freeform": {
+          "type": "boolean"
+        },
+        "apply_patch_streaming_events": {
           "type": "boolean"
         },
         "apps": {

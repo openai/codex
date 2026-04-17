@@ -68,7 +68,6 @@ pub async fn run_codex_tool_session(
         thread_id,
         thread,
         session_configured,
-        ..
     } = match thread_manager.start_thread(config).await {
         Ok(res) => res,
         Err(e) => {
@@ -348,6 +347,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::BackgroundEvent(_)
                     | EventMsg::StreamError(_)
                     | EventMsg::PatchApplyBegin(_)
+                    | EventMsg::PatchApplyUpdated(_)
                     | EventMsg::PatchApplyEnd(_)
                     | EventMsg::TurnDiff(_)
                     | EventMsg::WebSearchBegin(_)
