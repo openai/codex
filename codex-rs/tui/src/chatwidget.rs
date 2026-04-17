@@ -1076,6 +1076,7 @@ pub(crate) struct ThreadInputState {
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
     agent_turn_running: bool,
+    pending_standalone_user_shell_command: bool,
     standalone_user_shell_turn_id: Option<String>,
 }
 
@@ -2376,8 +2377,9 @@ impl ChatWidget {
         }
     }
 
-    fn is_standalone_user_shell_turn_running(&self) -> bool {
-        self.standalone_user_shell_turn_id.is_some() && self.bottom_pane.is_task_running()
+    fn is_standalone_user_shell_turn_pending_or_running(&self) -> bool {
+        self.pending_standalone_user_shell_command
+            || (self.standalone_user_shell_turn_id.is_some() && self.bottom_pane.is_task_running())
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
@@ -3289,6 +3291,7 @@ impl ChatWidget {
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
+            pending_standalone_user_shell_command: self.pending_standalone_user_shell_command,
             standalone_user_shell_turn_id: self.standalone_user_shell_turn_id.clone(),
         })
     }
@@ -3299,7 +3302,8 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
-            self.pending_standalone_user_shell_command = false;
+            self.pending_standalone_user_shell_command =
+                input_state.pending_standalone_user_shell_command;
             self.standalone_user_shell_turn_id = input_state.standalone_user_shell_turn_id;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
@@ -5173,7 +5177,7 @@ impl ChatWidget {
                     }
                     let should_submit_now = self.is_session_configured()
                         && !self.is_plan_streaming_in_tui()
-                        && !self.is_standalone_user_shell_turn_running();
+                        && !self.is_standalone_user_shell_turn_pending_or_running();
                     if should_submit_now {
                         // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -5394,7 +5398,10 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if !self.is_session_configured() || self.bottom_pane.is_task_running() {
+        if !self.is_session_configured()
+            || self.bottom_pane.is_task_running()
+            || self.is_standalone_user_shell_turn_pending_or_running()
+        {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
         } else {

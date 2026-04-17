@@ -801,6 +801,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: true,
         agent_turn_running: true,
+        pending_standalone_user_shell_command: false,
         standalone_user_shell_turn_id: None,
     }));
 
@@ -813,6 +814,27 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     assert!(!chat.agent_turn_running);
     assert!(!chat.turn_sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn restore_thread_input_state_preserves_pending_standalone_shell_command() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.restore_thread_input_state(Some(ThreadInputState {
+        composer: None,
+        pending_steers: VecDeque::new(),
+        rejected_steers_queue: VecDeque::new(),
+        queued_user_messages: VecDeque::new(),
+        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        task_running: false,
+        agent_turn_running: false,
+        pending_standalone_user_shell_command: true,
+        standalone_user_shell_turn_id: None,
+    }));
+
+    assert!(chat.pending_standalone_user_shell_command);
+    assert!(chat.standalone_user_shell_turn_id.is_none());
 }
 
 #[tokio::test]
