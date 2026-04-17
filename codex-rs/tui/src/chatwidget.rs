@@ -1081,7 +1081,7 @@ impl TurnSubmissionState {
     fn clear_for_finished_turn(&mut self, finished_turn_id: Option<&str>) {
         let should_clear = match self {
             Self::Idle => false,
-            Self::AwaitingTurnStart { .. } => true,
+            Self::AwaitingTurnStart { .. } => finished_turn_id.is_none(),
             Self::RunningStandaloneUserShell { turn_id } => finished_turn_id
                 .map(|finished_turn_id| finished_turn_id == turn_id)
                 .unwrap_or(true),
@@ -2409,6 +2409,11 @@ impl ChatWidget {
                 kind: TurnSubmissionKind::UserTurn,
                 ..
             } => TurnSubmissionState::Idle,
+            TurnSubmissionState::RunningStandaloneUserShell {
+                turn_id: running_turn_id,
+            } if running_turn_id == turn_id => TurnSubmissionState::RunningStandaloneUserShell {
+                turn_id: running_turn_id,
+            },
             TurnSubmissionState::Idle | TurnSubmissionState::RunningStandaloneUserShell { .. } => {
                 TurnSubmissionState::Idle
             }
@@ -5809,54 +5814,75 @@ impl ChatWidget {
             | TurnSubmissionState::RunningStandaloneUserShell { .. } => 0,
         };
         let replay_reconciliation_turns = &turns[replay_reconciliation_start..];
-        let in_progress_turn_id = replay_reconciliation_turns
-            .iter()
-            .find(|turn| matches!(turn.status, TurnStatus::InProgress))
-            .map(|turn| turn.id.clone());
-        let terminal_replay_turn = replay_reconciliation_turns.iter().find(|turn| {
-            matches!(
-                turn.status,
-                TurnStatus::Completed | TurnStatus::Interrupted | TurnStatus::Failed
-            )
-        });
         // Reconcile local submit/queue latches from the replayed snapshot as a whole before
         // rendering individual turns. Per-item replay is historical UI reconstruction; this is the
         // single place where snapshot state is allowed to unblock queued follow-up input.
-        if let Some(turn_id) = in_progress_turn_id {
-            self.note_turn_started(&turn_id);
-        } else if let Some(turn) = terminal_replay_turn {
-            let has_user_shell_command = turn.items.iter().any(|item| {
-                matches!(
-                    item,
-                    ThreadItem::CommandExecution {
-                        source: CommandExecutionSource::UserShell,
-                        ..
-                    }
-                )
-            });
-            match &self.turn_submission_state {
-                TurnSubmissionState::AwaitingTurnStart {
-                    kind: TurnSubmissionKind::UserTurn,
-                    ..
-                } => self
-                    .turn_submission_state
-                    .clear_for_finished_turn(Some(&turn.id)),
-                TurnSubmissionState::AwaitingTurnStart {
-                    kind: TurnSubmissionKind::StandaloneUserShell,
-                    ..
-                } if has_user_shell_command => self
-                    .turn_submission_state
-                    .clear_for_finished_turn(Some(&turn.id)),
-                TurnSubmissionState::RunningStandaloneUserShell { turn_id }
-                    if turn_id == &turn.id =>
+        match self.turn_submission_state.clone() {
+            TurnSubmissionState::AwaitingTurnStart {
+                kind: TurnSubmissionKind::UserTurn,
+                ..
+            } => {
+                if let Some(turn) = replay_reconciliation_turns.first()
+                    && matches!(
+                        turn.status,
+                        TurnStatus::Completed
+                            | TurnStatus::Interrupted
+                            | TurnStatus::Failed
+                            | TurnStatus::InProgress
+                    )
                 {
+                    if matches!(turn.status, TurnStatus::InProgress) {
+                        self.note_turn_started(&turn.id);
+                    } else {
+                        self.turn_submission_state = TurnSubmissionState::Idle;
+                    }
+                }
+            }
+            TurnSubmissionState::AwaitingTurnStart {
+                kind: TurnSubmissionKind::StandaloneUserShell,
+                ..
+            } => {
+                let finished_user_shell_turn =
+                    replay_reconciliation_turns.iter().rev().find(|turn| {
+                        matches!(
+                            turn.status,
+                            TurnStatus::Completed | TurnStatus::Interrupted | TurnStatus::Failed
+                        ) && turn.items.iter().any(|item| {
+                            matches!(
+                                item,
+                                ThreadItem::CommandExecution {
+                                    source: CommandExecutionSource::UserShell,
+                                    ..
+                                }
+                            )
+                        })
+                    });
+                if finished_user_shell_turn.is_some() {
+                    self.turn_submission_state = TurnSubmissionState::Idle;
+                } else if let Some(turn) = replay_reconciliation_turns.first()
+                    && matches!(turn.status, TurnStatus::InProgress)
+                {
+                    self.note_turn_started(&turn.id);
+                }
+            }
+            TurnSubmissionState::RunningStandaloneUserShell { turn_id } => {
+                if let Some(turn) = replay_reconciliation_turns.iter().find(|turn| {
+                    turn.id.as_str() == turn_id.as_str()
+                        && matches!(
+                            turn.status,
+                            TurnStatus::Completed | TurnStatus::Interrupted | TurnStatus::Failed
+                        )
+                }) {
                     self.turn_submission_state
                         .clear_for_finished_turn(Some(&turn.id));
+                } else if replay_reconciliation_turns.iter().any(|turn| {
+                    turn.id.as_str() == turn_id.as_str()
+                        && matches!(turn.status, TurnStatus::InProgress)
+                }) {
+                    self.note_turn_started(&turn_id);
                 }
-                TurnSubmissionState::Idle
-                | TurnSubmissionState::AwaitingTurnStart { .. }
-                | TurnSubmissionState::RunningStandaloneUserShell { .. } => {}
             }
+            TurnSubmissionState::Idle => {}
         }
 
         for turn in turns {

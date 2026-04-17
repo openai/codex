@@ -800,7 +800,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
 }
 
 #[tokio::test]
-async fn replayed_completed_user_shell_turn_clears_pending_standalone_shell_submission() {
+async fn replayed_user_shell_turns_reconcile_pending_standalone_shell_submission() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.turn_submission_state = TurnSubmissionState::AwaitingTurnStart {
         kind: TurnSubmissionKind::StandaloneUserShell,
@@ -851,6 +851,15 @@ async fn replayed_completed_user_shell_turn_clears_pending_standalone_shell_subm
                 duration_ms: None,
             },
             AppServerTurn {
+                id: "summary-turn".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: Some(1),
+                duration_ms: None,
+            },
+            AppServerTurn {
                 id: "shell-turn".to_string(),
                 items: vec![AppServerThreadItem::CommandExecution {
                     id: "cmd-1".to_string(),
@@ -867,7 +876,16 @@ async fn replayed_completed_user_shell_turn_clears_pending_standalone_shell_subm
                 status: AppServerTurnStatus::Completed,
                 error: None,
                 started_at: None,
-                completed_at: Some(1),
+                completed_at: Some(2),
+                duration_ms: None,
+            },
+            AppServerTurn {
+                id: "active-model-turn".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+                started_at: Some(3),
+                completed_at: None,
                 duration_ms: None,
             },
         ],
@@ -875,6 +893,18 @@ async fn replayed_completed_user_shell_turn_clears_pending_standalone_shell_subm
     );
 
     assert_eq!(chat.turn_submission_state, TurnSubmissionState::Idle);
+
+    chat.turn_submission_state = TurnSubmissionState::RunningStandaloneUserShell {
+        turn_id: "shell-turn".to_string(),
+    };
+    chat.note_turn_started("shell-turn");
+
+    assert_eq!(
+        chat.turn_submission_state,
+        TurnSubmissionState::RunningStandaloneUserShell {
+            turn_id: "shell-turn".to_string(),
+        }
+    );
 }
 
 #[tokio::test]
