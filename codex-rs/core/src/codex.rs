@@ -2954,6 +2954,13 @@ impl Session {
         self.idle_pending_input.lock().await.clear();
     }
 
+    pub(crate) async fn clear_queued_goal_continuations_for_next_turn(&self) {
+        self.idle_pending_input
+            .lock()
+            .await
+            .retain(|item| !crate::goals::is_goal_continuation_item(item));
+    }
+
     pub(crate) async fn has_active_turn(&self) -> bool {
         self.active_turn.lock().await.is_some()
     }

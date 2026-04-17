@@ -83,7 +83,14 @@ impl CodexThread {
     pub async fn continue_active_goal_if_idle(&self) {
         self.codex
             .session
-            .maybe_start_turn_for_pending_work_or_goal_continuation()
+            .maybe_start_turn_for_active_goal_continuation()
+            .await;
+    }
+
+    pub async fn clear_queued_goal_continuations(&self) {
+        self.codex
+            .session
+            .clear_queued_goal_continuations_for_next_turn()
             .await;
     }
 

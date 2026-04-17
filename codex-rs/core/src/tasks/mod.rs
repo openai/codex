@@ -46,6 +46,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -432,6 +433,28 @@ impl Session {
     pub(crate) async fn maybe_start_turn_for_pending_work_or_goal_continuation(self: &Arc<Self>) {
         self.maybe_start_turn_for_pending_work().await;
         let _continuation_guard = self.goal_continuation_lock.lock().await;
+        self.maybe_start_goal_continuation_if_idle().await;
+    }
+
+    pub(crate) async fn maybe_start_turn_for_active_goal_continuation(self: &Arc<Self>) {
+        let _continuation_guard = self.goal_continuation_lock.lock().await;
+        let active_goal = match self.get_thread_goal().await {
+            Ok(Some(goal)) if goal.status == ThreadGoalStatus::Active => true,
+            Ok(Some(_)) | Ok(None) => false,
+            Err(err) => {
+                tracing::warn!("failed to read thread goal before pending work startup: {err}");
+                false
+            }
+        };
+        if !active_goal {
+            return;
+        }
+
+        self.maybe_start_turn_for_pending_work().await;
+        self.maybe_start_goal_continuation_if_idle().await;
+    }
+
+    async fn maybe_start_goal_continuation_if_idle(self: &Arc<Self>) {
         if self.has_active_turn().await
             || self.has_queued_response_items_for_next_turn().await
             || self.has_trigger_turn_mailbox_items().await
@@ -441,12 +464,6 @@ impl Session {
         let Some(items) = self.goal_continuation_items_if_active().await else {
             return;
         };
-        if self.has_active_turn().await
-            || self.has_queued_response_items_for_next_turn().await
-            || self.has_trigger_turn_mailbox_items().await
-        {
-            return;
-        }
         {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
