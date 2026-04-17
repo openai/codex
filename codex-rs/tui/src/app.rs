@@ -3729,7 +3729,11 @@ impl App {
         resume_restored_queue: bool,
     ) {
         if let Some(session) = snapshot.session {
-            self.chat_widget.handle_thread_session(session);
+            if self.side_threads.contains_key(&session.thread_id) {
+                self.chat_widget.handle_side_thread_session(session);
+            } else {
+                self.chat_widget.handle_thread_session(session);
+            }
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ true);
@@ -9609,6 +9613,39 @@ guardian_approval = true
         assert_eq!(stored_session.forked_from_id, None);
         assert_eq!(store.turns, Vec::<Turn>::new());
         assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[tokio::test]
+    async fn side_thread_snapshot_skips_session_header_preamble() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        while app_event_rx.try_recv().is_ok() {}
+
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState { parent_thread_id });
+
+        let snapshot = ThreadEventSnapshot {
+            session: Some(ThreadSessionState {
+                forked_from_id: Some(parent_thread_id),
+                ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
+            }),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        };
+
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+        let mut rendered_cells = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+            }
+        }
+        assert_eq!(app.chat_widget.thread_id(), Some(side_thread_id));
+        assert_eq!(rendered_cells, Vec::<String>::new());
     }
 
     #[tokio::test]

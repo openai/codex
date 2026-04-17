@@ -1285,6 +1285,12 @@ pub(crate) enum ReplayKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionConfiguredDisplay {
+    Normal,
+    SideConversation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ThreadItemRenderSource {
     Live,
     Replay(ReplayKind),
@@ -1985,6 +1991,14 @@ impl ChatWidget {
 
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
+        self.on_session_configured_with_display(event, SessionConfiguredDisplay::Normal);
+    }
+
+    fn on_session_configured_with_display(
+        &mut self,
+        event: codex_protocol::protocol::SessionConfiguredEvent,
+        display: SessionConfiguredDisplay,
+    ) {
         self.last_agent_markdown = None;
         self.saw_copy_source_this_turn = false;
         self.bottom_pane
@@ -2038,24 +2052,27 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.refresh_plugin_mentions();
-        let startup_tooltip_override = self.startup_tooltip_override.take();
-        let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
-        #[cfg(test)]
-        let initial_messages = event.initial_messages.clone();
-        let session_info_cell = history_cell::new_session_info(
-            &self.config,
-            &model_for_header,
-            event,
-            self.show_welcome_banner,
-            startup_tooltip_override,
-            self.plan_type,
-            show_fast_status,
-        );
-        self.apply_session_info_cell(session_info_cell);
+        if display == SessionConfiguredDisplay::Normal {
+            let startup_tooltip_override = self.startup_tooltip_override.take();
+            let show_fast_status =
+                self.should_show_fast_status(&model_for_header, event.service_tier);
+            #[cfg(test)]
+            let initial_messages = event.initial_messages.clone();
+            let session_info_cell = history_cell::new_session_info(
+                &self.config,
+                &model_for_header,
+                event,
+                self.show_welcome_banner,
+                startup_tooltip_override,
+                self.plan_type,
+                show_fast_status,
+            );
+            self.apply_session_info_cell(session_info_cell);
 
-        #[cfg(test)]
-        if let Some(messages) = initial_messages {
-            self.replay_initial_messages(messages);
+            #[cfg(test)]
+            if let Some(messages) = initial_messages {
+                self.replay_initial_messages(messages);
+            }
         }
         self.saw_copy_source_this_turn = false;
         self.refresh_skills_for_current_cwd(/*force_reload*/ true);
@@ -2069,7 +2086,9 @@ impl ChatWidget {
                 self.submit_user_message(user_message);
             }
         }
-        if let Some(forked_from_id) = forked_from_id {
+        if display == SessionConfiguredDisplay::Normal
+            && let Some(forked_from_id) = forked_from_id
+        {
             self.emit_forked_thread_event(forked_from_id);
         }
         if !self.suppress_session_configured_redraw {
@@ -2090,6 +2109,14 @@ impl ChatWidget {
     pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
         self.on_session_configured(thread_session_state_to_legacy_event(session));
+    }
+
+    pub(crate) fn handle_side_thread_session(&mut self, session: ThreadSessionState) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
+        self.on_session_configured_with_display(
+            thread_session_state_to_legacy_event(session),
+            SessionConfiguredDisplay::SideConversation,
+        );
     }
 
     fn emit_forked_thread_event(&mut self, forked_from_id: ThreadId) {
