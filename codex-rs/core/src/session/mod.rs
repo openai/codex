@@ -461,7 +461,9 @@ impl Codex {
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let environment = environment_manager.default_environment();
-        let fs = Some(environment.get_filesystem());
+        let fs = environment
+            .as_ref()
+            .map(|environment| environment.get_filesystem());
         let plugin_outcome = plugins_manager.plugins_for_config(&config).await;
         let effective_skill_roots = plugin_outcome.effective_skill_roots();
         let skills_input = skills_load_input_from_config(&config, effective_skill_roots);

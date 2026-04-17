@@ -641,8 +641,6 @@ impl Session {
             Arc::clone(&auth_manager),
             session_configuration.session_source.clone(),
         ));
-        let environment = environment_manager.default_environment();
-        let allows_agent_environment_access = environment_manager.allows_agent_environment_access();
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -698,8 +696,6 @@ impl Session {
                 config.js_repl_node_path.clone(),
             ),
             environment_manager,
-            environment: Some(environment),
-            allows_agent_environment_access,
         };
         services
             .model_client

@@ -17,7 +17,6 @@ use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_analytics::AnalyticsEventsClient;
-use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentManager;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
@@ -68,6 +67,4 @@ pub(crate) struct SessionServices {
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
-    pub(crate) environment: Option<Arc<Environment>>,
-    pub(crate) allows_agent_environment_access: bool,
 }
