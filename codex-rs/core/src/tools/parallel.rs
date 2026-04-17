@@ -93,6 +93,7 @@ impl ToolCallRuntime {
         let lock = Arc::clone(&self.parallel_execution);
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
+        let join_error_call = call.clone();
         let abort_session = Arc::clone(&session);
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
@@ -133,10 +134,14 @@ impl ToolCallRuntime {
 
         async move {
             tokio::select! {
-                res = &mut handle => res.map_err(Self::tool_task_join_error)?,
+                res = &mut handle => res.map_err(|err| {
+                    Self::tool_task_join_error(err, &join_error_call, started.elapsed())
+                })?,
                 _ = cancellation_token.cancelled() => {
                     if terminal_outcome_reached.load(Ordering::Acquire) || handle.is_finished() {
-                        handle.await.map_err(Self::tool_task_join_error)?
+                        handle.await.map_err(|err| {
+                            Self::tool_task_join_error(err, &call, started.elapsed())
+                        })?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         abort_dispatch_span.record("aborted", true);
@@ -155,7 +160,7 @@ impl ToolCallRuntime {
                                 .await;
                                 Ok(response)
                             }
-                            Err(err) => Err(Self::tool_task_join_error(err)),
+                            Err(err) => Err(Self::tool_task_join_error(err, &call, started.elapsed())),
                         }
                     }
                 },
@@ -166,7 +171,24 @@ impl ToolCallRuntime {
 }
 
 impl ToolCallRuntime {
-    fn tool_task_join_error(err: JoinError) -> FunctionCallError {
+    fn tool_task_join_error(
+        err: JoinError,
+        call: &ToolCall,
+        elapsed: std::time::Duration,
+    ) -> FunctionCallError {
+        if err.is_cancelled() {
+            let secs = elapsed.as_secs_f32().max(0.1);
+            tracing::warn!(
+                tool_name = %call.tool_name,
+                call_id = call.call_id,
+                elapsed_seconds = secs,
+                "tool task was cancelled before delivering a response"
+            );
+            return FunctionCallError::RespondToModel(format!(
+                "tool execution interrupted after {secs:.1}s"
+            ));
+        }
+
         FunctionCallError::Fatal(format!("tool task failed to receive: {err:?}"))
     }
 

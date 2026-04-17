@@ -15,11 +15,15 @@ pub use codex_state::LogEntry;
 use codex_state::ThreadMetadataBuilder;
 use codex_utils_path::normalize_for_path_comparison;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::OnceCell;
 use tracing::info;
 use tracing::warn;
 
@@ -34,6 +38,53 @@ const STARTUP_BACKFILL_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct StateDbCacheKey {
+    sqlite_home: PathBuf,
+    default_provider: String,
+}
+
+type StateDbRuntimeCell = Arc<OnceCell<StateDbHandle>>;
+
+static STATE_DB_RUNTIME_CACHE: LazyLock<Mutex<HashMap<StateDbCacheKey, StateDbRuntimeCell>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cache_key(sqlite_home: &Path, default_provider: &str) -> StateDbCacheKey {
+    StateDbCacheKey {
+        sqlite_home: normalize_for_path_comparison(sqlite_home)
+            .unwrap_or_else(|_| sqlite_home.to_path_buf()),
+        default_provider: default_provider.to_string(),
+    }
+}
+
+fn cached_runtime_cell(sqlite_home: &Path, default_provider: &str) -> StateDbRuntimeCell {
+    let key = cache_key(sqlite_home, default_provider);
+    let mut cache = STATE_DB_RUNTIME_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(cell) = cache.get(&key) {
+        return Arc::clone(cell);
+    }
+
+    let cell = Arc::new(OnceCell::new());
+    cache.insert(key, Arc::clone(&cell));
+    cell
+}
+
+async fn shared_state_db_runtime(
+    sqlite_home: &Path,
+    default_provider: &str,
+) -> anyhow::Result<StateDbHandle> {
+    let cell = cached_runtime_cell(sqlite_home, default_provider);
+    let runtime = cell
+        .get_or_try_init(|| async {
+            codex_state::StateRuntime::init(sqlite_home.to_path_buf(), default_provider.to_string())
+                .await
+        })
+        .await?;
+    Ok(Arc::clone(runtime))
+}
 
 /// Initialize the state runtime for thread state persistence.
 ///
@@ -107,15 +158,17 @@ async fn try_init_with_roots_inner(
     default_model_provider_id: String,
     backfill_lease_seconds: Option<i64>,
 ) -> anyhow::Result<StateDbHandle> {
-    let runtime =
-        codex_state::StateRuntime::init(sqlite_home.clone(), default_model_provider_id.clone())
-            .await
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "failed to initialize state runtime at {}: {err}",
-                    sqlite_home.display()
-                )
-            })?;
+    let runtime = shared_state_db_runtime(
+        sqlite_home.as_path(),
+        default_model_provider_id.as_str(),
+    )
+    .await
+    .map_err(|err| {
+        anyhow::anyhow!(
+            "failed to initialize state runtime at {}: {err}",
+            sqlite_home.display()
+        )
+    })?;
     let backfill_gate_started = Instant::now();
     let backfill_gate_result = wait_for_backfill_gate(
         runtime.as_ref(),
@@ -221,11 +274,8 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
         );
         return None;
     }
-    let runtime = match codex_state::StateRuntime::init(
-        config.sqlite_home().to_path_buf(),
-        config.model_provider_id().to_string(),
-    )
-    .await
+    let runtime = match shared_state_db_runtime(config.sqlite_home(), config.model_provider_id())
+        .await
     {
         Ok(runtime) => runtime,
         Err(_) => {

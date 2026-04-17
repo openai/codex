@@ -64,21 +64,27 @@ pub async fn handle(
     let reporting_thread_id = session.conversation_id;
     let reporting_thread_id_str = reporting_thread_id.to_string();
     let accepted = if args.stop.unwrap_or(false) {
-        db.report_agent_job_item_result_and_cancel_job(
-            args.job_id.as_str(),
-            args.item_id.as_str(),
-            reporting_thread_id_str.as_str(),
-            &args.result,
-            "cancelled by worker request",
-        )
+        db_ops::retry_locked("report_agent_job_item_result_and_cancel_job", || async {
+            db.report_agent_job_item_result_and_cancel_job(
+                args.job_id.as_str(),
+                args.item_id.as_str(),
+                reporting_thread_id_str.as_str(),
+                &args.result,
+                "cancelled by worker request",
+            )
+            .await
+        })
         .await
     } else {
-        db.report_agent_job_item_result(
-            args.job_id.as_str(),
-            args.item_id.as_str(),
-            reporting_thread_id_str.as_str(),
-            &args.result,
-        )
+        db_ops::retry_locked("report_agent_job_item_result", || async {
+            db.report_agent_job_item_result(
+                args.job_id.as_str(),
+                args.item_id.as_str(),
+                reporting_thread_id_str.as_str(),
+                &args.result,
+            )
+            .await
+        })
         .await
     }
     .map_err(|err| {

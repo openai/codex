@@ -156,44 +156,50 @@ pub async fn handle(
         args.max_runtime_seconds
             .or(turn.config.agent_job_max_runtime_seconds),
     )?;
-    let _job = db
-        .create_agent_job(
+    let _job = db_ops::retry_locked("create_agent_job", || async {
+        db.create_agent_job(
             &codex_state::AgentJobCreateParams {
                 id: job_id.clone(),
-                name: job_name,
-                instruction: args.instruction,
+                name: job_name.clone(),
+                instruction: args.instruction.clone(),
                 auto_export: true,
                 max_runtime_seconds,
-                output_schema_json: args.output_schema,
-                input_headers: headers,
+                output_schema_json: args.output_schema.clone(),
+                input_headers: headers.clone(),
                 input_csv_path: input_path.display().to_string(),
                 output_csv_path: output_csv_path.display().to_string(),
             },
             items.as_slice(),
         )
         .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to create agent job: {err}"))
-        })?;
+    })
+    .await
+    .map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to create agent job: {err}"))
+    })?;
 
     let requested_concurrency = args.max_concurrency.or(args.max_workers);
     let options = match build_runner_options(&session, &turn, requested_concurrency).await {
         Ok(options) => options,
         Err(err) => {
             let error_message = err.to_string();
-            let _ = db
-                .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
-                .await;
+            let _ = db_ops::retry_locked("mark_agent_job_failed_after_options", || async {
+                db.mark_agent_job_failed(job_id.as_str(), error_message.as_str())
+                    .await
+            })
+            .await;
             return Err(err);
         }
     };
-    db.mark_agent_job_running(job_id.as_str())
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to transition agent job {job_id} to running: {err}"
-            ))
-        })?;
+    db_ops::retry_locked("mark_agent_job_running", || async {
+        db.mark_agent_job_running(job_id.as_str()).await
+    })
+    .await
+    .map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to transition agent job {job_id} to running: {err}"
+        ))
+    })?;
     if let Err(err) = run_agent_job_loop(
         session.clone(),
         turn.clone(),
@@ -204,23 +210,26 @@ pub async fn handle(
     .await
     {
         let error_message = format!("job runner failed: {err}");
-        let _ = db
-            .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
-            .await;
+        let _ = db_ops::retry_locked("mark_agent_job_failed_after_runner_error", || async {
+            db.mark_agent_job_failed(job_id.as_str(), error_message.as_str())
+                .await
+        })
+        .await;
         return Err(FunctionCallError::RespondToModel(format!(
             "agent job {job_id} failed: {err}"
         )));
     }
 
-    let job = db
-        .get_agent_job(job_id.as_str())
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to load agent job {job_id}: {err}"))
-        })?
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
-        })?;
+    let job = db_ops::retry_locked("get_agent_job_after_runner", || async {
+        db.get_agent_job(job_id.as_str()).await
+    })
+    .await
+    .map_err(|err| {
+        FunctionCallError::RespondToModel(format!("failed to load agent job {job_id}: {err}"))
+    })?
+    .ok_or_else(|| {
+        FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
+    })?;
     let output_path = PathBuf::from(job.output_csv_path.clone());
     if !tokio::fs::try_exists(&output_path).await.unwrap_or(false) {
         export_job_csv_snapshot(db.clone(), &job)
@@ -231,24 +240,27 @@ pub async fn handle(
                 ))
             })?;
     }
-    let progress = db
-        .get_agent_job_progress(job_id.as_str())
-        .await
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to load agent job progress {job_id}: {err}"
-            ))
-        })?;
+    let progress = db_ops::retry_locked("get_agent_job_progress_after_runner", || async {
+        db.get_agent_job_progress(job_id.as_str()).await
+    })
+    .await
+    .map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to load agent job progress {job_id}: {err}"
+        ))
+    })?;
     let mut job_error = job.last_error.clone().filter(|err| !err.trim().is_empty());
     let failed_item_errors = if progress.failed_items > 0 {
-        let items = db
-            .list_agent_job_items(
+        let items = db_ops::retry_locked("list_failed_agent_job_items", || async {
+            db.list_agent_job_items(
                 job_id.as_str(),
                 Some(codex_state::AgentJobItemStatus::Failed),
                 Some(5),
             )
             .await
-            .unwrap_or_default();
+        })
+        .await
+        .unwrap_or_default();
         let summaries: Vec<_> = items
             .into_iter()
             .filter_map(|item| {

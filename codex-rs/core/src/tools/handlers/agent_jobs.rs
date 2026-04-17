@@ -33,6 +33,8 @@ use uuid::Uuid;
 
 mod report_agent_job_result;
 mod spawn_agents_on_csv;
+#[path = "agent_jobs_db.rs"]
+mod db_ops;
 #[path = "agent_jobs_slots.rs"]
 mod slots;
 #[path = "agent_jobs_startup.rs"]
@@ -186,10 +188,11 @@ async fn run_agent_job_loop(
     job_id: String,
     options: JobRunnerOptions,
 ) -> anyhow::Result<()> {
-    let job = db
-        .get_agent_job(job_id.as_str())
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found"))?;
+    let job = db_ops::retry_locked("get_agent_job_for_runner", || async {
+        db.get_agent_job(job_id.as_str()).await
+    })
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("agent job {job_id} was not found"))?;
     let runtime_timeout = job_runtime_timeout(&job);
     let mut active_items: HashMap<ThreadId, ActiveJobItem> = HashMap::new();
     let mut starting_items = startup::StartupTasks::default();
@@ -202,12 +205,20 @@ async fn run_agent_job_loop(
     )
     .await?;
 
-    let mut cancel_requested = db.is_agent_job_cancelled(job_id.as_str()).await?;
+    let mut cancel_requested = db_ops::retry_locked("is_agent_job_cancelled_initial", || async {
+        db.is_agent_job_cancelled(job_id.as_str()).await
+    })
+    .await?;
     loop {
         let mut progressed = false;
         let mut agent_limit_reached = false;
 
-        if !cancel_requested && db.is_agent_job_cancelled(job_id.as_str()).await? {
+        if !cancel_requested
+            && db_ops::retry_locked("is_agent_job_cancelled_pre_launch", || async {
+                db.is_agent_job_cancelled(job_id.as_str()).await
+            })
+            .await?
+        {
             cancel_requested = true;
         }
 
@@ -222,7 +233,11 @@ async fn run_agent_job_loop(
         progressed |= startup_result.progressed;
         agent_limit_reached |= startup_result.agent_limit_reached;
 
-        let scheduler_progress = db.get_agent_job_progress(job_id.as_str()).await?;
+        let scheduler_progress =
+            db_ops::retry_locked("get_scheduler_agent_job_progress", || async {
+                db.get_agent_job_progress(job_id.as_str()).await
+            })
+            .await?;
         if slots::reclaim_inactive_active_items(
             session.clone(),
             db.clone(),
@@ -235,7 +250,12 @@ async fn run_agent_job_loop(
             progressed = true;
         }
 
-        if !cancel_requested && db.is_agent_job_cancelled(job_id.as_str()).await? {
+        if !cancel_requested
+            && db_ops::retry_locked("is_agent_job_cancelled_post_reclaim", || async {
+                db.is_agent_job_cancelled(job_id.as_str()).await
+            })
+            .await?
+        {
             cancel_requested = true;
             progressed = true;
         }
@@ -319,7 +339,10 @@ async fn run_agent_job_loop(
         let finished = find_finished_threads(session.clone(), &active_items).await;
         if finished.is_empty() {
             let progress = if progressed {
-                db.get_agent_job_progress(job_id.as_str()).await?
+                db_ops::retry_locked("get_agent_job_progress_after_progress", || async {
+                    db.get_agent_job_progress(job_id.as_str()).await
+                })
+                .await?
             } else {
                 scheduler_progress
             };
@@ -371,15 +394,25 @@ async fn run_agent_job_loop(
 
     if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
         let message = format!("auto-export failed: {err}");
-        db.mark_agent_job_failed(job_id.as_str(), message.as_str())
-            .await?;
+        db_ops::retry_locked("mark_agent_job_failed_after_export", || async {
+            db.mark_agent_job_failed(job_id.as_str(), message.as_str())
+                .await
+        })
+        .await?;
         return Ok(());
     }
-    let cancelled = cancel_requested || db.is_agent_job_cancelled(job_id.as_str()).await?;
+    let cancelled = cancel_requested
+        || db_ops::retry_locked("is_agent_job_cancelled_before_complete", || async {
+            db.is_agent_job_cancelled(job_id.as_str()).await
+        })
+        .await?;
     if cancelled {
         return Ok(());
     }
-    db.mark_agent_job_completed(job_id.as_str()).await?;
+    db_ops::retry_locked("mark_agent_job_completed", || async {
+        db.mark_agent_job_completed(job_id.as_str()).await
+    })
+    .await?;
     Ok(())
 }
 
@@ -387,9 +420,11 @@ async fn export_job_csv_snapshot(
     db: Arc<codex_state::StateRuntime>,
     job: &codex_state::AgentJob,
 ) -> anyhow::Result<()> {
-    let items = db
-        .list_agent_job_items(job.id.as_str(), /*status*/ None, /*limit*/ None)
-        .await?;
+    let items = db_ops::retry_locked("list_agent_job_items_for_export", || async {
+        db.list_agent_job_items(job.id.as_str(), /*status*/ None, /*limit*/ None)
+            .await
+    })
+    .await?;
     let csv_content = render_job_csv(job.input_headers.as_slice(), items.as_slice())
         .map_err(|err| anyhow::anyhow!("failed to render job csv for auto-export: {err}"))?;
     let output_path = PathBuf::from(job.output_csv_path.clone());
@@ -407,18 +442,23 @@ async fn recover_running_items(
     active_items: &mut HashMap<ThreadId, ActiveJobItem>,
     runtime_timeout: Duration,
 ) -> anyhow::Result<()> {
-    let running_items = db
-        .list_agent_job_items(
+    let running_items = db_ops::retry_locked("list_running_agent_job_items_for_recovery", || async {
+        db.list_agent_job_items(
             job_id,
             Some(codex_state::AgentJobItemStatus::Running),
             /*limit*/ None,
         )
-        .await?;
+        .await
+    })
+    .await?;
     for item in running_items {
         if is_item_stale(&item, runtime_timeout) {
             let error_message = format!("worker exceeded max runtime of {runtime_timeout:?}");
-            db.mark_agent_job_item_failed(job_id, item.item_id.as_str(), error_message.as_str())
-                .await?;
+            db_ops::retry_locked("mark_stale_agent_job_item_failed_on_recovery", || async {
+                db.mark_agent_job_item_failed(job_id, item.item_id.as_str(), error_message.as_str())
+                    .await
+            })
+            .await?;
             if let Some(assigned_thread_id) = item.assigned_thread_id.as_ref()
                 && let Ok(thread_id) = ThreadId::from_string(assigned_thread_id.as_str())
             {
@@ -431,11 +471,14 @@ async fn recover_running_items(
             continue;
         }
         let Some(assigned_thread_id) = item.assigned_thread_id.clone() else {
-            db.mark_agent_job_item_pending(
-                job_id,
-                item.item_id.as_str(),
-                Some("worker startup was interrupted before a thread was assigned"),
-            )
+            db_ops::retry_locked("mark_agent_job_item_pending_on_recovery", || async {
+                db.mark_agent_job_item_pending(
+                    job_id,
+                    item.item_id.as_str(),
+                    Some("worker startup was interrupted before a thread was assigned"),
+                )
+                .await
+            })
             .await?;
             continue;
         };
@@ -443,11 +486,14 @@ async fn recover_running_items(
             Ok(thread_id) => thread_id,
             Err(err) => {
                 let error_message = format!("invalid assigned_thread_id: {err:?}");
-                db.mark_agent_job_item_failed(
-                    job_id,
-                    item.item_id.as_str(),
-                    error_message.as_str(),
-                )
+                db_ops::retry_locked("mark_agent_job_item_failed_invalid_thread", || async {
+                    db.mark_agent_job_item_failed(
+                        job_id,
+                        item.item_id.as_str(),
+                        error_message.as_str(),
+                    )
+                    .await
+                })
                 .await?;
                 continue;
             }
@@ -542,8 +588,11 @@ async fn reap_stale_active_items(
     }
     for (thread_id, item_id) in stale {
         let error_message = format!("worker exceeded max runtime of {runtime_timeout:?}");
-        db.mark_agent_job_item_failed(job_id, item_id.as_str(), error_message.as_str())
-            .await?;
+        db_ops::retry_locked("mark_stale_active_agent_job_item_failed", || async {
+            db.mark_agent_job_item_failed(job_id, item_id.as_str(), error_message.as_str())
+                .await
+        })
+        .await?;
         let _ = session
             .services
             .agent_control
@@ -561,23 +610,29 @@ async fn finalize_finished_item(
     item_id: &str,
     thread_id: ThreadId,
 ) -> anyhow::Result<()> {
-    let item = db
-        .get_agent_job_item(job_id, item_id)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!("job item not found for finalization: {job_id}/{item_id}")
-        })?;
+    let item = db_ops::retry_locked("get_agent_job_item_for_finalization", || async {
+        db.get_agent_job_item(job_id, item_id).await
+    })
+    .await?
+    .ok_or_else(|| {
+        anyhow::anyhow!("job item not found for finalization: {job_id}/{item_id}")
+    })?;
     if matches!(item.status, codex_state::AgentJobItemStatus::Running) {
         if item.result_json.is_some() {
-            let _ = db.mark_agent_job_item_completed(job_id, item_id).await?;
+            let _ = db_ops::retry_locked("mark_agent_job_item_completed", || async {
+                db.mark_agent_job_item_completed(job_id, item_id).await
+            })
+            .await?;
         } else {
-            let _ = db
-                .mark_agent_job_item_failed(
+            let _ = db_ops::retry_locked("mark_agent_job_item_failed_missing_report", || async {
+                db.mark_agent_job_item_failed(
                     job_id,
                     item_id,
                     "worker finished without calling report_agent_job_result",
                 )
-                .await?;
+                .await
+            })
+            .await?;
         }
     }
     let _ = session
