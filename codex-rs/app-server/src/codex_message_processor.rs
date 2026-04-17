@@ -7432,6 +7432,7 @@ impl CodexMessageProcessor {
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
+        let parent_tool_access_policy = parent_thread.config_snapshot().await.tool_access_policy;
 
         let NewThread {
             thread_id,
@@ -7445,7 +7446,7 @@ impl CodexMessageProcessor {
                 config,
                 rollout_path,
                 /*persist_extended_history*/ false,
-                /*tool_access_policy*/ Default::default(),
+                parent_tool_access_policy,
                 self.request_trace_context(request_id).await,
             )
             .await

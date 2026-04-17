@@ -9646,6 +9646,10 @@ guardian_approval = true
         }
         assert_eq!(app.chat_widget.thread_id(), Some(side_thread_id));
         assert_eq!(rendered_cells, Vec::<String>::new());
+        assert_eq!(
+            app.chat_widget.active_cell_transcript_lines(/*width*/ 120),
+            None
+        );
     }
 
     #[tokio::test]

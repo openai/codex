@@ -268,6 +268,15 @@ impl App {
                     .await
                 {
                     self.discard_side_thread(app_server, child_thread_id).await;
+                    if self.active_thread_id != Some(parent_thread_id)
+                        && let Err(restore_err) = self
+                            .select_agent_thread(tui, app_server, parent_thread_id)
+                            .await
+                    {
+                        tracing::warn!(
+                            "failed to restore parent thread after side conversation switch failure: {restore_err}"
+                        );
+                    }
                     self.restore_side_user_message(user_message.take());
                     self.chat_widget.add_error_message(format!(
                         "Failed to switch into side conversation {child_thread_id}: {err}"
