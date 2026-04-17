@@ -425,7 +425,9 @@ pub(crate) async fn start_embedded_app_server_for_picker(
     start_app_server_for_picker(
         config,
         &AppServerTarget::Embedded,
-        Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        Arc::new(EnvironmentManager::from_exec_server_url(
+            codex_exec_server::EnvironmentManagerArgs::default(),
+        )),
     )
     .await
 }
@@ -623,7 +625,9 @@ fn config_cwd_for_app_server_target(
     app_server_target: &AppServerTarget,
     environment_manager: &EnvironmentManager,
 ) -> std::io::Result<Option<AbsolutePathBuf>> {
-    if environment_manager.is_remote()
+    if environment_manager
+        .default_environment()
+        .is_some_and(|environment| environment.is_remote())
         || matches!(app_server_target, AppServerTarget::Remote { .. })
     {
         return Ok(None);
@@ -1771,7 +1775,9 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
-            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            Arc::new(EnvironmentManager::from_exec_server_url(
+                codex_exec_server::EnvironmentManagerArgs::default(),
+            )),
         )
         .await
     }
@@ -1930,7 +1936,9 @@ mod tests {
             websocket_url: "ws://127.0.0.1:1234/".to_string(),
             auth_token: None,
         };
-        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
+        let environment_manager = EnvironmentManager::from_exec_server_url(
+            codex_exec_server::EnvironmentManagerArgs::default(),
+        );
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
@@ -1943,7 +1951,9 @@ mod tests {
     fn config_cwd_for_app_server_target_canonicalizes_embedded_cli_cwd() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let target = AppServerTarget::Embedded;
-        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
+        let environment_manager = EnvironmentManager::from_exec_server_url(
+            codex_exec_server::EnvironmentManagerArgs::default(),
+        );
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(temp_dir.path()), &target, &environment_manager)?;
@@ -1963,7 +1973,9 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let missing = temp_dir.path().join("missing");
         let target = AppServerTarget::Embedded;
-        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
+        let environment_manager = EnvironmentManager::from_exec_server_url(
+            codex_exec_server::EnvironmentManagerArgs::default(),
+        );
 
         let err = config_cwd_for_app_server_target(Some(&missing), &target, &environment_manager)
             .expect_err("missing embedded cwd should fail");
@@ -1980,7 +1992,11 @@ mod tests {
             Path::new("/definitely/not/local/to/this/test")
         };
         let target = AppServerTarget::Embedded;
-        let environment_manager = EnvironmentManager::new(Some("ws://127.0.0.1:8765".to_string()));
+        let environment_manager =
+            EnvironmentManager::from_exec_server_url(codex_exec_server::EnvironmentManagerArgs {
+                exec_server_url: Some("ws://127.0.0.1:8765".to_string()),
+                local_runtime_paths: None,
+            });
 
         let config_cwd =
             config_cwd_for_app_server_target(Some(remote_only_cwd), &target, &environment_manager)?;
@@ -2107,7 +2123,9 @@ mod tests {
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
-            Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+            Arc::new(EnvironmentManager::from_exec_server_url(
+                codex_exec_server::EnvironmentManagerArgs::default(),
+            )),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
         .await;

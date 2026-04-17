@@ -18,6 +18,7 @@ use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_analytics::AnalyticsEventsClient;
 use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentManager;
 use codex_hooks::Hooks;
 use codex_login::AuthManager;
 use codex_mcp::McpConnectionManager;
@@ -64,5 +65,7 @@ pub(crate) struct SessionServices {
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
+    pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) environment: Option<Arc<Environment>>,
+    pub(crate) allows_agent_environment_access: bool,
 }

@@ -241,7 +241,9 @@ fn build_test_processor(
         outgoing,
         arg0_paths: Arg0DispatchPaths::default(),
         config,
-        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
+        environment_manager: Arc::new(EnvironmentManager::from_exec_server_url(
+            codex_exec_server::EnvironmentManagerArgs::default(),
+        )),
         cli_overrides: Vec::new(),
         loader_overrides: LoaderOverrides::default(),
         cloud_requirements: CloudRequirementsLoader::default(),

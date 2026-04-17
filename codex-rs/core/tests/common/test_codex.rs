@@ -76,7 +76,7 @@ impl TestEnv {
     pub async fn local() -> Result<Self> {
         let local_cwd_temp_dir = Arc::new(TempDir::new()?);
         let cwd = local_cwd_temp_dir.abs();
-        let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None).await?;
+        let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None)?;
         Ok(Self {
             environment,
             cwd,
@@ -115,7 +115,7 @@ pub async fn test_env() -> Result<TestEnv> {
     match get_remote_test_env() {
         Some(remote_env) => {
             let websocket_url = remote_exec_server_url()?;
-            let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
+            let environment = codex_exec_server::Environment::create(Some(websocket_url))?;
             let cwd = remote_aware_cwd_path();
             environment
                 .get_filesystem()
@@ -350,9 +350,13 @@ impl TestCodexBuilder {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
             .await?;
-        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
-            test_env.exec_server_url().map(str::to_owned),
-        ));
+        let environment_manager =
+            Arc::new(codex_exec_server::EnvironmentManager::from_exec_server_url(
+                codex_exec_server::EnvironmentManagerArgs {
+                    exec_server_url: test_env.exec_server_url().map(str::to_owned),
+                    local_runtime_paths: None,
+                },
+            ));
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);

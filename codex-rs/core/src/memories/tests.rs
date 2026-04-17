@@ -491,8 +491,8 @@ mod phase2 {
                 CodexAuth::from_api_key("dummy"),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
-                std::sync::Arc::new(codex_exec_server::EnvironmentManager::new(
-                    /*exec_server_url*/ None,
+                std::sync::Arc::new(codex_exec_server::EnvironmentManager::from_exec_server_url(
+                    codex_exec_server::EnvironmentManagerArgs::default(),
                 )),
             );
             let (mut session, _turn_context) = make_session_and_context().await;

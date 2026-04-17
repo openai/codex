@@ -460,10 +460,7 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let environment = environment_manager
-            .current()
-            .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?;
+        let environment = environment_manager.default_environment();
         let fs = environment
             .as_ref()
             .map(|environment| environment.get_filesystem());
@@ -650,7 +647,7 @@ impl Codex {
             mcp_manager.clone(),
             skills_watcher,
             agent_control,
-            environment,
+            environment_manager,
             analytics_events_client,
         )
         .await

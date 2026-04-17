@@ -228,7 +228,7 @@ impl Session {
         mcp_manager: Arc<McpManager>,
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
-        environment: Option<Arc<Environment>>,
+        environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -641,6 +641,8 @@ impl Session {
             Arc::clone(&auth_manager),
             session_configuration.session_source.clone(),
         ));
+        let environment = environment_manager.default_environment();
+        let allows_agent_environment_access = environment_manager.allows_agent_environment_access();
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -695,7 +697,9 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: environment.clone(),
+            environment_manager,
+            environment,
+            allows_agent_environment_access,
         };
         services
             .model_client
