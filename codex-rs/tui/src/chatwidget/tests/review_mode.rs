@@ -350,7 +350,9 @@ async fn review_restores_context_window_indicator() {
 async fn restore_thread_input_state_restores_pending_steers_without_downgrading_them() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut pending_steers = VecDeque::new();
-    pending_steers.push_back(UserMessage::from("pending steer"));
+    let mut pending_steer = pending_steer("pending steer");
+    pending_steer.turn_id = Some("turn-1".to_string());
+    pending_steers.push_back(pending_steer);
     let mut rejected_steers_queue = VecDeque::new();
     rejected_steers_queue.push_back(UserMessage::from("already rejected"));
     let mut queued_user_messages = VecDeque::new();
@@ -361,7 +363,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         pending_steers,
         rejected_steers_queue,
         queued_user_messages,
-        active_turn_id: None,
+        active_turn_id: Some("turn-1".to_string()),
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,
@@ -376,6 +378,10 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
     assert_eq!(
         chat.pending_steers.front().unwrap().user_message.text,
         "pending steer"
+    );
+    assert_eq!(
+        chat.pending_steers.front().unwrap().turn_id.as_deref(),
+        Some("turn-1")
     );
 }
 
@@ -503,6 +509,29 @@ async fn replayed_completion_does_not_retry_pending_steer() {
     assert_eq!(chat.pending_steers.len(), 1);
     assert!(chat.rejected_steers_queue.is_empty());
     assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn replayed_in_progress_turn_is_captured_as_active_turn() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "active-turn".to_string(),
+            items: Vec::new(),
+            status: AppServerTurnStatus::InProgress,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }],
+        ReplayKind::ThreadSnapshot,
+    );
+
+    let input_state = chat
+        .capture_thread_input_state()
+        .expect("expected thread input state");
+    assert_eq!(input_state.active_turn_id.as_deref(), Some("active-turn"));
 }
 
 #[tokio::test]

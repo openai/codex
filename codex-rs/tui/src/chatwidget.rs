@@ -1066,7 +1066,7 @@ impl ThreadComposerState {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
-    pending_steers: VecDeque<UserMessage>,
+    pending_steers: VecDeque<PendingSteer>,
     rejected_steers_queue: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<UserMessage>,
     active_turn_id: Option<String>,
@@ -1102,6 +1102,7 @@ impl From<&str> for UserMessage {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 struct PendingSteer {
     user_message: UserMessage,
     compare_key: PendingSteerCompareKey,
@@ -3363,11 +3364,7 @@ impl ChatWidget {
         };
         Some(ThreadInputState {
             composer: composer.has_content().then_some(composer),
-            pending_steers: self
-                .pending_steers
-                .iter()
-                .map(|pending| pending.user_message.clone())
-                .collect(),
+            pending_steers: self.pending_steers.clone(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
             active_turn_id: self
@@ -3415,19 +3412,7 @@ impl ChatWidget {
                 );
                 self.bottom_pane.set_composer_pending_pastes(Vec::new());
             }
-            self.pending_steers = input_state
-                .pending_steers
-                .into_iter()
-                .map(|user_message| PendingSteer {
-                    compare_key: PendingSteerCompareKey {
-                        message: user_message.text.clone(),
-                        image_count: user_message.local_images.len()
-                            + user_message.remote_image_urls.len(),
-                    },
-                    turn_id: input_state.active_turn_id.clone(),
-                    user_message,
-                })
-                .collect();
+            self.pending_steers = input_state.pending_steers;
             self.rejected_steers_queue = input_state.rejected_steers_queue;
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
@@ -5815,6 +5800,7 @@ impl ChatWidget {
                 duration_ms,
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
+                self.last_turn_id = Some(turn_id.clone());
                 self.last_non_retry_error = None;
                 self.on_task_started();
             }
@@ -6314,6 +6300,7 @@ impl ChatWidget {
                         notification.error.codex_error_info,
                         Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
                     ) {
+                        self.queue_unacknowledged_pending_steers_for_turn(&notification.turn_id);
                         self.finalize_turn();
                         self.request_redraw();
                         self.clear_restored_active_turn_if_matches(&notification.turn_id);
@@ -6517,23 +6504,28 @@ impl ChatWidget {
             TurnStatus::Interrupted => {
                 self.last_non_retry_error = None;
                 if from_replay {
-                    if !replayed_turn_matches_restored_active_turn {
-                        return;
+                    if replayed_turn_matches_restored_active_turn {
+                        self.restore_pending_messages_after_replayed_incomplete_turn();
+                        self.clear_restored_active_turn_if_matches(&turn_id);
+                    } else {
+                        self.finalize_turn();
+                        self.request_redraw();
                     }
-                    self.restore_pending_messages_after_replayed_incomplete_turn();
-                    self.clear_restored_active_turn_if_matches(&turn_id);
                 } else {
                     self.on_interrupted_turn(TurnAbortReason::Interrupted);
                 }
             }
             TurnStatus::Failed => {
                 if from_replay {
-                    if !replayed_turn_matches_restored_active_turn {
-                        return;
+                    if replayed_turn_matches_restored_active_turn {
+                        self.last_non_retry_error = None;
+                        self.restore_pending_messages_after_replayed_incomplete_turn();
+                        self.clear_restored_active_turn_if_matches(&turn_id);
+                    } else {
+                        self.last_non_retry_error = None;
+                        self.finalize_turn();
+                        self.request_redraw();
                     }
-                    self.last_non_retry_error = None;
-                    self.restore_pending_messages_after_replayed_incomplete_turn();
-                    self.clear_restored_active_turn_if_matches(&turn_id);
                     return;
                 }
                 if let Some(error) = notification.turn.error {
