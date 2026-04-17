@@ -426,6 +426,7 @@ impl AppServerSession {
         approval_policy: AskForApproval,
         approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
         sandbox_policy: SandboxPolicy,
+        permission_profile: Option<PermissionProfile>,
         model: String,
         effort: Option<codex_protocol::openai_models::ReasoningEffort>,
         summary: Option<codex_protocol::config_types::ReasoningSummary>,
@@ -435,14 +436,19 @@ impl AppServerSession {
         output_schema: Option<serde_json::Value>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
-        let (sandbox_policy, permission_profile) = match sandbox_policy {
-            policy @ SandboxPolicy::ExternalSandbox { .. } => (Some(policy.into()), None),
-            policy => {
-                let permission_profile =
-                    PermissionProfile::from_legacy_sandbox_policy(&policy, &cwd);
+        let (sandbox_policy, permission_profile) =
+            if let Some(permission_profile) = permission_profile {
                 (None, Some(permission_profile.into()))
-            }
-        };
+            } else {
+                match sandbox_policy {
+                    policy @ SandboxPolicy::ExternalSandbox { .. } => (Some(policy.into()), None),
+                    policy => {
+                        let permission_profile =
+                            PermissionProfile::from_legacy_sandbox_policy(&policy, &cwd);
+                        (None, Some(permission_profile.into()))
+                    }
+                }
+            };
         self.client
             .request_typed(ClientRequest::TurnStart {
                 request_id,
