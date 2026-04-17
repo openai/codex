@@ -899,6 +899,61 @@ async fn replayed_buffered_shell_turn_completion_clears_pending_shell_marker() {
 }
 
 #[tokio::test]
+async fn replayed_non_retry_error_preserves_pending_shell_submit_markers() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.pending_turn_start_after_submit = true;
+    chat.pending_standalone_user_shell_command = true;
+
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                message: "permission denied".to_string(),
+                codex_error_info: None,
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: "thread-1".to_string(),
+            turn_id: "old-turn".to_string(),
+        }),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.pending_turn_start_after_submit);
+    assert!(chat.pending_standalone_user_shell_command);
+    assert!(chat.standalone_user_shell_turn_id.is_none());
+}
+
+#[tokio::test]
+async fn replayed_failed_completed_turn_preserves_pending_shell_submit_markers() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.pending_turn_start_after_submit = true;
+    chat.pending_standalone_user_shell_command = true;
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "old-turn".to_string(),
+            items: Vec::new(),
+            status: AppServerTurnStatus::Failed,
+            error: Some(AppServerTurnError {
+                message: "permission denied".to_string(),
+                codex_error_info: None,
+                additional_details: None,
+            }),
+            started_at: None,
+            completed_at: Some(0),
+            duration_ms: None,
+        }],
+        ReplayKind::ThreadSnapshot,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.pending_turn_start_after_submit);
+    assert!(chat.pending_standalone_user_shell_command);
+    assert!(chat.standalone_user_shell_turn_id.is_none());
+}
+
+#[tokio::test]
 async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_status_header("Idle".to_string());

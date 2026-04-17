@@ -6301,6 +6301,8 @@ impl ChatWidget {
                             notification.error.additional_details,
                         );
                     }
+                } else if from_replay {
+                    self.last_non_retry_error = None;
                 } else {
                     self.last_non_retry_error = Some((
                         notification.turn_id.clone(),
@@ -6498,6 +6500,10 @@ impl ChatWidget {
                 self.on_interrupted_turn(TurnAbortReason::Interrupted);
             }
             TurnStatus::Failed => {
+                if replay_kind.is_some() {
+                    self.last_non_retry_error = None;
+                    return;
+                }
                 if let Some(error) = notification.turn.error {
                     if self.last_non_retry_error.as_ref()
                         == Some(&(notification.turn.id.clone(), error.message.clone()))
@@ -6835,24 +6841,26 @@ impl ChatWidget {
                 message,
                 codex_error_info,
             }) => {
-                if codex_error_info
-                    .as_ref()
-                    .is_some_and(|info| self.handle_steer_rejected_error(info))
+                if !from_replay
+                    && !codex_error_info
+                        .as_ref()
+                        .is_some_and(|info| self.handle_steer_rejected_error(info))
                 {
-                } else if let Some(kind) = codex_error_info
-                    .as_ref()
-                    .and_then(core_rate_limit_error_kind)
-                {
-                    match kind {
-                        RateLimitErrorKind::ServerOverloaded => {
-                            self.on_server_overloaded_error(message)
+                    if let Some(kind) = codex_error_info
+                        .as_ref()
+                        .and_then(core_rate_limit_error_kind)
+                    {
+                        match kind {
+                            RateLimitErrorKind::ServerOverloaded => {
+                                self.on_server_overloaded_error(message)
+                            }
+                            RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                                self.on_error(message)
+                            }
                         }
-                        RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
-                        }
+                    } else {
+                        self.on_error(message);
                     }
-                } else {
-                    self.on_error(message);
                 }
             }
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
