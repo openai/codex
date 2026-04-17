@@ -9210,7 +9210,10 @@
             "type": "string"
           },
           "threadId": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "uri": {
             "type": "string"
@@ -9218,7 +9221,6 @@
         },
         "required": [
           "server",
-          "threadId",
           "uri"
         ],
         "title": "McpResourceReadParams",

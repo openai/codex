@@ -29,6 +29,7 @@ pub use mcp::group_tools_by_server;
 pub use mcp::mcp_permission_prompt_is_auto_approved;
 pub use mcp::oauth_login_support;
 pub use mcp::qualified_mcp_tool_name_prefix;
+pub use mcp::read_mcp_resource;
 pub use mcp::resolve_oauth_scopes;
 pub use mcp::should_retry_without_scopes;
 pub use mcp::split_qualified_tool_name;
