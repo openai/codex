@@ -1,39 +1,40 @@
 use crate::winutil::to_wide;
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::ffi::c_void;
 use std::path::Path;
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
+use windows_sys::Win32::Security::ACE_HEADER;
+use windows_sys::Win32::Security::ACL;
+use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
 use windows_sys::Win32::Security::AclSizeInformation;
+use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
 use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
 use windows_sys::Win32::Security::Authorization::SetNamedSecurityInfoW;
 use windows_sys::Win32::Security::Authorization::SetSecurityInfo;
-use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
+use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::Security::EqualSid;
+use windows_sys::Win32::Security::GENERIC_MAPPING;
 use windows_sys::Win32::Security::GetAce;
 use windows_sys::Win32::Security::GetAclInformation;
 use windows_sys::Win32::Security::MapGenericMask;
-use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
-use windows_sys::Win32::Security::ACE_HEADER;
-use windows_sys::Win32::Security::ACL;
-use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
-use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
-use windows_sys::Win32::Security::GENERIC_MAPPING;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
+use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
-use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
+use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
@@ -45,11 +46,17 @@ use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_EA;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
-use windows_sys::Win32::Storage::FileSystem::DELETE;
 const SE_KERNEL_OBJECT: u32 = 6;
 const INHERIT_ONLY_ACE: u8 = 0x08;
 const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
+const WRITE_DENY_MASK: u32 = FILE_WRITE_DATA
+    | FILE_APPEND_DATA
+    | FILE_WRITE_EA
+    | FILE_WRITE_ATTRIBUTES
+    | DELETE
+    | FILE_DELETE_CHILD;
+const LEGACY_GENERIC_WRITE_DENY_MASK: u32 = FILE_GENERIC_WRITE | GENERIC_WRITE_MASK;
 
 /// Fetch DACL via handle-based query; caller must LocalFree the returned SD.
 ///
@@ -228,14 +235,6 @@ pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -
     if ok == 0 {
         return false;
     }
-    let deny_write_mask = FILE_GENERIC_WRITE
-        | FILE_WRITE_DATA
-        | FILE_APPEND_DATA
-        | FILE_WRITE_EA
-        | FILE_WRITE_ATTRIBUTES
-        | GENERIC_WRITE_MASK
-        | DELETE
-        | FILE_DELETE_CHILD;
     for i in 0..info.AceCount {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
         if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
@@ -252,19 +251,54 @@ pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -
         let base = p_ace as usize;
         let sid_ptr =
             (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void;
-        if EqualSid(sid_ptr, psid) != 0 && (ace.Mask & deny_write_mask) != 0 {
+        if EqualSid(sid_ptr, psid) != 0
+            && (ace.Mask & (WRITE_DENY_MASK | LEGACY_GENERIC_WRITE_DENY_MASK)) != 0
+        {
             return true;
         }
     }
     false
 }
 
-const WRITE_ALLOW_MASK: u32 = FILE_GENERIC_READ
-    | FILE_GENERIC_WRITE
-    | FILE_GENERIC_EXECUTE
-    | DELETE
-    | FILE_DELETE_CHILD;
+unsafe fn dacl_has_legacy_generic_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
+    if p_dacl.is_null() {
+        return false;
+    }
+    let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
+    let ok = GetAclInformation(
+        p_dacl as *const ACL,
+        &mut info as *mut _ as *mut c_void,
+        std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+        AclSizeInformation,
+    );
+    if ok == 0 {
+        return false;
+    }
+    for i in 0..info.AceCount {
+        let mut p_ace: *mut c_void = std::ptr::null_mut();
+        if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
+            continue;
+        }
+        let hdr = &*(p_ace as *const ACE_HEADER);
+        if hdr.AceType != 1 {
+            continue; // ACCESS_DENIED_ACE_TYPE
+        }
+        if (hdr.AceFlags & INHERIT_ONLY_ACE) != 0 {
+            continue;
+        }
+        let ace = &*(p_ace as *const ACCESS_ALLOWED_ACE);
+        let base = p_ace as usize;
+        let sid_ptr =
+            (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void;
+        if EqualSid(sid_ptr, psid) != 0 && (ace.Mask & LEGACY_GENERIC_WRITE_DENY_MASK) != 0 {
+            return true;
+        }
+    }
+    false
+}
 
+const WRITE_ALLOW_MASK: u32 =
+    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
 
 unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     path: &Path,
@@ -275,12 +309,7 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
     let (p_dacl, p_sd) = fetch_dacl_handle(path)?;
     let mut entries: Vec<EXPLICIT_ACCESS_W> = Vec::new();
     for sid in sids {
-        if dacl_mask_allows(
-            p_dacl,
-            &[*sid],
-            allow_mask,
-            /*require_all_bits*/ true,
-        ) {
+        if dacl_mask_allows(p_dacl, &[*sid], allow_mask, /*require_all_bits*/ true) {
             continue;
         }
         entries.push(EXPLICIT_ACCESS_W {
@@ -469,6 +498,31 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool>
     if code != ERROR_SUCCESS {
         return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
     }
+    // Older Windows sandbox builds denied FILE_GENERIC_WRITE here, which also carries
+    // READ_CONTROL and can make repo-local .codex directories unreadable on startup.
+    if dacl_has_legacy_generic_write_deny_for_sid(p_dacl, psid) {
+        if !p_sd.is_null() {
+            LocalFree(p_sd as HLOCAL);
+        }
+        revoke_ace(path, psid);
+        p_sd = std::ptr::null_mut();
+        p_dacl = std::ptr::null_mut();
+        let code = GetNamedSecurityInfoW(
+            to_wide(path).as_ptr(),
+            1,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut p_dacl,
+            std::ptr::null_mut(),
+            &mut p_sd,
+        );
+        if code != ERROR_SUCCESS {
+            return Err(anyhow!(
+                "GetNamedSecurityInfoW failed after legacy deny repair: {code}"
+            ));
+        }
+    }
     let mut added = false;
     if !dacl_has_write_deny_for_sid(p_dacl, psid) {
         let trustee = TRUSTEE_W {
@@ -479,14 +533,7 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool>
             ptstrName: psid as *mut u16,
         };
         let mut explicit: EXPLICIT_ACCESS_W = std::mem::zeroed();
-        explicit.grfAccessPermissions = FILE_GENERIC_WRITE
-            | FILE_WRITE_DATA
-            | FILE_APPEND_DATA
-            | FILE_WRITE_EA
-            | FILE_WRITE_ATTRIBUTES
-            | GENERIC_WRITE_MASK
-            | DELETE
-            | FILE_DELETE_CHILD;
+        explicit.grfAccessPermissions = WRITE_DENY_MASK;
         explicit.grfAccessMode = DENY_ACCESS;
         explicit.grfInheritance = CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
         explicit.Trustee = trustee;
@@ -514,6 +561,31 @@ pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool>
         LocalFree(p_sd as HLOCAL);
     }
     Ok(added)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LEGACY_GENERIC_WRITE_DENY_MASK;
+    use super::WRITE_DENY_MASK;
+    use windows_sys::Win32::Storage::FileSystem::FILE_APPEND_DATA;
+    use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA;
+    use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
+
+    #[test]
+    fn write_deny_mask_keeps_read_control_available() {
+        assert_eq!(WRITE_DENY_MASK & READ_CONTROL, 0);
+        assert_ne!(WRITE_DENY_MASK & FILE_WRITE_DATA, 0);
+        assert_ne!(WRITE_DENY_MASK & FILE_APPEND_DATA, 0);
+        assert_ne!(WRITE_DENY_MASK & FILE_DELETE_CHILD, 0);
+    }
+
+    #[test]
+    fn legacy_generic_write_mask_needs_repair() {
+        assert_ne!(LEGACY_GENERIC_WRITE_DENY_MASK & FILE_GENERIC_WRITE, 0);
+        assert_ne!(LEGACY_GENERIC_WRITE_DENY_MASK & READ_CONTROL, 0);
+    }
 }
 
 pub unsafe fn revoke_ace(path: &Path, psid: *mut c_void) {
