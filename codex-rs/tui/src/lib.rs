@@ -978,6 +978,7 @@ pub async fn run_main(
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
+    let codex_trace_layer = codex_trace::local_layer_from_env().ok().flatten();
 
     let log_db = get_state_db(&config).await.map(log_db::start);
     let log_db_layer = log_db
@@ -991,6 +992,7 @@ pub async fn run_main(
         .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
+        .with(codex_trace_layer)
         .try_init();
 
     run_ratatui_app(

@@ -180,6 +180,7 @@ use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::client::CodexTraceContext;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -1327,6 +1328,200 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
+fn emit_trace_safe_event_for_event_msg(thread_id: ThreadId, turn_id: &str, msg: &EventMsg) {
+    match msg {
+        EventMsg::TurnComplete(_) => {
+            emit_turn_ended_trace_event(thread_id, turn_id, "completed");
+        }
+        EventMsg::TurnAborted(_) => {
+            emit_turn_ended_trace_event(thread_id, turn_id, "aborted");
+        }
+        EventMsg::CollabAgentSpawnBegin(event) => {
+            let tool_call_id = trace_tool_call_id(&event.call_id);
+            emit_collab_trace_event(
+                "codex.collab.spawn.started",
+                thread_id,
+                turn_id,
+                &tool_call_id,
+                event.sender_thread_id,
+                None,
+                None,
+                None,
+            );
+        }
+        EventMsg::CollabAgentSpawnEnd(event) => {
+            let tool_call_id = trace_tool_call_id(&event.call_id);
+            emit_collab_trace_event(
+                "codex.collab.spawn.ended",
+                thread_id,
+                turn_id,
+                &tool_call_id,
+                event.sender_thread_id,
+                event.new_thread_id,
+                event.new_agent_nickname.as_deref(),
+                event.new_agent_role.as_deref(),
+            );
+        }
+        EventMsg::CollabAgentInteractionBegin(event) => {
+            let tool_call_id = trace_tool_call_id(&event.call_id);
+            emit_collab_trace_event(
+                "codex.collab.message.started",
+                thread_id,
+                turn_id,
+                &tool_call_id,
+                event.sender_thread_id,
+                Some(event.receiver_thread_id),
+                None,
+                None,
+            );
+        }
+        EventMsg::CollabAgentInteractionEnd(event) => {
+            let tool_call_id = trace_tool_call_id(&event.call_id);
+            emit_collab_trace_event(
+                "codex.collab.message.ended",
+                thread_id,
+                turn_id,
+                &tool_call_id,
+                event.sender_thread_id,
+                Some(event.receiver_thread_id),
+                event.receiver_agent_nickname.as_deref(),
+                event.receiver_agent_role.as_deref(),
+            );
+        }
+        EventMsg::CollabWaitingBegin(event) => {
+            let tool_call_id = trace_tool_call_id(&event.call_id);
+            for receiver_thread_id in &event.receiver_thread_ids {
+                emit_collab_trace_event(
+                    "codex.collab.wait.started",
+                    thread_id,
+                    turn_id,
+                    &tool_call_id,
+                    event.sender_thread_id,
+                    Some(*receiver_thread_id),
+                    None,
+                    None,
+                );
+            }
+        }
+        EventMsg::CollabWaitingEnd(event) => {
+            let tool_call_id = trace_tool_call_id(&event.call_id);
+            if event.agent_statuses.is_empty() {
+                if event.statuses.is_empty() {
+                    emit_collab_trace_event(
+                        "codex.collab.wait.ended",
+                        thread_id,
+                        turn_id,
+                        &tool_call_id,
+                        event.sender_thread_id,
+                        None,
+                        None,
+                        None,
+                    );
+                } else {
+                    for receiver_thread_id in event.statuses.keys() {
+                        emit_collab_trace_event(
+                            "codex.collab.wait.ended",
+                            thread_id,
+                            turn_id,
+                            &tool_call_id,
+                            event.sender_thread_id,
+                            Some(*receiver_thread_id),
+                            None,
+                            None,
+                        );
+                    }
+                }
+            } else {
+                for agent_status in &event.agent_statuses {
+                    emit_collab_trace_event(
+                        "codex.collab.wait.ended",
+                        thread_id,
+                        turn_id,
+                        &tool_call_id,
+                        event.sender_thread_id,
+                        Some(agent_status.thread_id),
+                        agent_status.agent_nickname.as_deref(),
+                        agent_status.agent_role.as_deref(),
+                    );
+                }
+            }
+        }
+        EventMsg::CollabCloseBegin(event) => {
+            let tool_call_id = trace_tool_call_id(&event.call_id);
+            emit_collab_trace_event(
+                "codex.collab.close.started",
+                thread_id,
+                turn_id,
+                &tool_call_id,
+                event.sender_thread_id,
+                Some(event.receiver_thread_id),
+                None,
+                None,
+            );
+        }
+        EventMsg::CollabCloseEnd(event) => {
+            let tool_call_id = trace_tool_call_id(&event.call_id);
+            emit_collab_trace_event(
+                "codex.collab.close.ended",
+                thread_id,
+                turn_id,
+                &tool_call_id,
+                event.sender_thread_id,
+                Some(event.receiver_thread_id),
+                event.receiver_agent_nickname.as_deref(),
+                event.receiver_agent_role.as_deref(),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn emit_turn_ended_trace_event(thread_id: ThreadId, turn_id: &str, status: &str) {
+    tracing::event!(
+        target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+        tracing::Level::INFO,
+        event.name = %"codex.turn.ended",
+        thread.id = %thread_id,
+        turn.id = %turn_id,
+        status = %status,
+    );
+}
+
+fn emit_collab_trace_event(
+    event_name: &str,
+    thread_id: ThreadId,
+    turn_id: &str,
+    tool_call_id: &str,
+    sender_thread_id: ThreadId,
+    target_thread_id: Option<ThreadId>,
+    target_agent_nickname: Option<&str>,
+    target_agent_role: Option<&str>,
+) {
+    let target_thread_id = target_thread_id
+        .map(|thread_id| thread_id.to_string())
+        .unwrap_or_default();
+    tracing::event!(
+        target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+        tracing::Level::INFO,
+        event.name = %event_name,
+        thread.id = %thread_id,
+        turn.id = %turn_id,
+        tool.call_id = %tool_call_id,
+        sender.thread.id = %sender_thread_id,
+        target.thread.id = %target_thread_id,
+        target.agent.nickname = %target_agent_nickname.unwrap_or(""),
+        target.agent.role = %target_agent_role.unwrap_or(""),
+    );
+}
+
+fn trace_tool_call_id(call_id: &str) -> String {
+    if call_id.starts_with("tool:") {
+        call_id.to_string()
+    } else {
+        format!("tool:{call_id}")
+    }
+}
+
 impl Session {
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
@@ -2190,6 +2385,32 @@ impl Session {
             let mut guard = network_policy_decider_session.write().await;
             *guard = Arc::downgrade(&sess);
         }
+        let thread_id = conversation_id.to_string();
+        let (agent_path, parent_thread_id) = match &session_configuration.session_source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                agent_path,
+                ..
+            }) => (
+                agent_path
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "/root".to_string()),
+                Some(parent_thread_id.to_string()),
+            ),
+            _ => ("/root".to_string(), None),
+        };
+        let session_source = session_configuration.session_source.to_string();
+        tracing::event!(
+            target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+            tracing::Level::INFO,
+            event.name = %"codex.thread.started",
+            thread.id = %thread_id,
+            agent.path = %agent_path,
+            model = session_configuration.collaboration_mode.model(),
+            thread.source = %session_source,
+            parent_thread.id = %parent_thread_id.as_deref().unwrap_or(""),
+        );
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
@@ -2764,6 +2985,13 @@ impl Session {
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
         }
+        tracing::event!(
+            target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+            tracing::Level::INFO,
+            event.name = %"codex.turn.started",
+            thread.id = %self.conversation_id,
+            turn.id = %turn_context.sub_id,
+        );
         let turn_context = Arc::new(turn_context);
         turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn_context
@@ -2892,6 +3120,11 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        emit_trace_safe_event_for_event_msg(
+            self.conversation_id,
+            &turn_context.sub_id,
+            &legacy_source,
+        );
         let event = Event {
             id: turn_context.sub_id.clone(),
             msg,
@@ -7876,8 +8109,13 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
+    let trace_context = CodexTraceContext {
+        thread_id: sess.conversation_id.to_string(),
+        turn_id: turn_context.sub_id.clone(),
+        inference_call_id: codex_trace::next_id("inference"),
+    };
     let mut stream = client_session
-        .stream(
+        .stream_with_trace(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
@@ -7885,6 +8123,7 @@ async fn try_run_sampling_request(
             turn_context.reasoning_summary,
             turn_context.config.service_tier,
             turn_metadata_header,
+            Some(trace_context),
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)

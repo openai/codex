@@ -522,6 +522,7 @@ pub async fn run_main_with_transport(
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
+    let codex_trace_layer = codex_trace::local_layer_from_env().ok().flatten();
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
         .with(feedback_layer)
@@ -529,6 +530,7 @@ pub async fn run_main_with_transport(
         .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
+        .with(codex_trace_layer)
         .try_init();
     for warning in &config_warnings {
         match &warning.details {

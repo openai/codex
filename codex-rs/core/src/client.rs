@@ -85,6 +85,7 @@ use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use http::StatusCode as HttpStatusCode;
 use reqwest::StatusCode;
+use serde_json::json;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -136,6 +137,13 @@ const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
+
+#[derive(Clone, Debug)]
+pub(crate) struct CodexTraceContext {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) inference_call_id: String,
+}
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
@@ -1140,6 +1148,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
+        trace_context: Option<CodexTraceContext>,
     ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             warn!(path, "Streaming from fixture");
@@ -1148,7 +1157,11 @@ impl ModelClientSession {
                 self.client.state.provider.stream_idle_timeout(),
             )
             .map_err(map_api_error)?;
-            let (stream, _last_request_rx) = map_response_stream(stream, session_telemetry.clone());
+            let (stream, _last_request_rx) = map_response_stream(
+                stream,
+                session_telemetry.clone(),
+                /*trace_context*/ None,
+            );
             return Ok(stream);
         }
 
@@ -1157,6 +1170,7 @@ impl ModelClientSession {
             .as_ref()
             .map(AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
+        let mut trace_started = false;
         loop {
             let client_setup = self.client.current_client_setup().await?;
             let transport = ReqwestTransport::new(build_reqwest_client());
@@ -1182,6 +1196,18 @@ impl ModelClientSession {
                 summary,
                 service_tier,
             )?;
+            if let Some(trace_context) = &trace_context
+                && !trace_started
+            {
+                let request_payload = codex_trace::write_payload("inference_request", &request);
+                emit_inference_started(
+                    trace_context,
+                    model_info,
+                    &self.client.state.provider.name,
+                    request_payload.as_ref(),
+                );
+                trace_started = true;
+            }
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1192,7 +1218,8 @@ impl ModelClientSession {
 
             match stream_result {
                 Ok(stream) => {
-                    let (stream, _) = map_response_stream(stream, session_telemetry.clone());
+                    let (stream, _) =
+                        map_response_stream(stream, session_telemetry.clone(), trace_context);
                     return Ok(stream);
                 }
                 Err(ApiError::Transport(
@@ -1208,7 +1235,13 @@ impl ModelClientSession {
                     );
                     continue;
                 }
-                Err(err) => return Err(map_api_error(err)),
+                Err(err) => {
+                    let mapped = map_api_error(err);
+                    if let Some(trace_context) = &trace_context {
+                        emit_inference_failed(trace_context, &mapped.to_string());
+                    }
+                    return Err(mapped);
+                }
             }
         }
     }
@@ -1237,6 +1270,7 @@ impl ModelClientSession {
         summary: ReasoningSummaryConfig,
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
+        trace_context: Option<CodexTraceContext>,
         warmup: bool,
         request_trace: Option<W3cTraceContext>,
     ) -> Result<WebsocketStreamOutcome> {
@@ -1312,18 +1346,38 @@ impl ModelClientSession {
             }
 
             let ws_request = self.prepare_websocket_request(ws_payload, &request);
+            let request_payload = trace_context
+                .as_ref()
+                .and_then(|_| codex_trace::write_payload("inference_request", &ws_request));
+            if let Some(trace_context) = &trace_context {
+                emit_inference_started(
+                    trace_context,
+                    model_info,
+                    &self.client.state.provider.name,
+                    request_payload.as_ref(),
+                );
+            }
             self.websocket_session.last_request = Some(request);
             let stream_result = self.websocket_session.connection.as_ref().ok_or_else(|| {
                 map_api_error(ApiError::Stream(
                     "websocket connection is unavailable".to_string(),
                 ))
             })?;
-            let stream_result = stream_result
+            let stream_result = match stream_result
                 .stream_request(ws_request, self.websocket_session.connection_reused())
                 .await
-                .map_err(map_api_error)?;
+            {
+                Ok(stream) => stream,
+                Err(err) => {
+                    let mapped = map_api_error(err);
+                    if let Some(trace_context) = &trace_context {
+                        emit_inference_failed(trace_context, &mapped.to_string());
+                    }
+                    return Err(mapped);
+                }
+            };
             let (stream, last_request_rx) =
-                map_response_stream(stream_result, session_telemetry.clone());
+                map_response_stream(stream_result, session_telemetry.clone(), trace_context);
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
         }
@@ -1391,6 +1445,7 @@ impl ModelClientSession {
                 summary,
                 service_tier,
                 turn_metadata_header,
+                /*trace_context*/ None,
                 /*warmup*/ true,
                 current_span_w3c_trace_context(),
             )
@@ -1432,6 +1487,43 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
+        self.stream_with_trace(
+            prompt,
+            model_info,
+            session_telemetry,
+            effort,
+            summary,
+            service_tier,
+            turn_metadata_header,
+            /*trace_context*/ None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(
+        target = "codex_otel.trace_safe",
+        name = "codex.inference",
+        skip_all,
+        fields(
+            thread.id = %trace_context.as_ref().map(|ctx| ctx.thread_id.as_str()).unwrap_or(""),
+            turn.id = %trace_context.as_ref().map(|ctx| ctx.turn_id.as_str()).unwrap_or(""),
+            inference.id = %trace_context.as_ref().map(|ctx| ctx.inference_call_id.as_str()).unwrap_or(""),
+            model = %model_info.slug,
+            provider.name = %self.client.state.provider.name,
+        )
+    )]
+    pub(crate) async fn stream_with_trace(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
+        turn_metadata_header: Option<&str>,
+        trace_context: Option<CodexTraceContext>,
+    ) -> Result<ResponseStream> {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
@@ -1446,6 +1538,7 @@ impl ModelClientSession {
                             summary,
                             service_tier,
                             turn_metadata_header,
+                            trace_context.clone(),
                             /*warmup*/ false,
                             request_trace,
                         )
@@ -1466,6 +1559,7 @@ impl ModelClientSession {
                     summary,
                     service_tier,
                     turn_metadata_header,
+                    trace_context,
                 )
                 .await
             }
@@ -1558,9 +1652,62 @@ fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<Strin
     }
 }
 
+fn emit_inference_started(
+    trace_context: &CodexTraceContext,
+    model_info: &ModelInfo,
+    provider_name: &str,
+    request_payload: Option<&codex_trace::RawPayloadRef>,
+) {
+    tracing::event!(
+        target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+        tracing::Level::INFO,
+        event.name = %"codex.inference.started",
+        thread.id = %trace_context.thread_id,
+        turn.id = %trace_context.turn_id,
+        inference.id = %trace_context.inference_call_id,
+        model = %model_info.slug,
+        provider.name = %provider_name,
+        raw_payload.request.id = %request_payload.map(|payload| payload.raw_payload_id.as_str()).unwrap_or(""),
+        raw_payload.request.path = %request_payload.map(|payload| payload.path.as_str()).unwrap_or(""),
+        raw_payload.request.kind = %request_payload.map(|payload| payload.kind.as_str()).unwrap_or(""),
+    );
+}
+
+fn emit_inference_completed(
+    trace_context: &CodexTraceContext,
+    response_id: &str,
+    response_payload: Option<&codex_trace::RawPayloadRef>,
+) {
+    tracing::event!(
+        target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+        tracing::Level::INFO,
+        event.name = %"codex.inference.completed",
+        thread.id = %trace_context.thread_id,
+        turn.id = %trace_context.turn_id,
+        inference.id = %trace_context.inference_call_id,
+        response.id = %response_id,
+        raw_payload.response.id = %response_payload.map(|payload| payload.raw_payload_id.as_str()).unwrap_or(""),
+        raw_payload.response.path = %response_payload.map(|payload| payload.path.as_str()).unwrap_or(""),
+        raw_payload.response.kind = %response_payload.map(|payload| payload.kind.as_str()).unwrap_or(""),
+    );
+}
+
+fn emit_inference_failed(trace_context: &CodexTraceContext, error: &str) {
+    tracing::event!(
+        target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+        tracing::Level::INFO,
+        event.name = %"codex.inference.failed",
+        thread.id = %trace_context.thread_id,
+        turn.id = %trace_context.turn_id,
+        inference.id = %trace_context.inference_call_id,
+        error = %error,
+    );
+}
+
 fn map_response_stream<S>(
     api_stream: S,
     session_telemetry: SessionTelemetry,
+    trace_context: Option<CodexTraceContext>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
 where
     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
@@ -1592,6 +1739,17 @@ where
                     response_id,
                     token_usage,
                 }) => {
+                    if let Some(trace_context) = &trace_context {
+                        let payload = codex_trace::write_payload(
+                            "inference_response_summary",
+                            &json!({
+                                "response_id": response_id,
+                                "token_usage": token_usage.clone(),
+                                "output_items": items_added.clone(),
+                            }),
+                        );
+                        emit_inference_completed(trace_context, &response_id, payload.as_ref());
+                    }
                     if let Some(usage) = &token_usage {
                         session_telemetry.sse_event_completed(
                             usage.input_tokens,
@@ -1627,6 +1785,9 @@ where
                     let mapped = map_api_error(err);
                     if !logged_error {
                         session_telemetry.see_event_completed_failed(&mapped);
+                        if let Some(trace_context) = &trace_context {
+                            emit_inference_failed(trace_context, &mapped.to_string());
+                        }
                         logged_error = true;
                     }
                     if tx_event.send(Err(mapped)).await.is_err() {

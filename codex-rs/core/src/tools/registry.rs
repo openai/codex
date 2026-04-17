@@ -28,6 +28,7 @@ use codex_tools::ToolSpec;
 use codex_utils_readiness::Readiness;
 use futures::future::BoxFuture;
 use serde_json::Value;
+use serde_json::json;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -206,7 +207,37 @@ impl ToolRegistry {
     //     }
     // }
 
+    #[tracing::instrument(
+        target = "codex_otel.trace_safe",
+        name = "codex.tool_call",
+        skip_all,
+        fields(
+            thread.id = %invocation.session.conversation_id,
+            turn.id = %invocation.turn.sub_id,
+            tool.call_id = %invocation.call_id,
+            tool.name = %invocation.tool_name.display(),
+        )
+    )]
     pub(crate) async fn dispatch_any(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        let call_id_owned = invocation.call_id.clone();
+        let trace_tool_call_id = format!("tool:{call_id_owned}");
+        let invocation_payload =
+            codex_trace::write_payload("tool_invocation", &trace_tool_invocation(&invocation));
+        emit_tool_started(
+            &invocation,
+            &trace_tool_call_id,
+            invocation_payload.as_ref(),
+        );
+
+        let result = self.dispatch_any_inner(invocation).await;
+        emit_tool_ended(&trace_tool_call_id, &result);
+        result
+    }
+
+    async fn dispatch_any_inner(
         &self,
         invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
@@ -297,10 +328,11 @@ impl ToolRegistry {
             )
             .await
         {
-            return Err(FunctionCallError::RespondToModel(format!(
+            let message = format!(
                 "Command blocked by PreToolUse hook: {reason}. Command: {}",
                 pre_tool_use_payload.command
-            )));
+            );
+            return Err(FunctionCallError::RespondToModel(message));
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
@@ -374,7 +406,7 @@ impl ToolRegistry {
         // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse
         let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
-            output_preview,
+            output_preview: output_preview.clone(),
             success,
             executed: true,
             duration,
@@ -426,6 +458,114 @@ impl ToolRegistry {
             }
             Err(err) => Err(err),
         }
+    }
+}
+
+fn emit_tool_started(
+    invocation: &ToolInvocation,
+    tool_call_id: &str,
+    invocation_payload: Option<&codex_trace::RawPayloadRef>,
+) {
+    tracing::event!(
+        target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+        tracing::Level::INFO,
+        event.name = %"codex.tool.started",
+        thread.id = %invocation.session.conversation_id,
+        turn.id = %invocation.turn.sub_id,
+        tool.call_id = %tool_call_id,
+        tool.name = %invocation.tool_name.display(),
+        model_visible_call.id = %invocation.call_id,
+        raw_payload.invocation.id = %invocation_payload.map(|payload| payload.raw_payload_id.as_str()).unwrap_or(""),
+        raw_payload.invocation.path = %invocation_payload.map(|payload| payload.path.as_str()).unwrap_or(""),
+        raw_payload.invocation.kind = %invocation_payload.map(|payload| payload.kind.as_str()).unwrap_or(""),
+    );
+}
+
+fn emit_tool_ended(tool_call_id: &str, result: &Result<AnyToolResult, FunctionCallError>) {
+    let (status, output_preview) = match result {
+        Ok(result) => {
+            let success = result.result.success_for_logging();
+            let status = if success { "completed" } else { "failed" };
+            (status, result.result.log_preview())
+        }
+        Err(err) => ("failed", err.to_string()),
+    };
+    let result_payload = codex_trace::write_payload_lazy("tool_result", || {
+        trace_tool_result(result, status, &output_preview)
+    });
+    tracing::event!(
+        target: codex_otel::OTEL_TRACE_SAFE_TARGET,
+        tracing::Level::INFO,
+        event.name = %"codex.tool.ended",
+        tool.call_id = %tool_call_id,
+        status = %status,
+        output_preview = %output_preview,
+        raw_payload.result.id = %result_payload.as_ref().map(|payload| payload.raw_payload_id.as_str()).unwrap_or(""),
+        raw_payload.result.path = %result_payload.as_ref().map(|payload| payload.path.as_str()).unwrap_or(""),
+        raw_payload.result.kind = %result_payload.as_ref().map(|payload| payload.kind.as_str()).unwrap_or(""),
+    );
+}
+
+fn trace_tool_invocation(invocation: &ToolInvocation) -> Value {
+    let payload = match &invocation.payload {
+        ToolPayload::Function { arguments } => json!({
+            "type": "function",
+            "arguments": arguments,
+        }),
+        ToolPayload::ToolSearch { arguments } => json!({
+            "type": "tool_search",
+            "arguments": arguments,
+        }),
+        ToolPayload::Custom { input } => json!({
+            "type": "custom",
+            "input": input,
+        }),
+        ToolPayload::LocalShell { params } => json!({
+            "type": "local_shell",
+            "command": &params.command,
+            "workdir": &params.workdir,
+            "timeout_ms": params.timeout_ms,
+        }),
+        ToolPayload::Mcp {
+            server,
+            tool,
+            raw_arguments,
+        } => json!({
+            "type": "mcp",
+            "server": server,
+            "tool": tool,
+            "raw_arguments": raw_arguments,
+        }),
+    };
+    json!({
+        "call_id": &invocation.call_id,
+        "tool_name": invocation.tool_name.display(),
+        "turn_id": &invocation.turn.sub_id,
+        "payload": payload,
+    })
+}
+
+fn trace_tool_result(
+    result: &Result<AnyToolResult, FunctionCallError>,
+    status: &str,
+    output_preview: &str,
+) -> Value {
+    match result {
+        Ok(result) => json!({
+            "status": status,
+            "success": result.result.success_for_logging(),
+            "output_preview": output_preview,
+            "model_visible_response_item": result.result.to_response_item(&result.call_id, &result.payload),
+            "code_mode_result": result.result.code_mode_result(&result.payload),
+        }),
+        Err(err) => json!({
+            "status": status,
+            "success": false,
+            "output_preview": output_preview,
+            "error": {
+                "message": err.to_string(),
+            },
+        }),
     }
 }
 

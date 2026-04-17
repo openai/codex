@@ -1,5 +1,7 @@
 use super::*;
+use crate::tools::context::FunctionToolOutput;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 
 struct TestHandler;
 
@@ -47,5 +49,36 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
         namespaced
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
+    );
+}
+
+#[test]
+fn trace_tool_result_includes_full_caller_payloads() {
+    let result = Ok(AnyToolResult {
+        call_id: "call-1".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        result: Box::new(FunctionToolOutput::from_text(
+            "tool output".to_string(),
+            Some(true),
+        )),
+    });
+
+    let payload = trace_tool_result(&result, "completed", "tool output");
+
+    assert_eq!(
+        payload,
+        json!({
+            "status": "completed",
+            "success": true,
+            "output_preview": "tool output",
+            "model_visible_response_item": {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "tool output",
+            },
+            "code_mode_result": "tool output",
+        })
     );
 }

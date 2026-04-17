@@ -34,6 +34,7 @@ codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-trace = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-oss = { workspace = true }

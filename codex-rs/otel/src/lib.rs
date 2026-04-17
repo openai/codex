@@ -32,6 +32,8 @@ pub use crate::trace_context::span_w3c_trace_context;
 pub use crate::trace_context::traceparent_context_from_env;
 pub use codex_utils_string::sanitize_metric_tag_value;
 
+pub const OTEL_TRACE_SAFE_TARGET: &str = "codex_otel.trace_safe";
+
 #[derive(Debug, Clone, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolDecisionSource {

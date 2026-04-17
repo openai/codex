@@ -24,6 +24,8 @@ use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_state::StateRuntime;
 use codex_state::state_db_path;
+use codex_trace::REDUCED_STATE_FILE_NAME;
+use codex_trace::reduce_bundle_to_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
@@ -191,6 +193,9 @@ enum DebugSubcommand {
     /// Render the model-visible prompt input list as JSON.
     PromptInput(DebugPromptInputCommand),
 
+    /// Reduce a local trace bundle into viewer state JSON.
+    TraceReduce(DebugTraceReduceCommand),
+
     /// Internal: reset local memory state for a fresh start.
     #[clap(hide = true)]
     ClearMemories,
@@ -223,6 +228,17 @@ struct DebugPromptInputCommand {
     /// Optional image(s) to attach to the user prompt.
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     images: Vec<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct DebugTraceReduceCommand {
+    /// Trace bundle directory containing manifest.json and events.jsonl.
+    #[arg(value_name = "TRACE_BUNDLE")]
+    trace_bundle: PathBuf,
+
+    /// Output state.json path. Defaults to TRACE_BUNDLE/state.json.
+    #[arg(long = "output", short = 'o', value_name = "FILE")]
+    output: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -992,6 +1008,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 )
                 .await?;
             }
+            DebugSubcommand::TraceReduce(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug trace-reduce",
+                )?;
+                run_debug_trace_reduce_command(cmd).await?;
+            }
             DebugSubcommand::ClearMemories => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
@@ -1256,6 +1280,15 @@ async fn run_debug_prompt_input_command(
     let prompt_input = codex_core::build_prompt_input(config, input).await?;
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);
 
+    Ok(())
+}
+
+async fn run_debug_trace_reduce_command(cmd: DebugTraceReduceCommand) -> anyhow::Result<()> {
+    let output = cmd
+        .output
+        .unwrap_or_else(|| cmd.trace_bundle.join(REDUCED_STATE_FILE_NAME));
+    reduce_bundle_to_path(&cmd.trace_bundle, &output)?;
+    println!("{}", output.display());
     Ok(())
 }
 

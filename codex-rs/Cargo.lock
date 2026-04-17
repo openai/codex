@@ -1464,6 +1464,7 @@ dependencies = [
  "codex-state",
  "codex-thread-store",
  "codex-tools",
+ "codex-trace",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -1695,6 +1696,7 @@ dependencies = [
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
+ "codex-trace",
  "codex-tui",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -1943,6 +1945,7 @@ dependencies = [
  "codex-test-binary-support",
  "codex-thread-store",
  "codex-tools",
+ "codex-trace",
  "codex-utils-absolute-path",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
@@ -2103,6 +2106,7 @@ dependencies = [
  "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",
+ "codex-trace",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -2912,6 +2916,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-trace"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "codex-tui"
 version = "0.0.0"
 dependencies = [
@@ -2946,6 +2965,7 @@ dependencies = [
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",
+ "codex-trace",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
  "codex-utils-cargo-bin",
