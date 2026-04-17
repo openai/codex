@@ -309,6 +309,19 @@ async fn on_event_updates_status_from_turn_aborted() {
 }
 
 #[tokio::test]
+async fn on_event_updates_status_from_budget_limited_abort() {
+    let status = agent_status_from_event(&EventMsg::TurnAborted(TurnAbortedEvent {
+        turn_id: Some("turn-1".to_string()),
+        reason: TurnAbortReason::BudgetLimited,
+        completed_at: None,
+        duration_ms: None,
+    }));
+
+    let expected = AgentStatus::Interrupted;
+    assert_eq!(status, Some(expected));
+}
+
+#[tokio::test]
 async fn on_event_updates_status_from_shutdown_complete() {
     let status = agent_status_from_event(&EventMsg::ShutdownComplete);
     assert_eq!(status, Some(AgentStatus::Shutdown));
