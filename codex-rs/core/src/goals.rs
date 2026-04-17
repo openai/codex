@@ -636,7 +636,6 @@ impl Session {
         }
 
         let _continuation_guard = self.goal_continuation_lock.lock().await;
-        self.clear_queued_response_items_for_next_turn().await;
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
@@ -646,6 +645,7 @@ impl Session {
         else {
             return Ok(());
         };
+        self.clear_queued_response_items_for_next_turn().await;
         let goal = protocol_goal_from_state(goal);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
         self.thread_goal_wall_clock_accounting
