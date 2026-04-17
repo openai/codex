@@ -139,7 +139,7 @@ fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-fn git_info_from_parts(
+pub(super) fn git_info_from_parts(
     sha: Option<String>,
     branch: Option<String>,
     origin_url: Option<String>,

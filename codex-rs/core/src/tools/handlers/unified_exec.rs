@@ -317,6 +317,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .exec_command(
                         ExecCommandRequest {
                             command,
+                            hook_command: args.cmd,
                             process_id,
                             yield_time_ms,
                             max_output_tokens,

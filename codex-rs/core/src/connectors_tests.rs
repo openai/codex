@@ -391,6 +391,62 @@ fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
 }
 
 #[test]
+fn app_tool_policy_defaults_missing_destructive_hint_to_true() {
+    let apps_config = AppsConfigToml {
+        default: Some(AppsDefaultConfig {
+            enabled: true,
+            destructive_enabled: false,
+            open_world_enabled: true,
+        }),
+        apps: HashMap::new(),
+    };
+
+    let policy = app_tool_policy_from_apps_config(
+        Some(&apps_config),
+        Some("calendar"),
+        "events/create",
+        /*tool_title*/ None,
+        Some(&annotations(/*destructive_hint*/ None, Some(false))),
+    );
+
+    assert_eq!(
+        policy,
+        AppToolPolicy {
+            enabled: false,
+            approval: AppToolApproval::Auto,
+        }
+    );
+}
+
+#[test]
+fn app_tool_policy_defaults_missing_open_world_hint_to_true() {
+    let apps_config = AppsConfigToml {
+        default: Some(AppsDefaultConfig {
+            enabled: true,
+            destructive_enabled: true,
+            open_world_enabled: false,
+        }),
+        apps: HashMap::new(),
+    };
+
+    let policy = app_tool_policy_from_apps_config(
+        Some(&apps_config),
+        Some("calendar"),
+        "events/create",
+        /*tool_title*/ None,
+        Some(&annotations(Some(false), /*open_world_hint*/ None)),
+    );
+
+    assert_eq!(
+        policy,
+        AppToolPolicy {
+            enabled: false,
+            approval: AppToolApproval::Auto,
+        }
+    );
+}
+
+#[test]
 fn app_is_enabled_uses_default_for_unconfigured_apps() {
     let apps_config = AppsConfigToml {
         default: Some(AppsDefaultConfig {

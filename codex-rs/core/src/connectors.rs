@@ -21,12 +21,12 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::warn;
 
-use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::Config;
 use crate::config_loader::AppsRequirementsToml;
 use crate::mcp::McpManager;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
+use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -680,10 +680,10 @@ fn app_tool_policy_from_apps_config(
         });
     let destructive_hint = annotations
         .and_then(|annotations| annotations.destructive_hint)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let open_world_hint = annotations
         .and_then(|annotations| annotations.open_world_hint)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let enabled =
         (destructive_enabled || !destructive_hint) && (open_world_enabled || !open_world_hint);
 
