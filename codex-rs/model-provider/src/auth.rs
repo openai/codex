@@ -41,6 +41,16 @@ fn bearer_auth_provider_from_auth(
     }
 
     if let Some(auth) = auth {
+        if auth.is_agent_identity_only() {
+            return Ok(BearerAuthProvider {
+                token: None,
+                account_id: auth
+                    .agent_identity_record()
+                    .map(|record| record.workspace_id),
+                is_fedramp_account: false,
+            });
+        }
+
         let token = auth.get_token()?;
         Ok(BearerAuthProvider {
             token: Some(token),

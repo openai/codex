@@ -36,7 +36,7 @@ struct RegisterTaskResponse {
 
 impl AgentIdentityManager {
     pub(crate) async fn register_task(&self) -> Result<Option<RegisteredAgentTask>> {
-        if !self.feature_enabled {
+        if !self.is_enabled() {
             return Ok(None);
         }
 
@@ -65,12 +65,15 @@ impl AgentIdentityManager {
         let client = create_client();
         let url =
             agent_task_registration_url(&self.chatgpt_base_url, &stored_identity.agent_runtime_id);
-        let human_biscuit = self.mint_human_biscuit(&binding, "POST", &url).await?;
-        let response = client
+        let mut request = client
             .post(&url)
-            .header("X-OpenAI-Authorization", human_biscuit)
             .json(&request_body)
-            .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
+            .timeout(AGENT_TASK_REGISTRATION_TIMEOUT);
+        if binding.access_token.is_some() {
+            let human_biscuit = self.mint_human_biscuit(&binding, "POST", &url).await?;
+            request = request.header("X-OpenAI-Authorization", human_biscuit);
+        }
+        let response = request
             .send()
             .await
             .with_context(|| format!("failed to send agent task registration request to {url}"))?;
@@ -196,6 +199,50 @@ mod tests {
         );
 
         assert_eq!(manager.register_task().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn register_task_uses_agent_identity_only_auth_when_feature_is_disabled() {
+        let server = MockServer::start().await;
+        let chatgpt_base_url = server.uri();
+        let auth = make_agent_identity_only_auth("account-123", Some("user-123"), "agent-123");
+        let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
+        let manager = AgentIdentityManager::new_for_tests(
+            auth_manager,
+            /*feature_enabled*/ false,
+            chatgpt_base_url,
+            SessionSource::Cli,
+        );
+        let stored_identity = manager
+            .current_stored_identity()
+            .await
+            .expect("stored identity");
+        let encrypted_task_id =
+            encrypt_task_id_for_identity(&stored_identity, "task_123").expect("task ciphertext");
+
+        Mock::given(method("POST"))
+            .and(path("/v1/agent/agent-123/task/register"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "encrypted_task_id": encrypted_task_id,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let task = manager
+            .register_task()
+            .await
+            .unwrap()
+            .expect("task should be registered");
+
+        assert_eq!(
+            task,
+            RegisteredAgentTask {
+                agent_runtime_id: "agent-123".to_string(),
+                task_id: "task_123".to_string(),
+                registered_at: task.registered_at.clone(),
+            }
+        );
     }
 
     #[tokio::test]
@@ -445,6 +492,33 @@ mod tests {
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+        };
+        save_auth(tempdir.path(), &auth_json, AuthCredentialsStoreMode::File).expect("save auth");
+        CodexAuth::from_auth_storage(tempdir.path(), AuthCredentialsStoreMode::File)
+            .expect("load auth")
+            .expect("auth")
+    }
+
+    fn make_agent_identity_only_auth(
+        account_id: &str,
+        user_id: Option<&str>,
+        agent_runtime_id: &str,
+    ) -> CodexAuth {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let key_material = generate_agent_key_material().expect("key material");
+        let auth_json = AuthDotJson {
+            auth_mode: Some(ApiAuthMode::Chatgpt),
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: Some(AgentIdentityAuthRecord {
+                workspace_id: account_id.to_string(),
+                chatgpt_user_id: user_id.map(ToOwned::to_owned),
+                agent_runtime_id: agent_runtime_id.to_string(),
+                agent_private_key: key_material.private_key_pkcs8_base64,
+                registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+                background_task_id: None,
+            }),
         };
         save_auth(tempdir.path(), &auth_json, AuthCredentialsStoreMode::File).expect("save auth");
         CodexAuth::from_auth_storage(tempdir.path(), AuthCredentialsStoreMode::File)

@@ -259,6 +259,74 @@ fn dummy_chatgpt_auth_does_not_create_cwd_auth_json_when_identity_is_set() {
 }
 
 #[test]
+fn chatgpt_auth_detects_agent_identity_only() {
+    let codex_home = tempdir().unwrap();
+    let record = AgentIdentityAuthRecord {
+        workspace_id: "account-123".to_string(),
+        chatgpt_user_id: Some("user-123".to_string()),
+        agent_runtime_id: "agent_123".to_string(),
+        agent_private_key: "pkcs8-base64".to_string(),
+        registered_at: "2026-04-13T12:00:00Z".to_string(),
+        background_task_id: None,
+    };
+    let auth_dot_json = AuthDotJson {
+        auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
+        openai_api_key: None,
+        tokens: None,
+        last_refresh: None,
+        agent_identity: Some(record.clone()),
+    };
+    super::save_auth(
+        codex_home.path(),
+        &auth_dot_json,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("save auth file");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
+
+    assert!(auth.is_agent_identity_only());
+    assert_eq!(auth.agent_identity_record(), Some(record));
+}
+
+#[test]
+fn chatgpt_auth_with_tokens_is_not_agent_identity_only() {
+    let codex_home = tempdir().unwrap();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("account-123".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
+    auth.set_agent_identity(AgentIdentityAuthRecord {
+        workspace_id: "account-123".to_string(),
+        chatgpt_user_id: Some("user-123".to_string()),
+        agent_runtime_id: "agent_123".to_string(),
+        agent_private_key: "pkcs8-base64".to_string(),
+        registered_at: "2026-04-13T12:00:00Z".to_string(),
+        background_task_id: None,
+    })
+    .expect("set agent identity");
+
+    assert!(!auth.is_agent_identity_only());
+}
+
+#[test]
 fn unauthorized_recovery_reports_mode_and_step_names() {
     let dir = tempdir().unwrap();
     let manager = AuthManager::shared(
@@ -684,6 +752,30 @@ async fn build_config(
     }
 }
 
+fn write_agent_identity_only_auth_file(
+    codex_home: &Path,
+    workspace_id: &str,
+) -> std::io::Result<()> {
+    save_auth(
+        codex_home,
+        &AuthDotJson {
+            auth_mode: Some(AuthMode::Chatgpt),
+            openai_api_key: None,
+            tokens: None,
+            last_refresh: None,
+            agent_identity: Some(AgentIdentityAuthRecord {
+                workspace_id: workspace_id.to_string(),
+                chatgpt_user_id: None,
+                agent_runtime_id: "agent_123".to_string(),
+                agent_private_key: "private-key".to_string(),
+                registered_at: "2026-04-13T12:00:00Z".to_string(),
+                background_task_id: None,
+            }),
+        },
+        AuthCredentialsStoreMode::File,
+    )
+}
+
 /// Use sparingly.
 /// TODO (gpeal): replace this with an injectable env var provider.
 #[cfg(test)]
@@ -792,6 +884,50 @@ async fn enforce_login_restrictions_allows_matching_workspace() {
     assert!(
         codex_home.path().join("auth.json").exists(),
         "auth.json should remain when restrictions pass"
+    );
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_allows_matching_agent_identity_only_workspace() {
+    let codex_home = tempdir().unwrap();
+    write_agent_identity_only_auth_file(codex_home.path(), "org_mine")
+        .expect("failed to write auth file");
+
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        Some("org_mine".to_string()),
+    )
+    .await;
+
+    super::enforce_login_restrictions(&config).expect("matching workspace should succeed");
+    assert!(
+        codex_home.path().join("auth.json").exists(),
+        "auth.json should remain when restrictions pass"
+    );
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn enforce_login_restrictions_logs_out_for_agent_identity_only_workspace_mismatch() {
+    let codex_home = tempdir().unwrap();
+    write_agent_identity_only_auth_file(codex_home.path(), "org_another_org")
+        .expect("failed to write auth file");
+
+    let config = build_config(
+        codex_home.path(),
+        /*forced_login_method*/ None,
+        Some("org_mine".to_string()),
+    )
+    .await;
+
+    let err = super::enforce_login_restrictions(&config)
+        .expect_err("expected workspace mismatch to error");
+    assert!(err.to_string().contains("workspace org_mine"));
+    assert!(
+        !codex_home.path().join("auth.json").exists(),
+        "auth.json should be removed on mismatch"
     );
 }
 
