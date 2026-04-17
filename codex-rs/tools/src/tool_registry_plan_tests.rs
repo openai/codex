@@ -1489,7 +1489,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
         "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
     ));
     assert!(description.contains(
-        "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
+        "If tool search is available, tool search should happen before tool suggestion."
     ));
 }
 
@@ -1560,27 +1560,22 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains("Plan events and schedules."));
     assert!(description.contains("Find and summarize email threads."));
     assert!(description.contains("id: `sample@test`, type: plugin, action: install"));
-    assert!(description.contains("`action_type`: `install` or `enable`"));
+    assert!(description.contains("tool_type = \"plugin\", action_type = \"install\""));
+    assert!(description.contains("tool_type = \"connector\", action_type = \"install\""));
     assert!(
         description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
     );
-    assert!(
-        description.contains(
-            "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
-        )
-    );
     assert!(description.contains(
-        "For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely."
+        "If tool search is available, tool search should happen before tool suggestion."
+    ));
+    assert!(description.contains("There are two types of allowed suggestions:"));
+    assert!(description.contains(
+        "Suggest a plugin needed in the context that explicitly and unambiguously fits the user intent but is not installed"
     ));
     assert!(description.contains(
-        "For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself."
+        "Suggest a connector needed in the context but not installed (even when its plugin is installed)"
     ));
-    assert!(description.contains(
-        "Do not suggest a plugin just because one of its connectors or capabilities seems relevant."
-    ));
-    assert!(description.contains(
-        "Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard."
-    ));
+    assert!(description.contains("Suggest a tool only when it qualifies all the conditions."));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     assert!(!description.contains("{{discoverable_tools}}"));
     assert!(!description.contains("tool_search fails to find a good match"));
