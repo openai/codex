@@ -152,6 +152,7 @@ fn exec_server_params_for_request(
         env_policy,
         env,
         tty,
+        pipe_stdin: false,
         arg0: request.arg0.clone(),
     }
 }

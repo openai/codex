@@ -133,6 +133,7 @@ fn reference_context_item() -> TurnContextItem {
         approval_policy: AskForApproval::OnRequest,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         network: None,
+        file_system_sandbox_policy: None,
         model: "gpt-test".to_string(),
         personality: None,
         collaboration_mode: None,

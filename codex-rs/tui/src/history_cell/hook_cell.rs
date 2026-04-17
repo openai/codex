@@ -769,6 +769,7 @@ mod tests {
             execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
             scope: codex_protocol::protocol::HookScope::Turn,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: codex_protocol::protocol::HookSource::User,
             display_order: 0,
             status: HookRunStatus::Running,
             status_message: Some("checking output policy".to_string()),

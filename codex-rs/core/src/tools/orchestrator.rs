@@ -64,7 +64,7 @@ impl ToolOrchestrator {
         req: &Rq,
         tool_ctx: &ToolCtx,
         attempt: &SandboxAttempt<'_>,
-        has_managed_network_requirements: bool,
+        managed_network_active: bool,
     ) -> (Result<Out, ToolError>, Option<DeferredNetworkApproval>)
     where
         T: ToolRuntime<Rq, Out>,
@@ -72,7 +72,7 @@ impl ToolOrchestrator {
         let network_approval = begin_network_approval(
             &tool_ctx.session,
             &tool_ctx.turn.sub_id,
-            has_managed_network_requirements,
+            managed_network_active,
             tool.network_approval_spec(req, tool_ctx),
         )
         .await;
@@ -177,12 +177,7 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let has_managed_network_requirements = turn_ctx
-            .config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some();
+        let managed_network_active = turn_ctx.network.is_some();
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
@@ -190,7 +185,7 @@ impl ToolOrchestrator {
                 turn_ctx.network_sandbox_policy,
                 tool.sandbox_preference(),
                 turn_ctx.windows_sandbox_level,
-                has_managed_network_requirements,
+                managed_network_active,
             ),
         };
 
@@ -201,7 +196,7 @@ impl ToolOrchestrator {
             policy: &turn_ctx.sandbox_policy,
             file_system_policy: &turn_ctx.file_system_sandbox_policy,
             network_policy: turn_ctx.network_sandbox_policy,
-            enforce_managed_network: has_managed_network_requirements,
+            enforce_managed_network: managed_network_active,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
@@ -218,7 +213,7 @@ impl ToolOrchestrator {
             req,
             tool_ctx,
             &initial_attempt,
-            has_managed_network_requirements,
+            managed_network_active,
         )
         .await;
         match first_result {
@@ -233,7 +228,7 @@ impl ToolOrchestrator {
                 output,
                 network_policy_decision,
             }))) => {
-                let network_approval_context = if has_managed_network_requirements {
+                let network_approval_context = if managed_network_active {
                     network_policy_decision
                         .as_ref()
                         .and_then(network_approval_context_from_payload)
@@ -324,7 +319,7 @@ impl ToolOrchestrator {
                     policy: &turn_ctx.sandbox_policy,
                     file_system_policy: &turn_ctx.file_system_sandbox_policy,
                     network_policy: turn_ctx.network_sandbox_policy,
-                    enforce_managed_network: has_managed_network_requirements,
+                    enforce_managed_network: managed_network_active,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
@@ -342,7 +337,7 @@ impl ToolOrchestrator {
                     req,
                     tool_ctx,
                     &escalated_attempt,
-                    has_managed_network_requirements,
+                    managed_network_active,
                 )
                 .await;
                 retry_result.map(|output| OrchestratorRunResult {

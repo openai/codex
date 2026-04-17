@@ -7,6 +7,7 @@ pub(crate) mod schema_loader;
 
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::HookSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::events::permission_request::PermissionRequestOutcome;
@@ -36,6 +37,7 @@ pub(crate) struct ConfiguredHandler {
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub source_path: AbsolutePathBuf,
+    pub source: HookSource,
     pub display_order: i64,
 }
 

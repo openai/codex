@@ -981,6 +981,9 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overrides(
     if !file_system_sandbox_policy
         .get_unreadable_roots_with_cwd(sandbox_policy_cwd)
         .is_empty()
+        || !file_system_sandbox_policy
+            .get_unreadable_globs_with_cwd(sandbox_policy_cwd)
+            .is_empty()
     {
         return Err(
             "windows unelevated restricted-token sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"
@@ -1096,6 +1099,9 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
     if !file_system_sandbox_policy
         .get_unreadable_roots_with_cwd(sandbox_policy_cwd)
         .is_empty()
+        || !file_system_sandbox_policy
+            .get_unreadable_globs_with_cwd(sandbox_policy_cwd)
+            .is_empty()
     {
         return Err(
             "windows elevated sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"

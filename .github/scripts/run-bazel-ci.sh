@@ -69,12 +69,37 @@ print_bazel_test_log_tails() {
   local console_log="$1"
   local testlogs_dir
   local -a bazel_info_cmd=(bazel)
+  local -a bazel_info_args=(info)
 
   if (( ${#bazel_startup_args[@]} > 0 )); then
     bazel_info_cmd+=("${bazel_startup_args[@]}")
   fi
 
-  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+  # `bazel info` needs the same CI config as the failed test invocation so
+  # platform-specific output roots match. On Windows, omitting `ci-windows`
+  # would point at `local_windows-fastbuild` even when the test ran with the
+  # MSVC host platform under `local_windows_msvc-fastbuild`.
+  if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+    bazel_info_args+=(
+      "--config=${ci_config}"
+      "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+    )
+  fi
+  # Only pass flags that affect Bazel's output-root selection or repository
+  # lookup. Test/build-only flags such as execution logs or remote download
+  # mode can make `bazel info` fail, which would hide the real test log path.
+  for arg in "${post_config_bazel_args[@]}"; do
+    case "$arg" in
+      --host_platform=* | --repo_contents_cache=* | --repository_cache=*)
+        bazel_info_args+=("$arg")
+        ;;
+    esac
+  done
+
+  testlogs_dir="$(run_bazel "${bazel_info_cmd[@]:1}" \
+    --noexperimental_remote_repo_contents_cache \
+    "${bazel_info_args[@]}" \
+    bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
 
   local failed_targets=()
   while IFS= read -r target; do
@@ -94,6 +119,12 @@ print_bazel_test_log_tails() {
     local rel_path="${target#//}"
     rel_path="${rel_path/://}"
     local test_log="${testlogs_dir}/${rel_path}/test.log"
+    local reported_test_log
+    reported_test_log="$(grep -F "FAIL: ${target} " "$console_log" | sed -nE 's#.* \(see (.*[\\/]test\.log)\).*#\1#p' | head -n 1 || true)"
+    if [[ -n "$reported_test_log" ]]; then
+      reported_test_log="${reported_test_log//\\//}"
+      test_log="$reported_test_log"
+    fi
 
     echo "::group::Bazel test log tail for ${target}"
     if [[ -f "$test_log" ]]; then

@@ -1,4 +1,5 @@
 use crate::config::Config;
+use codex_core_plugins::marketplace::find_marketplace_manifest_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
@@ -50,9 +51,7 @@ pub(crate) fn installed_marketplace_roots_from_config(
                 marketplace,
                 &default_install_root,
             )?;
-            path.join(".agents/plugins/marketplace.json")
-                .is_file()
-                .then_some(path)
+            find_marketplace_manifest_path(&path).map(|_| path)
         })
         .filter_map(|path| AbsolutePathBuf::try_from(path).ok())
         .collect::<Vec<_>>();

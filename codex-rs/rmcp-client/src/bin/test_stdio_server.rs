@@ -208,6 +208,7 @@ impl TestToolServer {
     ///   - `codex mcp add mcpimg -- /abs/path/to/test_stdio_server`
     /// - Then in Codex TUI, ask it to call:
     ///   - `mcpimg.image_scenario({"scenario":"image_only"})`
+    ///   - `mcpimg.image_scenario({"scenario":"image_only_original_detail"})`
     ///   - `mcpimg.image_scenario({"scenario":"text_then_image","caption":"Here is the image:"})`
     ///   - `mcpimg.image_scenario({"scenario":"invalid_base64_then_image"})`
     ///   - `mcpimg.image_scenario({"scenario":"invalid_image_bytes_then_image"})`
@@ -224,6 +225,7 @@ impl TestToolServer {
                     "type": "string",
                     "enum": [
                         "image_only",
+                        "image_only_original_detail",
                         "text_then_image",
                         "invalid_base64_then_image",
                         "invalid_image_bytes_then_image",
@@ -339,6 +341,7 @@ fn sync_barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, SyncBarrier
 /// invalid image.
 enum ImageScenario {
     ImageOnly,
+    ImageOnlyOriginalDetail,
     TextThenImage,
     InvalidBase64ThenImage,
     InvalidImageBytesThenImage,
@@ -551,6 +554,21 @@ impl TestToolServer {
         match args.scenario {
             ImageScenario::ImageOnly => {
                 content.push(rmcp::model::Content::image(valid_data_b64, mime_type));
+            }
+            ImageScenario::ImageOnlyOriginalDetail => {
+                let mut meta = rmcp::model::Meta::new();
+                meta.insert(
+                    "codex/imageDetail".to_string(),
+                    serde_json::json!("original"),
+                );
+                content.push(rmcp::model::Annotated::new(
+                    rmcp::model::RawContent::Image(rmcp::model::RawImageContent {
+                        data: valid_data_b64,
+                        mime_type,
+                        meta: Some(meta),
+                    }),
+                    None,
+                ));
             }
             ImageScenario::TextThenImage => {
                 content.push(rmcp::model::Content::text(caption));

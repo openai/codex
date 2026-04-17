@@ -8598,6 +8598,14 @@
           "scope": {
             "$ref": "#/definitions/v2/HookScope"
           },
+          "source": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/HookSource"
+              }
+            ],
+            "default": "unknown"
+          },
           "sourcePath": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
@@ -8633,6 +8641,19 @@
         "enum": [
           "thread",
           "turn"
+        ],
+        "type": "string"
+      },
+      "HookSource": {
+        "enum": [
+          "system",
+          "user",
+          "project",
+          "mdm",
+          "sessionFlags",
+          "legacyManagedConfigFile",
+          "legacyManagedConfigMdm",
+          "unknown"
         ],
         "type": "string"
       },
@@ -13369,6 +13390,12 @@
               },
               "id": {
                 "type": "string"
+              },
+              "mcpAppResourceUri": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "result": {
                 "anyOf": [
