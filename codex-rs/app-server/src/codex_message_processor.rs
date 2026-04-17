@@ -1702,12 +1702,15 @@ impl CodexMessageProcessor {
             }
         }
 
-        if let Err(err) = self.auth_manager.logout() {
-            return Err(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("logout failed: {err}"),
-                data: None,
-            });
+        match self.auth_manager.logout_with_revoke().await {
+            Ok(_) => {}
+            Err(err) => {
+                return Err(JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("logout failed: {err}"),
+                    data: None,
+                });
+            }
         }
 
         // Reflect the current auth method after logout (likely None).
