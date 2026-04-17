@@ -68,6 +68,27 @@ Particularly when introducing a new concept/feature/API, before adding to `codex
 
 Likewise, when reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to `codex-core`.
 
+## Must-Have Codex Coding Guidance
+
+Follow these rules while writing code, not only during PR review:
+
+- For path-like values, prefer `AbsolutePathBuf` once absolute-ness is part of the contract:
+  cwd/runtime state, config roots, sandbox/permission roots, helper executable paths, protocol
+  fields, and persisted environment paths. Keep raw CLI/user/config-relative inputs as `PathBuf` or
+  strings until the boundary that owns the base path, then resolve with existing helpers.
+- Do not mutate process environment in Rust tests with `std::env::set_var`,
+  `std::env::remove_var`, or ad hoc `PATH` rewrites. Pass env through explicit config, runner
+  parameters, sandbox helper args, or an injected env map.
+- Prefer integration or harness-level tests for behavior that crosses session, protocol, runtime, or
+  process boundaries. Unit tests are fine for local pure logic, but cross-boundary behavior needs
+  boundary coverage.
+
+## Codex PR Review Guidance
+
+- Keep broader review heuristics out of normal coding-time flow. When the task is explicitly a PR
+  review, pre-submit review, or reviewer-feedback pass, load the available Codex PR review skill or
+  review-specific guidance and apply that checklist in a separate review pass.
+
 ## TUI style conventions
 
 See `codex-rs/tui/styles.md`.
