@@ -6201,26 +6201,12 @@ impl ChatWidget {
                     details: notification.details,
                 })
             }
-            ServerNotification::ConfigWarning(notification) => {
-                let summary = notification.summary.trim();
-                let details = notification
+            ServerNotification::ConfigWarning(notification) => self.on_warning(
+                notification
                     .details
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|details| !details.is_empty());
-                let mut message = if summary.is_empty() {
-                    "Session warning.".to_string()
-                } else {
-                    format!("Session warning: {summary}")
-                };
-                if let Some(details) = details
-                    && !summary.eq(details)
-                {
-                    message.push_str(": ");
-                    message.push_str(details);
-                }
-                self.on_warning(message)
-            }
+                    .map(|details| format!("{}: {details}", notification.summary))
+                    .unwrap_or(notification.summary),
+            ),
             ServerNotification::McpServerStatusUpdated(notification) => {
                 self.on_mcp_server_status_updated(notification)
             }

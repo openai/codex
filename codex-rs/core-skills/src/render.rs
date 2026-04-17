@@ -77,7 +77,12 @@ pub fn render_skills_section(
     side_effects: SkillRenderSideEffects<'_>,
 ) -> Option<RenderedSkillsSection> {
     if skills.is_empty() {
-        let _ = record_skill_render_side_effects(side_effects, 0, 0, false);
+        let _ = record_skill_render_side_effects(
+            side_effects,
+            /*total_count*/ 0,
+            /*included_count*/ 0,
+            /*truncated*/ false,
+        );
         return None;
     }
 
@@ -248,7 +253,7 @@ mod tests {
     #[test]
     fn default_budget_falls_back_to_characters_without_context_window() {
         assert_eq!(
-            default_skill_metadata_budget(None),
+            default_skill_metadata_budget(/*context_window*/ None),
             SkillMetadataBudget::Characters(DEFAULT_SKILL_METADATA_CHAR_BUDGET)
         );
         assert_eq!(

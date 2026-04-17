@@ -199,14 +199,15 @@ async fn live_app_server_warning_notification_renders_message() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
+    let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        rendered.contains(
+        normalized.contains(
             "Some enabled skills were not included in the model-visible skills list for this session."
         ),
         "expected warning notification message, got {rendered}"
     );
     assert!(
-        rendered.contains("Mention a skill by name or path if you need it."),
+        normalized.contains("Mention a skill by name or path if you need it."),
         "expected warning guidance, got {rendered}"
     );
 }
@@ -229,8 +230,8 @@ async fn live_app_server_config_warning_prefixes_summary() {
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Session warning: Invalid configuration; using defaults."),
-        "expected prefixed config warning, got {rendered}"
+        rendered.contains("Invalid configuration; using defaults."),
+        "expected config warning summary, got {rendered}"
     );
 }
 
