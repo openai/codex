@@ -4,6 +4,9 @@ inputs:
   target:
     description: Target triple used for setup and cache namespacing.
     required: true
+  cache-scope:
+    description: Logical namespace used to keep concurrent Bazel jobs from reserving the same repository cache key.
+    required: true
   install-test-prereqs:
     description: Install Node.js and DotSlash for Bazel-backed test jobs.
     required: false
@@ -12,6 +15,12 @@ outputs:
   repository-cache-path:
     description: Filesystem path used for the Bazel repository cache.
     value: ${{ steps.setup_bazel.outputs.repository-cache-path }}
+  repository-cache-key:
+    description: Primary actions/cache key for the Bazel repository cache.
+    value: ${{ steps.cache_bazel_repository_key.outputs.repository-cache-key }}
+  repository-cache-hit:
+    description: Whether the Bazel repository cache restore found an exact key match.
+    value: ${{ steps.cache_bazel_repository_restore.outputs.cache-hit }}
 
 runs:
   using: composite
@@ -23,6 +32,18 @@ runs:
         target: ${{ inputs.target }}
         install-test-prereqs: ${{ inputs.install-test-prereqs }}
 
+    - name: Compute bazel repository cache key
+      id: cache_bazel_repository_key
+      shell: bash
+      env:
+        CACHE_SCOPE: ${{ inputs.cache-scope }}
+        TARGET: ${{ inputs.target }}
+        CACHE_HASH: ${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+      run: |
+        echo "repository-cache-key=bazel-cache-${CACHE_SCOPE}-${TARGET}-${CACHE_HASH}" >> "${GITHUB_OUTPUT}"
+        echo "repository-cache-restore-key=bazel-cache-${CACHE_SCOPE}-${TARGET}-" >> "${GITHUB_OUTPUT}"
+        echo "legacy-repository-cache-restore-key=bazel-cache-${TARGET}-" >> "${GITHUB_OUTPUT}"
+
     # Restore the Bazel repository cache explicitly so external dependencies
     # do not need to be re-downloaded on every CI run. Keep restore failures
     # non-fatal so transient cache-service errors degrade to a cold build
@@ -33,9 +54,10 @@ runs:
       uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
       with:
         path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
-        key: bazel-cache-${{ inputs.target }}-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+        key: ${{ steps.cache_bazel_repository_key.outputs.repository-cache-key }}
         restore-keys: |
-          bazel-cache-${{ inputs.target }}
+          ${{ steps.cache_bazel_repository_key.outputs.repository-cache-restore-key }}
+          ${{ steps.cache_bazel_repository_key.outputs.legacy-repository-cache-restore-key }}
 
     - name: Set up Bazel execution logs
       shell: bash
