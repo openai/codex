@@ -146,6 +146,7 @@ use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
+use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
@@ -1239,13 +1240,6 @@ impl SessionConfiguration {
         if let Some(approvals_reviewer) = updates.approvals_reviewer {
             next_configuration.approvals_reviewer = approvals_reviewer;
         }
-        let mut sandbox_policy_changed = false;
-        if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
-            next_configuration.sandbox_policy.set(sandbox_policy)?;
-            next_configuration.network_sandbox_policy =
-                NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
-            sandbox_policy_changed = true;
-        }
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
@@ -1266,13 +1260,33 @@ impl SessionConfiguration {
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
-        if sandbox_policy_changed {
+
+        if let Some(permission_profile) = updates.permission_profile.clone() {
+            let sandbox_policy = permission_profile
+                .to_legacy_sandbox_policy(&next_configuration.cwd)
+                .map_err(|err| ConstraintError::InvalidValue {
+                    field_name: "permission_profile",
+                    candidate: format!("{permission_profile:?}"),
+                    allowed: format!(
+                        "permission profiles that can be represented by the active sandbox constraints: {err}"
+                    ),
+                    requirement_source: codex_config::RequirementSource::Unknown,
+                })?;
+            next_configuration.sandbox_policy.set(sandbox_policy)?;
+            let (file_system_sandbox_policy, network_sandbox_policy) =
+                permission_profile.to_runtime_permissions();
+            next_configuration.file_system_sandbox_policy = file_system_sandbox_policy;
+            next_configuration.network_sandbox_policy = network_sandbox_policy;
+        } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
+            next_configuration.sandbox_policy.set(sandbox_policy)?;
             next_configuration.file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
                     next_configuration.sandbox_policy.get(),
                     &next_configuration.cwd,
                     &self.file_system_sandbox_policy,
                 );
+            next_configuration.network_sandbox_policy =
+                NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
         } else if cwd_changed && file_system_policy_matches_legacy {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
@@ -1298,6 +1312,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
+    pub(crate) permission_profile: Option<PermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) collaboration_mode: Option<CollaborationMode>,
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,

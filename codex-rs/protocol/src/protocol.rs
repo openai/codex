@@ -38,6 +38,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::PermissionProfile;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
@@ -500,6 +501,10 @@ pub enum Op {
         /// Updated sandbox policy for tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox_policy: Option<SandboxPolicy>,
+
+        /// Updated permissions profile for tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        permission_profile: Option<PermissionProfile>,
 
         /// Updated Windows sandbox mode for tool execution.
         #[serde(skip_serializing_if = "Option::is_none")]
