@@ -12,8 +12,6 @@ use tracing::error;
 
 use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
@@ -30,6 +28,8 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
@@ -541,11 +541,7 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
-    if !turn_context
-        .config
-        .memories
-        .no_memories_if_mcp_or_web_search
-    {
+    if !turn_context.config.memories.disable_on_external_context {
         return;
     }
     state_db::mark_thread_memory_mode_polluted(

@@ -13,8 +13,8 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use tokio_util::sync::CancellationToken;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
@@ -57,7 +57,7 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
         .remove(review_id)
         .filter(|rejection| !rejection.rationale.trim().is_empty())
         .unwrap_or_else(|| GuardianRejection {
-            rationale: "Guardian denied the action without a specific rationale.".to_string(),
+            rationale: "Auto-reviewer denied the action without a specific rationale.".to_string(),
             source: GuardianAssessmentDecisionSource::Agent,
         });
     match rejection.source {

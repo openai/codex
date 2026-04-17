@@ -68,6 +68,7 @@ pub use goals::ThreadGoalAccountingMode;
 pub use goals::ThreadGoalAccountingOutcome;
 pub use goals::ThreadGoalUpdate;
 pub use remote_control::RemoteControlEnrollmentRecord;
+pub use threads::ThreadFilterOptions;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id

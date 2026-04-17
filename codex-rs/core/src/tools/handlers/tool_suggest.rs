@@ -155,8 +155,8 @@ impl ToolHandler for ToolSuggestHandler {
 }
 
 async fn verify_tool_suggestion_completed(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
     tool: &DiscoverableTool,
     auth: Option<&codex_login::CodexAuth>,
 ) -> bool {
@@ -194,8 +194,8 @@ async fn verify_tool_suggestion_completed(
 }
 
 async fn refresh_missing_suggested_connectors(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
     auth: Option<&codex_login::CodexAuth>,
     expected_connector_ids: &[String],
     tool_id: &str,
