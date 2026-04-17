@@ -67,6 +67,14 @@ fn estimate_compact_payload_tokens(request: &responses::ResponsesRequest) -> i64
         .saturating_add(approx_token_count(&request.instructions_text()))
 }
 
+fn first_input_index_containing(request: &responses::ResponsesRequest, needle: &str) -> usize {
+    request
+        .input()
+        .iter()
+        .position(|item| item.to_string().contains(needle))
+        .unwrap_or_else(|| panic!("expected request input to contain {needle:?}"))
+}
+
 const PRETURN_CONTEXT_DIFF_CWD: &str = "/tmp/PRETURN_CONTEXT_DIFF_CWD";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1479,12 +1487,30 @@ async fn ready_prefix_compact_is_applied_by_pre_turn_auto_compact() -> Result<()
     );
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), 3);
-    let third_request_body = requests[2].body_json().to_string();
+    let third_request = &requests[2];
+    let third_request_body = third_request.body_json().to_string();
     assert!(third_request_body.contains("PREFIX_READY_SUMMARY"));
     assert!(!third_request_body.contains("FIRST_REMOTE_USER"));
     assert!(third_request_body.contains("SECOND_REMOTE_USER"));
     assert!(third_request_body.contains("THIRD_REMOTE_USER"));
-    let stale_context_count = requests[2]
+    let summary_index = first_input_index_containing(third_request, "PREFIX_READY_SUMMARY");
+    let captured_context_index =
+        first_input_index_containing(third_request, PRETURN_CONTEXT_DIFF_CWD);
+    let suffix_user_index = first_input_index_containing(third_request, "SECOND_REMOTE_USER");
+    let current_user_index = first_input_index_containing(third_request, "THIRD_REMOTE_USER");
+    assert!(
+        summary_index < captured_context_index,
+        "captured context should follow the compacted prefix summary"
+    );
+    assert!(
+        captured_context_index < suffix_user_index,
+        "captured context should precede retained suffix messages"
+    );
+    assert!(
+        suffix_user_index < current_user_index,
+        "retained suffix should preserve chronological user message order"
+    );
+    let stale_context_count = third_request
         .message_input_texts("user")
         .iter()
         .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
