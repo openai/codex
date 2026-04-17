@@ -423,7 +423,7 @@ impl Session {
         turn_context: &TurnContext,
         state_db: &StateDbHandle,
         current_token_usage: TokenUsage,
-        boundary: GoalAccountingBoundary,
+        _boundary: GoalAccountingBoundary,
     ) -> anyhow::Result<bool> {
         let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
             return Ok(false);
@@ -440,19 +440,15 @@ impl Session {
             if tracked_created_at_ms == Some(created_at_ms) {
                 return Ok(false);
             }
-            let should_reset_baseline = turn_context.goal_accounting.active_this_turn()
-                || matches!(boundary, GoalAccountingBoundary::Tool);
-            if should_reset_baseline {
-                turn_context
-                    .goal_accounting
-                    .reset_baseline(current_token_usage)
-                    .await;
-            }
+            turn_context
+                .goal_accounting
+                .reset_baseline(current_token_usage)
+                .await;
             turn_context
                 .goal_accounting
                 .mark_active_goal(created_at_ms)
                 .await;
-            return Ok(should_reset_baseline);
+            return Ok(true);
         }
 
         if turn_context.goal_accounting.active_this_turn()
@@ -502,59 +498,63 @@ impl Session {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn queue_goal_continuation_if_active(self: &Arc<Self>) {
-        if !self.enabled(Feature::GoalMode) {
+        let _continuation_guard = self.goal_continuation_lock.lock().await;
+        let Some(items) = self.goal_continuation_items_if_active().await else {
             return;
+        };
+        self.queue_response_items_for_next_turn(items).await;
+        tracing::info!("queued active goal continuation");
+    }
+
+    pub(crate) async fn goal_continuation_items_if_active(
+        self: &Arc<Self>,
+    ) -> Option<Vec<ResponseInputItem>> {
+        if !self.enabled(Feature::GoalMode) {
+            return None;
         }
         if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
             tracing::debug!("skipping active goal continuation while plan mode is active");
-            return;
+            return None;
         }
         if self.has_active_turn().await {
             tracing::debug!("skipping active goal continuation because a turn is already active");
-            return;
+            return None;
         }
         if self.has_queued_response_items_for_next_turn().await {
             tracing::debug!(
                 "skipping active goal continuation because pending next-turn input already exists"
             );
-            return;
+            return None;
         }
         if self.has_trigger_turn_mailbox_items().await {
             tracing::debug!(
                 "skipping active goal continuation because trigger-turn mailbox input is pending"
             );
-            return;
+            return None;
         }
         let goal = match self.get_thread_goal().await {
             Ok(Some(goal)) => goal,
             Ok(None) => {
                 tracing::debug!("skipping active goal continuation because no goal is set");
-                return;
+                return None;
             }
             Err(err) => {
                 tracing::warn!("failed to read thread goal for continuation: {err}");
-                return;
+                return None;
             }
         };
         if goal.status != ThreadGoalStatus::Active {
             tracing::debug!(status = ?goal.status, "skipping inactive thread goal");
-            return;
+            return None;
         }
         if self.has_active_turn().await
             || self.has_queued_response_items_for_next_turn().await
             || self.has_trigger_turn_mailbox_items().await
         {
             tracing::debug!("skipping active goal continuation because pending work appeared");
-            return;
-        }
-        let _continuation_guard = self.goal_continuation_lock.lock().await;
-        if self.has_active_turn().await
-            || self.has_queued_response_items_for_next_turn().await
-            || self.has_trigger_turn_mailbox_items().await
-        {
-            tracing::debug!("skipping active goal continuation because pending work appeared");
-            return;
+            return None;
         }
         let goal = match self.get_thread_goal().await {
             Ok(Some(goal)) if goal.status == ThreadGoalStatus::Active => goal,
@@ -563,27 +563,25 @@ impl Session {
                     status = ?goal.status,
                     "skipping thread goal that changed before continuation queueing"
                 );
-                return;
+                return None;
             }
             Ok(None) => {
                 tracing::debug!(
                     "skipping thread goal that disappeared before continuation queueing"
                 );
-                return;
+                return None;
             }
             Err(err) => {
                 tracing::warn!("failed to re-read thread goal for continuation: {err}");
-                return;
+                return None;
             }
         };
-        self.queue_response_items_for_next_turn(vec![ResponseInputItem::Message {
+        Some(vec![ResponseInputItem::Message {
             role: "developer".to_string(),
             content: vec![ContentItem::InputText {
                 text: continuation_prompt(&goal),
             }],
         }])
-        .await;
-        tracing::info!("queued active goal continuation");
     }
 }
 

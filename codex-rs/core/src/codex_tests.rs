@@ -6391,7 +6391,7 @@ async fn goal_accounting_charges_out_of_band_paused_goal_at_turn_boundary() -> a
 }
 
 #[tokio::test]
-async fn goal_accounting_charges_out_of_band_activation_at_turn_boundary() -> anyhow::Result<()> {
+async fn goal_accounting_resets_out_of_band_activation_at_turn_boundary() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
         .await;
@@ -6421,7 +6421,7 @@ async fn goal_accounting_charges_out_of_band_activation_at_turn_boundary() -> an
         .await?
         .expect("goal should remain persisted after accounting");
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
-    assert_eq!(70, goal.tokens_used);
+    assert_eq!(0, goal.tokens_used);
 
     Ok(())
 }

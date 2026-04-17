@@ -4423,6 +4423,7 @@ impl Session {
     }
 
     /// Queue response items to be injected into the next active turn created for this session.
+    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
