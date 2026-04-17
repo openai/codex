@@ -446,13 +446,7 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (
-            session_configuration,
-            sandbox_policy_changed,
-            previous_cwd,
-            codex_home,
-            session_source,
-        ) = {
+        let update_result = {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
@@ -462,26 +456,35 @@ impl Session {
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
                     state.session_configuration = next.clone();
-                    (
+                    Ok((
                         next,
                         sandbox_policy_changed,
                         previous_cwd,
                         codex_home,
                         session_source,
-                    )
+                    ))
                 }
-                Err(err) => {
-                    drop(state);
-                    self.send_event_raw(Event {
-                        id: sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: err.to_string(),
-                            codex_error_info: Some(CodexErrorInfo::BadRequest),
-                        }),
-                    })
-                    .await;
-                    return Err(err);
-                }
+                Err(err) => Err(err),
+            }
+        };
+        let (
+            session_configuration,
+            sandbox_policy_changed,
+            previous_cwd,
+            codex_home,
+            session_source,
+        ) = match update_result {
+            Ok(update) => update,
+            Err(err) => {
+                self.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: err.to_string(),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return Err(err);
             }
         };
 
