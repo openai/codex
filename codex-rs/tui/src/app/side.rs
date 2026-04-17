@@ -152,10 +152,18 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
-    ) {
-        self.interrupt_side_thread(app_server, thread_id).await;
+    ) -> bool {
+        if let Err(message) = self.interrupt_side_thread(app_server, thread_id).await {
+            tracing::warn!("{message}");
+            self.chat_widget.add_error_message(message);
+            return false;
+        }
         if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
-            tracing::warn!("failed to unsubscribe side conversation {thread_id}: {err}");
+            let message =
+                format!("Failed to close side conversation {thread_id}; it is still open: {err}");
+            tracing::warn!("{message}");
+            self.chat_widget.add_error_message(message);
+            return false;
         }
         self.abort_thread_event_listener(thread_id);
         self.thread_event_channels.remove(&thread_id);
@@ -167,18 +175,23 @@ impl App {
             self.refresh_pending_thread_approvals().await;
         }
         self.sync_active_agent_label();
+        true
     }
 
-    async fn interrupt_side_thread(&self, app_server: &mut AppServerSession, thread_id: ThreadId) {
+    async fn interrupt_side_thread(
+        &self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> std::result::Result<(), String> {
         let interrupt_result =
             if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                 app_server.turn_interrupt(thread_id, turn_id).await
             } else {
                 app_server.startup_interrupt(thread_id).await
             };
-        if let Err(err) = interrupt_result {
-            tracing::warn!("failed to interrupt side conversation before discard: {err}");
-        }
+        interrupt_result.map_err(|err| {
+            format!("Failed to close side conversation {thread_id}; it is still open: {err}")
+        })
     }
 
     fn side_developer_instructions(existing_instructions: Option<&str>) -> String {
@@ -242,7 +255,15 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
-        let side_threads_to_discard = self.side_threads_to_discard_after_switch(thread_id);
+        let mut side_threads_to_discard = self.side_threads_to_discard_after_switch(thread_id);
+        if let Some(active_thread_id) = self.active_thread_id
+            && side_threads_to_discard.contains(&active_thread_id)
+        {
+            if !self.discard_side_thread(app_server, active_thread_id).await {
+                return Ok(());
+            }
+            side_threads_to_discard.retain(|thread_id| *thread_id != active_thread_id);
+        }
         self.select_agent_thread(tui, app_server, thread_id).await?;
         if self.active_thread_id == Some(thread_id) {
             for side_thread_id in side_threads_to_discard {
