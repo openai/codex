@@ -157,7 +157,7 @@ pub enum Feature {
     /// Enable plugins.
     Plugins,
     /// Show the startup prompt for migrating external agent config into Codex.
-    ExternalMigrate,
+    ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
     /// Allow prompting and installing missing MCP dependencies.
@@ -847,7 +847,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::ExternalMigrate,
+        id: Feature::ExternalMigration,
         key: "external_migration",
         stage: Stage::Experimental {
             name: "External migration",

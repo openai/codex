@@ -105,7 +105,7 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
 
 #[test]
 fn external_migration_is_experimental_and_disabled_by_default() {
-    let spec = Feature::ExternalMigrate.info();
+    let spec = Feature::ExternalMigration.info();
     let stage = spec.stage;
 
     assert!(matches!(stage, Stage::Experimental { .. }));
@@ -117,7 +117,7 @@ fn external_migration_is_experimental_and_disabled_by_default() {
         )
     );
     assert_eq!(stage.experimental_announcement(), None);
-    assert_eq!(Feature::ExternalMigrate.default_enabled(), false);
+    assert_eq!(Feature::ExternalMigration.default_enabled(), false);
 }
 
 #[test]

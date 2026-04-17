@@ -242,7 +242,7 @@ pub(crate) async fn handle_external_agent_config_migration_prompt_if_needed(
     cli_kv_overrides: &[(String, TomlValue)],
     harness_overrides: &ConfigOverrides,
 ) -> Result<ExternalAgentConfigMigrationStartupOutcome> {
-    if !config.features.enabled(Feature::ExternalMigrate) {
+    if !config.features.enabled(Feature::ExternalMigration) {
         return Ok(ExternalAgentConfigMigrationStartupOutcome::Continue {
             success_message: None,
         });
