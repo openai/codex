@@ -2170,23 +2170,6 @@ impl App {
         });
     }
 
-    async fn refresh_plugin_state_after_change(
-        &mut self,
-        app_server: &AppServerSession,
-        cwd: &std::path::Path,
-        action: &str,
-    ) {
-        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
-            tracing::warn!(error = %err, "failed to refresh config after {action}");
-        }
-        self.chat_widget.refresh_plugin_mentions();
-        self.chat_widget.submit_op(AppCommand::reload_user_config());
-
-        if self.chat_widget.config_ref().cwd.as_path() == cwd {
-            self.fetch_plugins_list(app_server, cwd.to_path_buf());
-        }
-    }
-
     fn submit_feedback(
         &mut self,
         app_server: &AppServerSession,
@@ -4704,12 +4687,11 @@ impl App {
             } => {
                 let install_succeeded = result.is_ok();
                 if install_succeeded {
-                    self.refresh_plugin_state_after_change(
-                        app_server,
-                        cwd.as_path(),
-                        "plugin install",
-                    )
-                    .await;
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(error = %err, "failed to refresh config after plugin install");
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
                 }
                 let should_refresh_plugin_detail = self.chat_widget.on_plugin_install_loaded(
                     cwd.clone(),
@@ -4718,18 +4700,19 @@ impl App {
                     plugin_display_name,
                     result,
                 );
-                if install_succeeded
-                    && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
-                    && should_refresh_plugin_detail
+                if install_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
                 {
-                    self.fetch_plugin_detail(
-                        app_server,
-                        cwd,
-                        PluginReadParams {
-                            marketplace_path,
-                            plugin_name,
-                        },
-                    );
+                    self.fetch_plugins_list(app_server, cwd.clone());
+                    if should_refresh_plugin_detail {
+                        self.fetch_plugin_detail(
+                            app_server,
+                            cwd,
+                            PluginReadParams {
+                                marketplace_path,
+                                plugin_name,
+                            },
+                        );
+                    }
                 }
             }
             AppEvent::FetchMcpInventory => {
@@ -5228,18 +5211,25 @@ impl App {
             } => {
                 let uninstall_succeeded = result.is_ok();
                 if uninstall_succeeded {
-                    self.refresh_plugin_state_after_change(
-                        app_server,
-                        cwd.as_path(),
-                        "plugin uninstall",
-                    )
-                    .await;
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to refresh config after plugin uninstall"
+                        );
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
                 }
                 self.chat_widget.on_plugin_uninstall_loaded(
                     cwd.clone(),
                     plugin_display_name,
                     result,
                 );
+                if uninstall_succeeded
+                    && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                {
+                    self.fetch_plugins_list(app_server, cwd);
+                }
             }
             AppEvent::RefreshPluginMentions => {
                 self.refresh_plugin_mentions();
@@ -10707,55 +10697,6 @@ guardian_approval = true
             app_enabled_in_effective_config(&app.config, &app_id),
             Some(false)
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn refresh_plugin_state_after_change_reloads_config_and_mentions() -> Result<()> {
-        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-        let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf().abs();
-        let app_id = "unit_test_refresh_plugin_state_connector".to_string();
-
-        ConfigEditsBuilder::new(&app.config.codex_home)
-            .with_edits([
-                ConfigEdit::SetPath {
-                    segments: vec!["apps".to_string(), app_id.clone(), "enabled".to_string()],
-                    value: false.into(),
-                },
-                ConfigEdit::SetPath {
-                    segments: vec![
-                        "apps".to_string(),
-                        app_id.clone(),
-                        "disabled_reason".to_string(),
-                    ],
-                    value: "user".into(),
-                },
-            ])
-            .apply()
-            .await
-            .expect("persist app toggle");
-
-        let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-        let cwd = app.chat_widget.config_ref().cwd.to_path_buf();
-
-        app.refresh_plugin_state_after_change(&app_server, cwd.as_path(), "test")
-            .await;
-
-        assert_eq!(
-            app_enabled_in_effective_config(&app.config, &app_id),
-            Some(false)
-        );
-        assert!(matches!(
-            time::timeout(time::Duration::from_secs(1), app_event_rx.recv()).await?,
-            Some(AppEvent::RefreshPluginMentions)
-        ));
-        assert_eq!(
-            time::timeout(time::Duration::from_secs(1), op_rx.recv()).await?,
-            Some(Op::ReloadUserConfig)
-        );
-
-        app_server.shutdown().await?;
         Ok(())
     }
 
