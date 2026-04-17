@@ -116,6 +116,8 @@ pub use service::ConfigServiceError;
 
 pub use codex_git_utils::GhostSnapshotConfig;
 
+const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_DISABLE_MANAGED_CONFIG";
+
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
@@ -681,7 +683,9 @@ impl ConfigBuilder {
         };
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
-        let loader_overrides = loader_overrides.unwrap_or_default();
+        let loader_overrides = loader_overrides
+            .map(apply_debug_loader_overrides)
+            .unwrap_or_else(|| apply_debug_loader_overrides(LoaderOverrides::default()));
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
             Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
@@ -730,6 +734,42 @@ impl ConfigBuilder {
     pub(crate) fn without_managed_config_for_tests() -> Self {
         Self::default().loader_overrides(LoaderOverrides::without_managed_config_for_tests())
     }
+}
+
+fn apply_debug_loader_overrides(mut loader_overrides: LoaderOverrides) -> LoaderOverrides {
+    #[cfg(debug_assertions)]
+    if disable_managed_config_from_debug_env() {
+        if loader_overrides.managed_config_path.is_none() {
+            loader_overrides.managed_config_path = Some(
+                std::env::temp_dir()
+                    .join("codex-config-tests")
+                    .join("managed_config.toml"),
+            );
+        }
+        #[cfg(target_os = "macos")]
+        if loader_overrides.managed_preferences_base64.is_none() {
+            loader_overrides.managed_preferences_base64 = Some(String::new());
+        }
+        if loader_overrides
+            .macos_managed_config_requirements_base64
+            .is_none()
+        {
+            loader_overrides.macos_managed_config_requirements_base64 = Some(String::new());
+        }
+    }
+
+    loader_overrides
+}
+
+fn disable_managed_config_from_debug_env() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        if let Ok(value) = std::env::var(DISABLE_MANAGED_CONFIG_ENV_VAR) {
+            return matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES");
+        }
+    }
+
+    false
 }
 
 impl Config {
