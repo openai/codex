@@ -483,6 +483,7 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
             && *depth >= config.agent_max_depth
+            && !config.features.enabled(Feature::MultiAgentV2)
         {
             let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
@@ -638,6 +639,37 @@ impl AgentControl {
         result
     }
 
+    pub(crate) async fn enqueue_inter_agent_communication(
+        &self,
+        agent_id: ThreadId,
+        communication: InterAgentCommunication,
+    ) -> CodexResult<()> {
+        let last_task_message = communication.content.clone();
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        thread
+            .codex
+            .session
+            .enqueue_mailbox_communication(communication);
+        self.state
+            .update_last_task_message(agent_id, last_task_message);
+        Ok(())
+    }
+
+    pub(crate) async fn maybe_start_turn_for_pending_work(
+        &self,
+        agent_id: ThreadId,
+    ) -> CodexResult<()> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        thread
+            .codex
+            .session
+            .maybe_start_turn_for_pending_work()
+            .await;
+        Ok(())
+    }
+
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
@@ -717,6 +749,12 @@ impl AgentControl {
         thread.agent_status().await
     }
 
+    pub(crate) async fn has_mailbox_waiters(&self, agent_id: ThreadId) -> CodexResult<bool> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        Ok(thread.codex.session.has_mailbox_waiters())
+    }
+
     pub(crate) fn register_session_root(
         &self,
         current_thread_id: ThreadId,
@@ -729,6 +767,10 @@ impl AgentControl {
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
         self.state.agent_metadata_for_thread(agent_id)
+    }
+
+    pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
+        self.state.agent_id_for_path(agent_path)
     }
 
     pub(crate) async fn list_live_agent_subtree_thread_ids(

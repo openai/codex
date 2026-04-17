@@ -22,6 +22,8 @@ use crate::mcp_call_tool_result_output_schema;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_protocol::AgentPath;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -221,6 +223,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
             "list_agents",
         ],
     );
+    assert_lacks_tool_name(&tools, "send_parent_message");
 
     let spawn_agent = find_tool(&tools, "spawn_agent");
     let ToolSpec::Function(ResponsesApiTool {
@@ -284,6 +287,45 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         required,
         Some(&vec!["target".to_string(), "message".to_string()])
     );
+
+    let child_tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path")),
+            agent_nickname: None,
+            agent_role: None,
+        }),
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (child_tools, _) = build_specs(
+        &child_tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    let parent_message = find_tool(&child_tools, "send_parent_message");
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &parent_message.spec
+    else {
+        panic!("send_parent_message should be a function tool");
+    };
+    assert_eq!(output_schema, &None);
+    let (properties, required) = expect_object_schema(parameters);
+    assert!(properties.contains_key("message"));
+    assert!(properties.contains_key("mode"));
+    assert!(properties.contains_key("trigger_turn"));
+    assert!(!properties.contains_key("target"));
+    assert_eq!(required, Some(&vec!["message".to_string()]));
 
     let wait_agent = find_tool(&tools, "wait_agent");
     let ToolSpec::Function(ResponsesApiTool {

@@ -47,7 +47,7 @@ pub(crate) struct FollowupTaskArgs {
     pub(crate) interrupt: bool,
 }
 
-fn message_content(message: String) -> Result<String, FunctionCallError> {
+pub(crate) fn message_content(message: String) -> Result<String, FunctionCallError> {
     if message.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
             "Empty message can't be sent to an agent".to_string(),

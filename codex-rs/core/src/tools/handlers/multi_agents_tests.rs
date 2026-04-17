@@ -1,5 +1,6 @@
 use super::*;
 use crate::CodexThread;
+use crate::NewThread;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
@@ -13,6 +14,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
+use crate::tools::handlers::multi_agents_v2::ParentMessageHandler as ParentMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
@@ -25,6 +27,7 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -46,6 +49,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
@@ -90,6 +94,123 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
+}
+
+async fn pending_inter_agent_mail(
+    session: &crate::session::session::Session,
+) -> Vec<InterAgentCommunication> {
+    session
+        .get_pending_input()
+        .await
+        .into_iter()
+        .filter_map(|item| match item {
+            ResponseInputItem::Message { content, .. } => {
+                InterAgentCommunication::from_message_content(&content)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+async fn make_parent_message_child(
+    agent_path: Option<AgentPath>,
+) -> (
+    ThreadManager,
+    NewThread,
+    crate::session::session::Session,
+    TurnContext,
+    ThreadId,
+) {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let child_thread_id = session
+        .services
+        .agent_control
+        .spawn_agent_with_metadata(
+            (*turn.config).clone(),
+            vec![UserInput::Text {
+                text: "inspect this repo".to_string(),
+                text_elements: Vec::new(),
+            }]
+            .into(),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: agent_path.clone(),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
+        .await
+        .expect("worker spawn should succeed")
+        .thread_id;
+    session.conversation_id = child_thread_id;
+    turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: root.thread_id,
+        depth: 1,
+        agent_path,
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    (manager, root, session, turn, child_thread_id)
+}
+
+async fn mark_parent_running(root: &NewThread) -> Arc<TurnContext> {
+    let root_turn = root.thread.codex.session.new_default_turn().await;
+    root.thread
+        .codex
+        .session
+        .send_event(
+            root_turn.as_ref(),
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: root_turn.sub_id.clone(),
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            }),
+        )
+        .await;
+    root_turn
+}
+
+async fn wait_until_parent_mail_is_pending(session: &crate::session::session::Session) {
+    for _ in 0..50 {
+        if session.has_pending_input().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn send_parent_message(
+    session: crate::session::session::Session,
+    turn: TurnContext,
+    payload: serde_json::Value,
+) {
+    ParentMessageHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "send_parent_message",
+            function_payload(payload),
+        ))
+        .await
+        .expect("parent message should succeed");
 }
 
 async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
@@ -1101,6 +1222,314 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         !root_ops
             .iter()
             .any(|op| matches!(op, Op::InterAgentCommunication { .. }))
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_parent_message_interrupts_busy_parent_before_delivering_mail() {
+    let child_path = AgentPath::try_from("/root/worker").expect("agent path");
+    let (manager, root, session, turn, _) =
+        make_parent_message_child(Some(child_path.clone())).await;
+    let root_turn = mark_parent_running(&root).await;
+
+    send_parent_message(
+        session,
+        turn,
+        json!({
+            "message": "parent please take over",
+            "mode": "interrupt"
+        }),
+    )
+    .await;
+
+    let root_ops = manager
+        .captured_ops()
+        .into_iter()
+        .filter_map(|(id, op)| (id == root.thread_id).then_some(op))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        root_ops
+            .iter()
+            .filter(|op| matches!(op, Op::Interrupt))
+            .count(),
+        1
+    );
+    root.thread
+        .codex
+        .session
+        .send_event(
+            root_turn.as_ref(),
+            EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(root_turn.sub_id.clone()),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+    wait_until_parent_mail_is_pending(root.thread.codex.session.as_ref()).await;
+    assert_eq!(
+        pending_inter_agent_mail(root.thread.codex.session.as_ref()).await,
+        vec![InterAgentCommunication::new(
+            child_path,
+            AgentPath::root(),
+            Vec::new(),
+            "parent please take over".to_string(),
+            /*trigger_turn*/ true,
+        )]
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_parent_message_queue_trigger_waits_for_busy_parent_to_finish() {
+    let child_path = AgentPath::try_from("/root/worker").expect("agent path");
+    let (manager, root, session, turn, _) =
+        make_parent_message_child(Some(child_path.clone())).await;
+    let root_turn = mark_parent_running(&root).await;
+
+    send_parent_message(
+        session,
+        turn,
+        json!({
+            "message": "parent should process when free",
+            "mode": "queue",
+            "trigger_turn": true
+        }),
+    )
+    .await;
+
+    let root_ops = manager
+        .captured_ops()
+        .into_iter()
+        .filter_map(|(id, op)| (id == root.thread_id).then_some(op))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        root_ops
+            .iter()
+            .filter(|op| matches!(op, Op::Interrupt))
+            .count(),
+        0
+    );
+    assert!(
+        !root.thread.codex.session.has_pending_input().await,
+        "queue plus trigger should not be drainable by the currently running parent turn"
+    );
+
+    root.thread
+        .codex
+        .session
+        .send_event(
+            root_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: root_turn.sub_id.clone(),
+                last_agent_message: Some("parent turn done".to_string()),
+                completed_at: None,
+                duration_ms: None,
+            }),
+        )
+        .await;
+    wait_until_parent_mail_is_pending(root.thread.codex.session.as_ref()).await;
+
+    assert_eq!(
+        pending_inter_agent_mail(root.thread.codex.session.as_ref()).await,
+        vec![InterAgentCommunication::new(
+            child_path,
+            AgentPath::root(),
+            Vec::new(),
+            "parent should process when free".to_string(),
+            /*trigger_turn*/ true,
+        )]
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_parent_message_uses_registry_when_turn_source_is_generic() {
+    let child_path = AgentPath::try_from("/root/worker").expect("agent path");
+    let (_manager, root, session, mut turn, _) =
+        make_parent_message_child(Some(child_path.clone())).await;
+    turn.session_source = SessionSource::Cli;
+
+    send_parent_message(
+        session,
+        turn,
+        json!({
+            "message": "registry-resolved parent mail",
+            "mode": "enqueue"
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        pending_inter_agent_mail(root.thread.codex.session.as_ref()).await,
+        vec![InterAgentCommunication::new(
+            child_path,
+            AgentPath::root(),
+            Vec::new(),
+            "registry-resolved parent mail".to_string(),
+            /*trigger_turn*/ false,
+        )]
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_parent_message_synthesizes_path_for_anonymous_thread_spawn() {
+    let (_manager, root, session, turn, child_thread_id) =
+        make_parent_message_child(/*agent_path*/ None).await;
+
+    send_parent_message(
+        session,
+        turn,
+        json!({
+            "message": "anonymous parent mail",
+            "mode": "enqueue"
+        }),
+    )
+    .await;
+
+    let synthetic_child_path = AgentPath::try_from(format!(
+        "/root/agent_{}",
+        child_thread_id.to_string().replace('-', "_")
+    ))
+    .expect("synthetic child path should be valid");
+    assert_eq!(
+        pending_inter_agent_mail(root.thread.codex.session.as_ref()).await,
+        vec![InterAgentCommunication::new(
+            synthetic_child_path,
+            AgentPath::root(),
+            Vec::new(),
+            "anonymous parent mail".to_string(),
+            /*trigger_turn*/ false,
+        )]
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_parent_message_wakes_wait_agent_without_interrupting_parent() {
+    let (_session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    let root = manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    turn.config = Arc::new(config);
+
+    let parent_session = root.thread.codex.session.clone();
+    let parent_turn = Arc::new(turn);
+    let wait_task = tokio::spawn({
+        let session = parent_session.clone();
+        let turn = parent_turn.clone();
+        async move {
+            WaitAgentHandlerV2
+                .handle(invocation(
+                    session,
+                    turn,
+                    "wait_agent",
+                    function_payload(json!({"timeout_ms": 10_000})),
+                ))
+                .await
+        }
+    });
+    for _ in 0..50 {
+        if parent_session.has_mailbox_waiters() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        parent_session.has_mailbox_waiters(),
+        "wait_agent should register mailbox waiter"
+    );
+
+    let child_path = AgentPath::try_from("/root/worker").expect("agent path");
+    let child_thread_id = parent_session
+        .services
+        .agent_control
+        .spawn_agent_with_metadata(
+            (*parent_turn.config).clone(),
+            vec![UserInput::Text {
+                text: "inspect this repo".to_string(),
+                text_elements: Vec::new(),
+            }]
+            .into(),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: Some(child_path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions::default(),
+        )
+        .await
+        .expect("worker spawn should succeed")
+        .thread_id;
+    let (mut child_session, mut child_turn) = make_session_and_context().await;
+    child_session.services.agent_control = manager.agent_control();
+    child_session.conversation_id = child_thread_id;
+    child_turn.config = parent_turn.config.clone();
+    child_turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: root.thread_id,
+        depth: 1,
+        agent_path: Some(child_path.clone()),
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    ParentMessageHandlerV2
+        .handle(invocation(
+            Arc::new(child_session),
+            Arc::new(child_turn),
+            "send_parent_message",
+            function_payload(json!({
+                "message": "waiter-visible parent mail",
+                "mode": "queue",
+                "trigger_turn": true
+            })),
+        ))
+        .await
+        .expect("parent message should succeed");
+
+    let wait_output = wait_task
+        .await
+        .expect("wait task should join")
+        .expect("wait_agent should succeed");
+    let (content, _) = expect_text_output(wait_output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should parse");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message: "Wait completed.".to_string(),
+            timed_out: false,
+        }
+    );
+
+    let root_ops = manager
+        .captured_ops()
+        .into_iter()
+        .filter_map(|(id, op)| (id == root.thread_id).then_some(op))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        root_ops
+            .iter()
+            .filter(|op| matches!(op, Op::Interrupt))
+            .count(),
+        0
+    );
+    assert_eq!(
+        pending_inter_agent_mail(parent_session.as_ref()).await,
+        vec![InterAgentCommunication::new(
+            child_path,
+            AgentPath::root(),
+            Vec::new(),
+            "waiter-visible parent mail".to_string(),
+            /*trigger_turn*/ true,
+        )]
     );
 }
 
@@ -2847,7 +3276,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_wait_agent_waits_for_new_mail_after_start() {
+async fn multi_agent_v2_wait_agent_returns_pending_mail_after_start() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -2892,7 +3321,7 @@ async fn multi_agent_v2_wait_agent_waits_for_new_mail_after_start() {
         .expect("worker path");
 
     session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path.clone(),
+        worker_path,
         AgentPath::root(),
         Vec::new(),
         "already queued".to_string(),
@@ -2913,21 +3342,6 @@ async fn multi_agent_v2_wait_agent_waits_for_new_mail_after_start() {
                 .await
         }
     });
-    tokio::task::yield_now().await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(
-        !wait_task.is_finished(),
-        "mail already queued before wait should not wake wait_agent"
-    );
-
-    session.enqueue_mailbox_communication(InterAgentCommunication::new(
-        worker_path,
-        AgentPath::root(),
-        Vec::new(),
-        "new mail".to_string(),
-        /*trigger_turn*/ false,
-    ));
-
     let output = wait_task
         .await
         .expect("wait task should join")

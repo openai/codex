@@ -28,6 +28,7 @@ pub enum ToolHandlerKind {
     RequestPermissions,
     RequestUserInput,
     ResumeAgentV1,
+    ParentMessageV2,
     SendInputV1,
     SendMessageV2,
     Shell,
