@@ -479,6 +479,7 @@ impl Session {
             return Ok(());
         }
 
+        let _continuation_guard = self.goal_continuation_lock.lock().await;
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
@@ -540,6 +541,14 @@ impl Session {
             tracing::debug!(status = ?goal.status, "skipping inactive thread goal");
             return;
         }
+        if self.has_active_turn().await
+            || self.has_queued_response_items_for_next_turn().await
+            || self.has_trigger_turn_mailbox_items().await
+        {
+            tracing::debug!("skipping active goal continuation because pending work appeared");
+            return;
+        }
+        let _continuation_guard = self.goal_continuation_lock.lock().await;
         if self.has_active_turn().await
             || self.has_queued_response_items_for_next_turn().await
             || self.has_trigger_turn_mailbox_items().await
