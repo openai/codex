@@ -204,6 +204,44 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
 }
 
 #[tokio::test]
+async fn plugin_detail_popup_snapshot_shows_remote_install_required_message() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let mut summary = plugins_test_summary(
+        "plugin-toolkit",
+        "toolkit",
+        Some("Toolkit"),
+        Some("Remote tools."),
+        /*installed*/ false,
+        /*enabled*/ true,
+        PluginInstallPolicy::Available,
+    );
+    summary.source = PluginSource::Git {
+        url: "owner/repo".to_string(),
+        path: Some("plugins/toolkit".to_string()),
+        ref_name: None,
+        sha: None,
+    };
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.add_plugins_output();
+    let mut plugin = plugins_test_detail(summary, None, &[], &[], &[]);
+    plugin.details_unavailable_reason =
+        Some(PluginDetailsUnavailableReason::InstallRequiredForRemoteSource);
+    chat.on_plugin_detail_loaded(cwd.to_path_buf(), Ok(PluginReadResponse { plugin }));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!(
+        "plugin_detail_popup_remote_install_required",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
 async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);

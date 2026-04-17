@@ -967,6 +967,7 @@ pub(super) fn plugins_test_detail(
             })
             .collect(),
         mcp_servers: mcp_servers.iter().map(|name| (*name).to_string()).collect(),
+        details_unavailable_reason: None,
     }
 }
 

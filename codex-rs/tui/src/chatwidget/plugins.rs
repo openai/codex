@@ -14,6 +14,7 @@ use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use codex_app_server_protocol::PluginDetail;
+use codex_app_server_protocol::PluginDetailsUnavailableReason;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
@@ -860,6 +861,9 @@ impl ChatWidget {
         if let Some(description) = plugin_detail_description(plugin) {
             header.push(Line::from(description.dim()));
         }
+        if let Some(message) = plugin_details_unavailable_message(plugin) {
+            header.push(Line::from(message.dim()));
+        }
 
         let cwd = self.config.cwd.to_path_buf();
         let plugins_response = plugins_response.clone();
@@ -1052,7 +1056,20 @@ fn plugin_detail_description(plugin: &PluginDetail) -> Option<String> {
         .map(str::to_string)
 }
 
+fn plugin_details_unavailable_message(plugin: &PluginDetail) -> Option<&'static str> {
+    match plugin.details_unavailable_reason {
+        Some(PluginDetailsUnavailableReason::InstallRequiredForRemoteSource) => Some(
+            "Remote Git plugin. Install it to download and view bundled skills, apps, and MCP servers.",
+        ),
+        None => None,
+    }
+}
+
 fn plugin_skill_summary(plugin: &PluginDetail) -> String {
+    if plugin.details_unavailable_reason.is_some() {
+        return "Install required to view bundled skills.".to_string();
+    }
+
     if plugin.skills.is_empty() {
         "No plugin skills.".to_string()
     } else {
@@ -1066,6 +1083,10 @@ fn plugin_skill_summary(plugin: &PluginDetail) -> String {
 }
 
 fn plugin_app_summary(plugin: &PluginDetail) -> String {
+    if plugin.details_unavailable_reason.is_some() {
+        return "Install required to view bundled apps.".to_string();
+    }
+
     if plugin.apps.is_empty() {
         "No plugin apps.".to_string()
     } else {
@@ -1079,6 +1100,10 @@ fn plugin_app_summary(plugin: &PluginDetail) -> String {
 }
 
 fn plugin_mcp_summary(plugin: &PluginDetail) -> String {
+    if plugin.details_unavailable_reason.is_some() {
+        return "Install required to view bundled MCP servers.".to_string();
+    }
+
     if plugin.mcp_servers.is_empty() {
         "No plugin MCP servers.".to_string()
     } else {
