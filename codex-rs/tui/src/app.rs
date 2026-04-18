@@ -329,11 +329,10 @@ fn session_summary(
     rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| FinalOutput::from(token_usage).to_string());
-    let (thread_id, thread_name) = resumable_thread(thread_id, thread_name, rollout_path)
-        .map(|thread| (Some(thread.thread_id), thread.thread_name))
-        .unwrap_or((None, None));
+    let thread_id =
+        resumable_thread(thread_id, thread_name, rollout_path).map(|thread| thread.thread_id);
     let resume_command =
-        crate::legacy_core::util::resume_command(thread_name.as_deref(), thread_id);
+        crate::legacy_core::util::resume_command(/*thread_name*/ None, thread_id);
 
     if usage_line.is_none() && resume_command.is_none() {
         return None;
@@ -11691,7 +11690,7 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn session_summary_prefers_name_over_id() {
+    async fn session_summary_uses_id_even_when_thread_has_name() {
         let usage = TokenUsage {
             input_tokens: 10,
             output_tokens: 2,
@@ -11712,7 +11711,7 @@ guardian_approval = true
         .expect("summary");
         assert_eq!(
             summary.resume_command,
-            Some("codex resume my-session".to_string())
+            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 }
