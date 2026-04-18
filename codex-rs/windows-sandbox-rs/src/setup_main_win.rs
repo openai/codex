@@ -245,6 +245,128 @@ fn read_mask_allows_or_log(
     }
 }
 
+fn repair_existing_descendant_write_aces(
+    root: &Path,
+    psids: &[*mut c_void],
+    log: &mut File,
+    refresh_errors: &mut Vec<String>,
+) -> Result<()> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+
+    let mut stack = vec![root.to_path_buf()];
+    let mut visited = 0usize;
+    let mut updated = 0usize;
+
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                refresh_errors.push(format!(
+                    "write ACL descendant scan failed on {}: {}",
+                    dir.display(),
+                    err
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "write ACL descendant scan failed on {}: {}; continuing",
+                        dir.display(),
+                        err
+                    ),
+                )?;
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    refresh_errors.push(format!(
+                        "write ACL descendant enumeration failed under {}: {}",
+                        dir.display(),
+                        err
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "write ACL descendant enumeration failed under {}: {}; continuing",
+                            dir.display(),
+                            err
+                        ),
+                    )?;
+                    continue;
+                }
+            };
+
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    let path = entry.path();
+                    refresh_errors.push(format!(
+                        "write ACL descendant type query failed on {}: {}",
+                        path.display(),
+                        err
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "write ACL descendant type query failed on {}: {}; continuing",
+                            path.display(),
+                            err
+                        ),
+                    )?;
+                    continue;
+                }
+            };
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            let path = entry.path();
+            visited += 1;
+
+            match unsafe { ensure_allow_write_aces(&path, psids) } {
+                Ok(true) => updated += 1,
+                Ok(false) => {}
+                Err(err) => {
+                    refresh_errors.push(format!(
+                        "write ACL descendant repair failed on {}: {}",
+                        path.display(),
+                        err
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "write ACL descendant repair failed on {}: {}; continuing",
+                            path.display(),
+                            err
+                        ),
+                    )?;
+                }
+            }
+
+            if file_type.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+
+    log_line(
+        log,
+        &format!(
+            "write ACL descendant repair completed for {}: visited={} updated={}",
+            root.display(),
+            visited,
+            updated
+        ),
+    )?;
+    Ok(())
+}
+
 fn lock_sandbox_dir(
     dir: &Path,
     real_user: &str,
@@ -760,6 +882,53 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             }
         }
     });
+
+    for root in &seen_write_roots {
+        if !root.is_dir() {
+            continue;
+        }
+
+        let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
+        let sid_strings = if is_command_cwd {
+            vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
+        } else {
+            vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
+        };
+
+        let mut psids: Vec<*mut c_void> = Vec::new();
+        let mut sid_conversion_failed = false;
+        for sid_str in &sid_strings {
+            if let Some(psid) = unsafe { convert_string_sid_to_sid(sid_str) } {
+                psids.push(psid);
+            } else {
+                refresh_errors.push(format!(
+                    "write ACL descendant repair skipped for {}: convert SID {} failed",
+                    root.display(),
+                    sid_str
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "write ACL descendant repair skipped for {}: convert SID {} failed",
+                        root.display(),
+                        sid_str
+                    ),
+                )?;
+                sid_conversion_failed = true;
+                break;
+            }
+        }
+
+        if !sid_conversion_failed {
+            repair_existing_descendant_write_aces(root, &psids, log, &mut refresh_errors)?;
+        }
+
+        for psid in psids {
+            unsafe {
+                LocalFree(psid as HLOCAL);
+            }
+        }
+    }
 
     lock_sandbox_dir(
         &sandbox_bin_dir(&payload.codex_home),
