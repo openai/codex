@@ -770,8 +770,9 @@ impl Session {
             tx_event.clone(),
             session_configuration.sandbox_policy.get().clone(),
             McpRuntimeEnvironment::new(
-                environment
-                    .clone()
+                sess.services
+                    .environment_manager
+                    .default_environment()
                     .unwrap_or_else(|| Arc::new(Environment::default())),
                 session_configuration.cwd.to_path_buf(),
             ),
