@@ -185,6 +185,57 @@ async fn live_app_server_turn_started_sets_feedback_turn_id() {
 }
 
 #[tokio::test]
+async fn live_app_server_warning_notification_renders_message() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::Warning(WarningNotification {
+            thread_id: None,
+            message: "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it.".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        normalized.contains(
+            "Some enabled skills were not included in the model-visible skills list for this session."
+        ),
+        "expected warning notification message, got {rendered}"
+    );
+    assert!(
+        normalized.contains("Mention a skill by name or path if you need it."),
+        "expected warning guidance, got {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_config_warning_prefixes_summary() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ConfigWarning(ConfigWarningNotification {
+            summary: "Invalid configuration; using defaults.".to_string(),
+            details: None,
+            path: None,
+            range: None,
+        }),
+        /*replay_kind*/ None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Invalid configuration; using defaults."),
+        "expected config warning summary, got {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_file_change_item_started_preserves_changes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

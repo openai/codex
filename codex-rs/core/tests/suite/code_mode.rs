@@ -1970,14 +1970,16 @@ image("data:image/png;base64,AAA");
         items[1],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "https://example.com/image.jpg"
+            "image_url": "https://example.com/image.jpg",
+            "detail": "high"
         }),
     );
     assert_eq!(
         items[2],
         serde_json::json!({
             "type": "input_image",
-            "image_url": "data:image/png;base64,AAA"
+            "image_url": "data:image/png;base64,AAA",
+            "detail": "high"
         }),
     );
 
