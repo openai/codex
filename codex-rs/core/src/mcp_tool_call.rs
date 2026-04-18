@@ -14,6 +14,7 @@ use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::codex_apps_mcp_tools::CODEX_APPS_META_KEY;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
@@ -649,17 +650,12 @@ pub(crate) struct McpToolApprovalMetadata {
     openai_file_upload_options: Option<OpenAiFileUploadOptions>,
 }
 
-const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 const MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY: &str = "openai/fileUploadConfig";
 
 #[derive(Debug, Clone, Deserialize)]
 struct RawOpenAiFileUploadConfig {
     #[serde(default)]
-    use_case: Option<String>,
-    #[serde(default)]
     store_in_library: bool,
-    #[serde(default)]
-    upload_source: Option<String>,
 }
 
 fn parse_openai_file_upload_options(
@@ -670,17 +666,13 @@ fn parse_openai_file_upload_options(
         .cloned()
         .and_then(|value| serde_json::from_value::<RawOpenAiFileUploadConfig>(value).ok())?;
 
-    if raw.use_case.is_none() && !raw.store_in_library && raw.upload_source.is_none() {
+    if !raw.store_in_library {
         return None;
     }
 
-    let mut options = OpenAiFileUploadOptions::default();
-    if let Some(use_case) = raw.use_case {
-        options.use_case = use_case;
-    }
-    options.store_in_library = raw.store_in_library;
-    options.upload_source = raw.upload_source;
-    Some(options)
+    Some(OpenAiFileUploadOptions {
+        store_in_library: true,
+    })
 }
 
 fn custom_mcp_tool_approval_mode(
@@ -723,7 +715,7 @@ fn build_mcp_tool_call_request_meta(
             metadata.and_then(|metadata| metadata.codex_apps_meta.clone())
     {
         request_meta.insert(
-            MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
+            CODEX_APPS_META_KEY.to_string(),
             serde_json::Value::Object(codex_apps_meta),
         );
     }
@@ -1139,7 +1131,7 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             .tool
             .meta
             .as_ref()
-            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+            .and_then(|meta| meta.get(CODEX_APPS_META_KEY))
             .and_then(serde_json::Value::as_object)
             .cloned(),
         openai_file_input_params: Some(declared_openai_file_input_param_names(

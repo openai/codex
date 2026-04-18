@@ -88,9 +88,7 @@ fn parse_openai_file_upload_options_reads_store_in_library_config() {
     assert_eq!(
         parsed,
         Some(codex_api::OpenAiFileUploadOptions {
-            use_case: "codex".to_string(),
             store_in_library: true,
-            upload_source: None,
         })
     );
 }
@@ -632,7 +630,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         ),
         Some(serde_json::json!({
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
-            MCP_TOOL_CODEX_APPS_META_KEY: {
+            crate::codex_apps_mcp_tools::CODEX_APPS_META_KEY: {
                 "resource_uri": "connector://calendar/tools/calendar_create_event",
                 "contains_mcp_source": true,
                 "connector_id": "calendar",

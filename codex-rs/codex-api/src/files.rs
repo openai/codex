@@ -21,17 +21,13 @@ const OPENAI_FILE_USE_CASE: &str = "codex";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiFileUploadOptions {
-    pub use_case: String,
     pub store_in_library: bool,
-    pub upload_source: Option<String>,
 }
 
 impl Default for OpenAiFileUploadOptions {
     fn default() -> Self {
         Self {
-            use_case: OPENAI_FILE_USE_CASE.to_string(),
             store_in_library: false,
-            upload_source: None,
         }
     }
 }
@@ -150,13 +146,10 @@ pub async fn upload_local_file(
     let mut create_request = serde_json::json!({
         "file_name": file_name,
         "file_size": metadata.len(),
-        "use_case": options.use_case,
+        "use_case": OPENAI_FILE_USE_CASE,
     });
     if options.store_in_library {
         create_request["store_in_library"] = serde_json::json!(true);
-    }
-    if let Some(upload_source) = &options.upload_source {
-        create_request["upload_source"] = serde_json::json!(upload_source);
     }
     let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
         .json(&create_request)
