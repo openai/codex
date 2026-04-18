@@ -23,10 +23,7 @@ pub async fn run_mac_app_open_or_install(
     }
     eprintln!("Codex Desktop not found; downloading installer...");
     let download_url = download_url_override.unwrap_or_else(|| {
-        let is_apple_silicon = std::env::consts::ARCH == "aarch64"
-            || sysctl_flag("sysctl.proc_translated").unwrap_or(false)
-            || sysctl_flag("hw.optional.arm64").unwrap_or(false);
-        let default_url = if is_apple_silicon {
+        let default_url = if is_apple_silicon_mac() {
             CODEX_DMG_URL_ARM64
         } else {
             CODEX_DMG_URL_X64
@@ -44,20 +41,26 @@ pub async fn run_mac_app_open_or_install(
     Ok(())
 }
 
-fn sysctl_flag(name: &str) -> Option<bool> {
-    let name = CString::new(name).ok()?;
-    let mut value: libc::c_int = 0;
-    let mut size = std::mem::size_of_val(&value);
-    let result = unsafe {
-        libc::sysctlbyname(
-            name.as_ptr(),
-            (&mut value as *mut libc::c_int).cast::<libc::c_void>(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    (result == 0).then_some(value != 0)
+fn is_apple_silicon_mac() -> bool {
+    fn macos_sysctl_flag(name: &str) -> Option<bool> {
+        let name = CString::new(name).ok()?;
+        let mut value: libc::c_int = 0;
+        let mut size = std::mem::size_of_val(&value);
+        let result = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr(),
+                (&mut value as *mut libc::c_int).cast::<libc::c_void>(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        (result == 0).then_some(value != 0)
+    }
+
+    std::env::consts::ARCH == "aarch64"
+        || macos_sysctl_flag("sysctl.proc_translated").unwrap_or(false)
+        || macos_sysctl_flag("hw.optional.arm64").unwrap_or(false)
 }
 
 fn find_existing_codex_app_path() -> Option<PathBuf> {
