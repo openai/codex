@@ -7,13 +7,19 @@ pub struct AppCommand {
     #[arg(value_name = "PATH", default_value = ".")]
     pub path: PathBuf,
 
-    /// Override the macOS DMG download URL (advanced).
+    /// Override the app installer download URL (advanced).
     #[arg(long = "download-url")]
     pub download_url_override: Option<String>,
 }
 
-#[cfg(target_os = "macos")]
 pub async fn run_app(cmd: AppCommand) -> anyhow::Result<()> {
     let workspace = std::fs::canonicalize(&cmd.path).unwrap_or(cmd.path);
-    crate::desktop_app::run_app_open_or_install(workspace, cmd.download_url_override).await
+    #[cfg(target_os = "macos")]
+    {
+        crate::desktop_app::run_app_open_or_install(workspace, cmd.download_url_override).await
+    }
+    #[cfg(target_os = "windows")]
+    {
+        crate::desktop_app::run_app_open_or_install(workspace, cmd.download_url_override).await
+    }
 }
