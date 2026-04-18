@@ -2,7 +2,7 @@
 //!
 //! The public tool contract intentionally splits goal creation from updates:
 //! `set_goal` starts an active objective, while `update_goal` changes status
-//! or budget on the existing goal and preserves usage accounting.
+//! on the existing goal and preserves usage accounting.
 
 use crate::function_tool::FunctionCallError;
 use crate::goals::GoalAccountingBoundary;
@@ -21,7 +21,6 @@ use codex_tools::GET_GOAL_TOOL_NAME;
 use codex_tools::SET_GOAL_TOOL_NAME;
 use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -38,9 +37,7 @@ struct SetGoalArgs {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct UpdateGoalArgs {
-    status: Option<ToolGoalStatus>,
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    token_budget: Option<Option<i64>>,
+    status: ToolGoalStatus,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -48,7 +45,6 @@ struct UpdateGoalArgs {
 enum ToolGoalStatus {
     Active,
     Paused,
-    BudgetLimited,
     Complete,
 }
 
@@ -57,7 +53,6 @@ impl From<ToolGoalStatus> for ThreadGoalStatus {
         match value {
             ToolGoalStatus::Active => Self::Active,
             ToolGoalStatus::Paused => Self::Paused,
-            ToolGoalStatus::BudgetLimited => Self::BudgetLimited,
             ToolGoalStatus::Complete => Self::Complete,
         }
     }
@@ -162,15 +157,12 @@ async fn handle_update_goal(
     let status = args.status;
     let request = SetGoalRequest {
         objective: None,
-        status: status.map(Into::into),
-        token_budget: args.token_budget,
+        status: Some(status.into()),
+        token_budget: None,
     };
 
-    if matches!(
-        status,
-        Some(ToolGoalStatus::Paused | ToolGoalStatus::BudgetLimited | ToolGoalStatus::Complete)
-    ) {
-        if status == Some(ToolGoalStatus::Paused) {
+    if matches!(status, ToolGoalStatus::Paused | ToolGoalStatus::Complete) {
+        if status == ToolGoalStatus::Paused {
             let goal = session
                 .get_thread_goal()
                 .await
@@ -179,6 +171,9 @@ async fn handle_update_goal(
                 .as_ref()
                 .is_some_and(|goal| goal.status == ThreadGoalStatus::BudgetLimited)
             {
+                session
+                    .clear_queued_goal_continuations_for_next_turn()
+                    .await;
                 return goal_response(goal);
             }
         }
@@ -194,6 +189,9 @@ async fn handle_update_goal(
             .get_thread_goal()
             .await
             .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+        session
+            .clear_queued_goal_continuations_for_next_turn()
+            .await;
         return goal_response(goal);
     }
     let goal = session
@@ -233,14 +231,6 @@ fn completion_budget_report(goal: &ThreadGoal) -> Option<String> {
             parts.join("; ")
         ))
     }
-}
-
-fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[cfg(test)]

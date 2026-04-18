@@ -109,10 +109,17 @@ impl CodexThread {
             .await;
     }
 
-    pub async fn account_active_goal_progress(&self) -> anyhow::Result<()> {
+    pub async fn abort_for_goal_stopped(&self) {
         self.codex
             .session
-            .account_active_thread_goal_progress()
+            .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+            .await;
+    }
+
+    pub async fn account_goal_progress_before_external_mutation(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .account_thread_goal_progress_before_external_mutation()
             .await
     }
 

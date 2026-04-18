@@ -96,7 +96,9 @@ impl CodexMessageProcessor {
                 return;
             }
             if let Some(thread) = running_thread.as_ref()
-                && let Err(err) = thread.account_active_goal_progress().await
+                && let Err(err) = thread
+                    .account_goal_progress_before_external_mutation()
+                    .await
             {
                 warn!(
                     "failed to account active goal progress before app-server goal replacement: {err}"
@@ -146,7 +148,9 @@ impl CodexMessageProcessor {
                 return;
             }
             if let Some(thread) = running_thread.as_ref()
-                && let Err(err) = thread.account_active_goal_progress().await
+                && let Err(err) = thread
+                    .account_goal_progress_before_external_mutation()
+                    .await
             {
                 warn!(
                     "failed to account active goal progress before app-server goal update: {err}"
@@ -191,13 +195,17 @@ impl CodexMessageProcessor {
             && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
         {
             match goal_status {
-                ThreadGoalStatus::Active => thread.continue_active_goal_if_idle().await,
+                ThreadGoalStatus::Active => {
+                    thread.clear_queued_goal_continuations().await;
+                    thread.continue_active_goal_if_idle().await;
+                }
                 ThreadGoalStatus::BudgetLimited => {
                     thread.clear_queued_goal_continuations().await;
                     thread.abort_for_goal_budget_limited().await;
                 }
                 ThreadGoalStatus::Paused | ThreadGoalStatus::Complete => {
                     thread.clear_queued_goal_continuations().await;
+                    thread.abort_for_goal_stopped().await;
                 }
             }
         }
@@ -323,7 +331,9 @@ impl CodexMessageProcessor {
         let thread_state = self.thread_state_manager.thread_state(thread_id).await;
         let thread_state = thread_state.lock().await;
         if let Some(thread) = running_thread.as_ref()
-            && let Err(err) = thread.account_active_goal_progress().await
+            && let Err(err) = thread
+                .account_goal_progress_before_external_mutation()
+                .await
         {
             warn!("failed to account active goal progress before app-server goal clear: {err}");
         }
@@ -339,6 +349,7 @@ impl CodexMessageProcessor {
 
         if let Some(thread) = running_thread.as_ref() {
             thread.clear_cached_thread_goal_after_delete().await;
+            thread.abort_for_goal_stopped().await;
         }
 
         self.outgoing

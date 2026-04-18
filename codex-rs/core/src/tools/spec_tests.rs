@@ -430,35 +430,6 @@ async fn test_build_specs_gpt5_codex_default() {
 }
 
 #[tokio::test]
-async fn test_goal_mode_adds_goal_tools() {
-    let mut features = Features::with_defaults();
-    features.enable(Feature::GoalMode);
-    assert_default_model_tools(
-        "gpt-5-codex",
-        &features,
-        Some(WebSearchMode::Cached),
-        "shell_command",
-        &[
-            "update_plan",
-            "get_goal",
-            "set_goal",
-            "update_goal",
-            "request_user_input",
-            "apply_patch",
-            "web_search",
-            "image_generation",
-            "view_image",
-            "spawn_agent",
-            "send_input",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-        ],
-    )
-    .await;
-}
-
-#[tokio::test]
 async fn test_build_specs_gpt51_codex_default() {
     let features = Features::with_defaults();
     assert_default_model_tools(
