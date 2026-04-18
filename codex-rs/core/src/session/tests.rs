@@ -6100,8 +6100,8 @@ async fn inactive_goal_does_not_start_stale_queued_continuation() -> anyhow::Res
 
     assert!(!sess.has_active_turn().await);
     assert!(
-        sess.has_queued_response_items_for_next_turn().await,
-        "non-goal startup should not consume the stale continuation"
+        !sess.has_queued_response_items_for_next_turn().await,
+        "inactive goals should clear stale continuation input"
     );
 
     Ok(())

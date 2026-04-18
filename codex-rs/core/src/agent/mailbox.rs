@@ -69,6 +69,12 @@ impl MailboxReceiver {
         self.sync_pending_mails();
         self.pending_mails.drain(..).collect()
     }
+
+    pub(crate) fn prepend(&mut self, mails: Vec<InterAgentCommunication>) {
+        for mail in mails.into_iter().rev() {
+            self.pending_mails.push_front(mail);
+        }
+    }
 }
 
 #[cfg(test)]

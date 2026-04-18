@@ -2949,7 +2949,7 @@ impl Session {
     pub(crate) async fn get_pending_input_for_turn_state(
         &self,
         expected_turn_state: &Arc<tokio::sync::Mutex<crate::state::TurnState>>,
-    ) -> Vec<ResponseInputItem> {
+    ) -> (Vec<ResponseInputItem>, Vec<InterAgentCommunication>) {
         let (pending_input, accepts_mailbox_delivery) = {
             let active = self.active_turn.lock().await;
             match active.as_ref() {
@@ -2964,25 +2964,10 @@ impl Session {
             }
         };
         if !accepts_mailbox_delivery {
-            return pending_input;
+            return (pending_input, Vec::new());
         }
-        let mailbox_items = {
-            let mut mailbox_rx = self.mailbox_rx.lock().await;
-            mailbox_rx
-                .drain()
-                .into_iter()
-                .map(|mail| mail.to_response_input_item())
-                .collect::<Vec<_>>()
-        };
-        if pending_input.is_empty() {
-            mailbox_items
-        } else if mailbox_items.is_empty() {
-            pending_input
-        } else {
-            let mut pending_input = pending_input;
-            pending_input.extend(mailbox_items);
-            pending_input
-        }
+        let mailbox_items = self.mailbox_rx.lock().await.drain();
+        (pending_input, mailbox_items)
     }
 
     /// Queue response items to be injected into the next active turn created for this session.
@@ -3011,6 +2996,17 @@ impl Session {
         let mut idle_pending_input = self.idle_pending_input.lock().await;
         items.append(&mut idle_pending_input);
         *idle_pending_input = items;
+    }
+
+    pub(crate) async fn requeue_mailbox_items_front(
+        &self,
+        mailbox_items: Vec<InterAgentCommunication>,
+    ) {
+        if mailbox_items.is_empty() {
+            return;
+        }
+
+        self.mailbox_rx.lock().await.prepend(mailbox_items);
     }
 
     pub(crate) async fn clear_queued_goal_continuations_for_next_turn(&self) {

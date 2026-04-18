@@ -323,10 +323,10 @@ impl Session {
             }
             InitialResponseItems::Direct(items) => items,
         };
-        let mailbox_items = if include_next_turn_queue {
+        let (turn_pending_input, mailbox_items) = if include_next_turn_queue {
             self.get_pending_input_for_turn_state(&turn_state).await
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
 
         let mut active = self.active_turn.lock().await;
@@ -339,8 +339,12 @@ impl Session {
         };
         if let Some(reason) = skip_reason {
             drop(active);
-            self.requeue_drained_startup_input(queued_response_items, mailbox_items)
-                .await;
+            self.requeue_drained_startup_input(
+                queued_response_items,
+                turn_pending_input,
+                mailbox_items,
+            )
+            .await;
             debug!("{reason}");
             return;
         }
@@ -350,8 +354,11 @@ impl Session {
             for item in queued_response_items {
                 turn_state.push_pending_input(item);
             }
-            for item in mailbox_items {
+            for item in turn_pending_input {
                 turn_state.push_pending_input(item);
+            }
+            for mail in mailbox_items {
+                turn_state.push_pending_input(mail.to_response_input_item());
             }
         }
         let Some(turn) = active.as_mut() else {
@@ -428,13 +435,18 @@ impl Session {
     async fn requeue_drained_startup_input(
         &self,
         mut queued_response_items: Vec<ResponseInputItem>,
-        mailbox_items: Vec<ResponseInputItem>,
+        turn_pending_input: Vec<ResponseInputItem>,
+        mailbox_items: Vec<codex_protocol::protocol::InterAgentCommunication>,
     ) {
-        if queued_response_items.is_empty() && mailbox_items.is_empty() {
+        if queued_response_items.is_empty()
+            && turn_pending_input.is_empty()
+            && mailbox_items.is_empty()
+        {
             return;
         }
 
-        queued_response_items.extend(mailbox_items);
+        self.requeue_mailbox_items_front(mailbox_items).await;
+        queued_response_items.extend(turn_pending_input);
         self.requeue_response_items_for_next_turn_front(queued_response_items)
             .await;
     }
@@ -452,6 +464,7 @@ impl Session {
     }
 
     pub(crate) async fn maybe_start_turn_for_pending_work_or_goal_continuation(self: &Arc<Self>) {
+        self.clear_stale_goal_continuations_for_next_turn().await;
         self.maybe_start_turn_for_pending_work().await;
         let _continuation_guard = self.goal_continuation_lock.lock().await;
         self.maybe_start_goal_continuation_if_idle().await;
@@ -468,6 +481,7 @@ impl Session {
             }
         };
         if !active_goal {
+            self.clear_queued_goal_continuations_for_next_turn().await;
             return;
         }
 

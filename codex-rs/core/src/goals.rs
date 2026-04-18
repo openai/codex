@@ -20,7 +20,9 @@ use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_utils_template::Template;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -32,6 +34,14 @@ pub(crate) struct SetGoalRequest {
     pub(crate) status: Option<ThreadGoalStatus>,
     pub(crate) token_budget: Option<Option<i64>>,
 }
+
+static CONTINUATION_PROMPT_TEMPLATE: LazyLock<Template> =
+    LazyLock::new(
+        || match Template::parse(include_str!("../templates/goals/continuation.md")) {
+            Ok(template) => template,
+            Err(err) => panic!("embedded goals/continuation.md template is invalid: {err}"),
+        },
+    );
 
 #[derive(Clone, Copy)]
 pub(crate) enum GoalAccountingBoundary {
@@ -370,6 +380,22 @@ impl Session {
         self.clear_queued_goal_continuations_for_next_turn().await;
     }
 
+    pub(crate) async fn clear_stale_goal_continuations_for_next_turn(&self) {
+        let active_goal = match self.get_thread_goal().await {
+            Ok(Some(goal)) => goal.status == ThreadGoalStatus::Active,
+            Ok(None) => false,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to read thread goal before clearing stale continuations: {err}"
+                );
+                false
+            }
+        };
+        if !active_goal {
+            self.clear_queued_goal_continuations_for_next_turn().await;
+        }
+    }
+
     pub(crate) async fn mark_thread_goal_turn_started(
         &self,
         turn_context: &TurnContext,
@@ -588,7 +614,7 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn account_active_thread_goal_progress(
+    pub(crate) async fn account_thread_goal_progress_before_external_mutation(
         self: &Arc<Self>,
     ) -> anyhow::Result<()> {
         let turn_context = {
@@ -600,11 +626,21 @@ impl Session {
                     .map(|(_, task)| Arc::clone(&task.turn_context))
             })
         };
-        let Some(turn_context) = turn_context else {
+        if let Some(turn_context) = turn_context {
+            return self
+                .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Tool)
+                .await;
+        }
+
+        let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
-        self.account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Tool)
-            .await
+        self.account_thread_goal_wall_clock_usage(
+            &state_db,
+            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn account_thread_goal_wall_clock_usage(
@@ -876,6 +912,10 @@ fn should_ignore_goal_for_mode(mode: ModeKind) -> bool {
     mode == ModeKind::Plan
 }
 
+// Builds the hidden developer prompt used to continue an active goal after the
+// previous turn completes. Runtime-owned state such as budget exhaustion is
+// reported as context, but the model is only asked to mark goals active,
+// paused, or complete.
 fn continuation_prompt(goal: &ThreadGoal) -> String {
     let token_budget = goal
         .token_budget
@@ -885,37 +925,19 @@ fn continuation_prompt(goal: &ThreadGoal) -> String {
         .token_budget
         .map(|budget| (budget - goal.tokens_used).max(0).to_string())
         .unwrap_or_else(|| "unbounded".to_string());
+    let tokens_used = goal.tokens_used.to_string();
+    let time_used_seconds = goal.time_used_seconds.to_string();
 
-    format!(
-        r#"Continue working toward the active thread goal.
-
-Objective:
-{objective}
-
-Budget:
-- Time spent pursuing goal: {time_used_seconds} seconds
-- Tokens used: {tokens_used}
-- Token budget: {token_budget}
-- Tokens remaining: {remaining_tokens}
-
-Avoid repeating work that is already done. Choose the next concrete action toward the objective.
-
-Before deciding that the goal is achieved, perform a completion audit against the actual current state:
-- Restate the objective as concrete deliverables or success criteria.
-- Build a prompt-to-artifact checklist that maps every explicit requirement, numbered item, named file, command, test, gate, and deliverable to concrete evidence.
-- Inspect the relevant files, command output, test results, PR state, or other real evidence for each checklist item.
-- Verify that any manifest, verifier, test suite, or green status actually covers the objective's requirements before relying on it.
-- Do not accept proxy signals as completion by themselves. Passing tests, a complete manifest, a successful verifier, or substantial implementation effort are useful evidence only if they cover every requirement in the objective.
-- Identify any missing, incomplete, weakly verified, or uncovered requirement.
-- Treat uncertainty as not achieved; do more verification or continue the work.
-
-Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when the audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call update_goal with status "complete" so usage accounting is preserved. Report the final elapsed time, and if the achieved goal has a token budget, report the final consumed token budget to the user after update_goal succeeds.
-
-If the goal has not been achieved and cannot be achieved within the remaining budget, or the remaining budget is too small for productive continuation, call update_goal with status "budgetLimited". Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work. If the goal is otherwise blocked and cannot continue productively for a non-budget reason, call update_goal with status "paused"."#,
-        objective = goal.objective,
-        tokens_used = goal.tokens_used,
-        time_used_seconds = goal.time_used_seconds,
-    )
+    match CONTINUATION_PROMPT_TEMPLATE.render([
+        ("objective", goal.objective.as_str()),
+        ("tokens_used", tokens_used.as_str()),
+        ("time_used_seconds", time_used_seconds.as_str()),
+        ("token_budget", token_budget.as_str()),
+        ("remaining_tokens", remaining_tokens.as_str()),
+    ]) {
+        Ok(prompt) => prompt,
+        Err(err) => panic!("embedded goals/continuation.md template failed to render: {err}"),
+    }
 }
 
 pub(crate) fn is_goal_continuation_item(item: &ResponseInputItem) -> bool {
@@ -987,8 +1009,12 @@ pub(crate) fn goal_token_delta_for_usage(usage: &TokenUsage) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::GoalWallClockAccountingState;
+    use super::continuation_prompt;
     use super::should_ignore_goal_for_mode;
+    use codex_protocol::ThreadId;
     use codex_protocol::config_types::ModeKind;
+    use codex_protocol::protocol::ThreadGoal;
+    use codex_protocol::protocol::ThreadGoalStatus;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -998,6 +1024,24 @@ mod tests {
         assert!(!should_ignore_goal_for_mode(ModeKind::Default));
         assert!(!should_ignore_goal_for_mode(ModeKind::PairProgramming));
         assert!(!should_ignore_goal_for_mode(ModeKind::Execute));
+    }
+
+    #[test]
+    fn continuation_prompt_does_not_tell_model_to_set_budget_limited() {
+        let prompt = continuation_prompt(&ThreadGoal {
+            thread_id: ThreadId::new(),
+            objective: "finish the stack".to_string(),
+            status: ThreadGoalStatus::Active,
+            token_budget: Some(10_000),
+            tokens_used: 1_234,
+            time_used_seconds: 56,
+            created_at: 1,
+            updated_at: 2,
+        });
+
+        assert!(prompt.contains("finish the stack"));
+        assert!(prompt.contains("Token budget: 10000"));
+        assert!(!prompt.contains("budgetLimited"));
     }
 
     #[tokio::test]
