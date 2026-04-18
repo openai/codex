@@ -388,6 +388,107 @@ async fn thread_resume_emits_paused_goal_update() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_goal_set_replaces_budget_limited_same_objective() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace(
+            "general_analytics = true\n",
+            "general_analytics = true\ngoal_mode = true\n",
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "materialize this thread".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id,
+                "objective": "keep polishing",
+                "status": "budgetLimited",
+                "tokenBudget": 10,
+            })),
+        )
+        .await?;
+    let goal_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(goal_id)),
+    )
+    .await??;
+    let goal: ThreadGoalSetResponse = to_response(goal_resp)?;
+    assert_eq!(goal.goal.status, ThreadGoalStatus::BudgetLimited);
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("thread/goal/updated"),
+    )
+    .await??;
+
+    let replacement_id = mcp
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({
+                "threadId": thread.id,
+                "objective": "keep polishing",
+            })),
+        )
+        .await?;
+    let replacement_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(replacement_id)),
+    )
+    .await??;
+    let replacement: ThreadGoalSetResponse = to_response(replacement_resp)?;
+
+    assert_eq!(replacement.goal.status, ThreadGoalStatus::Active);
+    assert_eq!(replacement.goal.token_budget, None);
+    assert_eq!(replacement.goal.tokens_used, 0);
+    assert_eq!(replacement.goal.time_used_seconds, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_emits_restored_token_usage_before_next_turn() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
