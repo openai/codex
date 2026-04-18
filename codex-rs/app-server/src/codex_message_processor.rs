@@ -143,6 +143,9 @@ use codex_app_server_protocol::ThreadDecrementElicitationResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadGoal;
+use codex_app_server_protocol::ThreadGoalClearParams;
+use codex_app_server_protocol::ThreadGoalClearResponse;
+use codex_app_server_protocol::ThreadGoalClearedNotification;
 use codex_app_server_protocol::ThreadGoalGetParams;
 use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetParams;
@@ -933,6 +936,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadGoalGet { request_id, params } => {
                 self.thread_goal_get(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadGoalClear { request_id, params } => {
+                self.thread_goal_clear(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadMetadataUpdate { request_id, params } => {
@@ -3255,6 +3262,99 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn thread_goal_clear(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadGoalClearParams,
+    ) {
+        if !self.config.features.enabled(Feature::GoalMode) {
+            self.send_invalid_request_error(
+                request_id,
+                "goal_mode feature is disabled".to_string(),
+            )
+            .await;
+            return;
+        }
+
+        let thread_id = match parse_thread_id_for_request(params.thread_id.as_str()) {
+            Ok(thread_id) => thread_id,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
+            Ok(state_db) => state_db,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let running_thread = self.thread_manager.get_thread(thread_id).await.ok();
+        let rollout_path = match running_thread.as_ref() {
+            Some(thread) => match thread.rollout_path() {
+                Some(path) => path,
+                None => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("ephemeral thread does not support goals: {thread_id}"),
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => {
+                match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string())
+                    .await
+                {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("thread not found: {thread_id}"),
+                        )
+                        .await;
+                        return;
+                    }
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to locate thread id {thread_id}: {err}"),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            }
+        };
+        reconcile_rollout(
+            Some(&state_db),
+            rollout_path.as_path(),
+            self.config.model_provider_id.as_str(),
+            /*builder*/ None,
+            &[],
+            /*archived_only*/ None,
+            /*new_thread_memory_mode*/ None,
+        )
+        .await;
+
+        let cleared = match state_db.delete_thread_goal(thread_id).await {
+            Ok(cleared) => cleared,
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to clear thread goal: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        self.outgoing
+            .send_response(request_id, ThreadGoalClearResponse { cleared })
+            .await;
+        if cleared {
+            self.emit_thread_goal_cleared_ordered(thread_id).await;
+        }
+    }
+
     async fn state_db_for_thread_goal_get(
         &self,
         thread_id: ThreadId,
@@ -3352,6 +3452,32 @@ impl CodexMessageProcessor {
                     thread_id: thread_id.to_string(),
                     turn_id: None,
                     goal,
+                },
+            ))
+            .await;
+    }
+
+    async fn emit_thread_goal_cleared_ordered(&self, thread_id: ThreadId) {
+        if self.thread_manager.get_thread(thread_id).await.is_ok() {
+            let listener_command_tx = {
+                let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+                let thread_state = thread_state.lock().await;
+                thread_state.listener_command_tx()
+            };
+            if let Some(listener_command_tx) = listener_command_tx {
+                let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalCleared;
+                if listener_command_tx.send(command).is_ok() {
+                    return;
+                }
+                warn!(
+                    "failed to enqueue thread goal clear for {thread_id}: listener command channel is closed"
+                );
+            }
+        }
+        self.outgoing
+            .send_server_notification(ServerNotification::ThreadGoalCleared(
+                ThreadGoalClearedNotification {
+                    thread_id: thread_id.to_string(),
                 },
             ))
             .await;
@@ -9101,6 +9227,15 @@ async fn handle_thread_listener_command(
                         thread_id: conversation_id.to_string(),
                         turn_id: None,
                         goal,
+                    },
+                ))
+                .await;
+        }
+        ThreadListenerCommand::EmitThreadGoalCleared => {
+            outgoing
+                .send_server_notification(ServerNotification::ThreadGoalCleared(
+                    ThreadGoalClearedNotification {
+                        thread_id: conversation_id.to_string(),
                     },
                 ))
                 .await;
