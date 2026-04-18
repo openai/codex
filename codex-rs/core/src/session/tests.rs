@@ -8,9 +8,12 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::config_loader::project_trust_key;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
+use crate::skills::SkillRenderSideEffects;
+use crate::skills::render::SkillMetadataBudget;
 use crate::tools::format_exec_output_str;
 
 use codex_features::Feature;
@@ -21,6 +24,7 @@ use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -54,10 +58,17 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
+use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ProjectConfig;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
+use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -83,6 +94,7 @@ use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TokenCountEvent;
@@ -106,10 +118,16 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Metric;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -153,6 +171,54 @@ fn assistant_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+    }
+}
+
+fn test_session_telemetry_without_metadata() -> SessionTelemetry {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
+    SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics_without_metadata_tags(metrics)
+}
+
+fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
+    for scope_metrics in resource_metrics.scope_metrics() {
+        for metric in scope_metrics.metrics() {
+            if metric.name() == name {
+                return metric;
+            }
+        }
+    }
+    panic!("metric {name} missing");
+}
+
+fn histogram_sum(resource_metrics: &ResourceMetrics, name: &str) -> u64 {
+    let metric = find_metric(resource_metrics, name);
+    match metric.data() {
+        AggregatedMetrics::F64(data) => match data {
+            MetricData::Histogram(histogram) => {
+                let points: Vec<_> = histogram.data_points().collect();
+                assert_eq!(points.len(), 1);
+                points[0].sum().round() as u64
+            }
+            _ => panic!("unexpected histogram aggregation"),
+        },
+        _ => panic!("unexpected metric data type"),
     }
 }
 
@@ -306,6 +372,75 @@ fn user_input_texts(items: &[ResponseItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+fn write_project_hooks(dot_codex: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dot_codex)?;
+    std::fs::write(
+        dot_codex.join("hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo hello from hook"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )
+}
+
+async fn write_project_trust_config(
+    codex_home: &Path,
+    trusted_projects: &[(&Path, TrustLevel)],
+) -> std::io::Result<()> {
+    tokio::fs::write(
+        codex_home.join(codex_config::CONFIG_TOML_FILE),
+        toml::to_string(&ConfigToml {
+            projects: Some(
+                trusted_projects
+                    .iter()
+                    .map(|(project, trust_level)| {
+                        (
+                            project_trust_key(project),
+                            ProjectConfig {
+                                trust_level: Some(*trust_level),
+                            },
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>(),
+            ),
+            ..Default::default()
+        })
+        .expect("serialize config"),
+    )
+    .await
+}
+
+async fn preview_session_start_hooks(
+    config: &crate::config::Config,
+) -> std::io::Result<Vec<codex_protocol::protocol::HookRunSummary>> {
+    let hooks = Hooks::new(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(config.config_layer_stack.clone()),
+        ..HooksConfig::default()
+    });
+
+    Ok(
+        hooks.preview_session_start(&codex_hooks::SessionStartRequest {
+            session_id: ThreadId::new(),
+            cwd: config.cwd.clone(),
+            transcript_path: None,
+            model: "gpt-5".to_string(),
+            permission_mode: "default".to_string(),
+            source: codex_hooks::SessionStartSource::Startup,
+        }),
+    )
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
@@ -2075,6 +2210,7 @@ async fn set_rate_limits_retains_previous_credits() {
             balance: Some("10.00".to_string()),
         }),
         plan_type: Some(codex_protocol::account::PlanType::Plus),
+        rate_limit_reached_type: None,
     };
     state.set_rate_limits(initial.clone());
 
@@ -2093,6 +2229,7 @@ async fn set_rate_limits_retains_previous_credits() {
         }),
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     state.set_rate_limits(update.clone());
 
@@ -2105,6 +2242,7 @@ async fn set_rate_limits_retains_previous_credits() {
             secondary: update.secondary,
             credits: initial.credits,
             plan_type: initial.plan_type,
+            rate_limit_reached_type: None,
         })
     );
 }
@@ -2181,6 +2319,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             balance: Some("15.00".to_string()),
         }),
         plan_type: Some(codex_protocol::account::PlanType::Plus),
+        rate_limit_reached_type: None,
     };
     state.set_rate_limits(initial.clone());
 
@@ -2195,6 +2334,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         secondary: None,
         credits: None,
         plan_type: Some(codex_protocol::account::PlanType::Pro),
+        rate_limit_reached_type: None,
     };
     state.set_rate_limits(update.clone());
 
@@ -2207,6 +2347,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             secondary: update.secondary,
             credits: initial.credits,
             plan_type: update.plan_type,
+            rate_limit_reached_type: None,
         })
     );
 }
@@ -4471,6 +4612,138 @@ async fn build_initial_context_omits_default_image_save_location_without_image_h
             .any(|text| text.contains("Generated images are saved to")),
         "expected initial context to omit image save instructions without image history, got {developer_texts:?}"
     );
+}
+
+#[tokio::test]
+async fn build_initial_context_trims_skill_metadata_from_context_window_budget() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "admin-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            scope: SkillScope::Admin,
+        },
+        SkillMetadata {
+            name: "repo-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+    ];
+    turn_context.model_info.context_window = Some(100);
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+
+    assert!(
+        developer_texts
+            .iter()
+            .all(|text| !text.contains(THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE)),
+        "expected skill budget warning to stay out of the initial context, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .all(|text| !text.contains("- admin-skill:") && !text.contains("- repo-skill:")),
+        "expected no skill metadata entries to fit the tiny budget, got {developer_texts:?}"
+    );
+}
+
+#[test]
+fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
+    let session_telemetry = test_session_telemetry_without_metadata();
+    let rendered = render_skills_section(
+        &[SkillMetadata {
+            name: "repo-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        }],
+        SkillMetadataBudget::Characters(1),
+        SkillRenderSideEffects::ThreadStart {
+            session_telemetry: &session_telemetry,
+        },
+    )
+    .expect("skills should render");
+
+    assert!(rendered.emit_warning);
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    assert_eq!(
+        histogram_sum(&snapshot, THREAD_SKILLS_ENABLED_TOTAL_METRIC),
+        1
+    );
+    assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_KEPT_TOTAL_METRIC), 0);
+    assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_TRUNCATED_METRIC), 1);
+}
+
+#[tokio::test]
+async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_builds() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let mut turn_context = Arc::into_inner(turn_context).expect("sole turn context owner");
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "admin-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            scope: SkillScope::Admin,
+        },
+        SkillMetadata {
+            name: "repo-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+    ];
+    turn_context.model_info.context_window = Some(100);
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+
+    let _ = session.build_initial_context(&turn_context).await;
+    let warning_event = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("warning event should arrive")
+        .expect("warning event should be readable");
+    assert!(matches!(
+        warning_event.msg,
+        EventMsg::Warning(WarningEvent { message })
+            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+    ));
+
+    let _ = session.build_initial_context(&turn_context).await;
+    let warning_event = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("warning event should arrive on repeated build")
+        .expect("warning event should be readable");
+    assert!(matches!(
+        warning_event.msg,
+        EventMsg::Warning(WarningEvent { message })
+            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+    ));
 }
 
 #[tokio::test]
@@ -7849,4 +8122,86 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     );
 
     pretty_assertions::assert_eq!(output, expected);
+}
+
+#[tokio::test]
+async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let codex_home = temp.path().join("home");
+    let project_root = temp.path().join("project");
+    let nested = project_root.join("nested");
+    let root_dot_codex = project_root.join(".codex");
+    let nested_dot_codex = nested.join(".codex");
+
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&nested_dot_codex)?;
+    std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    write_project_hooks(&root_dot_codex)?;
+    write_project_hooks(&nested_dot_codex)?;
+    write_project_trust_config(&codex_home, &[(&nested, TrustLevel::Trusted)]).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+
+    let preview = preview_session_start_hooks(&config).await?;
+    let expected_source_path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+        nested_dot_codex.join("hooks.json"),
+    )?;
+    assert_eq!(
+        preview
+            .iter()
+            .map(|run| &run.source_path)
+            .collect::<Vec<_>>(),
+        vec![&expected_source_path],
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_start_hooks_require_project_trust_without_config_toml() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let project_root = temp.path().join("project");
+    let nested = project_root.join("nested");
+    let dot_codex = project_root.join(".codex");
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    write_project_hooks(&dot_codex)?;
+
+    let cases = [
+        ("unknown", Vec::<(&Path, TrustLevel)>::new(), 0_usize),
+        (
+            "untrusted",
+            vec![(&project_root as &Path, TrustLevel::Untrusted)],
+            0_usize,
+        ),
+        (
+            "trusted",
+            vec![(&project_root as &Path, TrustLevel::Trusted)],
+            1_usize,
+        ),
+    ];
+
+    for (name, trust_entries, expected_hooks) in cases {
+        let codex_home = temp.path().join(format!("home_{name}"));
+        std::fs::create_dir_all(&codex_home)?;
+        write_project_trust_config(&codex_home, &trust_entries).await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home)
+            .fallback_cwd(Some(nested.clone()))
+            .build()
+            .await?;
+
+        assert_eq!(
+            preview_session_start_hooks(&config).await?.len(),
+            expected_hooks,
+            "unexpected hook count for {name}",
+        );
+    }
+
+    Ok(())
 }

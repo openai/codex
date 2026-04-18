@@ -106,6 +106,7 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     }
 }
 
@@ -233,6 +234,7 @@ pub(super) async fn make_chatwidget_manual(
         connectors_partial_snapshot: None,
         plugin_install_apps_needing_auth: Vec::new(),
         plugin_install_auth_flow: None,
+        plugins_active_tab_id: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
         plugins_cache: PluginsCacheState::default(),
@@ -857,8 +859,11 @@ pub(super) fn plugins_test_interface(
         default_prompt: None,
         brand_color: None,
         composer_icon: None,
+        composer_icon_url: None,
         logo: None,
+        logo_url: None,
         screenshots: Vec::new(),
+        screenshot_urls: Vec::new(),
     }
 }
 
@@ -894,7 +899,7 @@ pub(super) fn plugins_test_curated_marketplace(
 ) -> PluginMarketplaceEntry {
     PluginMarketplaceEntry {
         name: OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
-        path: plugins_test_absolute_path("marketplaces/chatgpt"),
+        path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         interface: Some(MarketplaceInterface {
             display_name: Some("ChatGPT Marketplace".to_string()),
         }),
@@ -905,7 +910,7 @@ pub(super) fn plugins_test_curated_marketplace(
 pub(super) fn plugins_test_repo_marketplace(plugins: Vec<PluginSummary>) -> PluginMarketplaceEntry {
     PluginMarketplaceEntry {
         name: "repo".to_string(),
-        path: plugins_test_absolute_path("marketplaces/repo"),
+        path: Some(plugins_test_absolute_path("marketplaces/repo")),
         interface: Some(MarketplaceInterface {
             display_name: Some("Repo Marketplace".to_string()),
         }),
@@ -919,7 +924,6 @@ pub(super) fn plugins_test_response(
     PluginListResponse {
         marketplaces,
         marketplace_load_errors: Vec::new(),
-        remote_sync_error: None,
         featured_plugin_ids: Vec::new(),
     }
 }

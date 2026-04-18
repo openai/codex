@@ -6,6 +6,7 @@ use tracing::trace;
 
 use crate::ExecBackend;
 use crate::ExecProcess;
+use crate::ExecProcessEventReceiver;
 use crate::ExecServerError;
 use crate::StartedExecProcess;
 use crate::client::ExecServerClient;
@@ -54,6 +55,10 @@ impl ExecProcess for RemoteExecProcess {
 
     fn subscribe_wake(&self) -> watch::Receiver<u64> {
         self.session.subscribe_wake()
+    }
+
+    fn subscribe_events(&self) -> ExecProcessEventReceiver {
+        self.session.subscribe_events()
     }
 
     async fn read(
