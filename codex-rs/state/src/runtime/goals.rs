@@ -174,6 +174,20 @@ WHERE thread_id = ?
         self.get_thread_goal(thread_id).await
     }
 
+    pub async fn delete_thread_goal(&self, thread_id: ThreadId) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            r#"
+DELETE FROM thread_goals
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn account_thread_goal_usage(
         &self,
         thread_id: ThreadId,
@@ -317,6 +331,10 @@ mod tests {
         assert_eq!(None, replaced.token_budget);
         assert_eq!(0, replaced.tokens_used);
         assert_eq!(0, replaced.time_used_seconds);
+
+        assert!(runtime.delete_thread_goal(thread_id).await.unwrap());
+        assert_eq!(None, runtime.get_thread_goal(thread_id).await.unwrap());
+        assert!(!runtime.delete_thread_goal(thread_id).await.unwrap());
     }
 
     #[tokio::test]
