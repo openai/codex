@@ -2,6 +2,7 @@ use super::process::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecError;
 use async_trait::async_trait;
 use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ProcessId;
 use codex_exec_server::ReadResponse;
@@ -31,6 +32,10 @@ impl ExecProcess for MockExecProcess {
 
     fn subscribe_wake(&self) -> watch::Receiver<u64> {
         self.wake_tx.subscribe()
+    }
+
+    fn subscribe_events(&self) -> ExecProcessEventReceiver {
+        ExecProcessEventReceiver::empty()
     }
 
     async fn read(

@@ -58,6 +58,7 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -302,6 +303,16 @@ impl McpProcess {
     /// Send an `account/rateLimits/read` JSON-RPC request.
     pub async fn send_get_account_rate_limits_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("account/rateLimits/read", /*params*/ None)
+            .await
+    }
+
+    /// Send an `account/sendAddCreditsNudgeEmail` JSON-RPC request.
+    pub async fn send_add_credits_nudge_email_request(
+        &mut self,
+        params: SendAddCreditsNudgeEmailParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("account/sendAddCreditsNudgeEmail", params)
             .await
     }
 

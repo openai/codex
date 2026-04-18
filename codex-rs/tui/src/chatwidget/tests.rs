@@ -46,6 +46,7 @@ pub(super) use codex_app_server_protocol::CommandAction as AppServerCommandActio
 pub(super) use codex_app_server_protocol::CommandExecutionRequestApprovalParams as AppServerCommandExecutionRequestApprovalParams;
 pub(super) use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
 pub(super) use codex_app_server_protocol::CommandExecutionStatus as AppServerCommandExecutionStatus;
+pub(super) use codex_app_server_protocol::ConfigWarningNotification;
 pub(super) use codex_app_server_protocol::ErrorNotification;
 pub(super) use codex_app_server_protocol::FileUpdateChange;
 pub(super) use codex_app_server_protocol::GuardianApprovalReview;
@@ -94,6 +95,7 @@ pub(super) use codex_app_server_protocol::TurnError as AppServerTurnError;
 pub(super) use codex_app_server_protocol::TurnStartedNotification;
 pub(super) use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 pub(super) use codex_app_server_protocol::UserInput as AppServerUserInput;
+pub(super) use codex_app_server_protocol::WarningNotification;
 pub(super) use codex_config::types::ApprovalsReviewer;
 pub(super) use codex_config::types::Notifications;
 #[cfg(target_os = "windows")]
