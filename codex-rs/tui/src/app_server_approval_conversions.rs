@@ -1,4 +1,3 @@
-use codex_app_server_protocol::AdditionalFileSystemPermissions;
 use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
@@ -35,12 +34,7 @@ pub(crate) fn granted_permission_profile_from_request(
         network: value.network.map(|network| AdditionalNetworkPermissions {
             enabled: network.enabled,
         }),
-        file_system: value
-            .file_system
-            .map(|file_system| AdditionalFileSystemPermissions {
-                read: file_system.read,
-                write: file_system.write,
-            }),
+        file_system: value.file_system.map(Into::into),
     }
 }
 
@@ -50,6 +44,10 @@ mod tests {
     use super::network_approval_context_to_core;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSpecialPath;
     use codex_protocol::protocol::NetworkApprovalContext;
     use codex_protocol::protocol::NetworkApprovalProtocol;
     use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
@@ -82,10 +80,10 @@ mod tests {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![absolute_path("/tmp/read-only")]),
-                    write: Some(vec![absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![absolute_path("/tmp/read-only")]),
+                    Some(vec![absolute_path("/tmp/write")]),
+                )),
             }),
             codex_app_server_protocol::GrantedPermissionProfile {
                 network: Some(codex_app_server_protocol::AdditionalNetworkPermissions {
@@ -94,6 +92,37 @@ mod tests {
                 file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
                     read: Some(vec![absolute_path("/tmp/read-only")]),
                     write: Some(vec![absolute_path("/tmp/write")]),
+                    entries: None,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn converts_request_permissions_into_canonical_granted_permissions() {
+        assert_eq!(
+            granted_permission_profile_from_request(CoreRequestPermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    entries: vec![FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Write,
+                    }],
+                }),
+                ..Default::default()
+            }),
+            codex_app_server_protocol::GrantedPermissionProfile {
+                network: None,
+                file_system: Some(codex_app_server_protocol::AdditionalFileSystemPermissions {
+                    read: None,
+                    write: None,
+                    entries: Some(vec![codex_app_server_protocol::FileSystemSandboxEntry {
+                        path: codex_app_server_protocol::FileSystemPath::Special {
+                            value: codex_app_server_protocol::FileSystemSpecialPath::Root,
+                        },
+                        access: codex_app_server_protocol::FileSystemAccessMode::Write,
+                    },]),
                 }),
             }
         );

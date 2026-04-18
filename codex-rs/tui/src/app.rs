@@ -9244,6 +9244,7 @@ guardian_approval = true
             file_system: Some(AdditionalFileSystemPermissions {
                 read: Some(vec![test_absolute_path("/tmp/read-only")]),
                 write: Some(vec![test_absolute_path("/tmp/write")]),
+                entries: None,
             }),
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
@@ -9276,10 +9277,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![test_absolute_path("/tmp/read-only")]),
+                    Some(vec![test_absolute_path("/tmp/write")]),
+                )),
             })
         );
         assert_eq!(
@@ -9351,6 +9352,7 @@ guardian_approval = true
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![test_absolute_path("/tmp/read-only")]),
                         write: Some(vec![test_absolute_path("/tmp/write")]),
+                        entries: None,
                     }),
                 },
             },
@@ -9372,10 +9374,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![test_absolute_path("/tmp/read-only")]),
+                    Some(vec![test_absolute_path("/tmp/write")]),
+                )),
             }
         );
     }
