@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::ffi::c_void;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -43,6 +44,14 @@ const WRITE_RESTRICTED: u32 = 0x08;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WIN_WORLD_SID: i32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
+
+fn restricted_token_flags(include_lua_token: bool) -> u32 {
+    let mut flags = DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED;
+    if include_lua_token {
+        flags |= LUA_TOKEN;
+    }
+    flags
+}
 
 #[repr(C)]
 struct TokenDefaultDaclInfo {
@@ -352,10 +361,9 @@ unsafe fn create_token_with_caps_from(
     entries[logon_idx + 1].Attributes = 0;
 
     let mut new_token: HANDLE = 0;
-    let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
         base_token,
-        flags,
+        restricted_token_flags(true),
         0,
         std::ptr::null(),
         0,
@@ -365,7 +373,28 @@ unsafe fn create_token_with_caps_from(
         &mut new_token,
     );
     if ok == 0 {
-        return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
+        let err = GetLastError();
+        if err != ERROR_INVALID_PARAMETER {
+            return Err(anyhow!("CreateRestrictedToken failed: {err}"));
+        }
+
+        // Some already-limited/non-UAC process tokens reject LUA_TOKEN with
+        // ERROR_INVALID_PARAMETER. Retrying without it preserves the
+        // write-restricted sandbox instead of failing before process launch.
+        let ok = CreateRestrictedToken(
+            base_token,
+            restricted_token_flags(false),
+            0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            entries.len() as u32,
+            entries.as_mut_ptr(),
+            &mut new_token,
+        );
+        if ok == 0 {
+            return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
+        }
     }
 
     let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
@@ -376,4 +405,28 @@ unsafe fn create_token_with_caps_from(
 
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restricted_token_flags;
+    use super::DISABLE_MAX_PRIVILEGE;
+    use super::LUA_TOKEN;
+    use super::WRITE_RESTRICTED;
+
+    #[test]
+    fn restricted_token_flags_include_lua_token_when_requested() {
+        assert_eq!(
+            restricted_token_flags(true),
+            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
+        );
+    }
+
+    #[test]
+    fn restricted_token_flags_can_omit_lua_token_for_retry() {
+        assert_eq!(
+            restricted_token_flags(false),
+            DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED
+        );
+    }
 }
