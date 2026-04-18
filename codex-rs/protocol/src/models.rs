@@ -400,9 +400,18 @@ pub enum ResponseInputItem {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
-    InputText { text: String },
-    InputImage { image_url: String },
-    OutputText { text: String },
+    InputText {
+        text: String,
+    },
+    InputImage {
+        image_url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        detail: Option<ImageDetail>,
+    },
+    OutputText {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
@@ -413,6 +422,8 @@ pub enum ImageDetail {
     High,
     Original,
 }
+
+pub const DEFAULT_IMAGE_DETAIL: ImageDetail = ImageDetail::High;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -621,7 +632,7 @@ const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("prompts/permissions/approval_policy/on_request.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
     include_str!("prompts/permissions/approval_policy/on_request_rule_request_permission.md");
-const GUARDIAN_SUBAGENT_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `guardian_subagent`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
+const AUTO_REVIEW_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
@@ -694,7 +705,7 @@ impl DeveloperInstructions {
         let text = if approvals_reviewer == ApprovalsReviewer::GuardianSubagent
             && approval_policy != AskForApproval::Never
         {
-            format!("{text}\n\n{GUARDIAN_SUBAGENT_APPROVAL_SUFFIX}")
+            format!("{text}\n\n{AUTO_REVIEW_APPROVAL_SUFFIX}")
         } else {
             text
         };
@@ -1127,6 +1138,7 @@ pub fn local_image_content_items_with_label_number(
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             });
             if label_number.is_some() {
                 items.push(ContentItem::InputText {
@@ -1274,7 +1286,10 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             ContentItem::InputText {
                                 text: image_open_tag_text(),
                             },
-                            ContentItem::InputImage { image_url },
+                            ContentItem::InputImage {
+                                image_url,
+                                detail: Some(DEFAULT_IMAGE_DETAIL),
+                            },
                             ContentItem::InputText {
                                 text: image_close_tag_text(),
                             },
@@ -1417,7 +1432,7 @@ impl From<crate::dynamic_tools::DynamicToolCallOutputContentItem>
             crate::dynamic_tools::DynamicToolCallOutputContentItem::InputImage { image_url } => {
                 Self::InputImage {
                     image_url,
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 }
             }
         }
@@ -1654,9 +1669,13 @@ fn convert_mcp_content_to_items(
                         .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
                         .and_then(serde_json::Value::as_str)
                         .and_then(|detail| match detail {
+                            "auto" => Some(ImageDetail::Auto),
+                            "low" => Some(ImageDetail::Low),
+                            "high" => Some(ImageDetail::High),
                             "original" => Some(ImageDetail::Original),
                             _ => None,
-                        }),
+                        })
+                        .or(Some(DEFAULT_IMAGE_DETAIL)),
                 }
             }
             Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
@@ -1747,7 +1766,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
         );
     }
@@ -1822,7 +1841,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,Zm9v".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
         );
     }
@@ -1845,7 +1864,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputText {
                 text: "line 2".to_string(),
@@ -1864,7 +1883,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ];
 
@@ -1887,7 +1906,7 @@ mod tests {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
         ]);
 
@@ -2136,7 +2155,8 @@ mod tests {
         )
         .into_text();
 
-        assert!(text.contains("`approvals_reviewer` is `guardian_subagent`"));
+        assert!(text.contains("`approvals_reviewer` is `auto_review`"));
+        assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
         assert!(text.contains("materially safer alternative"));
     }
 
@@ -2151,6 +2171,7 @@ mod tests {
         )
         .into_text();
 
+        assert!(!text.contains("`approvals_reviewer` is `auto_review`"));
         assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
     }
 
@@ -2457,7 +2478,7 @@ mod tests {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ]
         );
@@ -2484,7 +2505,7 @@ mod tests {
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ]),
         };
@@ -2520,7 +2541,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,BASE64".into(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             }]
         );
 
@@ -2560,7 +2581,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unknown_mcp_image_detail_metadata() -> Result<()> {
+    fn preserves_standard_detail_metadata_on_mcp_images() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![serde_json::json!({
                 "type": "image",
@@ -2584,7 +2605,7 @@ mod tests {
             items,
             vec![FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,BASE64".into(),
-                detail: None,
+                detail: Some(ImageDetail::High),
             }]
         );
 
@@ -2764,7 +2785,10 @@ mod tests {
                     ContentItem::InputText {
                         text: image_open_tag_text(),
                     },
-                    ContentItem::InputImage { image_url },
+                    ContentItem::InputImage {
+                        image_url,
+                        detail: Some(DEFAULT_IMAGE_DETAIL),
+                    },
                     ContentItem::InputText {
                         text: image_close_tag_text(),
                     },
@@ -2969,7 +2993,13 @@ mod tests {
                         text: image_open_tag_text(),
                     })
                 );
-                assert_eq!(content.get(1), Some(&ContentItem::InputImage { image_url }));
+                assert_eq!(
+                    content.get(1),
+                    Some(&ContentItem::InputImage {
+                        image_url,
+                        detail: Some(DEFAULT_IMAGE_DETAIL),
+                    })
+                );
                 assert_eq!(
                     content.get(2),
                     Some(&ContentItem::InputText {

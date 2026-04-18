@@ -41,6 +41,7 @@ fn build_stage_one_input_message_uses_default_limit_when_model_context_window_mi
     let input = format!("{}{}{}", "a".repeat(700_000), "middle", "z".repeat(700_000));
     let mut model_info = model_info_from_slug("gpt-5.2-codex");
     model_info.context_window = None;
+    model_info.max_context_window = None;
     let expected_truncated = truncate_text(
         &input,
         TruncationPolicy::Tokens(phase_one::DEFAULT_STAGE_ONE_ROLLOUT_TOKEN_LIMIT),

@@ -101,6 +101,7 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_command_execution_end_item;
 use codex_app_server_protocol::build_file_change_approval_request_item;
 use codex_app_server_protocol::build_file_change_begin_item;
@@ -268,7 +269,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
-        EventMsg::Warning(_warning_event) => {}
+        EventMsg::Warning(warning_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = WarningNotification {
+                    thread_id: Some(conversation_id.to_string()),
+                    message: warning_event.message,
+                };
+                if let Some(analytics_events_client) = analytics_events_client.as_ref() {
+                    analytics_events_client
+                        .track_notification(ServerNotification::Warning(notification.clone()));
+                }
+                outgoing
+                    .send_server_notification(ServerNotification::Warning(notification))
+                    .await;
+            }
+        }
         EventMsg::GuardianAssessment(assessment) => {
             if let ApiVersion::V2 = api_version {
                 let pending_command_execution = match build_item_from_guardian_event(

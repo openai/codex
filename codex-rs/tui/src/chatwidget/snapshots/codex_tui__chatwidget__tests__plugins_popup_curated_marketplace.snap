@@ -9,9 +9,9 @@ expression: popup
   [All Plugins]  Installed (1)  OpenAI Curated  Repo Marketplace
 
   Type to search plugins
-› Alpha Sync          Disabled               Press Enter to view plugin details.
-  Bravo Search        Available            · ChatGPT Marketplace · Search docs and tickets.
-  Hidden Repo Plugin  Available            · Repo Marketplace · Should not be shown in /plugins.
-  Starter             Available by default · ChatGPT Marketplace · Included by default.
+› [ ] Alpha Sync          Disabled    Space to enable; Enter view details.
+  [-] Bravo Search        Available · ChatGPT Marketplace · Search docs and tickets.
+  [-] Hidden Repo Plugin  Available · Repo Marketplace · Should not be shown in /plugins.
+  [-] Starter             Available · ChatGPT Marketplace · Included by default.
 
-  ←/→ select marketplace · enter view details · esc close
+  space enable/disable · ←/→ select marketplace · enter view details · esc close

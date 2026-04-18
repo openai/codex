@@ -1932,6 +1932,36 @@ pub struct GetAccountRateLimitsResponse {
     pub rate_limits_by_limit_id: Option<HashMap<String, RateLimitSnapshot>>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SendAddCreditsNudgeEmailParams {
+    pub credit_type: AddCreditsNudgeCreditType,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum AddCreditsNudgeCreditType {
+    Credits,
+    UsageLimit,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SendAddCreditsNudgeEmailResponse {
+    pub status: AddCreditsNudgeEmailStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum AddCreditsNudgeEmailStatus {
+    Sent,
+    CooldownActive,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6830,6 +6860,16 @@ pub struct DeprecationNoticeNotification {
     pub summary: String,
     /// Optional extra guidance, such as migration steps or rationale.
     pub details: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WarningNotification {
+    /// Optional thread target when the warning applies to a specific thread.
+    pub thread_id: Option<String>,
+    /// Concise warning message for the user.
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

@@ -20,6 +20,7 @@ use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::default_skill_metadata_budget;
 use crate::exec_policy::ExecPolicyManager;
 use crate::installation_id::resolve_installation_id;
 use crate::parse_turn_item;
@@ -28,6 +29,7 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::render_skills_section;
 use crate::rollout::find_thread_name_by_id;
 use crate::session_prefix::format_subagent_notification_message;
+use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use async_channel::Receiver;
@@ -362,9 +364,10 @@ pub struct Codex {
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 
-/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
-/// the submission id for the initial `ConfigureSession` request and the
-/// unique session id.
+pub(crate) const THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE: &str = "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it.";
+
+/// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`] and
+/// the unique session id.
 pub struct CodexSpawnOk {
     pub codex: Codex,
     pub thread_id: ThreadId,
@@ -396,6 +399,7 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub(crate) async fn spawn(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
@@ -2469,8 +2473,24 @@ impl Session {
             .turn_skills
             .outcome
             .allowed_skills_for_implicit_invocation();
-        if let Some(skills_section) = render_skills_section(&implicit_skills) {
-            developer_sections.push(skills_section);
+        let rendered_skills = render_skills_section(
+            &implicit_skills,
+            default_skill_metadata_budget(turn_context.model_info.context_window),
+            SkillRenderSideEffects::ThreadStart {
+                session_telemetry: &self.services.session_telemetry,
+            },
+        );
+        if let Some(rendered_skills) = rendered_skills {
+            if rendered_skills.emit_warning {
+                self.send_event_raw(Event {
+                    id: String::new(),
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
+                    }),
+                })
+                .await;
+            }
+            developer_sections.push(rendered_skills.text);
         }
         let loaded_plugins = self
             .services

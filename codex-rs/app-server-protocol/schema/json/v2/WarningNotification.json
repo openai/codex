@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "message": {
+      "description": "Concise warning message for the user.",
+      "type": "string"
+    },
+    "threadId": {
+      "description": "Optional thread target when the warning applies to a specific thread.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "message"
+  ],
+  "title": "WarningNotification",
+  "type": "object"
+}

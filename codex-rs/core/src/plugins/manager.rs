@@ -1060,10 +1060,11 @@ impl PluginsManager {
             })?;
         let plugin_key = plugin_id.as_key();
         if matches!(plugin.source, MarketplacePluginSource::Git { .. }) && !plugin.installed {
+            let description = remote_plugin_install_required_description(&plugin.source);
             return Ok(PluginDetail {
                 id: plugin_key,
                 name: plugin.name,
-                description: None,
+                description: Some(description),
                 source: plugin.source,
                 policy: plugin.policy,
                 interface: plugin.interface,
@@ -1495,6 +1496,34 @@ impl PluginsManager {
         roots.dedup();
         roots
     }
+}
+
+fn remote_plugin_install_required_description(source: &MarketplacePluginSource) -> String {
+    let source_description = match source {
+        MarketplacePluginSource::Git {
+            url,
+            path,
+            ref_name,
+            sha,
+        } => {
+            let mut parts = vec![url.clone()];
+            if let Some(path) = path {
+                parts.push(format!("path `{path}`"));
+            }
+            if let Some(ref_name) = ref_name {
+                parts.push(format!("ref `{ref_name}`"));
+            }
+            if let Some(sha) = sha {
+                parts.push(format!("sha `{sha}`"));
+            }
+            parts.join(", ")
+        }
+        MarketplacePluginSource::Local { path } => path.as_path().display().to_string(),
+    };
+
+    format!(
+        "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {source_description}."
+    )
 }
 
 #[derive(Debug, thiserror::Error)]
