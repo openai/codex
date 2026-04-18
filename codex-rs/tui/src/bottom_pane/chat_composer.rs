@@ -136,7 +136,6 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
@@ -225,13 +224,13 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+
+#[cfg(test)]
+use ratatui::style::Color;
+
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
-
-fn bash_mode_style() -> Style {
-    Style::default().fg(Color::LightRed)
-}
 
 fn user_input_too_large_message(actual_chars: usize) -> String {
     format!(
@@ -319,7 +318,7 @@ impl ChatComposerConfig {
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
-    shell_command_prefix: bool,
+    is_bash_mode: bool,
     active_popup: ActivePopup,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
@@ -476,7 +475,7 @@ impl ChatComposer {
         let mut this = Self {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
-            shell_command_prefix: false,
+            is_bash_mode: false,
             active_popup: ActivePopup::None,
             app_event_tx,
             history: ChatComposerHistory::new(),
@@ -716,7 +715,7 @@ impl ChatComposer {
     /// Returns true if the composer currently contains no user-entered input.
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
-            && !self.shell_command_prefix
+            && !self.is_bash_mode
             && self.attached_images.is_empty()
             && self.remote_image_urls.is_empty()
     }
@@ -1022,14 +1021,23 @@ impl ChatComposer {
     ) {
         // Clear any existing content, placeholders, and attachments first.
         self.textarea.set_text_clearing_elements("");
-        self.shell_command_prefix = false;
+        self.is_bash_mode = false;
         self.pending_pastes.clear();
         self.attached_images.clear();
         self.mention_bindings.clear();
 
-        let (shell_command_prefix, text, text_elements) =
-            Self::split_shell_command_prefix(text, text_elements);
-        self.shell_command_prefix = shell_command_prefix;
+        let (text, text_elements) = if let Some(stripped) = text.strip_prefix('!') {
+            self.is_bash_mode = true;
+            (
+                stripped.to_string(),
+                text_elements
+                    .into_iter()
+                    .filter_map(|element| Self::shift_text_element(element, /*shift*/ -1))
+                    .collect(),
+            )
+        } else {
+            (text, text_elements)
+        };
         self.textarea.set_text_with_elements(&text, &text_elements);
 
         for (idx, path) in local_image_paths.into_iter().enumerate() {
@@ -1045,30 +1053,12 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-    fn split_shell_command_prefix(
-        text: String,
-        text_elements: Vec<TextElement>,
-    ) -> (bool, String, Vec<TextElement>) {
-        let Some(stripped) = text.strip_prefix('!') else {
-            return (false, text, text_elements);
-        };
-
-        (
-            true,
-            stripped.to_string(),
-            text_elements
-                .into_iter()
-                .filter_map(|element| Self::shift_text_element(element, /*shift*/ -1))
-                .collect(),
-        )
-    }
-
     fn current_cursor(&self) -> usize {
-        self.textarea.cursor() + if self.shell_command_prefix { 1 } else { 0 }
+        self.textarea.cursor() + if self.is_bash_mode { 1 } else { 0 }
     }
 
     fn history_navigation_cursor(&self) -> usize {
-        if self.shell_command_prefix && self.textarea.cursor() == 0 {
+        if self.is_bash_mode && self.textarea.cursor() == 0 {
             0
         } else {
             self.current_cursor()
@@ -1076,7 +1066,7 @@ impl ChatComposer {
     }
 
     fn set_current_cursor(&mut self, cursor: usize) {
-        let visible_cursor = if self.shell_command_prefix {
+        let visible_cursor = if self.is_bash_mode {
             cursor.saturating_sub(1)
         } else {
             cursor
@@ -1086,7 +1076,7 @@ impl ChatComposer {
     }
 
     fn current_text_elements(&self) -> Vec<TextElement> {
-        let shift = if self.shell_command_prefix { 1 } else { 0 };
+        let shift = if self.is_bash_mode { 1 } else { 0 };
         self.textarea
             .text_elements()
             .into_iter()
@@ -1184,7 +1174,7 @@ impl ChatComposer {
 
     /// Get the current composer text.
     pub(crate) fn current_text(&self) -> String {
-        if self.shell_command_prefix {
+        if self.is_bash_mode {
             format!("!{}", self.textarea.text())
         } else {
             self.textarea.text().to_string()
@@ -1398,7 +1388,7 @@ impl ChatComposer {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.textarea.insert_str(text);
-        self.sync_shell_command_prefix_from_text();
+        self.sync_bash_mode_from_text();
         self.sync_popups();
     }
 
@@ -1500,7 +1490,7 @@ impl ChatComposer {
                     if cmd == SlashCommand::Skills {
                         self.stage_selected_slash_command_history(cmd);
                         self.textarea.set_text_clearing_elements("");
-                        self.shell_command_prefix = false;
+                        self.is_bash_mode = false;
                         return (InputResult::Command(cmd), true);
                     }
 
@@ -1541,7 +1531,7 @@ impl ChatComposer {
                     if !starts_with_cmd {
                         self.textarea
                             .set_text_clearing_elements(&format!("/{} ", cmd.command()));
-                        self.shell_command_prefix = false;
+                        self.is_bash_mode = false;
                     }
                     if !self.textarea.text().is_empty() {
                         self.textarea.set_cursor(self.textarea.text().len());
@@ -1558,7 +1548,7 @@ impl ChatComposer {
                     let CommandItem::Builtin(cmd) = sel;
                     self.stage_selected_slash_command_history(cmd);
                     self.textarea.set_text_clearing_elements("");
-                    self.shell_command_prefix = false;
+                    self.is_bash_mode = false;
                     return (InputResult::Command(cmd), true);
                 }
                 // Fallback to default newline handling if no command selected.
@@ -2332,7 +2322,7 @@ impl ChatComposer {
         let input_starts_with_space = original_input.starts_with(' ');
         self.recent_submission_mention_bindings.clear();
         self.textarea.set_text_clearing_elements("");
-        self.shell_command_prefix = false;
+        self.is_bash_mode = false;
 
         if !self.pending_pastes.is_empty() {
             // Expand placeholders so element byte ranges stay aligned.
@@ -2472,7 +2462,7 @@ impl ChatComposer {
         // and accumulate it rather than submitting or inserting immediately.
         // Do not treat as paste inside a slash-command context.
         let in_slash_context = self.slash_commands_enabled()
-            && !self.shell_command_prefix
+            && !self.is_bash_mode
             && (matches!(self.active_popup, ActivePopup::Command(_))
                 || self
                     .textarea
@@ -2552,7 +2542,7 @@ impl ChatComposer {
     /// Check if the first line is a bare slash command (no args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
-        if !self.slash_commands_enabled() || self.shell_command_prefix {
+        if !self.slash_commands_enabled() || self.is_bash_mode {
             return None;
         }
         let first_line = self.textarea.text().lines().next().unwrap_or("");
@@ -2568,7 +2558,7 @@ impl ChatComposer {
             }
             self.stage_slash_command_history();
             self.textarea.set_text_clearing_elements("");
-            self.shell_command_prefix = false;
+            self.is_bash_mode = false;
             Some(InputResult::Command(cmd))
         } else {
             None
@@ -2578,7 +2568,7 @@ impl ChatComposer {
     /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_slash_command_with_args(&mut self) -> Option<InputResult> {
-        if !self.slash_commands_enabled() || self.shell_command_prefix {
+        if !self.slash_commands_enabled() || self.is_bash_mode {
             return None;
         }
         let text = self.textarea.text().to_string();
@@ -2905,7 +2895,7 @@ impl ChatComposer {
     fn shell_mode_footer_line(&self) -> Option<Line<'static>> {
         self.is_bang_shell_command()
             .then_some(())
-            .map(|_| Line::from(vec![Span::styled("Bash mode", bash_mode_style())]))
+            .map(|_| Line::from(vec![Span::from("Bash mode").light_red()]))
     }
 
     /// Applies any due `PasteBurst` flush at time `now`.
@@ -3057,16 +3047,16 @@ impl ChatComposer {
             Some(self.textarea.element_payloads())
         };
 
-        if self.shell_command_prefix
+        if self.is_bash_mode
             && matches!(input.code, KeyCode::Backspace)
             && self.textarea.cursor() == 0
         {
-            self.shell_command_prefix = false;
+            self.is_bash_mode = false;
             return (InputResult::None, true);
         }
 
         self.textarea.input(input);
-        self.sync_shell_command_prefix_from_text();
+        self.sync_bash_mode_from_text();
 
         if let Some(elements_before) = elements_before {
             self.reconcile_deleted_elements(elements_before);
@@ -3095,10 +3085,10 @@ impl ChatComposer {
         (InputResult::None, true)
     }
 
-    fn sync_shell_command_prefix_from_text(&mut self) {
-        if !self.shell_command_prefix && self.textarea.text().starts_with('!') {
+    fn sync_bash_mode_from_text(&mut self) {
+        if !self.is_bash_mode && self.textarea.text().starts_with('!') {
             self.textarea.replace_range(0..1, "");
-            self.shell_command_prefix = true;
+            self.is_bash_mode = true;
         }
     }
 
@@ -3272,7 +3262,7 @@ impl ChatComposer {
         let mention_token = self.current_mention_token();
 
         let allow_command_popup = self.slash_commands_enabled()
-            && !self.shell_command_prefix
+            && !self.is_bash_mode
             && file_token.is_none()
             && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
@@ -3358,7 +3348,7 @@ impl ChatComposer {
     }
 
     fn slash_command_element_range(&self, first_line: &str) -> Option<Range<usize>> {
-        if self.shell_command_prefix {
+        if self.is_bash_mode {
             return None;
         }
         let (name, _rest, _rest_offset) = parse_slash_name(first_line)?;
@@ -4143,13 +4133,12 @@ impl ChatComposer {
         }
         if !textarea_rect.is_empty() {
             let prompt = if self.input_enabled {
-                if self.shell_command_prefix {
-                    let prompt_style = if is_zellij {
-                        bash_mode_style()
+                if self.is_bash_mode {
+                    if is_zellij {
+                        Span::from("!").light_red()
                     } else {
-                        bash_mode_style().add_modifier(Modifier::BOLD)
-                    };
-                    Span::styled("!", prompt_style)
+                        Span::from("!").light_red().bold()
+                    }
                 } else if is_zellij {
                     Span::styled("›", style.fg(ratatui::style::Color::Cyan))
                 } else {
@@ -4169,7 +4158,7 @@ impl ChatComposer {
         }
 
         let mut state = self.textarea_state.borrow_mut();
-        let textarea_is_empty = self.textarea.text().is_empty() && !self.shell_command_prefix;
+        let textarea_is_empty = self.textarea.text().is_empty() && !self.is_bash_mode;
         if let Some(mask_char) = mask_char {
             self.textarea.render_ref_masked(
                 textarea_rect,
@@ -4608,18 +4597,6 @@ mod tests {
                     "gpt-5.4 high fast · ~/code/codex-1 · Context 0% used",
                 )));
                 composer.set_text_content("!git status".to_string(), Vec::new(), Vec::new());
-            },
-        );
-
-        snapshot_composer_state(
-            "footer_mode_shell_command_absorbs_bang_and_space",
-            /*enhanced_keys_supported*/ true,
-            |composer| {
-                composer.set_status_line_enabled(/*enabled*/ true);
-                composer.set_status_line(Some(Line::from(
-                    "gpt-5.4 high fast · ~/code/codex-1 · Context 0% used",
-                )));
-                composer.set_text_content("! git status".to_string(), Vec::new(), Vec::new());
             },
         );
     }
