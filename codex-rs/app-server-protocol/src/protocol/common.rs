@@ -288,6 +288,10 @@ client_request_definitions! {
         params: v2::ThreadGoalGetParams,
         response: v2::ThreadGoalGetResponse,
     },
+    ThreadGoalClear => "thread/goal/clear" {
+        params: v2::ThreadGoalClearParams,
+        response: v2::ThreadGoalClearResponse,
+    },
     ThreadMetadataUpdate => "thread/metadata/update" {
         params: v2::ThreadMetadataUpdateParams,
         response: v2::ThreadMetadataUpdateResponse,
@@ -1007,6 +1011,7 @@ server_notification_definitions! {
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
+    ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),

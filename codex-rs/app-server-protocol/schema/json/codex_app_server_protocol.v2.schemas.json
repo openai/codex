@@ -1037,6 +1037,30 @@
             },
             "method": {
               "enum": [
+                "thread/goal/clear"
+              ],
+              "title": "Thread/goal/clearRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadGoalClearParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/clearRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -9310,6 +9334,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/goal/cleared"
+              ],
+              "title": "Thread/goal/clearedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadGoalClearedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/clearedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/tokenUsage/updated"
               ],
               "title": "Thread/tokenUsage/updatedNotificationMethod",
@@ -11283,6 +11327,45 @@
         "tokensUsed",
         "updatedAt"
       ],
+      "type": "object"
+    },
+    "ThreadGoalClearParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadGoalClearParams",
+      "type": "object"
+    },
+    "ThreadGoalClearResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cleared": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cleared"
+      ],
+      "title": "ThreadGoalClearResponse",
+      "type": "object"
+    },
+    "ThreadGoalClearedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadGoalClearedNotification",
       "type": "object"
     },
     "ThreadGoalGetParams": {
