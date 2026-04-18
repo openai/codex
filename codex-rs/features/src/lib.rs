@@ -91,6 +91,8 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
+    /// Stream structured progress while apply_patch input is being generated.
+    ApplyPatchStreamingEvents,
     /// Allow exec tools to request additional permissions while staying sandboxed.
     ExecPermissionApprovals,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
@@ -146,12 +148,16 @@ pub enum Feature {
     Apps,
     /// Enable the tool_search tool for apps.
     ToolSearch,
+    /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
+    ToolSearchAlwaysDeferMcpTools,
     /// Expose placeholder tools for unavailable historical tool calls.
     UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
     Plugins,
+    /// Show the startup prompt for migrating external agent config into Codex.
+    ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
     /// Allow prompting and installing missing MCP dependencies.
@@ -721,6 +727,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ApplyPatchStreamingEvents,
+        key: "apply_patch_streaming_events",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ExecPermissionApprovals,
         key: "exec_permission_approvals",
         stage: Stage::UnderDevelopment,
@@ -811,6 +823,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::ToolSearchAlwaysDeferMcpTools,
+        key: "tool_search_always_defer_mcp_tools",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::UnavailableDummyTools,
         key: "unavailable_dummy_tools",
         stage: Stage::UnderDevelopment,
@@ -827,6 +845,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "plugins",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ExternalMigration,
+        key: "external_migration",
+        stage: Stage::Experimental {
+            name: "External migration",
+            menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
+            announcement: "",
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ImageGeneration,
@@ -862,7 +890,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GuardianApproval,
         key: "guardian_approval",
         stage: Stage::Experimental {
-            name: "Guardian Approvals",
+            name: "Auto-review",
             menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
             announcement: "",
         },

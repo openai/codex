@@ -28,6 +28,8 @@ use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::external_agent_config_migration_startup::ExternalAgentConfigMigrationStartupOutcome;
+use crate::external_agent_config_migration_startup::handle_external_agent_config_migration_prompt_if_needed;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
@@ -75,6 +77,8 @@ use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -82,6 +86,7 @@ use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListParams;
@@ -93,6 +98,7 @@ use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -271,8 +277,8 @@ struct GuardianApprovalsMode {
     sandbox_policy: SandboxPolicy,
 }
 
-/// Enabling the Guardian Approvals experiment in the TUI should also switch the
-/// current `/approvals` settings to the matching Guardian Approvals mode. Users
+/// Enabling the Auto-review experiment in the TUI should also switch the
+/// current `/approvals` settings to the matching Auto-review mode. Users
 /// can still change `/approvals` afterward; this just assumes that opting into
 /// the experiment means they want guardian review enabled immediately.
 fn guardian_approvals_mode() -> GuardianApprovalsMode {
@@ -1040,6 +1046,10 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    // Serialize plugin enablement writes per plugin so stale completions cannot
+    // overwrite a newer toggle, even if the plugin is toggled from different
+    // cwd contexts.
+    pending_plugin_enabled_writes: HashMap<String, Option<bool>>,
 }
 
 #[derive(Default)]
@@ -1114,13 +1124,13 @@ impl App {
         &self,
         tui: &mut tui::Tui,
         cfg: crate::legacy_core::config::Config,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
-            // Fork/resume bootstraps here don't carry any prefilled message content.
-            initial_user_message: None,
+            initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
             model_catalog: self.model_catalog.clone(),
@@ -1275,7 +1285,7 @@ impl App {
         let mut approvals_reviewer_override = None;
         let mut sandbox_policy_override = None;
         let mut feature_updates_to_apply = Vec::with_capacity(updates.len());
-        // Guardian Approvals owns `approvals_reviewer`, but disabling the feature
+        // Auto-Review owns `approvals_reviewer`, but disabling the feature
         // from inside a profile should not silently clear a value configured at
         // the root scope.
         let (root_approvals_reviewer_blocks_profile_disable, profile_approvals_reviewer_configured) = {
@@ -1308,7 +1318,7 @@ impl App {
                 && root_approvals_reviewer_blocks_profile_disable
             {
                 self.chat_widget.add_error_message(
-                        "Cannot disable Guardian Approvals in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
+                        "Cannot disable Auto-review in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
                     );
                 continue;
             }
@@ -1341,7 +1351,7 @@ impl App {
                             .into(),
                     });
                     if previous_approvals_reviewer != guardian_approvals_preset.approvals_reviewer {
-                        permissions_history_label = Some("Guardian Approvals");
+                        permissions_history_label = Some("Auto-review");
                     }
                 } else if !effective_enabled {
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
@@ -1358,13 +1368,13 @@ impl App {
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 // The feature flag alone is not enough for the live session.
-                // We also align approval policy + sandbox to the Guardian
-                // Approvals preset so enabling the experiment immediately
+                // We also align approval policy + sandbox to the Auto-review
+                // preset so enabling the experiment immediately
                 // makes guardian review observable in the current thread.
                 if !self.try_set_approval_policy_on_config(
                     &mut feature_config,
                     guardian_approvals_preset.approval_policy,
-                    "Failed to enable Guardian Approvals",
+                    "Failed to enable Auto-review",
                     "failed to set guardian approvals approval policy on staged config",
                 ) {
                     continue;
@@ -1372,7 +1382,7 @@ impl App {
                 if !self.try_set_sandbox_policy_on_config(
                     &mut feature_config,
                     guardian_approvals_preset.sandbox_policy.clone(),
-                    "Failed to enable Guardian Approvals",
+                    "Failed to enable Auto-review",
                     "failed to set guardian approvals sandbox policy on staged config",
                 ) {
                     continue;
@@ -1435,7 +1445,7 @@ impl App {
                 "failed to set guardian approvals sandbox policy on chat config"
             );
             self.chat_widget
-                .add_error_message(format!("Failed to enable Guardian Approvals: {err}"));
+                .add_error_message(format!("Failed to enable Auto-review: {err}"));
         }
 
         if approval_policy_override.is_some()
@@ -2068,6 +2078,25 @@ impl App {
         });
     }
 
+    /// Starts the initial skills refresh without delaying the first interactive frame.
+    ///
+    /// Startup only needs skill metadata to populate skill mentions and the skills UI; the prompt can be
+    /// rendered before that metadata arrives. The result is routed through the normal app event queue so
+    /// the same response handler updates the chat widget and emits invalid `SKILL.md` warnings once the
+    /// app-server RPC finishes. User-initiated skills refreshes still use the blocking app command path so
+    /// callers that explicitly asked for fresh skill state do not race ahead of their own refresh.
+    fn refresh_startup_skills(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        let cwd = self.config.cwd.to_path_buf();
+        tokio::spawn(async move {
+            let result = fetch_skills_list(request_handle, cwd)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::SkillsListLoaded { result });
+        });
+    }
+
     fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
@@ -2141,6 +2170,48 @@ impl App {
                 cwd: cwd_for_event,
                 plugin_id: plugin_id_for_event,
                 plugin_display_name,
+                result,
+            });
+        });
+    }
+
+    fn set_plugin_enabled(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    ) {
+        if let Some(queued_enabled) = self.pending_plugin_enabled_writes.get_mut(&plugin_id) {
+            *queued_enabled = Some(enabled);
+            return;
+        }
+
+        self.pending_plugin_enabled_writes
+            .insert(plugin_id.clone(), None);
+        self.spawn_plugin_enabled_write(app_server, cwd, plugin_id, enabled);
+    }
+
+    fn spawn_plugin_enabled_write(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let plugin_id_for_event = plugin_id.clone();
+            let result = write_plugin_enabled(request_handle, plugin_id, enabled)
+                .await
+                .map(|_| ())
+                .map_err(|err| format!("Failed to update plugin config: {err}"));
+            app_event_tx.send(AppEvent::PluginEnabledSet {
+                cwd: cwd_for_event,
+                plugin_id: plugin_id_for_event,
+                enabled,
                 result,
             });
         });
@@ -3414,7 +3485,11 @@ impl App {
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
 
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        let init = self.chatwidget_init_for_forked_or_resumed_thread(
+            tui,
+            self.config.clone(),
+            /*initial_user_message*/ None,
+        );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
 
         self.reset_for_thread_switch(tui)?;
@@ -3475,9 +3550,11 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         session_start_source: Option<ThreadStartSource>,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
-        // history.
+        // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
+        // until the new session is configured and any replayed turns have been rendered.
         self.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
             .await;
         let model = self.chat_widget.current_model().to_string();
@@ -3503,7 +3580,12 @@ impl App {
         {
             Ok(started) => {
                 if let Err(err) = self
-                    .replace_chat_widget_with_app_server_thread(tui, app_server, started)
+                    .replace_chat_widget_with_app_server_thread(
+                        tui,
+                        app_server,
+                        started,
+                        initial_user_message,
+                    )
                     .await
                 {
                     self.chat_widget.add_error_message(format!(
@@ -3536,9 +3618,17 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         started: AppServerStartedThread,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
     ) -> Result<()> {
+        // Initial messages are for freshly attached primary threads only. Thread switches and
+        // resume/fork flows pass `None` so they cannot replay old history and then auto-submit a new
+        // user turn by accident.
         self.reset_thread_event_state();
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        let init = self.chatwidget_init_for_forked_or_resumed_thread(
+            tui,
+            self.config.clone(),
+            initial_user_message,
+        );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
@@ -3773,6 +3863,7 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        entered_trust_nux: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         remote_app_server_url: Option<String>,
         remote_app_server_auth_token: Option<String>,
@@ -3790,6 +3881,38 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
+        let external_agent_config_migration_outcome =
+            handle_external_agent_config_migration_prompt_if_needed(
+                tui,
+                &mut app_server,
+                &mut config,
+                &cli_kv_overrides,
+                &harness_overrides,
+                entered_trust_nux,
+            )
+            .await?;
+        let external_agent_config_migration_message = match external_agent_config_migration_outcome
+        {
+            ExternalAgentConfigMigrationStartupOutcome::Continue { success_message } => {
+                success_message
+            }
+            ExternalAgentConfigMigrationStartupOutcome::ExitRequested => {
+                app_server
+                    .shutdown()
+                    .await
+                    .inspect_err(|err| {
+                        tracing::warn!("app-server shutdown failed: {err}");
+                    })
+                    .ok();
+                return Ok(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    thread_id: None,
+                    thread_name: None,
+                    update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                });
+            }
+        };
         let bootstrap = app_server.bootstrap(&config).await?;
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
@@ -3960,6 +4083,9 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        if let Some(message) = external_agent_config_migration_message {
+            chat_widget.add_info_message(message, /*hint*/ None);
+        }
 
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
@@ -4008,21 +4134,12 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_plugin_enabled_writes: HashMap::new(),
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
                 .await?;
         }
-        app.handle_skills_list_result(
-            app_server
-                .skills_list(codex_app_server_protocol::SkillsListParams {
-                    cwds: vec![app.config.cwd.to_path_buf()],
-                    force_reload: true,
-                    per_cwd_extra_user_roots: None,
-                })
-                .await,
-            "failed to load skills on startup",
-        );
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -4053,6 +4170,7 @@ impl App {
         tokio::pin!(tui_events);
 
         tui.frame_requester().schedule_frame();
+        app.refresh_startup_skills(&app_server);
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
         // already has data, without delaying the initial frame render.
         if requires_openai_auth && has_chatgpt_account {
@@ -4308,7 +4426,9 @@ impl App {
                 self.file_search
                     .update_search_dir(self.config.cwd.to_path_buf());
                 match self
-                    .replace_chat_widget_with_app_server_thread(tui, app_server, resumed)
+                    .replace_chat_widget_with_app_server_thread(
+                        tui, app_server, resumed, /*initial_user_message*/ None,
+                    )
                     .await
                 {
                     Ok(()) => {
@@ -4353,6 +4473,7 @@ impl App {
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(
                     tui, app_server, /*session_start_source*/ None,
+                    /*initial_user_message*/ None,
                 )
                 .await;
             }
@@ -4364,6 +4485,23 @@ impl App {
                     tui,
                     app_server,
                     Some(ThreadStartSource::Clear),
+                    /*initial_user_message*/ None,
+                )
+                .await;
+            }
+            AppEvent::ClearUiAndSubmitUserMessage { text } => {
+                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
+                self.reset_app_ui_state_after_clear();
+
+                self.start_fresh_session_with_summary_hint(
+                    tui,
+                    app_server,
+                    Some(ThreadStartSource::Clear),
+                    crate::chatwidget::create_initial_user_message(
+                        Some(text),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
                 )
                 .await;
             }
@@ -4458,7 +4596,9 @@ impl App {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
                             match self
-                                .replace_chat_widget_with_app_server_thread(tui, app_server, forked)
+                                .replace_chat_widget_with_app_server_thread(
+                                    tui, app_server, forked, /*initial_user_message*/ None,
+                                )
                                 .await
                             {
                                 Ok(()) => {
@@ -4555,6 +4695,18 @@ impl App {
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }
+            AppEvent::Logout => match app_server.logout_account().await {
+                Ok(()) => {
+                    return Ok(self
+                        .handle_exit_mode(app_server, ExitMode::ShutdownFirst)
+                        .await);
+                }
+                Err(err) => {
+                    tracing::error!("failed to logout: {err}");
+                    self.chat_widget
+                        .add_error_message(format!("Logout failed: {err}"));
+                }
+            },
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
@@ -4674,6 +4826,13 @@ impl App {
             } => {
                 self.fetch_plugin_uninstall(app_server, cwd, plugin_id, plugin_display_name);
             }
+            AppEvent::SetPluginEnabled {
+                cwd,
+                plugin_id,
+                enabled,
+            } => {
+                self.set_plugin_enabled(app_server, cwd, plugin_id, enabled);
+            }
             AppEvent::PluginInstallLoaded {
                 cwd,
                 marketplace_path,
@@ -4704,11 +4863,52 @@ impl App {
                             app_server,
                             cwd,
                             PluginReadParams {
-                                marketplace_path,
+                                marketplace_path: Some(marketplace_path),
+                                remote_marketplace_name: None,
                                 plugin_name,
                             },
                         );
                     }
+                }
+            }
+            AppEvent::PluginEnabledSet {
+                cwd,
+                plugin_id,
+                enabled,
+                result,
+            } => {
+                let queued_enabled = self
+                    .pending_plugin_enabled_writes
+                    .get_mut(&plugin_id)
+                    .and_then(Option::take);
+                let should_apply_result = if let Some(queued_enabled) = queued_enabled
+                    && (result.is_err() || queued_enabled != enabled)
+                {
+                    self.spawn_plugin_enabled_write(
+                        app_server,
+                        cwd.clone(),
+                        plugin_id.clone(),
+                        queued_enabled,
+                    );
+                    false
+                } else {
+                    true
+                };
+                if should_apply_result {
+                    self.pending_plugin_enabled_writes.remove(&plugin_id);
+                    let update_succeeded = result.is_ok();
+                    if update_succeeded {
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to refresh config after plugin toggle"
+                            );
+                        }
+                        self.chat_widget.refresh_plugin_mentions();
+                        self.chat_widget.submit_op(AppCommand::reload_user_config());
+                    }
+                    self.chat_widget
+                        .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
                 }
             }
             AppEvent::FetchMcpInventory => {
@@ -4716,6 +4916,12 @@ impl App {
             }
             AppEvent::McpInventoryLoaded { result } => {
                 self.handle_mcp_inventory_result(result);
+            }
+            AppEvent::SkillsListLoaded { result } => {
+                self.handle_skills_list_result(
+                    result.map_err(|err| color_eyre::eyre::eyre!(err)),
+                    "failed to load skills on startup",
+                );
             }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
@@ -6397,6 +6603,26 @@ async fn fetch_account_rate_limits(
     Ok(app_server_rate_limit_snapshots_to_core(response))
 }
 
+async fn fetch_skills_list(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> Result<SkillsListResponse> {
+    let request_id = RequestId::String(format!("startup-skills-list-{}", Uuid::new_v4()));
+    // Use the cloneable request handle so startup can issue this RPC from a background task without
+    // extending a borrow of `AppServerSession` across the first frame render.
+    request_handle
+        .request_typed(ClientRequest::SkillsList {
+            request_id,
+            params: SkillsListParams {
+                cwds: vec![cwd],
+                force_reload: true,
+                per_cwd_extra_user_roots: None,
+            },
+        })
+        .await
+        .wrap_err("skills/list failed in TUI")
+}
+
 async fn fetch_plugins_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
@@ -6408,7 +6634,6 @@ async fn fetch_plugins_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
-                force_remote_sync: false,
             },
         })
         .await
@@ -6446,9 +6671,9 @@ async fn fetch_plugin_install(
         .request_typed(ClientRequest::PluginInstall {
             request_id,
             params: PluginInstallParams {
-                marketplace_path,
+                marketplace_path: Some(marketplace_path),
+                remote_marketplace_name: None,
                 plugin_name,
-                force_remote_sync: false,
             },
         })
         .await
@@ -6463,13 +6688,31 @@ async fn fetch_plugin_uninstall(
     request_handle
         .request_typed(ClientRequest::PluginUninstall {
             request_id,
-            params: PluginUninstallParams {
-                plugin_id,
-                force_remote_sync: false,
-            },
+            params: PluginUninstallParams { plugin_id },
         })
         .await
         .wrap_err("plugin/uninstall failed in TUI")
+}
+
+async fn write_plugin_enabled(
+    request_handle: AppServerRequestHandle,
+    plugin_id: String,
+    enabled: bool,
+) -> Result<ConfigWriteResponse> {
+    let request_id = RequestId::String(format!("plugin-enable-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::ConfigValueWrite {
+            request_id,
+            params: ConfigValueWriteParams {
+                key_path: format!("plugins.{plugin_id}"),
+                value: serde_json::json!({ "enabled": enabled }),
+                merge_strategy: MergeStrategy::Upsert,
+                file_path: None,
+                expected_version: None,
+            },
+        })
+        .await
+        .wrap_err("config/value/write failed while updating plugin enablement in TUI")
 }
 
 fn build_feedback_upload_params(
@@ -6665,19 +6908,18 @@ mod tests {
             marketplaces: vec![
                 PluginMarketplaceEntry {
                     name: "openai-bundled".to_string(),
-                    path: test_absolute_path("/marketplaces/openai-bundled"),
+                    path: Some(test_absolute_path("/marketplaces/openai-bundled")),
                     interface: None,
                     plugins: Vec::new(),
                 },
                 PluginMarketplaceEntry {
                     name: "openai-curated".to_string(),
-                    path: test_absolute_path("/marketplaces/openai-curated"),
+                    path: Some(test_absolute_path("/marketplaces/openai-curated")),
                     interface: None,
                     plugins: Vec::new(),
                 },
             ],
             marketplace_load_errors: Vec::new(),
-            remote_sync_error: None,
             featured_plugin_ids: Vec::new(),
         };
 
@@ -6687,7 +6929,7 @@ mod tests {
             response.marketplaces,
             vec![PluginMarketplaceEntry {
                 name: "openai-curated".to_string(),
-                path: test_absolute_path("/marketplaces/openai-curated"),
+                path: Some(test_absolute_path("/marketplaces/openai-curated")),
                 interface: None,
                 plugins: Vec::new(),
             }]
@@ -8258,8 +8500,9 @@ mod tests {
             Some(&TomlValue::Boolean(false))
         );
         assert!(
-            !memories.contains_key("no_memories_if_mcp_or_web_search"),
-            "the TUI menu should not write the MCP pollution setting"
+            !memories.contains_key("disable_on_external_context")
+                && !memories.contains_key("no_memories_if_mcp_or_web_search"),
+            "the TUI menu should not write the external-context memory setting"
         );
         app_server.shutdown().await?;
         Ok(())
@@ -8403,7 +8646,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Permissions updated to Guardian Approvals"));
+        assert!(rendered.contains("Permissions updated to Auto-review"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("guardian_approval = true"));
@@ -9722,6 +9965,7 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            pending_plugin_enabled_writes: HashMap::new(),
         }
     }
 
@@ -9779,6 +10023,7 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                pending_plugin_enabled_writes: HashMap::new(),
             },
             rx,
             op_rx,
