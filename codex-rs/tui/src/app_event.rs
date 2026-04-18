@@ -17,6 +17,7 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -287,6 +288,21 @@ pub(crate) enum AppEvent {
         result: Result<PluginUninstallResponse, String>,
     },
 
+    /// Enable or disable an installed plugin.
+    SetPluginEnabled {
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+    },
+
+    /// Result of enabling or disabling a plugin.
+    PluginEnabledSet {
+        cwd: PathBuf,
+        plugin_id: String,
+        enabled: bool,
+        result: Result<(), String>,
+    },
+
     /// Refresh plugin mention bindings from the current config.
     RefreshPluginMentions,
 
@@ -309,6 +325,15 @@ pub(crate) enum AppEvent {
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
         result: Result<Vec<McpServerStatus>, String>,
+    },
+
+    /// Result of the startup skills refresh that runs after the first frame is scheduled.
+    ///
+    /// This event is startup-only. Interactive skills refreshes are handled synchronously through the app
+    /// command path because those callers expect the visible skill state to be current when their command
+    /// completes.
+    SkillsListLoaded {
+        result: Result<SkillsListResponse, String>,
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),

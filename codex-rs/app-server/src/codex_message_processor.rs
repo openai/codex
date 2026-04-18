@@ -29,6 +29,8 @@ use codex_analytics::TurnSteerRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -117,6 +119,8 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SkillSummary;
@@ -210,6 +214,7 @@ use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
+use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
@@ -1202,6 +1207,10 @@ impl CodexMessageProcessor {
                 self.get_account_rate_limits(to_connection_request_id(request_id))
                     .await;
             }
+            ClientRequest::SendAddCreditsNudgeEmail { request_id, params } => {
+                self.send_add_credits_nudge_email(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(to_connection_request_id(request_id), params)
                     .await;
@@ -1913,6 +1922,74 @@ impl CodexMessageProcessor {
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
             }
+        }
+    }
+
+    async fn send_add_credits_nudge_email(
+        &self,
+        request_id: ConnectionRequestId,
+        params: SendAddCreditsNudgeEmailParams,
+    ) {
+        match self.send_add_credits_nudge_email_inner(params).await {
+            Ok(status) => {
+                self.outgoing
+                    .send_response(request_id, SendAddCreditsNudgeEmailResponse { status })
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn send_add_credits_nudge_email_inner(
+        &self,
+        params: SendAddCreditsNudgeEmailParams,
+    ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "codex account authentication required to notify workspace owner"
+                    .to_string(),
+                data: None,
+            });
+        };
+
+        if !auth.is_chatgpt_auth() {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "chatgpt authentication required to notify workspace owner".to_string(),
+                data: None,
+            });
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to construct backend client: {err}"),
+                data: None,
+            })?;
+
+        match client
+            .send_add_credits_nudge_email(Self::backend_credit_type(params.credit_type))
+            .await
+        {
+            Ok(()) => Ok(AddCreditsNudgeEmailStatus::Sent),
+            Err(err) if err.status().is_some_and(|status| status.as_u16() == 429) => {
+                Ok(AddCreditsNudgeEmailStatus::CooldownActive)
+            }
+            Err(err) => Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to notify workspace owner: {err}"),
+                data: None,
+            }),
+        }
+    }
+
+    fn backend_credit_type(value: AddCreditsNudgeCreditType) -> BackendAddCreditsNudgeCreditType {
+        match value {
+            AddCreditsNudgeCreditType::Credits => BackendAddCreditsNudgeCreditType::Credits,
+            AddCreditsNudgeCreditType::UsageLimit => BackendAddCreditsNudgeCreditType::UsageLimit,
         }
     }
 
@@ -3896,9 +3973,7 @@ impl CodexMessageProcessor {
             // No ThreadRollback event will arrive if an error occurs.
             // Clean up and reply immediately.
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-            let mut thread_state = thread_state.lock().await;
-            thread_state.pending_rollbacks = None;
-            drop(thread_state);
+            thread_state.lock().await.pending_rollbacks = None;
 
             self.send_internal_error(request, format!("failed to start rollback: {err}"))
                 .await;
@@ -4691,6 +4766,7 @@ impl CodexMessageProcessor {
                 thread_id,
                 thread: codex_thread,
                 session_configured,
+                ..
             }) => {
                 let core_thread = Arc::clone(&codex_thread);
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
@@ -6825,54 +6901,18 @@ impl CodexMessageProcessor {
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
-        let PluginListParams {
-            cwds,
-            force_remote_sync,
-        } = params;
+        let PluginListParams { cwds } = params;
         let roots = cwds.unwrap_or_default();
         plugins_manager.maybe_start_non_curated_plugin_cache_refresh(&roots);
 
-        let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
                 return;
             }
         };
-        let mut remote_sync_error = None;
         let auth = self.auth_manager.auth().await;
-
-        if force_remote_sync {
-            match plugins_manager
-                .sync_plugins_from_remote(&config, auth.as_ref(), /*additive_only*/ false)
-                .await
-            {
-                Ok(sync_result) => {
-                    info!(
-                        installed_plugin_ids = ?sync_result.installed_plugin_ids,
-                        enabled_plugin_ids = ?sync_result.enabled_plugin_ids,
-                        disabled_plugin_ids = ?sync_result.disabled_plugin_ids,
-                        uninstalled_plugin_ids = ?sync_result.uninstalled_plugin_ids,
-                        "completed plugin/list remote sync"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "plugin/list remote sync failed; returning local marketplace state"
-                    );
-                    remote_sync_error = Some(err.to_string());
-                }
-            }
-
-            config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-                Ok(config) => config,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
-                }
-            };
-        }
 
         let config_for_marketplace_listing = config.clone();
         let plugins_manager_for_marketplace_listing = plugins_manager.clone();
@@ -6891,7 +6931,7 @@ impl CodexMessageProcessor {
                     .into_iter()
                     .map(|marketplace| PluginMarketplaceEntry {
                         name: marketplace.name,
-                        path: marketplace.path,
+                        path: Some(marketplace.path),
                         interface: marketplace.interface.map(|interface| MarketplaceInterface {
                             display_name: interface.display_name,
                         }),
@@ -6906,7 +6946,7 @@ impl CodexMessageProcessor {
                                 source: marketplace_plugin_source_to_info(plugin.source),
                                 install_policy: plugin.policy.installation.into(),
                                 auth_policy: plugin.policy.authentication.into(),
-                                interface: plugin.interface.map(plugin_interface_to_info),
+                                interface: plugin.interface.map(local_plugin_interface_to_info),
                             })
                             .collect(),
                     })
@@ -6966,7 +7006,6 @@ impl CodexMessageProcessor {
                 PluginListResponse {
                     marketplaces: data,
                     marketplace_load_errors,
-                    remote_sync_error,
                     featured_plugin_ids,
                 },
             )
@@ -7010,8 +7049,40 @@ impl CodexMessageProcessor {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginReadParams {
             marketplace_path,
+            remote_marketplace_name,
             plugin_name,
         } = params;
+        let marketplace_path = match (marketplace_path, remote_marketplace_name) {
+            (Some(marketplace_path), None) => marketplace_path,
+            (None, Some(remote_marketplace_name)) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "remote plugin read is not supported yet for marketplace {remote_marketplace_name}"
+                            ),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+            (Some(_), Some(_)) | (None, None) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "plugin/read requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
         let config = match self.load_latest_config(config_cwd).await {
@@ -7061,7 +7132,7 @@ impl CodexMessageProcessor {
                 enabled: outcome.plugin.enabled,
                 install_policy: outcome.plugin.policy.installation.into(),
                 auth_policy: outcome.plugin.policy.authentication.into(),
-                interface: outcome.plugin.interface.map(plugin_interface_to_info),
+                interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
             },
             description: outcome.plugin.description,
             skills: plugin_skills_to_info(&visible_skills, &outcome.plugin.disabled_skill_paths),
@@ -7135,9 +7206,40 @@ impl CodexMessageProcessor {
     async fn plugin_install(&self, request_id: ConnectionRequestId, params: PluginInstallParams) {
         let PluginInstallParams {
             marketplace_path,
+            remote_marketplace_name,
             plugin_name,
-            force_remote_sync,
         } = params;
+        let marketplace_path = match (marketplace_path, remote_marketplace_name) {
+            (Some(marketplace_path), None) => marketplace_path,
+            (None, Some(remote_marketplace_name)) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!(
+                                "remote plugin install is not supported yet for marketplace {remote_marketplace_name}"
+                            ),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+            (Some(_), Some(_)) | (None, None) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "plugin/install requires exactly one of marketplacePath or remoteMarketplaceName".to_string(),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -7146,21 +7248,7 @@ impl CodexMessageProcessor {
             marketplace_path,
         };
 
-        let install_result = if force_remote_sync {
-            let config = match self.load_latest_config(config_cwd.clone()).await {
-                Ok(config) => config,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
-                }
-            };
-            let auth = self.auth_manager.auth().await;
-            plugins_manager
-                .install_plugin_with_remote_sync(&config, auth.as_ref(), request)
-                .await
-        } else {
-            plugins_manager.install_plugin(request).await
-        };
+        let install_result = plugins_manager.install_plugin(request).await;
 
         match install_result {
             Ok(result) => {
@@ -7312,27 +7400,10 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: PluginUninstallParams,
     ) {
-        let PluginUninstallParams {
-            plugin_id,
-            force_remote_sync,
-        } = params;
+        let PluginUninstallParams { plugin_id } = params;
         let plugins_manager = self.thread_manager.plugins_manager();
 
-        let uninstall_result = if force_remote_sync {
-            let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-                Ok(config) => config,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
-                }
-            };
-            let auth = self.auth_manager.auth().await;
-            plugins_manager
-                .uninstall_plugin_with_remote_sync(&config, auth.as_ref(), plugin_id)
-                .await
-        } else {
-            plugins_manager.uninstall_plugin(plugin_id).await
-        };
+        let uninstall_result = plugins_manager.uninstall_plugin(plugin_id).await;
 
         match uninstall_result {
             Ok(()) => {
@@ -8629,8 +8700,10 @@ impl CodexMessageProcessor {
             start_fuzzy_file_search_session(session_id.clone(), roots, self.outgoing.clone());
         match session {
             Ok(session) => {
-                let mut sessions = self.fuzzy_search_sessions.lock().await;
-                sessions.insert(session_id, session);
+                self.fuzzy_search_sessions
+                    .lock()
+                    .await
+                    .insert(session_id, session);
                 self.outgoing
                     .send_response(request_id, FuzzyFileSearchSessionStartResponse {})
                     .await;
@@ -9543,7 +9616,7 @@ fn plugin_skills_to_info(
         .collect()
 }
 
-fn plugin_interface_to_info(interface: PluginManifestInterface) -> PluginInterface {
+fn local_plugin_interface_to_info(interface: PluginManifestInterface) -> PluginInterface {
     PluginInterface {
         display_name: interface.display_name,
         short_description: interface.short_description,
@@ -9557,14 +9630,28 @@ fn plugin_interface_to_info(interface: PluginManifestInterface) -> PluginInterfa
         default_prompt: interface.default_prompt,
         brand_color: interface.brand_color,
         composer_icon: interface.composer_icon,
+        composer_icon_url: None,
         logo: interface.logo,
+        logo_url: None,
         screenshots: interface.screenshots,
+        screenshot_urls: Vec::new(),
     }
 }
 
 fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginSource {
     match source {
         MarketplacePluginSource::Local { path } => PluginSource::Local { path },
+        MarketplacePluginSource::Git {
+            url,
+            path,
+            ref_name,
+            sha,
+        } => PluginSource::Git {
+            url,
+            path,
+            ref_name,
+            sha,
+        },
     }
 }
 
@@ -11356,13 +11443,9 @@ mod tests {
         assert_eq!(cancel_rx.await, Ok(()));
 
         let state = manager.thread_state(thread_id).await;
+        let subscribed_connection_ids = manager.subscribed_connection_ids(thread_id).await;
+        assert!(subscribed_connection_ids.is_empty());
         let state = state.lock().await;
-        assert!(
-            manager
-                .subscribed_connection_ids(thread_id)
-                .await
-                .is_empty()
-        );
         assert!(state.cancel_tx.is_none());
         assert!(state.active_turn_snapshot().is_none());
         Ok(())
