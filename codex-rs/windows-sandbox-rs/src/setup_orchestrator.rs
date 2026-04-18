@@ -330,12 +330,27 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn is_windowsapps_package_path(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains(r"\program files\windowsapps\")
+}
+
+fn helper_source_read_root(current_exe: Option<&Path>) -> Option<PathBuf> {
+    let dir = current_exe?.parent()?;
+    if is_windowsapps_package_path(dir) {
+        None
+    } else {
+        Some(dir.to_path_buf())
+    }
+}
+
 fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+        && let Some(dir) = helper_source_read_root(Some(exe.as_path()))
     {
-        roots.push(dir.to_path_buf());
+        roots.push(dir);
     }
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
@@ -804,6 +819,7 @@ mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::helper_source_read_root;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -1007,6 +1023,31 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn helper_source_read_root_skips_windowsapps_package_dir() {
+        let current_exe = PathBuf::from(
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_26.313.5234.0_x64__2p2nqsd0c76g0\app\codex.exe",
+        );
+
+        let root = helper_source_read_root(Some(current_exe.as_path()));
+
+        assert_eq!(None, root);
+    }
+
+    #[test]
+    fn helper_source_read_root_keeps_non_windowsapps_dir() {
+        let current_exe = PathBuf::from(r"C:\Users\alice\AppData\Local\Programs\Codex\codex.exe");
+
+        let root = helper_source_read_root(Some(current_exe.as_path()));
+
+        assert_eq!(
+            Some(PathBuf::from(
+                r"C:\Users\alice\AppData\Local\Programs\Codex"
+            )),
+            root
+        );
     }
 
     #[test]
