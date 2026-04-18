@@ -43,6 +43,10 @@ const WRITE_RESTRICTED: u32 = 0x08;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WIN_WORLD_SID: i32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
+const TOKEN_ELEVATION_TYPE_CLASS: i32 = 18; // TokenElevationType
+const TOKEN_ELEVATION_TYPE_DEFAULT: u32 = 1;
+const TOKEN_ELEVATION_TYPE_FULL: u32 = 2;
+const TOKEN_ELEVATION_TYPE_LIMITED: u32 = 3;
 
 #[repr(C)]
 struct TokenDefaultDaclInfo {
@@ -250,6 +254,38 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
 
     Err(anyhow!("Logon SID not present on token"))
 }
+
+unsafe fn restricted_token_flags(base_token: HANDLE) -> Result<u32> {
+    let mut elevation_type: u32 = 0;
+    let mut needed = 0;
+    let ok = GetTokenInformation(
+        base_token,
+        TOKEN_ELEVATION_TYPE_CLASS,
+        &mut elevation_type as *mut _ as *mut c_void,
+        std::mem::size_of::<u32>() as u32,
+        &mut needed,
+    );
+    if ok == 0 {
+        return Err(anyhow!(
+            "GetTokenInformation(TokenElevationType) failed: {}",
+            GetLastError()
+        ));
+    }
+
+    Ok(restricted_token_flags_for_elevation_type(elevation_type))
+}
+
+fn restricted_token_flags_for_elevation_type(elevation_type: u32) -> u32 {
+    let base_flags = DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED;
+
+    // Request a LUA token only when starting from a fully elevated token.
+    // Passing LUA_TOKEN for already-unelevated tokens can fail with ERROR_INVALID_PARAMETER.
+    match elevation_type {
+        TOKEN_ELEVATION_TYPE_FULL => base_flags | LUA_TOKEN,
+        TOKEN_ELEVATION_TYPE_DEFAULT | TOKEN_ELEVATION_TYPE_LIMITED | _ => base_flags,
+    }
+}
+
 unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     let mut luid = LUID {
         LowPart: 0,
@@ -352,7 +388,7 @@ unsafe fn create_token_with_caps_from(
     entries[logon_idx + 1].Attributes = 0;
 
     let mut new_token: HANDLE = 0;
-    let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
+    let flags = restricted_token_flags(base_token)?;
     let ok = CreateRestrictedToken(
         base_token,
         flags,
@@ -376,4 +412,37 @@ unsafe fn create_token_with_caps_from(
 
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DISABLE_MAX_PRIVILEGE;
+    use super::LUA_TOKEN;
+    use super::TOKEN_ELEVATION_TYPE_DEFAULT;
+    use super::TOKEN_ELEVATION_TYPE_FULL;
+    use super::TOKEN_ELEVATION_TYPE_LIMITED;
+    use super::WRITE_RESTRICTED;
+    use super::restricted_token_flags_for_elevation_type;
+
+    #[test]
+    fn skips_lua_flag_for_already_unelevated_tokens() {
+        let expected = DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED;
+
+        assert_eq!(
+            restricted_token_flags_for_elevation_type(TOKEN_ELEVATION_TYPE_DEFAULT),
+            expected
+        );
+        assert_eq!(
+            restricted_token_flags_for_elevation_type(TOKEN_ELEVATION_TYPE_LIMITED),
+            expected
+        );
+    }
+
+    #[test]
+    fn keeps_lua_flag_for_fully_elevated_tokens() {
+        assert_eq!(
+            restricted_token_flags_for_elevation_type(TOKEN_ELEVATION_TYPE_FULL),
+            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
+        );
+    }
 }
