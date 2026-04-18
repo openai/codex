@@ -82,7 +82,11 @@ When marking a budgeted goal achieved with status `complete`, report the final t
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
+        parameters: JsonSchema::object(
+            properties,
+            /*required*/ Some(vec!["status".to_string()]),
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 }

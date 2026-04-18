@@ -18,6 +18,7 @@ use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_tools::GET_GOAL_TOOL_NAME;
 use codex_tools::SET_GOAL_TOOL_NAME;
+use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -34,12 +35,17 @@ struct SetGoalArgs {
     token_budget: Option<Option<i64>>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct UpdateGoalArgs {
+    status: ToolGoalStatus,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 enum ToolGoalStatus {
     Active,
     Paused,
-    BudgetLimited,
     Complete,
 }
 
@@ -48,7 +54,6 @@ impl From<ToolGoalStatus> for ThreadGoalStatus {
         match value {
             ToolGoalStatus::Active => Self::Active,
             ToolGoalStatus::Paused => Self::Paused,
-            ToolGoalStatus::BudgetLimited => Self::BudgetLimited,
             ToolGoalStatus::Complete => Self::Complete,
         }
     }
@@ -110,6 +115,9 @@ impl ToolHandler for GoalHandler {
             SET_GOAL_TOOL_NAME => {
                 handle_set_goal(session.as_ref(), turn.as_ref(), &arguments).await
             }
+            UPDATE_GOAL_TOOL_NAME => {
+                handle_update_goal(session.as_ref(), turn.as_ref(), &arguments).await
+            }
             other => Err(FunctionCallError::Fatal(format!(
                 "goal handler received unsupported tool: {other}"
             ))),
@@ -138,6 +146,26 @@ async fn handle_set_goal(
                 objective: args.objective,
                 status: args.status.map(Into::into),
                 token_budget: args.token_budget,
+            },
+        )
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+    goal_response(Some(goal))
+}
+
+async fn handle_update_goal(
+    session: &Session,
+    turn_context: &TurnContext,
+    arguments: &str,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let args: UpdateGoalArgs = parse_arguments(arguments)?;
+    let goal = session
+        .set_thread_goal(
+            turn_context,
+            SetGoalRequest {
+                objective: None,
+                status: Some(args.status.into()),
+                token_budget: None,
             },
         )
         .await
