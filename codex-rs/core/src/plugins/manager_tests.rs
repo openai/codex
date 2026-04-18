@@ -1623,7 +1623,13 @@ plugins = true
         Some(PluginDetailsUnavailableReason::InstallRequiredForRemoteSource)
     );
     assert!(!outcome.plugin.installed);
-    assert!(outcome.plugin.description.is_none());
+    let expected_description = format!(
+        "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {missing_remote_repo_url}, path `plugins/toolkit`."
+    );
+    assert_eq!(
+        outcome.plugin.description.as_deref(),
+        Some(expected_description.as_str())
+    );
     assert!(outcome.plugin.skills.is_empty());
     assert!(outcome.plugin.apps.is_empty());
     assert!(outcome.plugin.mcp_server_names.is_empty());

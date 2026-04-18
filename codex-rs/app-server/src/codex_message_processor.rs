@@ -239,7 +239,6 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
 use codex_core::plugins::MarketplaceAddError;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
-use codex_core::plugins::PluginDetailsUnavailableReason as CorePluginDetailsUnavailableReason;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
@@ -6650,7 +6649,6 @@ impl CodexMessageProcessor {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let description = plugin_read_description(&outcome.plugin);
         let plugin = PluginDetail {
             marketplace_name: outcome.marketplace_name,
             marketplace_path: outcome.marketplace_path,
@@ -6664,7 +6662,7 @@ impl CodexMessageProcessor {
                 auth_policy: outcome.plugin.policy.authentication.into(),
                 interface: outcome.plugin.interface.map(local_plugin_interface_to_info),
             },
-            description,
+            description: outcome.plugin.description,
             skills: plugin_skills_to_info(&visible_skills, &outcome.plugin.disabled_skill_paths),
             apps: app_summaries,
             mcp_servers: outcome.plugin.mcp_server_names,
@@ -9140,43 +9138,6 @@ fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginS
             sha,
         },
     }
-}
-
-fn plugin_read_description(plugin: &codex_core::plugins::PluginDetail) -> Option<String> {
-    match plugin.details_unavailable_reason {
-        Some(CorePluginDetailsUnavailableReason::InstallRequiredForRemoteSource) => {
-            Some(remote_plugin_install_required_description(&plugin.source))
-        }
-        None => plugin.description.clone(),
-    }
-}
-
-fn remote_plugin_install_required_description(source: &MarketplacePluginSource) -> String {
-    let source_description = match source {
-        MarketplacePluginSource::Git {
-            url,
-            path,
-            ref_name,
-            sha,
-        } => {
-            let mut parts = vec![url.clone()];
-            if let Some(path) = path {
-                parts.push(format!("path `{path}`"));
-            }
-            if let Some(ref_name) = ref_name {
-                parts.push(format!("ref `{ref_name}`"));
-            }
-            if let Some(sha) = sha {
-                parts.push(format!("sha `{sha}`"));
-            }
-            parts.join(", ")
-        }
-        MarketplacePluginSource::Local { path } => path.as_path().display().to_string(),
-    };
-
-    format!(
-        "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {source_description}."
-    )
 }
 
 fn errors_to_info(
