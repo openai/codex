@@ -45,6 +45,7 @@ use details::KeymapActionDetailsRenderable;
 use details::build_action_details;
 
 const KEYMAP_PICKER_VIEW_ID: &str = "keymap-picker";
+pub(crate) const KEYMAP_ACTION_MENU_VIEW_ID: &str = "keymap-action-menu";
 const KEYMAP_DETAIL_PANEL_WIDTH: u16 = 46;
 const KEYMAP_DETAIL_PANEL_MIN_WIDTH: u16 = 40;
 
@@ -86,7 +87,6 @@ pub(crate) fn build_keymap_picker_params(
                         action: action.clone(),
                     });
                 })],
-                dismiss_on_select: true,
                 search_value: Some(search_value),
                 ..Default::default()
             }
@@ -150,6 +150,7 @@ pub(crate) fn build_keymap_action_menu_params(
     let remove_action = action.clone();
 
     SelectionViewParams {
+        view_id: Some(KEYMAP_ACTION_MENU_VIEW_ID),
         title: Some("Edit Shortcut".to_string()),
         subtitle: Some(format!("{label}  {context}.{action}")),
         footer_note: Some(Line::from(vec![
@@ -162,16 +163,15 @@ pub(crate) fn build_keymap_action_menu_params(
             SelectionItem {
                 name: "Set new key".to_string(),
                 description: Some(format!("Current: {current_binding}")),
-                selected_description: Some(
-                    "Capture one key and replace this action's custom binding.".to_string(),
-                ),
+                selected_description: Some(format!(
+                    "Current: {current_binding}. Capture one key and replace this action's custom binding."
+                )),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenKeymapCapture {
                         context: set_context.clone(),
                         action: set_action.clone(),
                     });
                 })],
-                dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
@@ -187,7 +187,6 @@ pub(crate) fn build_keymap_action_menu_params(
                         action: remove_action.clone(),
                     });
                 })],
-                dismiss_on_select: true,
                 ..Default::default()
             },
             SelectionItem {
@@ -477,10 +476,14 @@ fn key_parts_to_config_key_spec(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bottom_pane::BottomPane;
+    use crate::bottom_pane::BottomPaneParams;
     use crate::bottom_pane::ListSelectionView;
+    use crate::tui::FrameRequester;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
+    use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn app_event_sender() -> AppEventSender {
@@ -506,7 +509,11 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
+        render_buffer(&buf)
+    }
 
+    fn render_buffer(buf: &Buffer) -> String {
+        let area = buf.area();
         (0..area.height)
             .map(|row| {
                 let mut line = String::new();
@@ -524,12 +531,32 @@ mod tests {
             .join("\n")
     }
 
+    fn test_pane() -> (BottomPane, AppEventSender, UnboundedReceiver<AppEvent>) {
+        let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx.clone(),
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: false,
+            skills: Some(Vec::new()),
+        });
+        (pane, tx, rx)
+    }
+
     #[test]
     fn picker_covers_every_replaceable_action() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
 
         assert_eq!(params.items.len(), KEYMAP_ACTIONS.len());
+        assert!(
+            params.items.iter().all(|item| !item.dismiss_on_select),
+            "keymap picker should stay open behind the action menu"
+        );
         assert!(KEYMAP_ACTIONS.iter().all(|descriptor| {
             binding_slot(
                 &mut TuiKeymap::default(),
@@ -644,9 +671,22 @@ mod tests {
             &TuiKeymap::default(),
         );
 
+        assert_eq!(params.view_id, Some(KEYMAP_ACTION_MENU_VIEW_ID));
         assert_eq!(
             params.items[1].disabled_reason.as_deref(),
             Some("There is no custom root binding for this action to remove.")
+        );
+        assert!(
+            !params.items[0].dismiss_on_select,
+            "set-key should keep the action menu under key capture"
+        );
+        assert!(
+            !params.items[1].dismiss_on_select,
+            "clear-key should keep the action menu open for refresh"
+        );
+        assert!(
+            params.items[2].dismiss_on_select,
+            "cancel should dismiss the action menu"
         );
     }
 
@@ -663,6 +703,62 @@ mod tests {
         assert_snapshot!(
             "keymap_capture_view",
             format!("{:?}", render_capture(&view, /*width*/ 80, /*height*/ 8))
+        );
+    }
+
+    #[test]
+    fn capture_completion_returns_to_keymap_action_menu() {
+        let (mut pane, tx, mut rx) = test_pane();
+        let runtime = RuntimeKeymap::defaults();
+        pane.show_selection_view(build_keymap_action_menu_params(
+            "composer".to_string(),
+            "submit".to_string(),
+            &runtime,
+            &TuiKeymap::default(),
+        ));
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let AppEvent::OpenKeymapCapture { context, action } =
+            rx.try_recv().expect("open capture event")
+        else {
+            panic!("expected OpenKeymapCapture event");
+        };
+        assert_eq!(pane.active_view_id(), Some(KEYMAP_ACTION_MENU_VIEW_ID));
+
+        pane.show_view(Box::new(build_keymap_capture_view(
+            context, action, &runtime, tx,
+        )));
+        pane.handle_key_event(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL));
+
+        let AppEvent::KeymapCaptured {
+            context,
+            action,
+            key,
+        } = rx.try_recv().expect("captured key event")
+        else {
+            panic!("expected KeymapCaptured event");
+        };
+        assert_eq!(context, "composer");
+        assert_eq!(action, "submit");
+        assert_eq!(key, "ctrl-shift-k");
+        assert_eq!(pane.active_view_id(), Some(KEYMAP_ACTION_MENU_VIEW_ID));
+
+        let keymap =
+            keymap_with_replacement(&TuiKeymap::default(), &context, &action, &key).unwrap();
+        let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+        let params = build_keymap_action_menu_params(context, action, &runtime, &keymap);
+        assert!(
+            pane.replace_selection_view_if_active(KEYMAP_ACTION_MENU_VIEW_ID, params),
+            "active action menu should refresh after a successful assignment"
+        );
+        let area = Rect::new(0, 0, 80, pane.desired_height(/*width*/ 80));
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        let rendered = render_buffer(&buf);
+        assert!(
+            rendered.contains("Current: ctrl-shift-k"),
+            "rendered action menu did not include updated binding:\n{rendered}"
         );
     }
 

@@ -7836,6 +7836,26 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn refresh_keymap_action_menu(
+        &mut self,
+        context: &str,
+        action: &str,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params = keymap_setup::build_keymap_action_menu_params(
+            context.to_string(),
+            action.to_string(),
+            runtime_keymap,
+            &self.config.tui_keymap,
+        );
+        let replaced = self
+            .bottom_pane
+            .replace_selection_view_if_active(keymap_setup::KEYMAP_ACTION_MENU_VIEW_ID, params);
+        if replaced {
+            self.request_redraw();
+        }
+    }
+
     fn status_line_context_window_size(&self) -> Option<i64> {
         self.token_info
             .as_ref()

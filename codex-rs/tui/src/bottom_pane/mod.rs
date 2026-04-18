@@ -978,6 +978,11 @@ impl BottomPane {
         !self.view_stack.is_empty()
     }
 
+    #[cfg(test)]
+    pub(crate) fn active_view_id(&self) -> Option<&'static str> {
+        self.view_stack.last().and_then(|view| view.view_id())
+    }
+
     /// Return true when the pane is in the regular composer state without any
     /// overlays or popups and not running a task. This is the safe context to
     /// use Esc-Esc for backtracking from the main view.
