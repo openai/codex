@@ -12,7 +12,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["fs", "net", "rt"] }
 
 [target.'cfg(windows)'.dependencies]
 async-io = { workspace = true }

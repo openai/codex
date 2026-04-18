@@ -13,7 +13,7 @@ use tokio::io::ReadBuf;
 /// Creates `socket_dir` if needed and restricts it to the current user where
 /// the platform exposes Unix permissions.
 pub async fn prepare_private_socket_directory(socket_dir: impl AsRef<Path>) -> IoResult<()> {
-    platform::prepare_private_socket_directory(socket_dir.as_ref())
+    platform::prepare_private_socket_directory(socket_dir.as_ref()).await
 }
 
 /// Returns whether `socket_path` points at a stale Unix socket rendezvous path.
@@ -22,7 +22,7 @@ pub async fn prepare_private_socket_directory(socket_dir: impl AsRef<Path>) -> I
 /// rendezvous as a regular path, so existence is the only useful stale-path
 /// signal available.
 pub async fn is_stale_socket_path(socket_path: impl AsRef<Path>) -> IoResult<bool> {
-    platform::is_stale_socket_path(socket_path.as_ref())
+    platform::is_stale_socket_path(socket_path.as_ref()).await
 }
 
 /// Async Unix domain socket listener.
@@ -87,11 +87,11 @@ mod platform {
     use std::io;
     use std::io::ErrorKind;
     use std::io::Result as IoResult;
-    use std::os::unix::fs::DirBuilderExt;
     use std::os::unix::fs::FileTypeExt;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
+    use tokio::fs;
     use tokio::net::UnixListener;
     use tokio::net::UnixStream;
 
@@ -104,17 +104,16 @@ mod platform {
 
     pub(super) struct Listener(UnixListener);
 
-    pub(super) fn prepare_private_socket_directory(socket_dir: &Path) -> IoResult<()> {
-        match std::fs::DirBuilder::new()
-            .mode(SOCKET_DIR_MODE)
-            .create(socket_dir)
-        {
+    pub(super) async fn prepare_private_socket_directory(socket_dir: &Path) -> IoResult<()> {
+        let mut dir_builder = fs::DirBuilder::new();
+        dir_builder.mode(SOCKET_DIR_MODE);
+        match dir_builder.create(socket_dir).await {
             Ok(()) => return Ok(()),
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {}
             Err(err) => return Err(err),
         }
 
-        let metadata = std::fs::symlink_metadata(socket_dir)?;
+        let metadata = fs::symlink_metadata(socket_dir).await?;
         if !metadata.is_dir() {
             return Err(io::Error::new(
                 ErrorKind::AlreadyExists,
@@ -127,7 +126,8 @@ mod platform {
 
         let permissions = metadata.permissions();
         if permissions.mode() & SOCKET_DIR_PERMISSION_BITS != SOCKET_DIR_MODE {
-            std::fs::set_permissions(socket_dir, std::fs::Permissions::from_mode(SOCKET_DIR_MODE))?;
+            fs::set_permissions(socket_dir, std::fs::Permissions::from_mode(SOCKET_DIR_MODE))
+                .await?;
         }
 
         Ok(())
@@ -147,8 +147,9 @@ mod platform {
         UnixStream::connect(socket_path).await
     }
 
-    pub(super) fn is_stale_socket_path(socket_path: &Path) -> IoResult<bool> {
-        Ok(std::fs::symlink_metadata(socket_path)?
+    pub(super) async fn is_stale_socket_path(socket_path: &Path) -> IoResult<bool> {
+        Ok(fs::symlink_metadata(socket_path)
+            .await?
             .file_type()
             .is_socket())
     }
@@ -173,22 +174,23 @@ mod platform {
     use tokio::io::AsyncRead;
     use tokio::io::AsyncWrite;
     use tokio::io::ReadBuf;
+    use tokio::task;
     use tokio_util::compat::Compat;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     pub(super) struct Stream(Compat<Async<WindowsUnixStream>>);
 
-    pub(super) fn prepare_private_socket_directory(socket_dir: &Path) -> IoResult<()> {
-        std::fs::create_dir_all(socket_dir)
+    pub(super) async fn prepare_private_socket_directory(socket_dir: &Path) -> IoResult<()> {
+        tokio::fs::create_dir_all(socket_dir).await
     }
 
     pub(super) struct Listener(Async<WindowsUnixListener>);
 
     pub(super) async fn bind_listener(socket_path: &Path) -> IoResult<Listener> {
-        Async::new(WindowsUnixListener::from(uds_windows::UnixListener::bind(
-            socket_path,
-        )?))
-        .map(Listener)
+        let socket_path = socket_path.to_path_buf();
+        let listener =
+            spawn_blocking_io(move || uds_windows::UnixListener::bind(socket_path)).await?;
+        Async::new(WindowsUnixListener::from(listener)).map(Listener)
     }
 
     impl Listener {
@@ -201,15 +203,27 @@ mod platform {
     }
 
     pub(super) async fn connect_stream(socket_path: &Path) -> IoResult<Stream> {
-        Async::new(WindowsUnixStream::from(uds_windows::UnixStream::connect(
-            socket_path,
-        )?))
-        .map(FuturesAsyncReadCompatExt::compat)
-        .map(Stream)
+        let socket_path = socket_path.to_path_buf();
+        let stream =
+            spawn_blocking_io(move || uds_windows::UnixStream::connect(socket_path)).await?;
+        Async::new(WindowsUnixStream::from(stream))
+            .map(FuturesAsyncReadCompatExt::compat)
+            .map(Stream)
     }
 
-    pub(super) fn is_stale_socket_path(socket_path: &Path) -> IoResult<bool> {
-        Ok(socket_path.exists())
+    pub(super) async fn is_stale_socket_path(socket_path: &Path) -> IoResult<bool> {
+        tokio::fs::try_exists(socket_path).await
+    }
+
+    async fn spawn_blocking_io<T>(
+        operation: impl FnOnce() -> IoResult<T> + Send + 'static,
+    ) -> IoResult<T>
+    where
+        T: Send + 'static,
+    {
+        task::spawn_blocking(operation)
+            .await
+            .map_err(|err| io::Error::other(format!("blocking socket task failed: {err}")))?
     }
 
     pub(super) struct WindowsUnixListener(uds_windows::UnixListener);
