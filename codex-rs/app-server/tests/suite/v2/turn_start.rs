@@ -332,6 +332,22 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     )
     .await??;
 
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let request = requests
+        .last()
+        .expect("expected at least one model request");
+    assert!(
+        body_contains(request, "## Skills"),
+        "expected outgoing request to include the skills section"
+    );
+    assert!(
+        !body_contains(request, "- alpha-skill:") && !body_contains(request, "- beta-skill:"),
+        "expected trimmed skills to be omitted from the outgoing request body"
+    );
+
     Ok(())
 }
 
