@@ -3364,6 +3364,12 @@ impl CodexMessageProcessor {
         )
         .await;
 
+        if let Some(thread) = running_thread.as_ref()
+            && let Err(err) = thread.account_active_goal_progress().await
+        {
+            warn!("failed to account active goal progress before app-server goal clear: {err}");
+        }
+
         let cleared = match state_db.delete_thread_goal(thread_id).await {
             Ok(cleared) => cleared,
             Err(err) => {
@@ -3372,6 +3378,10 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        if let Some(thread) = running_thread.as_ref() {
+            thread.clear_cached_thread_goal_after_delete().await;
+        }
 
         self.outgoing
             .send_response(request_id, ThreadGoalClearResponse { cleared })
