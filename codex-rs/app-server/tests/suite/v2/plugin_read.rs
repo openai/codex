@@ -512,6 +512,75 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_read_describes_uninstalled_git_source_without_cloning() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let missing_remote_repo = repo_root.path().join("missing-remote-plugin-repo");
+    let missing_remote_repo_url = url::Url::from_directory_path(&missing_remote_repo)
+        .unwrap()
+        .to_string();
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        format!(
+            r#"{{
+  "name": "debug",
+  "plugins": [
+    {{
+      "name": "toolkit",
+      "source": {{
+        "source": "git-subdir",
+        "url": "{missing_remote_repo_url}",
+        "path": "plugins/toolkit"
+      }}
+    }}
+  ]
+}}"#
+        ),
+    )?;
+    write_plugins_enabled_config(&codex_home)?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.path().join(".agents/plugins/marketplace.json"),
+            )?,
+            plugin_name: "toolkit".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    let expected_description = format!(
+        "This is a cross-repo plugin. Install it to view more detailed information. The source of the plugin is {missing_remote_repo_url}, path `plugins/toolkit`."
+    );
+    assert_eq!(
+        response.plugin.description.as_deref(),
+        Some(expected_description.as_str())
+    );
+    assert!(!response.plugin.summary.installed);
+    assert!(response.plugin.skills.is_empty());
+    assert!(response.plugin.apps.is_empty());
+    assert!(response.plugin.mcp_servers.is_empty());
+    assert!(
+        !codex_home
+            .path()
+            .join("plugins/.marketplace-plugin-source-staging")
+            .exists()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
