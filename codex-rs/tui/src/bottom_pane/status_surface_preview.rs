@@ -52,7 +52,7 @@ impl StatusSurfacePreviewItem {
         }
     }
 
-    fn iter() -> impl Iterator<Item = Self> {
+    pub(crate) fn iter() -> impl Iterator<Item = Self> {
         [
             Self::AppName,
             Self::ProjectName,

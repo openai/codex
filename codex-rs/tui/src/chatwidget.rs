@@ -54,6 +54,7 @@ use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::StatusSurfacePreviewData;
+use crate::bottom_pane::StatusSurfacePreviewItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::bottom_pane::TerminalTitleSetupView;
 use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
@@ -7519,9 +7520,9 @@ impl ChatWidget {
     }
 
     fn status_surface_preview_data(&mut self) -> StatusSurfacePreviewData {
-        StatusSurfacePreviewData::from_iter(StatusLineItem::iter().filter_map(|item| {
-            self.status_line_value_for_item(&item)
-                .map(|value| (item.preview_item(), value))
+        StatusSurfacePreviewData::from_iter(StatusSurfacePreviewItem::iter().filter_map(|item| {
+            self.status_surface_preview_value_for_item(item)
+                .map(|value| (item, value))
         }))
     }
 
