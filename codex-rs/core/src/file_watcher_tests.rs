@@ -400,6 +400,48 @@ async fn missing_file_watch_reports_requested_path_when_parent_changes() {
 }
 
 #[tokio::test]
+async fn missing_file_watch_reports_requested_path_when_parent_delete_event_arrives() {
+    // Parent events should report both creation and deletion of a fallback target.
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let missing_file = temp_dir.path().join("FETCH_HEAD");
+
+    let watcher = Arc::new(FileWatcher::noop());
+    let (subscriber, rx) = watcher.add_subscriber();
+    let _registration = subscriber.register_path(missing_file.clone(), /*recursive*/ false);
+    let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
+
+    std::fs::write(&missing_file, "origin/main\n").expect("write missing file");
+    watcher
+        .send_paths_for_test(vec![temp_dir.path().into()])
+        .await;
+    let created = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("created event timeout")
+        .expect("created event");
+    assert_eq!(
+        created,
+        FileWatcherEvent {
+            paths: vec![missing_file.clone()],
+        }
+    );
+
+    std::fs::remove_file(&missing_file).expect("remove missing file");
+    watcher
+        .send_paths_for_test(vec![temp_dir.path().into()])
+        .await;
+    let deleted = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("deleted event timeout")
+        .expect("deleted event");
+    assert_eq!(
+        deleted,
+        FileWatcherEvent {
+            paths: vec![missing_file],
+        }
+    );
+}
+
+#[tokio::test]
 async fn spawn_event_loop_filters_non_mutating_events() {
     let watcher = Arc::new(FileWatcher::noop());
     let (subscriber, rx) = watcher.add_subscriber();

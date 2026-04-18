@@ -51,7 +51,7 @@ struct WatchState {
 }
 
 struct SubscriberState {
-    watched_paths: HashMap<SubscriberWatch, usize>,
+    watched_paths: HashMap<SubscriberWatch, SubscriberWatchState>,
     tx: WatchSender,
 }
 
@@ -68,6 +68,11 @@ struct SubscriberWatch {
     /// Existing path passed to the OS watcher and used for ref-counting. This
     /// is usually `requested`, but missing targets use an existing ancestor.
     actual: WatchPath,
+}
+
+struct SubscriberWatchState {
+    count: usize,
+    last_exists: bool,
 }
 
 /// Receives coalesced change notifications for a single subscriber.
@@ -369,10 +374,14 @@ impl FileWatcher {
                 let Some(subscriber) = state.subscribers.get_mut(&subscriber_id) else {
                     return;
                 };
-                *subscriber
+                subscriber
                     .watched_paths
                     .entry(subscriber_watch.clone())
-                    .or_default() += 1;
+                    .and_modify(|state| state.count += 1)
+                    .or_insert_with(|| SubscriberWatchState {
+                        count: 1,
+                        last_exists: subscriber_watch.matched.path.exists(),
+                    });
             }
 
             let counts = state
@@ -429,12 +438,13 @@ impl FileWatcher {
                 let Some(subscriber) = state.subscribers.get_mut(&subscriber_id) else {
                     return;
                 };
-                let Some(subscriber_count) = subscriber.watched_paths.get_mut(subscriber_watch)
+                let Some(subscriber_watch_state) =
+                    subscriber.watched_paths.get_mut(subscriber_watch)
                 else {
                     continue;
                 };
-                *subscriber_count = subscriber_count.saturating_sub(1);
-                if *subscriber_count == 0 {
+                subscriber_watch_state.count = subscriber_watch_state.count.saturating_sub(1);
+                if subscriber_watch_state.count == 0 {
                     subscriber.watched_paths.remove(subscriber_watch);
                 }
             }
@@ -463,13 +473,13 @@ impl FileWatcher {
         };
 
         let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
-        for (subscriber_watch, count) in subscriber.watched_paths {
+        for (subscriber_watch, subscriber_watch_state) in subscriber.watched_paths {
             let Some(path_counts) = state.path_ref_counts.get_mut(&subscriber_watch.actual.path)
             else {
                 continue;
             };
             let previous_mode = path_counts.effective_mode();
-            path_counts.decrement(subscriber_watch.actual.recursive, count);
+            path_counts.decrement(subscriber_watch.actual.recursive, subscriber_watch_state.count);
             let next_mode = path_counts.effective_mode();
             if path_counts.is_empty() {
                 state.path_ref_counts.remove(&subscriber_watch.actual.path);
@@ -527,24 +537,27 @@ impl FileWatcher {
 
     async fn notify_subscribers(state: &RwLock<WatchState>, event_paths: &[PathBuf]) {
         let subscribers_to_notify: Vec<(WatchSender, Vec<PathBuf>)> = {
-            let state = state
-                .read()
+            let mut state = state
+                .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state
                 .subscribers
-                .values()
+                .values_mut()
                 .filter_map(|subscriber| {
-                    let changed_paths: Vec<PathBuf> = event_paths
-                        .iter()
-                        .flat_map(|event_path| {
-                            subscriber
-                                .watched_paths
-                                .keys()
-                                .filter_map(|subscriber_watch| {
-                                    changed_path_for_event(subscriber_watch, event_path)
-                                })
-                        })
-                        .collect();
+                    let mut changed_paths = Vec::new();
+                    for event_path in event_paths {
+                        for (subscriber_watch, subscriber_watch_state) in
+                            &mut subscriber.watched_paths
+                        {
+                            if let Some(path) = changed_path_for_event(
+                                subscriber_watch,
+                                subscriber_watch_state,
+                                event_path,
+                            ) {
+                                changed_paths.push(path);
+                            }
+                        }
+                    }
                     (!changed_paths.is_empty()).then_some((subscriber.tx.clone(), changed_paths))
                 })
                 .collect()
@@ -651,34 +664,49 @@ fn actual_watch_path(requested: &WatchPath) -> (WatchPath, WatchPath) {
 /// synthetic tests and backends that preserve the input spelling.
 fn changed_path_for_event(
     subscriber_watch: &SubscriberWatch,
+    subscriber_watch_state: &mut SubscriberWatchState,
     event_path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(path) =
-        changed_path_for_matched_path(subscriber_watch, &subscriber_watch.matched, event_path)
-    {
+    if let Some(path) = changed_path_for_matched_path(
+        subscriber_watch,
+        subscriber_watch_state,
+        &subscriber_watch.matched,
+        event_path,
+    ) {
         return Some(path);
     }
     if subscriber_watch.matched.path == subscriber_watch.requested.path {
         return None;
     }
-    changed_path_for_matched_path(subscriber_watch, &subscriber_watch.requested, event_path)
+    changed_path_for_matched_path(
+        subscriber_watch,
+        subscriber_watch_state,
+        &subscriber_watch.requested,
+        event_path,
+    )
 }
 
 /// Applies the watch matching rules in one path namespace and maps any emitted
 /// path back into the subscriber's requested namespace.
 fn changed_path_for_matched_path(
     subscriber_watch: &SubscriberWatch,
+    subscriber_watch_state: &mut SubscriberWatchState,
     matched: &WatchPath,
     event_path: &Path,
 ) -> Option<PathBuf> {
     let requested = &subscriber_watch.requested;
     if event_path == matched.path {
+        subscriber_watch_state.last_exists = matched.path.exists();
         return Some(requested.path.clone());
     }
     if matched.path.starts_with(event_path) {
         if subscriber_watch.actual.path != matched.path {
-            return matched.path.exists().then(|| requested.path.clone());
+            let now_exists = matched.path.exists();
+            let should_notify = now_exists || subscriber_watch_state.last_exists;
+            subscriber_watch_state.last_exists = now_exists;
+            return should_notify.then(|| requested.path.clone());
         }
+        subscriber_watch_state.last_exists = matched.path.exists();
         return Some(event_path.to_path_buf());
     }
     if !event_path.starts_with(&matched.path) {
@@ -687,6 +715,7 @@ fn changed_path_for_matched_path(
     if !(matched.recursive || event_path.parent() == Some(matched.path.as_path())) {
         return None;
     }
+    subscriber_watch_state.last_exists = matched.path.exists();
     Some(
         event_path
             .strip_prefix(&matched.path)
