@@ -44,6 +44,7 @@ mod deprecation_notice;
 mod exec;
 mod exec_policy;
 mod fork_thread;
+mod guardian;
 mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;

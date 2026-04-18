@@ -727,6 +727,7 @@ pub(crate) fn build_guardian_review_session_config(
             .map(guardian_policy_prompt_with_config)
             .unwrap_or_else(guardian_policy_prompt),
     );
+    guardian_config.inject_skills_message = false;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
@@ -872,6 +873,22 @@ mod tests {
         .expect("guardian config");
 
         assert!(!guardian_config.features.enabled(Feature::CodexHooks));
+    }
+
+    #[tokio::test]
+    async fn guardian_review_session_config_disables_skills_message() {
+        let mut parent_config = crate::config::test_config().await;
+        parent_config.inject_skills_message = true;
+
+        let guardian_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("guardian config");
+
+        assert!(!guardian_config.inject_skills_message);
     }
 
     #[tokio::test(flavor = "current_thread")]
