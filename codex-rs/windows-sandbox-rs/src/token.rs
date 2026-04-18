@@ -3,6 +3,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 use std::ffi::c_void;
 use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
@@ -352,8 +353,28 @@ unsafe fn create_token_with_caps_from(
     entries[logon_idx + 1].Sid = psid_everyone;
     entries[logon_idx + 1].Attributes = 0;
 
+    let mut new_token = create_restricted_token(base_token, &mut entries, true)?;
+    if new_token == 0 {
+        new_token = create_restricted_token(base_token, &mut entries, false)?;
+    }
+
+    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
+    dacl_sids.push(psid_logon);
+    dacl_sids.push(psid_everyone);
+    dacl_sids.extend_from_slice(psid_capabilities);
+    set_default_dacl(new_token, &dacl_sids)?;
+
+    enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
+    Ok(new_token)
+}
+
+unsafe fn create_restricted_token(
+    base_token: HANDLE,
+    entries: &mut [SID_AND_ATTRIBUTES],
+    include_lua_token: bool,
+) -> Result<HANDLE> {
+    let flags = restricted_token_flags(include_lua_token);
     let mut new_token: HANDLE = 0;
-    let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
         base_token,
         flags,
@@ -365,16 +386,57 @@ unsafe fn create_token_with_caps_from(
         entries.as_mut_ptr(),
         &mut new_token,
     );
-    if ok == 0 {
-        return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
+    if ok != 0 {
+        return Ok(new_token);
     }
 
-    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
-    dacl_sids.push(psid_logon);
-    dacl_sids.push(psid_everyone);
-    dacl_sids.extend_from_slice(psid_capabilities);
-    set_default_dacl(new_token, &dacl_sids)?;
+    let err = GetLastError();
+    if should_retry_without_lua(err, include_lua_token) {
+        // Some already-unelevated sessions reject LUA_TOKEN with ERROR_INVALID_PARAMETER.
+        // Retry with the same restricting SIDs but without the LUA conversion flag.
+        return Ok(0);
+    }
 
-    enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
-    Ok(new_token)
+    Err(anyhow!("CreateRestrictedToken failed: {}", err))
+}
+
+fn restricted_token_flags(include_lua_token: bool) -> u32 {
+    let mut flags = DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED;
+    if include_lua_token {
+        flags |= LUA_TOKEN;
+    }
+    flags
+}
+
+fn should_retry_without_lua(err: u32, include_lua_token: bool) -> bool {
+    include_lua_token && err == ERROR_INVALID_PARAMETER
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restricted_token_flags;
+    use super::should_retry_without_lua;
+    use super::DISABLE_MAX_PRIVILEGE;
+    use super::LUA_TOKEN;
+    use super::WRITE_RESTRICTED;
+    use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
+
+    #[test]
+    fn retry_without_lua_only_for_invalid_parameter() {
+        assert!(should_retry_without_lua(ERROR_INVALID_PARAMETER, true));
+        assert!(!should_retry_without_lua(ERROR_INVALID_PARAMETER, false));
+        assert!(!should_retry_without_lua(5, true));
+    }
+
+    #[test]
+    fn restricted_token_flags_only_include_lua_when_requested() {
+        assert_eq!(
+            restricted_token_flags(true),
+            DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED
+        );
+        assert_eq!(
+            restricted_token_flags(false),
+            DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED
+        );
+    }
 }
