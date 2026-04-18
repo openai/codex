@@ -2007,6 +2007,7 @@ mod tests {
             runtime_args
                 .environment_manager
                 .default_environment()
+                .expect("default environment")
                 .is_remote()
         );
     }

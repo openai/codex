@@ -5694,15 +5694,20 @@ impl CodexMessageProcessor {
             .await;
         let auth_manager = Arc::clone(&self.auth_manager);
         let auth = auth_manager.auth().await;
-        let runtime_environment = {
-            let environment = self
-                .thread_manager
-                .environment_manager()
-                .default_environment()
-                .unwrap_or_else(|| Arc::new(codex_exec_server::Environment::default()));
-            // Status listing has no turn cwd. This fallback is used only
-            // by executor-backed stdio MCPs whose config omits `cwd`.
-            McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
+        let runtime_environment = match self
+            .thread_manager
+            .environment_manager()
+            .default_environment()
+        {
+            Some(environment) => {
+                // Status listing has no turn cwd. This fallback is used only
+                // by executor-backed stdio MCPs whose config omits `cwd`.
+                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
+            }
+            None => McpRuntimeEnvironment::new(
+                Arc::new(codex_exec_server::Environment::default()),
+                config.cwd.to_path_buf(),
+            ),
         };
 
         tokio::spawn(async move {
