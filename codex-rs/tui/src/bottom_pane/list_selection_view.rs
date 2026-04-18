@@ -1656,6 +1656,7 @@ mod tests {
                 ..Default::default()
             },
             tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
         );
         view.set_search_query("plugin".to_string());
 
