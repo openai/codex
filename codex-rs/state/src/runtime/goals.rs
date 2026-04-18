@@ -242,8 +242,10 @@ WHERE thread_id = ?
 
         let now_ms = datetime_to_epoch_millis(Utc::now());
         let status_filter = match mode {
-            ThreadGoalAccountingMode::ActiveOnly => "status = 'active'",
-            ThreadGoalAccountingMode::ActiveOrComplete => "status IN ('active', 'complete')",
+            ThreadGoalAccountingMode::ActiveOnly => "status IN ('active', 'budget_limited')",
+            ThreadGoalAccountingMode::ActiveOrComplete => {
+                "status IN ('active', 'budget_limited', 'complete')"
+            }
             ThreadGoalAccountingMode::ActiveOrStopped => {
                 "status IN ('active', 'paused', 'budget_limited')"
             }
@@ -480,7 +482,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn usage_accounting_updates_active_goals_and_stops_on_budget() {
+    async fn usage_accounting_updates_active_goals_and_accounts_budget_limited_in_flight_usage() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
         upsert_test_thread(&runtime, thread_id).await;
@@ -535,12 +537,12 @@ mod tests {
             )
             .await
             .expect("usage accounting should succeed");
-        let ThreadGoalAccountingOutcome::Unchanged(Some(goal)) = outcome else {
-            panic!("terminal goal should not continue accounting");
+        let ThreadGoalAccountingOutcome::Updated(goal) = outcome else {
+            panic!("budget-limited goal should still account in-flight active usage");
         };
         assert_eq!(crate::ThreadGoalStatus::BudgetLimited, goal.status);
-        assert_eq!(20, goal.tokens_used);
-        assert_eq!(10, goal.time_used_seconds);
+        assert_eq!(25, goal.tokens_used);
+        assert_eq!(15, goal.time_used_seconds);
     }
 
     #[tokio::test]
