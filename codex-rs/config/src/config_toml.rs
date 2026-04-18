@@ -22,6 +22,7 @@ use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
+use crate::types::ToolInterceptorsToml;
 use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
@@ -312,6 +313,10 @@ pub struct ConfigToml {
 
     /// Additional discoverable tools that can be suggested for installation.
     pub tool_suggest: Option<ToolSuggestConfig>,
+
+    /// Local subprocesses that can replace matching tool calls at execution time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_interceptors: Option<ToolInterceptorsToml>,
 
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,

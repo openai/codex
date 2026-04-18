@@ -178,6 +178,41 @@ pub struct ToolSuggestConfig {
     pub discoverables: Vec<ToolSuggestDiscoverable>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ToolInterceptorsToml {
+    #[serde(default)]
+    pub handlers: HashMap<String, ToolInterceptorHandlerToml>,
+
+    #[serde(default)]
+    pub rules: Vec<ToolInterceptorRuleToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ToolInterceptorHandlerToml {
+    pub command: String,
+
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<AbsolutePathBuf>,
+
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ToolInterceptorRuleToml {
+    pub tool: String,
+    pub handler: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+}
+
 /// Memories settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

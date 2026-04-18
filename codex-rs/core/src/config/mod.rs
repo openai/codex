@@ -42,6 +42,7 @@ use codex_config::types::OtelConfig;
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
 use codex_config::types::ShellEnvironmentPolicy;
+use codex_config::types::ToolInterceptorsToml;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
@@ -592,6 +593,9 @@ pub struct Config {
 
     /// Configured discoverable tools for tool suggestions.
     pub tool_suggest: ToolSuggestConfig,
+
+    /// Local subprocesses that can replace matching tool calls at execution time.
+    pub tool_interceptors: Option<ToolInterceptorsToml>,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
@@ -2268,6 +2272,7 @@ impl Config {
                 .and_then(|feedback| feedback.enabled)
                 .unwrap_or(true),
             tool_suggest,
+            tool_interceptors: cfg.tool_interceptors,
             tui_notifications: cfg
                 .tui
                 .as_ref()

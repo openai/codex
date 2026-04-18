@@ -298,6 +298,10 @@ impl ToolRouter {
             payload,
         };
 
+        if let Some(result) = crate::tool_interceptors::maybe_intercept(&invocation).await? {
+            return Ok(result);
+        }
+
         self.registry.dispatch_any(invocation).await
     }
 }
