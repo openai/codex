@@ -327,8 +327,14 @@ mod tests {
     #[test]
     fn preview_uses_runtime_values() {
         let preview_data = StatusSurfacePreviewData::from_iter([
-            (StatusLineItem::ModelName.preview_item(), "gpt-5".to_string()),
-            (StatusLineItem::CurrentDir.preview_item(), "/repo".to_string()),
+            (
+                StatusLineItem::ModelName.preview_item(),
+                "gpt-5".to_string(),
+            ),
+            (
+                StatusLineItem::CurrentDir.preview_item(),
+                "/repo".to_string(),
+            ),
         ]);
         let items = vec![
             MultiSelectItem {
@@ -347,7 +353,8 @@ mod tests {
 
         assert_eq!(
             preview_data.line_for_items(
-                items.iter()
+                items
+                    .iter()
                     .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
                     .map(StatusLineItem::preview_item),
             ),
@@ -357,8 +364,10 @@ mod tests {
 
     #[test]
     fn preview_uses_placeholders_when_runtime_values_are_missing() {
-        let preview_data =
-            StatusSurfacePreviewData::from_iter([(StatusSurfacePreviewItem::Model, "gpt-5".to_string())]);
+        let preview_data = StatusSurfacePreviewData::from_iter([(
+            StatusSurfacePreviewItem::Model,
+            "gpt-5".to_string(),
+        )]);
         let items = vec![
             MultiSelectItem {
                 id: StatusLineItem::ModelName.to_string(),
@@ -376,7 +385,8 @@ mod tests {
 
         assert_eq!(
             preview_data.line_for_items(
-                items.iter()
+                items
+                    .iter()
                     .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
                     .map(StatusLineItem::preview_item),
             ),
@@ -387,8 +397,14 @@ mod tests {
     #[test]
     fn preview_includes_thread_title() {
         let preview_data = StatusSurfacePreviewData::from_iter([
-            (StatusLineItem::ModelName.preview_item(), "gpt-5".to_string()),
-            (StatusLineItem::ThreadTitle.preview_item(), "Roadmap cleanup".to_string()),
+            (
+                StatusLineItem::ModelName.preview_item(),
+                "gpt-5".to_string(),
+            ),
+            (
+                StatusLineItem::ThreadTitle.preview_item(),
+                "Roadmap cleanup".to_string(),
+            ),
         ]);
         let items = vec![
             MultiSelectItem {
@@ -407,7 +423,8 @@ mod tests {
 
         assert_eq!(
             preview_data.line_for_items(
-                items.iter()
+                items
+                    .iter()
                     .filter_map(|item| item.id.parse::<StatusLineItem>().ok())
                     .map(StatusLineItem::preview_item),
             ),
@@ -425,13 +442,22 @@ mod tests {
                 StatusLineItem::GitBranch.to_string(),
             ]),
             StatusSurfacePreviewData::from_iter([
-                (StatusLineItem::ModelName.preview_item(), "gpt-5-codex".to_string()),
-                (StatusLineItem::CurrentDir.preview_item(), "~/codex-rs".to_string()),
+                (
+                    StatusLineItem::ModelName.preview_item(),
+                    "gpt-5-codex".to_string(),
+                ),
+                (
+                    StatusLineItem::CurrentDir.preview_item(),
+                    "~/codex-rs".to_string(),
+                ),
                 (
                     StatusLineItem::GitBranch.preview_item(),
                     "jif/statusline-preview".to_string(),
                 ),
-                (StatusLineItem::WeeklyLimit.preview_item(), "weekly 82%".to_string()),
+                (
+                    StatusLineItem::WeeklyLimit.preview_item(),
+                    "weekly 82%".to_string(),
+                ),
             ]),
             AppEventSender::new(tx_raw),
         );

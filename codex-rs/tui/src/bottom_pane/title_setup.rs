@@ -297,11 +297,8 @@ mod tests {
             "status".to_string(),
             "thread".to_string(),
         ];
-        let view = TerminalTitleSetupView::new(
-            Some(&selected),
-            StatusSurfacePreviewData::default(),
-            tx,
-        );
+        let view =
+            TerminalTitleSetupView::new(Some(&selected), StatusSurfacePreviewData::default(), tx);
         assert_snapshot!(
             "terminal_title_setup_basic",
             render_lines(&view, /*width*/ 84)
