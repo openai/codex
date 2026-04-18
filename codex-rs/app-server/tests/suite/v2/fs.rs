@@ -33,6 +33,9 @@ use std::process::Command;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+// Optional watch events should not inherit the slow process/RPC timeout: these
+// tests intentionally tolerate missing OS notifications in sandboxed CI.
+const OPTIONAL_FS_CHANGED_TIMEOUT: Duration = Duration::from_millis(1500);
 
 async fn initialized_mcp(codex_home: &TempDir) -> Result<McpProcess> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -832,7 +835,7 @@ async fn maybe_fs_changed_notification(
     mcp: &mut McpProcess,
 ) -> Result<Option<FsChangedNotification>> {
     match timeout(
-        DEFAULT_READ_TIMEOUT,
+        OPTIONAL_FS_CHANGED_TIMEOUT,
         mcp.read_stream_until_notification_message("fs/changed"),
     )
     .await
