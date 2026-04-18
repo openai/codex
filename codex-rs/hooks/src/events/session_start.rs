@@ -394,11 +394,28 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let marker_path = temp.path().join("project-ran");
         let (shell_program, shell_args, stopping_command, project_command) = if cfg!(windows) {
+            let stopping_script = temp.path().join("stopping.cmd");
+            std::fs::write(
+                &stopping_script,
+                r#"@echo off
+more > nul
+echo {"continue":false,"stopReason":"pause","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"trusted context"}}
+"#,
+            )?;
+            let project_script = temp.path().join("project.cmd");
+            std::fs::write(
+                &project_script,
+                r#"@echo off
+more > nul
+type nul > project-ran
+echo project context
+"#,
+            )?;
             (
                 "cmd.exe".to_string(),
                 vec!["/D".to_string(), "/C".to_string()],
-                r#"more > nul && echo {^"continue^":false,^"stopReason^":^"pause^",^"hookSpecificOutput^":{^"hookEventName^":^"SessionStart^",^"additionalContext^":^"trusted context^"}}"#.to_string(),
-                "more > nul && type nul > project-ran && echo project context".to_string(),
+                format!("\"{}\"", stopping_script.display()),
+                format!("\"{}\"", project_script.display()),
             )
         } else {
             (
