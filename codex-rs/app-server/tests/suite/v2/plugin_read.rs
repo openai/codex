@@ -546,9 +546,10 @@ async fn plugin_read_describes_uninstalled_git_source_without_cloning() -> Resul
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
-            marketplace_path: AbsolutePathBuf::try_from(
+            marketplace_path: Some(AbsolutePathBuf::try_from(
                 repo_root.path().join(".agents/plugins/marketplace.json"),
-            )?,
+            )?),
+            remote_marketplace_name: None,
             plugin_name: "toolkit".to_string(),
         })
         .await?;
