@@ -46,6 +46,8 @@ pub(crate) enum ThreadListenerCommand {
     EmitThreadGoalUpdated {
         goal: ThreadGoal,
     },
+    // EmitThreadGoalCleared is used to order app-server goal clears with running-thread resume responses.
+    EmitThreadGoalCleared,
     // ResolveServerRequest is used to notify the client that the request has been resolved.
     // It is executed in the thread listener's context to ensure that the resolved notification is ordered with regard to the request itself.
     ResolveServerRequest {
