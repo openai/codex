@@ -617,9 +617,9 @@ fn dedupe_watched_paths(mut watched_paths: Vec<WatchPath>) -> Vec<WatchPath> {
 
 /// Returns the actual OS watch path and canonical match path for a request.
 ///
-/// Missing targets are watched through the nearest existing ancestor. If that
-/// ancestor is not the direct parent, the actual watch becomes recursive so
-/// creation events below the ancestor can still reach the subscriber.
+/// Missing targets are watched recursively through the nearest existing
+/// directory ancestor so a target that later appears as a directory can still
+/// report direct child changes.
 fn actual_watch_path(requested: &WatchPath) -> (WatchPath, WatchPath) {
     if requested.path.exists() {
         let matched_path = requested
@@ -646,7 +646,7 @@ fn actual_watch_path(requested: &WatchPath) -> (WatchPath, WatchPath) {
                 .unwrap_or_else(|_| requested.path.clone());
             let actual = WatchPath {
                 path: path.to_path_buf(),
-                recursive: requested.recursive || Some(path) != requested_parent,
+                recursive: true,
             };
             let matched = WatchPath {
                 path: matched_path,

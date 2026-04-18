@@ -163,7 +163,7 @@ fn subscriber_drop_unregisters_paths() {
 
 #[test]
 fn missing_path_registers_nearest_existing_parent() {
-    // A missing direct child should watch its parent non-recursively.
+    // Missing targets use a recursive parent fallback because they may become directories.
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let missing_file = temp_dir.path().join("FETCH_HEAD");
 
@@ -171,7 +171,7 @@ fn missing_path_registers_nearest_existing_parent() {
     let (subscriber, _rx) = watcher.add_subscriber();
     let registration = subscriber.register_path(missing_file.clone(), /*recursive*/ false);
 
-    assert_eq!(watcher.watch_counts_for_test(temp_dir.path()), Some((1, 0)));
+    assert_eq!(watcher.watch_counts_for_test(temp_dir.path()), Some((0, 1)));
     assert_eq!(watcher.watch_counts_for_test(&missing_file), None);
 
     drop(registration);
