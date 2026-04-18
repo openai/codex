@@ -6,6 +6,7 @@ use crate::Features;
 use crate::FeaturesToml;
 use crate::Stage;
 use crate::feature_for_key;
+use crate::legacy_feature_keys;
 use crate::unstable_features_warning_event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
@@ -87,7 +88,7 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
-fn guardian_approval_is_experimental_and_user_toggleable() {
+fn auto_review_is_experimental_and_user_toggleable() {
     let spec = Feature::GuardianApproval.info();
     let stage = spec.stage;
 
@@ -101,6 +102,28 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     );
     assert_eq!(stage.experimental_announcement(), None);
     assert_eq!(Feature::GuardianApproval.default_enabled(), false);
+    assert_eq!(Feature::GuardianApproval.key(), "auto_review");
+    assert_eq!(
+        feature_for_key("auto_review"),
+        Some(Feature::GuardianApproval)
+    );
+    assert_eq!(
+        feature_for_key("guardian_approval"),
+        Some(Feature::GuardianApproval)
+    );
+    assert!(legacy_feature_keys().any(|key| key == "guardian_approval"));
+}
+
+#[test]
+fn auto_review_canonical_feature_key_wins_over_legacy_guardian_alias() {
+    let mut entries = BTreeMap::new();
+    entries.insert("auto_review".to_string(), false);
+    entries.insert("guardian_approval".to_string(), true);
+
+    let mut features = Features::with_defaults();
+    features.apply_map(&entries);
+
+    assert_eq!(features.enabled(Feature::GuardianApproval), false);
 }
 
 #[test]

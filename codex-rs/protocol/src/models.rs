@@ -499,7 +499,7 @@ impl DeveloperInstructions {
             ),
         };
 
-        let text = if approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+        let text = if approvals_reviewer == ApprovalsReviewer::AutoReview
             && approval_policy != AskForApproval::Never
         {
             format!("{text}\n\n{AUTO_REVIEW_APPROVAL_SUFFIX}")
@@ -1934,10 +1934,10 @@ mod tests {
     }
 
     #[test]
-    fn guardian_subagent_approvals_append_guardian_specific_guidance() {
+    fn auto_review_approvals_append_guardian_specific_guidance() {
         let text = DeveloperInstructions::from(
             AskForApproval::OnRequest,
-            ApprovalsReviewer::GuardianSubagent,
+            ApprovalsReviewer::AutoReview,
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ false,
             /*request_permissions_tool_enabled*/ false,
@@ -1950,10 +1950,10 @@ mod tests {
     }
 
     #[test]
-    fn guardian_subagent_approvals_omit_guardian_specific_guidance_when_approval_is_never() {
+    fn auto_review_approvals_omit_guardian_specific_guidance_when_approval_is_never() {
         let text = DeveloperInstructions::from(
             AskForApproval::Never,
-            ApprovalsReviewer::GuardianSubagent,
+            ApprovalsReviewer::AutoReview,
             &Policy::empty(),
             /*exec_permission_approvals_enabled*/ false,
             /*request_permissions_tool_enabled*/ false,

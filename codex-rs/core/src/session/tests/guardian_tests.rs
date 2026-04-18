@@ -375,7 +375,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
 }
 
 #[tokio::test]
-async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
+async fn auto_review_does_not_inherit_parent_exec_policy_rules() {
     let codex_home = tempdir().expect("create codex home");
     let project_dir = tempdir().expect("create project dir");
     let rules_dir = project_dir.path().join("rules");
@@ -458,7 +458,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         analytics_events_client: None,
     })
     .await
-    .expect("spawn guardian subagent");
+    .expect("spawn auto-review subagent");
 
     assert_eq!(
         codex

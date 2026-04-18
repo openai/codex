@@ -3609,7 +3609,7 @@ async fn user_turn_updates_approvals_reviewer() {
             }],
             cwd: config.cwd.to_path_buf(),
             approval_policy: config.permissions.approval_policy.value(),
-            approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::GuardianSubagent),
+            approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             model: turn_context.model_info.slug.clone(),
             effort: config.model_reasoning_effort,
@@ -3625,7 +3625,7 @@ async fn user_turn_updates_approvals_reviewer() {
     let state = session.state.lock().await;
     assert_eq!(
         state.session_configuration.approvals_reviewer,
-        codex_config::types::ApprovalsReviewer::GuardianSubagent
+        codex_config::types::ApprovalsReviewer::AutoReview
     );
 }
 
@@ -3804,7 +3804,7 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
 }
 
 #[tokio::test]
-async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
+async fn shutdown_and_wait_shuts_down_cached_auto_review() {
     let (parent_session, parent_turn_context) = make_session_and_context().await;
     let parent_session = Arc::new(parent_session);
     let parent_config = Arc::clone(&parent_turn_context.config);
@@ -3857,7 +3857,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
 
     child_shutdown_rx
         .await
-        .expect("guardian subagent should receive a shutdown op");
+        .expect("auto-review subagent should receive a shutdown op");
 }
 
 #[tokio::test]

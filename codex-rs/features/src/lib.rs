@@ -392,6 +392,9 @@ impl Features {
                     }
                     if k != feat.key() {
                         self.record_legacy_usage(k.as_str(), feat);
+                        if m.contains_key(feat.key()) {
+                            continue;
+                        }
                     }
                     if *v {
                         self.enable(feat);
@@ -888,7 +891,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::GuardianApproval,
-        key: "guardian_approval",
+        key: "auto_review",
         stage: Stage::Experimental {
             name: "Auto-review",
             menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",

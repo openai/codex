@@ -1042,15 +1042,24 @@ impl ConfigEditsBuilder {
     /// `false` so they can override an inherited root enable.
     pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
         let profile_scoped = self.profile.is_some();
-        let segments = if let Some(profile) = self.profile.as_ref() {
-            vec![
-                "profiles".to_string(),
-                profile.clone(),
-                "features".to_string(),
-                key.to_string(),
-            ]
+        let profile = self.profile.clone();
+        let segments_for_key = |feature_key: &str| {
+            if let Some(profile) = profile.as_ref() {
+                vec![
+                    "profiles".to_string(),
+                    profile.clone(),
+                    "features".to_string(),
+                    feature_key.to_string(),
+                ]
+            } else {
+                vec!["features".to_string(), feature_key.to_string()]
+            }
+        };
+        let segments = segments_for_key(key);
+        let legacy_auto_review_segments = if key == "auto_review" {
+            Some(segments_for_key("guardian_approval"))
         } else {
-            vec!["features".to_string(), key.to_string()]
+            None
         };
         let is_default_false_feature = FEATURES
             .iter()
@@ -1062,6 +1071,9 @@ impl ConfigEditsBuilder {
                 value: value(enabled),
             });
         } else {
+            self.edits.push(ConfigEdit::ClearPath { segments });
+        }
+        if let Some(segments) = legacy_auto_review_segments {
             self.edits.push(ConfigEdit::ClearPath { segments });
         }
         self
