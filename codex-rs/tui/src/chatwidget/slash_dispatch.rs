@@ -157,7 +157,7 @@ impl ChatWidget {
                 }
                 if let Some(thread_id) = self.thread_id {
                     self.app_event_tx
-                        .send(AppEvent::ToggleThreadGoal { thread_id });
+                        .send(AppEvent::OpenThreadGoalMenu { thread_id });
                 } else {
                     self.add_info_message(
                         "Usage: /goal <objective, optionally with a token budget>".to_string(),

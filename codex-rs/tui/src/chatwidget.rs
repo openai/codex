@@ -363,6 +363,7 @@ mod goal_status;
 use self::goal_status::GoalStatusState;
 #[cfg(test)]
 use self::goal_status::goal_status_indicator_from_app_goal;
+mod goal_menu;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod session_header;
@@ -6478,6 +6479,9 @@ impl ChatWidget {
             }
             ServerNotification::ThreadGoalUpdated(notification) => {
                 self.on_thread_goal_updated(notification.goal, notification.turn_id);
+            }
+            ServerNotification::ThreadGoalCleared(notification) => {
+                self.on_thread_goal_cleared(notification.thread_id.as_str());
             }
             ServerNotification::TurnStarted(notification) => {
                 self.last_turn_id = Some(notification.turn.id);

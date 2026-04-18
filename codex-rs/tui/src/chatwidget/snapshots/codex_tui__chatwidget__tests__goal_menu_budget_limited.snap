@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/goal_menu.rs
+assertion_line: 55
+expression: popup
+---
+  Goal
+  Status: limited by budget
+  Objective: Keep improving the bare goal command until it feels calm and
+  useful.
+  Time used: 1m
+  Tokens used: 12.5K
+  Token budget: 80K
+
+› 1. Clear goal  Remove the current goal.
+  2. Cancel      Keep the goal unchanged.
+
+  Press enter to confirm or esc to go back

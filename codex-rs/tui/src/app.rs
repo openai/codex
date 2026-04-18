@@ -4538,7 +4538,11 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    async fn toggle_thread_goal(&mut self, app_server: &mut AppServerSession, thread_id: ThreadId) {
+    async fn open_thread_goal_menu(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) {
         let response = match app_server.thread_goal_get(thread_id).await {
             Ok(response) => response,
             Err(err) => {
@@ -4551,43 +4555,55 @@ impl App {
         let Some(goal) = response.goal else {
             self.chat_widget.add_info_message(
                 "Usage: /goal <objective, optionally with a time or token budget>".to_string(),
-                Some("No goal is currently set for this thread.".to_string()),
+                Some("No goal is currently set.".to_string()),
             );
             return;
         };
 
-        let next_status = match goal.status {
-            ThreadGoalStatus::Active => Some(ThreadGoalStatus::Paused),
-            ThreadGoalStatus::Paused => Some(ThreadGoalStatus::Active),
-            ThreadGoalStatus::BudgetLimited | ThreadGoalStatus::Complete => None,
-        };
+        self.chat_widget.open_goal_menu(thread_id, goal);
+    }
 
-        if let Some(status) = next_status {
-            match app_server
-                .thread_goal_set(
-                    thread_id,
-                    /*objective*/ None,
-                    Some(status),
-                    /*token_budget*/ None,
-                )
-                .await
-            {
-                Ok(response) => self.chat_widget.add_info_message(
-                    format!("Goal {}", goal_status_label(response.goal.status)),
-                    Some(goal_usage_summary(&response.goal)),
-                ),
-                Err(err) => self
-                    .chat_widget
-                    .add_error_message(format!("Failed to update thread goal: {err}")),
+    async fn set_thread_goal_status(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        status: ThreadGoalStatus,
+    ) {
+        match app_server
+            .thread_goal_set(
+                thread_id,
+                /*objective*/ None,
+                Some(status),
+                /*token_budget*/ None,
+            )
+            .await
+        {
+            Ok(response) => self.chat_widget.add_info_message(
+                format!("Goal {}", goal_status_label(response.goal.status)),
+                Some(goal_usage_summary(&response.goal)),
+            ),
+            Err(err) => self
+                .chat_widget
+                .add_error_message(format!("Failed to update thread goal: {err}")),
+        }
+    }
+
+    async fn clear_thread_goal(&mut self, app_server: &mut AppServerSession, thread_id: ThreadId) {
+        match app_server.thread_goal_clear(thread_id).await {
+            Ok(response) => {
+                if response.cleared {
+                    self.chat_widget
+                        .add_info_message("Goal cleared".to_string(), /*hint*/ None);
+                } else {
+                    self.chat_widget.add_info_message(
+                        "No goal to clear".to_string(),
+                        Some("This thread does not currently have a goal.".to_string()),
+                    );
+                }
             }
-        } else {
-            self.chat_widget.add_info_message(
-                format!("Goal {}", goal_status_label(goal.status)),
-                Some(format!(
-                    "{} Use /goal <new objective> to replace it.",
-                    goal_usage_summary(&goal)
-                )),
-            );
+            Err(err) => self
+                .chat_widget
+                .add_error_message(format!("Failed to clear thread goal: {err}")),
         }
     }
 
@@ -5065,8 +5081,15 @@ impl App {
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }
-            AppEvent::ToggleThreadGoal { thread_id } => {
-                self.toggle_thread_goal(app_server, thread_id).await;
+            AppEvent::OpenThreadGoalMenu { thread_id } => {
+                self.open_thread_goal_menu(app_server, thread_id).await;
+            }
+            AppEvent::SetThreadGoalStatus { thread_id, status } => {
+                self.set_thread_goal_status(app_server, thread_id, status)
+                    .await;
+            }
+            AppEvent::ClearThreadGoal { thread_id } => {
+                self.clear_thread_goal(app_server, thread_id).await;
             }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {

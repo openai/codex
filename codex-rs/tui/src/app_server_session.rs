@@ -41,6 +41,8 @@ use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadGoalClearParams;
+use codex_app_server_protocol::ThreadGoalClearResponse;
 use codex_app_server_protocol::ThreadGoalGetParams;
 use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetParams;
@@ -625,6 +627,22 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/goal/set failed in TUI")
+    }
+
+    pub(crate) async fn thread_goal_clear(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadGoalClearResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadGoalClear {
+                request_id,
+                params: ThreadGoalClearParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/goal/clear failed in TUI")
     }
 
     pub(crate) async fn logout_account(&mut self) -> Result<()> {

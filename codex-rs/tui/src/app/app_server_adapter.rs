@@ -350,6 +350,9 @@ fn server_notification_thread_target(
         ServerNotification::ThreadGoalUpdated(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::ThreadGoalCleared(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::ThreadTokenUsageUpdated(notification) => {
             Some(notification.thread_id.as_str())
         }

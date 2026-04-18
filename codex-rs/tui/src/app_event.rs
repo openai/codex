@@ -18,6 +18,7 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
@@ -177,8 +178,19 @@ pub(crate) enum AppEvent {
         origin: RateLimitRefreshOrigin,
     },
 
-    /// Toggle the current thread goal between active and paused, or show goal usage.
-    ToggleThreadGoal {
+    /// Open the current thread goal summary/action menu.
+    OpenThreadGoalMenu {
+        thread_id: ThreadId,
+    },
+
+    /// Pause or unpause the current thread goal.
+    SetThreadGoalStatus {
+        thread_id: ThreadId,
+        status: ThreadGoalStatus,
+    },
+
+    /// Clear the current thread goal.
+    ClearThreadGoal {
         thread_id: ThreadId,
     },
 
