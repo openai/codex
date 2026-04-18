@@ -71,6 +71,8 @@ mod bespoke_event_handling;
 mod codex_message_processor;
 mod command_exec;
 mod config_api;
+mod config_manager;
+mod config_manager_service;
 mod dynamic_tools;
 mod error_code;
 mod external_agent_config_api;
