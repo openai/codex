@@ -479,7 +479,10 @@ impl FileWatcher {
                 continue;
             };
             let previous_mode = path_counts.effective_mode();
-            path_counts.decrement(subscriber_watch.actual.recursive, subscriber_watch_state.count);
+            path_counts.decrement(
+                subscriber_watch.actual.recursive,
+                subscriber_watch_state.count,
+            );
             let next_mode = path_counts.effective_mode();
             if path_counts.is_empty() {
                 state.path_ref_counts.remove(&subscriber_watch.actual.path);
@@ -634,7 +637,7 @@ fn actual_watch_path(requested: &WatchPath) -> (WatchPath, WatchPath) {
     let requested_parent = requested.path.parent();
     let mut ancestor = requested_parent;
     while let Some(path) = ancestor {
-        if path.exists() {
+        if path.is_dir() {
             let actual_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
             let matched_path = requested
                 .path

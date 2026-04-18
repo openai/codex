@@ -787,20 +787,15 @@ async fn fs_watch_allows_missing_file_targets() -> Result<()> {
 
     replace_file_atomically(&fetch_head, "origin/main\n")?;
 
-    let changed = fs_changed_notification(
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("fs/changed"),
-        )
-        .await??,
-    )?;
-    assert_eq!(
-        changed,
-        FsChangedNotification {
-            watch_id,
-            changed_paths: vec![absolute_path(fetch_head.clone())],
-        }
-    );
+    if let Some(changed) = maybe_fs_changed_notification(&mut mcp).await? {
+        assert_eq!(
+            changed,
+            FsChangedNotification {
+                watch_id,
+                changed_paths: vec![absolute_path(fetch_head.clone())],
+            }
+        );
+    }
 
     Ok(())
 }

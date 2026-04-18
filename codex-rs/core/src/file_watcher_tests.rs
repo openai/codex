@@ -181,8 +181,9 @@ fn missing_path_registers_nearest_existing_parent() {
 
 #[test]
 fn deeply_missing_path_registers_nearest_existing_ancestor_recursively() {
-    // A missing nested target needs a recursive watch on the closest ancestor.
+    // A missing nested target skips file prefixes and watches the closest directory.
     let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(temp_dir.path().join("refs"), "not a dir").expect("write refs file");
     let missing_file = temp_dir.path().join("refs").join("heads").join("main");
 
     let watcher = Arc::new(FileWatcher::noop());
