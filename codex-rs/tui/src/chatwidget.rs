@@ -6085,6 +6085,7 @@ impl ChatWidget {
                 )));
             }
             ServerNotification::ThreadGoalUpdated(_) => {}
+            ServerNotification::ThreadGoalCleared(_) => {}
             ServerNotification::ThreadNameUpdated(notification) => {
                 match ThreadId::from_string(&notification.thread_id) {
                     Ok(thread_id) => self.on_thread_name_updated(
