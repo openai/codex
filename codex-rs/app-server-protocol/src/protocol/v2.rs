@@ -3592,10 +3592,10 @@ pub struct ThreadListParams {
     /// If false or null, only non-archived threads are returned.
     #[ts(optional = nullable)]
     pub archived: Option<bool>,
-    /// Optional cwd filter; when set, only threads whose session cwd exactly
-    /// matches this path are returned.
+    /// Optional cwd filters; when set, only threads whose session cwd exactly
+    /// matches one of these paths are returned.
     #[ts(optional = nullable)]
-    pub cwd: Option<String>,
+    pub cwd: Option<Vec<String>>,
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,

@@ -3099,9 +3099,12 @@
           ]
         },
         "cwd": {
-          "description": "Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned.",
+          "description": "Optional cwd filters; when set, only threads whose session cwd exactly matches one of these paths are returned.",
+          "items": {
+            "type": "string"
+          },
           "type": [
-            "string",
+            "array",
             "null"
           ]
         },

@@ -38,10 +38,10 @@ sourceKinds?: Array<ThreadSourceKind> | null,
  */
 archived?: boolean | null,
 /**
- * Optional cwd filter; when set, only threads whose session cwd exactly
- * matches this path are returned.
+ * Optional cwd filters; when set, only threads whose session cwd exactly
+ * matches one of these paths are returned.
  */
-cwd?: string | null,
+cwd?: Array<string> | null,
 /**
  * Optional substring filter for the extracted thread title.
  */

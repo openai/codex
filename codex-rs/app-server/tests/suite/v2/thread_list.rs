@@ -468,15 +468,23 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_list_respects_cwd_filter() -> Result<()> {
+async fn thread_list_respects_cwd_filters() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
 
-    let filtered_id = create_fake_rollout(
+    let first_filtered_id = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T10-00-00",
         "2025-01-02T10:00:00Z",
-        "filtered",
+        "first filtered",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let second_filtered_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T12-00-00",
+        "2025-01-02T12:00:00Z",
+        "second filtered",
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
@@ -489,11 +497,22 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
         /*git_info*/ None,
     )?;
 
-    let target_cwd = codex_home.path().join("target-cwd");
-    fs::create_dir_all(&target_cwd)?;
+    let first_target_cwd = codex_home.path().join("first-target-cwd");
+    let second_target_cwd = codex_home.path().join("second-target-cwd");
+    fs::create_dir_all(&first_target_cwd)?;
+    fs::create_dir_all(&second_target_cwd)?;
     set_rollout_cwd(
-        rollout_path(codex_home.path(), "2025-01-02T10-00-00", &filtered_id).as_path(),
-        &target_cwd,
+        rollout_path(codex_home.path(), "2025-01-02T10-00-00", &first_filtered_id).as_path(),
+        &first_target_cwd,
+    )?;
+    set_rollout_cwd(
+        rollout_path(
+            codex_home.path(),
+            "2025-01-02T12-00-00",
+            &second_filtered_id,
+        )
+        .as_path(),
+        &second_target_cwd,
     )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
@@ -506,7 +525,10 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
-            cwd: Some(target_cwd.to_string_lossy().into_owned()),
+            cwd: Some(vec![
+                first_target_cwd.to_string_lossy().into_owned(),
+                second_target_cwd.to_string_lossy().into_owned(),
+            ]),
             search_term: None,
         })
         .await?;
@@ -520,10 +542,14 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
     } = to_response::<ThreadListResponse>(resp)?;
 
     assert_eq!(next_cursor, None);
-    assert_eq!(data.len(), 1);
-    assert_eq!(data[0].id, filtered_id);
-    assert_ne!(data[0].id, unfiltered_id);
-    assert_eq!(data[0].cwd.as_path(), target_cwd.as_path());
+    let filtered_ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(
+        filtered_ids,
+        vec![second_filtered_id.as_str(), first_filtered_id.as_str()]
+    );
+    assert!(!filtered_ids.contains(&unfiltered_id.as_str()));
+    assert_eq!(data[0].cwd.as_path(), second_target_cwd.as_path());
+    assert_eq!(data[1].cwd.as_path(), first_target_cwd.as_path());
 
     Ok(())
 }

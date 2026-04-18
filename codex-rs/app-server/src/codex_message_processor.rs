@@ -393,7 +393,7 @@ struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
     source_kinds: Option<Vec<ThreadSourceKind>>,
     archived: bool,
-    cwd: Option<PathBuf>,
+    cwd: Option<Vec<PathBuf>>,
     search_term: Option<String>,
 }
 
@@ -3705,7 +3705,7 @@ impl CodexMessageProcessor {
             cwd,
             search_term,
         } = params;
-        let cwd = match normalize_thread_list_cwd_filter(cwd) {
+        let cwd = match normalize_thread_list_cwd_filters(cwd) {
             Ok(cwd) => cwd,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -5246,8 +5246,10 @@ impl CodexMessageProcessor {
                 if source_kind_filter
                     .as_ref()
                     .is_none_or(|filter| source_kind_matches(&summary.source, filter))
-                    && cwd.as_ref().is_none_or(|expected_cwd| {
-                        path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
+                    && cwd.as_ref().is_none_or(|expected_cwds| {
+                        expected_cwds.iter().any(|expected_cwd| {
+                            path_utils::paths_match_after_normalization(&summary.cwd, expected_cwd)
+                        })
                     })
                 {
                     filtered.push(summary);
@@ -8730,25 +8732,31 @@ impl CodexMessageProcessor {
     }
 }
 
-fn normalize_thread_list_cwd_filter(
-    cwd: Option<String>,
-) -> Result<Option<PathBuf>, JSONRPCErrorError> {
-    let Some(cwd) = cwd else {
+fn normalize_thread_list_cwd_filters(
+    cwd: Option<Vec<String>>,
+) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
+    let Some(cwds) = cwd else {
         return Ok(None);
     };
-    AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
-        .map(AbsolutePathBuf::into_path_buf)
-        .map(Some)
-        .map_err(|err| JSONRPCErrorError {
-            code: INVALID_PARAMS_ERROR_CODE,
-            message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
-            data: None,
-        })
+
+    let mut normalized_cwds = Vec::with_capacity(cwds.len());
+    for cwd in cwds {
+        let cwd = AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
+            .map(AbsolutePathBuf::into_path_buf)
+            .map_err(|err| JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: format!("invalid thread/list cwd filter `{cwd}`: {err}"),
+                data: None,
+            })?;
+        normalized_cwds.push(cwd);
+    }
+
+    Ok(Some(normalized_cwds))
 }
 
 #[cfg(test)]
 mod thread_list_cwd_filter_tests {
-    use super::normalize_thread_list_cwd_filter;
+    use super::normalize_thread_list_cwd_filters;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -8762,8 +8770,9 @@ mod thread_list_cwd_filter_tests {
         };
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(cwd.clone())).expect("cwd filter should parse"),
-            Some(PathBuf::from(cwd))
+            normalize_thread_list_cwd_filters(Some(vec![cwd.clone()]))
+                .expect("cwd filter should parse"),
+            Some(vec![PathBuf::from(cwd)])
         );
     }
 
@@ -8773,9 +8782,9 @@ mod thread_list_cwd_filter_tests {
         let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
 
         assert_eq!(
-            normalize_thread_list_cwd_filter(Some(String::from("repo-b")))
+            normalize_thread_list_cwd_filters(Some(vec![String::from("repo-b")]))
                 .expect("cwd filter should parse"),
-            Some(expected)
+            Some(vec![expected])
         );
         Ok(())
     }
