@@ -336,7 +336,7 @@ mod tests {
                 "/repo".to_string(),
             ),
         ]);
-        let items = vec![
+        let items = [
             MultiSelectItem {
                 id: StatusLineItem::ModelName.to_string(),
                 name: String::new(),
@@ -368,7 +368,7 @@ mod tests {
             StatusSurfacePreviewItem::Model,
             "gpt-5".to_string(),
         )]);
-        let items = vec![
+        let items = [
             MultiSelectItem {
                 id: StatusLineItem::ModelName.to_string(),
                 name: String::new(),
@@ -406,7 +406,7 @@ mod tests {
                 "Roadmap cleanup".to_string(),
             ),
         ]);
-        let items = vec![
+        let items = [
             MultiSelectItem {
                 id: StatusLineItem::ModelName.to_string(),
                 name: String::new(),
