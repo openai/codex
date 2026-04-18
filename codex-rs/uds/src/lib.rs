@@ -12,7 +12,7 @@ use tokio::io::ReadBuf;
 
 /// Creates `socket_dir` if needed and restricts it to the current user where
 /// the platform exposes Unix permissions.
-pub fn prepare_private_socket_directory(socket_dir: impl AsRef<Path>) -> IoResult<()> {
+pub async fn prepare_private_socket_directory(socket_dir: impl AsRef<Path>) -> IoResult<()> {
     platform::prepare_private_socket_directory(socket_dir.as_ref())
 }
 
@@ -21,7 +21,7 @@ pub fn prepare_private_socket_directory(socket_dir: impl AsRef<Path>) -> IoResul
 /// On Unix this checks the file type. On Windows, `uds_windows` represents the
 /// rendezvous as a regular path, so existence is the only useful stale-path
 /// signal available.
-pub fn is_stale_socket_path(socket_path: impl AsRef<Path>) -> IoResult<bool> {
+pub async fn is_stale_socket_path(socket_path: impl AsRef<Path>) -> IoResult<bool> {
     platform::is_stale_socket_path(socket_path.as_ref())
 }
 
@@ -95,7 +95,10 @@ mod platform {
     use tokio::net::UnixListener;
     use tokio::net::UnixStream;
 
+    /// Owner-only access keeps the control socket directory private while
+    /// preserving owner traversal and socket path creation.
     const SOCKET_DIR_MODE: u32 = 0o700;
+    const SOCKET_DIR_PERMISSION_BITS: u32 = 0o777;
 
     pub(super) type Stream = UnixStream;
 
@@ -123,7 +126,7 @@ mod platform {
         }
 
         let permissions = metadata.permissions();
-        if permissions.mode() & 0o077 != 0 {
+        if permissions.mode() & SOCKET_DIR_PERMISSION_BITS != SOCKET_DIR_MODE {
             std::fs::set_permissions(socket_dir, std::fs::Permissions::from_mode(SOCKET_DIR_MODE))?;
         }
 
@@ -155,17 +158,25 @@ mod platform {
 mod platform {
     use std::io;
     use std::io::Result as IoResult;
+    use std::net::Shutdown;
     use std::ops::Deref;
     use std::os::windows::io::AsRawSocket;
     use std::os::windows::io::AsSocket;
     use std::os::windows::io::BorrowedSocket;
     use std::path::Path;
+    use std::pin::Pin;
+    use std::task::Context;
+    use std::task::Poll;
+    use std::task::ready;
 
     use async_io::Async;
+    use tokio::io::AsyncRead;
+    use tokio::io::AsyncWrite;
+    use tokio::io::ReadBuf;
     use tokio_util::compat::Compat;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-    pub(super) type Stream = Compat<Async<WindowsUnixStream>>;
+    pub(super) struct Stream(Compat<Async<WindowsUnixStream>>);
 
     pub(super) fn prepare_private_socket_directory(socket_dir: &Path) -> IoResult<()> {
         std::fs::create_dir_all(socket_dir)
@@ -183,7 +194,9 @@ mod platform {
     impl Listener {
         pub(super) async fn accept(&mut self) -> IoResult<Stream> {
             let (stream, _addr) = self.0.read_with(|listener| listener.accept()).await?;
-            Async::new(WindowsUnixStream::from(stream)).map(FuturesAsyncReadCompatExt::compat)
+            Async::new(WindowsUnixStream::from(stream))
+                .map(FuturesAsyncReadCompatExt::compat)
+                .map(Stream)
         }
     }
 
@@ -192,6 +205,7 @@ mod platform {
             socket_path,
         )?))
         .map(FuturesAsyncReadCompatExt::compat)
+        .map(Stream)
     }
 
     pub(super) fn is_stale_socket_path(socket_path: &Path) -> IoResult<bool> {
@@ -258,124 +272,42 @@ mod platform {
         }
     }
 
+    impl AsyncRead for Stream {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<IoResult<()>> {
+            Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for Stream {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<IoResult<usize>> {
+            Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+            Pin::new(&mut self.get_mut().0).poll_flush(cx)
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+            let stream = &mut self.get_mut().0;
+            ready!(Pin::new(&mut *stream).poll_flush(cx))?;
+            // `Compat<Async<_>>` maps shutdown to `poll_close()`, which only
+            // flushes for `async_io::Async`; call the socket shutdown directly.
+            stream.get_ref().get_ref().shutdown(Shutdown::Write)?;
+            Poll::Ready(Ok(()))
+        }
+    }
+
     unsafe impl async_io::IoSafe for WindowsUnixListener {}
     unsafe impl async_io::IoSafe for WindowsUnixStream {}
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::ErrorKind;
-
-    use pretty_assertions::assert_eq;
-    use tokio::io::AsyncReadExt;
-    use tokio::io::AsyncWriteExt;
-
-    use super::*;
-
-    #[test]
-    fn prepare_private_socket_directory_creates_directory() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let socket_dir = temp_dir.path().join("app-server-control");
-
-        prepare_private_socket_directory(&socket_dir).expect("socket dir should be created");
-
-        assert!(socket_dir.is_dir());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn prepare_private_socket_directory_tightens_existing_permissions() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let socket_dir = temp_dir.path().join("app-server-control");
-        std::fs::create_dir(&socket_dir).expect("socket dir should be created");
-        std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o755))
-            .expect("socket dir permissions should be relaxed");
-
-        prepare_private_socket_directory(&socket_dir)
-            .expect("socket dir permissions should be tightened");
-
-        let mode = std::fs::metadata(&socket_dir)
-            .expect("socket dir metadata")
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o700);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn regular_file_path_is_not_stale_socket_path() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let regular_file = temp_dir.path().join("not-a-socket");
-        std::fs::write(&regular_file, b"not a socket").expect("regular file should be created");
-
-        assert_eq!(
-            is_stale_socket_path(&regular_file).expect("stale socket check should succeed"),
-            false
-        );
-    }
-
-    #[tokio::test]
-    async fn bound_listener_path_is_stale_socket_path() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let socket_path = temp_dir.path().join("socket");
-        let _listener = match UnixListener::bind(&socket_path).await {
-            Ok(listener) => listener,
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                eprintln!("skipping test: failed to bind unix socket: {err}");
-                return;
-            }
-            Err(err) => panic!("failed to bind test socket: {err}"),
-        };
-
-        assert_eq!(
-            is_stale_socket_path(&socket_path).expect("stale socket check should succeed"),
-            true
-        );
-    }
-
-    #[tokio::test]
-    async fn stream_round_trips_data_between_listener_and_client() {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir");
-        let socket_path = temp_dir.path().join("socket");
-        let mut listener = match UnixListener::bind(&socket_path).await {
-            Ok(listener) => listener,
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-                eprintln!("skipping test: failed to bind unix socket: {err}");
-                return;
-            }
-            Err(err) => panic!("failed to bind test socket: {err}"),
-        };
-
-        let server_task = tokio::spawn(async move {
-            let mut server_stream = listener.accept().await.expect("connection should accept");
-            let mut request = [0; 7];
-            server_stream
-                .read_exact(&mut request)
-                .await
-                .expect("server should read request");
-            assert_eq!(&request, b"request");
-            server_stream
-                .write_all(b"response")
-                .await
-                .expect("server should write response");
-        });
-
-        let mut client_stream = UnixStream::connect(&socket_path)
-            .await
-            .expect("client should connect");
-        client_stream
-            .write_all(b"request")
-            .await
-            .expect("client should write request");
-        let mut response = [0; 8];
-        client_stream
-            .read_exact(&mut response)
-            .await
-            .expect("client should read response");
-        assert_eq!(&response, b"response");
-
-        server_task.await.expect("server task should join");
-    }
-}
+mod lib_tests;
