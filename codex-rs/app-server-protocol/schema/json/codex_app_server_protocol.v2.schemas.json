@@ -989,78 +989,6 @@
             },
             "method": {
               "enum": [
-                "thread/goal/set"
-              ],
-              "title": "Thread/goal/setRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/ThreadGoalSetParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/goal/setRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/goal/get"
-              ],
-              "title": "Thread/goal/getRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/ThreadGoalGetParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/goal/getRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "thread/goal/clear"
-              ],
-              "title": "Thread/goal/clearRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/ThreadGoalClearParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Thread/goal/clearRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -11329,32 +11257,6 @@
       ],
       "type": "object"
     },
-    "ThreadGoalClearParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "title": "ThreadGoalClearParams",
-      "type": "object"
-    },
-    "ThreadGoalClearResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "cleared": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "cleared"
-      ],
-      "title": "ThreadGoalClearResponse",
-      "type": "object"
-    },
     "ThreadGoalClearedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -11366,85 +11268,6 @@
         "threadId"
       ],
       "title": "ThreadGoalClearedNotification",
-      "type": "object"
-    },
-    "ThreadGoalGetParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "title": "ThreadGoalGetParams",
-      "type": "object"
-    },
-    "ThreadGoalGetResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "goal": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ThreadGoal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "title": "ThreadGoalGetResponse",
-      "type": "object"
-    },
-    "ThreadGoalSetParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "objective": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ThreadGoalStatus"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "tokenBudget": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "title": "ThreadGoalSetParams",
-      "type": "object"
-    },
-    "ThreadGoalSetResponse": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "goal": {
-          "$ref": "#/definitions/ThreadGoal"
-        }
-      },
-      "required": [
-        "goal"
-      ],
-      "title": "ThreadGoalSetResponse",
       "type": "object"
     },
     "ThreadGoalStatus": {
