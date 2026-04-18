@@ -2929,6 +2929,24 @@ impl ChatComposer {
         if self.should_handle_vim_insert_escape(key_event) {
             return self.handle_input_basic(key_event);
         }
+        if self.textarea.is_vim_normal_mode()
+            && self.is_empty()
+            && matches!(
+                key_event,
+                KeyEvent {
+                    code: KeyCode::Char('/'),
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                    ..
+                }
+            )
+        {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+            self.textarea.set_text_clearing_elements("/");
+            self.textarea.set_cursor(self.textarea.text().len());
+            self.textarea.enter_vim_insert_mode();
+            return (InputResult::None, true);
+        }
         if key_event.code == KeyCode::Esc {
             if self.is_empty() {
                 let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
@@ -5237,6 +5255,72 @@ mod tests {
             InputResult::Submitted { text, .. } => assert_eq!(text, "h"),
             _ => panic!("expected Submitted"),
         }
+    }
+
+    #[test]
+    fn slash_opens_command_popup_in_vim_normal_mode() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ true,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+
+        assert!(matches!(result, InputResult::None));
+        assert!(needs_redraw);
+        assert_eq!(composer.textarea.text(), "/");
+        assert_eq!(composer.textarea.cursor(), "/".len());
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+    }
+
+    #[test]
+    fn slash_command_can_be_typed_and_dispatched_after_vim_normal_slash() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ true,
+        );
+        composer.set_vim_enabled(/*enabled*/ true);
+
+        for ch in ['/', 'd', 'i', 'f', 'f'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        assert_eq!(composer.textarea.text(), "/diff");
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(needs_redraw);
+        assert!(composer.is_empty());
+        assert_eq!(
+            composer.vim_mode_indicator_span(),
+            Some("Vim: Insert".green())
+        );
+        assert!(matches!(result, InputResult::Command(SlashCommand::Diff)));
     }
 
     #[test]

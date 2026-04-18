@@ -233,6 +233,17 @@ impl TextArea {
         self.vim_enabled
     }
 
+    pub(crate) fn is_vim_normal_mode(&self) -> bool {
+        self.vim_enabled && self.vim_mode == VimMode::Normal
+    }
+
+    pub(crate) fn enter_vim_insert_mode(&mut self) {
+        if self.vim_enabled {
+            self.vim_mode = VimMode::Insert;
+            self.vim_operator = None;
+        }
+    }
+
     pub(crate) fn allows_paste_burst(&self) -> bool {
         !self.vim_enabled || self.vim_mode == VimMode::Insert
     }
