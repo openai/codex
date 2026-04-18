@@ -38,6 +38,32 @@ where
         ShellEnvironmentPolicyInherit::All => vars.into_iter().collect(),
         ShellEnvironmentPolicyInherit::None => HashMap::new(),
         ShellEnvironmentPolicyInherit::Core => {
+            #[cfg(target_os = "windows")]
+            const CORE_VARS: &[&str] = &[
+                "APPDATA",
+                "COMSPEC",
+                "HOMEDRIVE",
+                "HOMEPATH",
+                "HOME",
+                "LOCALAPPDATA",
+                "LOGNAME",
+                "PATH",
+                "PATHEXT",
+                "PROGRAMDATA",
+                "PROGRAMFILES",
+                "PROGRAMFILES(X86)",
+                "PROGRAMW6432",
+                "SHELL",
+                "SYSTEMDRIVE",
+                "SYSTEMROOT",
+                "TEMP",
+                "TMP",
+                "TMPDIR",
+                "USER",
+                "USERNAME",
+                "USERPROFILE",
+            ];
+            #[cfg(not(target_os = "windows"))]
             const CORE_VARS: &[&str] = &[
                 "HOME", "LOGNAME", "PATH", "SHELL", "USER", "USERNAME", "TMPDIR", "TEMP", "TMP",
             ];
