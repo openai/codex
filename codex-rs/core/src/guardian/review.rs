@@ -336,7 +336,7 @@ pub(crate) async fn review_approval_request_with_cancel(
     .await
 }
 
-pub(crate) fn spawn_approval_request_review_with_cancel(
+pub(crate) fn spawn_approval_request_review(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     review_id: String,

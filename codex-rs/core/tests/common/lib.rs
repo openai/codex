@@ -12,9 +12,6 @@ use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
-use codex_core::config_loader::ConfigLayerStack;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::LoaderOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;
@@ -167,31 +164,12 @@ pub fn fetch_dotslash_file(
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
-    let mut config = ConfigBuilder::default()
-        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+    ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
         .build()
         .await
-        .expect("defaults for test should always succeed");
-    let test_layers = config
-        .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ true,
-        )
-        .into_iter()
-        .filter(|layer| {
-            layer
-                .config_folder()
-                .is_some_and(|folder| folder.as_path() == codex_home.path())
-        })
-        .cloned()
-        .collect();
-    config.config_layer_stack =
-        ConfigLayerStack::new(test_layers, Default::default(), Default::default())
-            .expect("test config layers should be valid");
-    config
+        .expect("defaults for test should always succeed")
 }
 
 #[cfg(target_os = "linux")]

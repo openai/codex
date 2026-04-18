@@ -230,13 +230,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         .await
         .expect("request_permissions should stop when cancelled")
         .expect("request_permissions task should not panic");
-    assert_eq!(
-        response,
-        Some(RequestPermissionsResponse {
-            permissions: RequestPermissionProfile::default(),
-            scope: PermissionGrantScope::Turn,
-        })
-    );
+    assert_eq!(response, None);
     assert_eq!(session.granted_turn_permissions().await, None);
 }
 

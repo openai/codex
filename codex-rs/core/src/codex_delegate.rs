@@ -33,7 +33,7 @@ use crate::config::Config;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
-use crate::guardian::spawn_approval_request_review_with_cancel;
+use crate::guardian::spawn_approval_request_review;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
@@ -456,7 +456,7 @@ async fn handle_exec_approval(
     } = event;
     let decision = if routes_approval_to_guardian(parent_ctx) {
         let review_cancel = cancel_token.child_token();
-        let review_rx = spawn_approval_request_review_with_cancel(
+        let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
             new_guardian_review_id(),
@@ -564,7 +564,7 @@ async fn handle_patch_approval(
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let review_rx = spawn_approval_request_review_with_cancel(
+        let review_rx = spawn_approval_request_review(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
             new_guardian_review_id(),
@@ -685,7 +685,7 @@ async fn maybe_auto_review_mcp_request_user_input(
     )
     .await;
     let review_cancel = cancel_token.child_token();
-    let review_rx = spawn_approval_request_review_with_cancel(
+    let review_rx = spawn_approval_request_review(
         Arc::clone(parent_session),
         Arc::clone(parent_ctx),
         new_guardian_review_id(),

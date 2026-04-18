@@ -1659,7 +1659,7 @@ impl JsReplManager {
         let tracker = Arc::clone(&exec.tracker);
 
         match router
-            .dispatch_tool_call_with_code_mode_result_with_cancellation(
+            .dispatch_tool_call_with_code_mode_result(
                 session,
                 turn,
                 cancellation_token,

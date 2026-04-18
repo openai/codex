@@ -120,7 +120,7 @@ impl ToolCallRuntime {
                         };
 
                         router
-                            .dispatch_tool_call_with_code_mode_result_with_cancellation(
+                            .dispatch_tool_call_with_code_mode_result(
                                 session,
                                 turn,
                                 invocation_cancellation_token,

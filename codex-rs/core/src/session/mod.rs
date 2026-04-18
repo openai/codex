@@ -812,28 +812,6 @@ async fn thread_title_from_state_db(
         .flatten()
 }
 
-struct CancelTokenOnDrop {
-    token: Option<CancellationToken>,
-}
-
-impl CancelTokenOnDrop {
-    fn new(token: CancellationToken) -> Self {
-        Self { token: Some(token) }
-    }
-
-    fn disarm(&mut self) {
-        self.token = None;
-    }
-}
-
-impl Drop for CancelTokenOnDrop {
-    fn drop(&mut self) {
-        if let Some(token) = self.token.take() {
-            token.cancel();
-        }
-    }
-}
-
 impl Session {
     pub(crate) async fn app_server_client_metadata(&self) -> AppServerClientMetadata {
         let state = self.state.lock().await;
@@ -1958,18 +1936,19 @@ impl Session {
                 reason: args.reason,
                 permissions: requested_permissions.clone(),
             };
-            let review_cancel_token = cancellation_token.child_token();
-            let mut cancel_review_on_drop = CancelTokenOnDrop::new(review_cancel_token.clone());
-            let review_rx = crate::guardian::spawn_approval_request_review_with_cancel(
+            let review_rx = crate::guardian::spawn_approval_request_review(
                 session,
                 turn,
                 review_id,
                 request,
                 /*retry_reason*/ None,
-                review_cancel_token,
+                cancellation_token.clone(),
             );
-            let decision = review_rx.await.unwrap_or(ReviewDecision::Abort);
-            cancel_review_on_drop.disarm();
+            let decision = tokio::select! {
+                biased;
+                _ = cancellation_token.cancelled() => return None,
+                decision = review_rx => decision.unwrap_or(ReviewDecision::Denied),
+            };
             let response = match decision {
                 ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                     RequestPermissionsResponse {
@@ -2024,13 +2003,24 @@ impl Session {
         }
 
         let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
-            call_id,
+            call_id: call_id.clone(),
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
             permissions: args.permissions,
         });
         self.send_event(turn_context.as_ref(), event).await;
-        rx_response.await.ok()
+        tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => {
+                let mut active = self.active_turn.lock().await;
+                if let Some(at) = active.as_mut() {
+                    let mut ts = at.turn_state.lock().await;
+                    let _ = ts.remove_pending_request_permissions(&call_id);
+                }
+                None
+            }
+            response = rx_response => response.ok(),
+        }
     }
 
     pub async fn request_user_input(

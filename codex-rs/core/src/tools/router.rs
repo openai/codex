@@ -263,29 +263,8 @@ impl ToolRouter {
         }
     }
 
-    #[cfg(test)]
     #[instrument(level = "trace", skip_all, err)]
     pub async fn dispatch_tool_call_with_code_mode_result(
-        &self,
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        tracker: SharedTurnDiffTracker,
-        call: ToolCall,
-        source: ToolCallSource,
-    ) -> Result<AnyToolResult, FunctionCallError> {
-        self.dispatch_tool_call_with_code_mode_result_with_cancellation(
-            session,
-            turn,
-            CancellationToken::new(),
-            tracker,
-            call,
-            source,
-        )
-        .await
-    }
-
-    #[instrument(level = "trace", skip_all, err)]
-    pub async fn dispatch_tool_call_with_code_mode_result_with_cancellation(
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,

@@ -6397,6 +6397,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         .dispatch_tool_call_with_code_mode_result(
             Arc::clone(&session),
             Arc::clone(&turn_context),
+            CancellationToken::new(),
             tracker,
             call,
             ToolCallSource::Direct,
