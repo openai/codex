@@ -8,14 +8,26 @@
   },
   "properties": {
     "marketplacePath": {
-      "$ref": "#/definitions/AbsolutePathBuf"
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "pluginName": {
       "type": "string"
+    },
+    "remoteMarketplaceName": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [
-    "marketplacePath",
     "pluginName"
   ],
   "title": "PluginReadParams",

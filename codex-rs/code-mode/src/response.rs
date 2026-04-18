@@ -10,6 +10,8 @@ pub enum ImageDetail {
     Original,
 }
 
+pub const DEFAULT_IMAGE_DETAIL: ImageDetail = ImageDetail::High;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FunctionCallOutputContentItem {

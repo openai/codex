@@ -74,7 +74,7 @@ async fn detect_home_lists_config_skills_and_agents_md() {
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
-                "Import {} to {}",
+                "Migrate {} to {}",
                 external_agent_home.join("CLAUDE.md").display(),
                 codex_home.join("AGENTS.md").display()
             ),
@@ -107,7 +107,7 @@ async fn detect_repo_lists_agents_md_for_each_cwd() {
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
-                "Import {} to {}",
+                "Migrate {} to {}",
                 repo_root.join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
@@ -117,7 +117,7 @@ async fn detect_repo_lists_agents_md_for_each_cwd() {
         ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
-                "Import {} to {}",
+                "Migrate {} to {}",
                 repo_root.join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
@@ -194,7 +194,7 @@ async fn detect_repo_still_reports_non_plugin_items_when_home_config_is_invalid(
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
-                    "Import {} to {}",
+                    "Migrate {} to {}",
                     repo_root.join(".claude").join("CLAUDE.md").display(),
                     repo_root.join("AGENTS.md").display(),
                 ),
@@ -566,7 +566,7 @@ async fn detect_repo_prefers_non_empty_external_agent_agents_source() {
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
             description: format!(
-                "Import {} to {}",
+                "Migrate {} to {}",
                 repo_root.join(".claude").join("CLAUDE.md").display(),
                 repo_root.join("AGENTS.md").display(),
             ),
@@ -650,7 +650,7 @@ async fn detect_home_lists_enabled_plugins_from_settings() {
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 external_agent_home.join("settings.json").display()
             ),
             cwd: None,
@@ -710,7 +710,7 @@ enabled = true
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 repo_root.join(".claude").join("settings.json").display()
             ),
             cwd: Some(repo_root),
@@ -868,7 +868,7 @@ enabled = true
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 repo_root.join(".claude").join("settings.json").display()
             ),
             cwd: Some(repo_root),
@@ -1048,7 +1048,7 @@ source = "owner/debug-marketplace"
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 repo_root.join(".claude").join("settings.json").display()
             ),
             cwd: Some(repo_root),
@@ -1275,7 +1275,7 @@ async fn detect_home_supports_relative_external_agent_plugin_marketplace_path() 
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 external_agent_home.join("settings.json").display()
             ),
             cwd: None,
@@ -1426,7 +1426,7 @@ async fn detect_repo_supports_project_relative_external_agent_plugin_marketplace
         vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
             description: format!(
-                "Import enabled plugins from {}",
+                "Migrate enabled plugins from {}",
                 repo_root.join(".claude").join("settings.json").display()
             ),
             cwd: Some(repo_root),
