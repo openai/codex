@@ -5,10 +5,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_protocol::models::MessagePhase;

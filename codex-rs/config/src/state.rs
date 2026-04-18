@@ -3,6 +3,7 @@ use crate::config_requirements::ConfigRequirementsToml;
 
 use super::fingerprint::record_origins;
 use super::fingerprint::version_for_toml;
+use super::key_aliases::normalized_with_key_aliases;
 use super::merge::merge_toml_values;
 use codex_app_server_protocol::ConfigLayer;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -273,7 +274,8 @@ impl ConfigLayerStack {
             ConfigLayerStackOrdering::LowestPrecedenceFirst,
             /*include_disabled*/ false,
         ) {
-            record_origins(&layer.config, &layer.metadata(), &mut path, &mut origins);
+            let config = normalized_with_key_aliases(&layer.config, &[]);
+            record_origins(&config, &layer.metadata(), &mut path, &mut origins);
         }
 
         origins
@@ -365,3 +367,7 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
 
     Ok(user_layer_index)
 }
+
+#[cfg(test)]
+#[path = "state_tests.rs"]
+mod tests;

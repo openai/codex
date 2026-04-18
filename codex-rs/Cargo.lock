@@ -1409,6 +1409,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "async-channel",
  "async-trait",
  "base64 0.22.1",
  "bytes",
@@ -1697,6 +1698,7 @@ dependencies = [
  "codex-login",
  "codex-mcp",
  "codex-mcp-server",
+ "codex-model-provider",
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
@@ -1841,6 +1843,7 @@ dependencies = [
 name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
+ "async-channel",
  "async-trait",
  "codex-protocol",
  "deno_core_icudata",
@@ -1933,6 +1936,7 @@ dependencies = [
  "codex-instructions",
  "codex-login",
  "codex-mcp",
+ "codex-model-provider",
  "codex-model-provider-info",
  "codex-models-manager",
  "codex-network-proxy",
@@ -2369,7 +2373,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "codex-api",
  "codex-app-server-protocol",
  "codex-client",
  "codex-config",
@@ -2466,6 +2469,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-model-provider"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-api",
+ "codex-login",
+ "codex-model-provider-info",
+ "codex-protocol",
+ "http 1.4.0",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "codex-model-provider-info"
 version = "0.0.0"
 dependencies = [
@@ -2494,6 +2510,7 @@ dependencies = [
  "codex-config",
  "codex-feedback",
  "codex-login",
+ "codex-model-provider",
  "codex-model-provider-info",
  "codex-otel",
  "codex-protocol",

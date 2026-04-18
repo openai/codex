@@ -70,6 +70,7 @@ use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
@@ -381,7 +382,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        PreToolUse, PostToolUse, SessionStart, UserPromptSubmit, Stop
+        PreToolUse, PermissionRequest, PostToolUse, SessionStart, UserPromptSubmit, Stop
     }
 );
 
@@ -1034,6 +1035,11 @@ pub struct ExternalAgentConfigImportParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ExternalAgentConfigImportResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExternalAgentConfigImportCompletedNotification {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -3226,6 +3232,9 @@ pub struct ThreadListParams {
     /// Optional sort key; defaults to created_at.
     #[ts(optional = nullable)]
     pub sort_key: Option<ThreadSortKey>,
+    /// Optional sort direction; defaults to descending (newest first).
+    #[ts(optional = nullable)]
+    pub sort_direction: Option<SortDirection>,
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
     #[ts(optional = nullable)]
@@ -3273,6 +3282,14 @@ pub enum ThreadSortKey {
     UpdatedAt,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3281,6 +3298,11 @@ pub struct ThreadListResponse {
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
+    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
+    /// This is only populated when the page contains at least one thread.
+    /// Use it with the opposite `sortDirection`; for timestamp sorts it anchors
+    /// at the start of the page timestamp so same-second updates are not skipped.
+    pub backwards_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
@@ -3349,6 +3371,37 @@ pub struct ThreadReadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadTurnsListParams {
+    pub thread_id: String,
+    /// Opaque cursor to pass to the next call to continue after the last turn.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional turn page size.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Optional turn pagination direction; defaults to descending.
+    #[ts(optional = nullable)]
+    pub sort_direction: Option<SortDirection>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTurnsListResponse {
+    pub data: Vec<Turn>,
+    /// Opaque cursor to pass to the next call to continue after the last turn.
+    /// if None, there are no more turns to return.
+    pub next_cursor: Option<String>,
+    /// Opaque cursor to pass as `cursor` when reversing `sortDirection`.
+    /// This is only populated when the page contains at least one turn.
+    /// Use it with the opposite `sortDirection` to include the anchor turn again
+    /// and catch updates to that turn.
+    pub backwards_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct SkillsListParams {
     /// When empty, defaults to the current session working directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3407,10 +3460,6 @@ pub struct PluginListParams {
     /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<AbsolutePathBuf>>,
-    /// When true, reconcile the official curated marketplace against the remote plugin state
-    /// before listing marketplaces.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3420,7 +3469,6 @@ pub struct PluginListResponse {
     pub marketplaces: Vec<PluginMarketplaceEntry>,
     #[serde(default)]
     pub marketplace_load_errors: Vec<MarketplaceLoadErrorInfo>,
-    pub remote_sync_error: Option<String>,
     #[serde(default)]
     pub featured_plugin_ids: Vec<String>,
 }
@@ -3437,7 +3485,10 @@ pub struct MarketplaceLoadErrorInfo {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginReadParams {
-    pub marketplace_path: AbsolutePathBuf,
+    #[ts(optional = nullable)]
+    pub marketplace_path: Option<AbsolutePathBuf>,
+    #[ts(optional = nullable)]
+    pub remote_marketplace_name: Option<String>,
     pub plugin_name: String,
 }
 
@@ -3549,7 +3600,9 @@ pub struct SkillsListEntry {
 #[ts(export_to = "v2/")]
 pub struct PluginMarketplaceEntry {
     pub name: String,
-    pub path: AbsolutePathBuf,
+    /// Local marketplace file path when the marketplace is backed by a local file.
+    /// Remote-only catalog marketplaces do not have a local path.
+    pub path: Option<AbsolutePathBuf>,
     pub interface: Option<MarketplaceInterface>,
     pub plugins: Vec<PluginSummary>,
 }
@@ -3642,9 +3695,18 @@ pub struct PluginInterface {
     /// 128 characters per entry.
     pub default_prompt: Option<Vec<String>>,
     pub brand_color: Option<String>,
+    /// Local composer icon path, resolved from the installed plugin package.
     pub composer_icon: Option<AbsolutePathBuf>,
+    /// Remote composer icon URL from the plugin catalog.
+    pub composer_icon_url: Option<String>,
+    /// Local logo path, resolved from the installed plugin package.
     pub logo: Option<AbsolutePathBuf>,
+    /// Remote logo URL from the plugin catalog.
+    pub logo_url: Option<String>,
+    /// Local screenshot paths, resolved from the installed plugin package.
     pub screenshots: Vec<AbsolutePathBuf>,
+    /// Remote screenshot URLs from the plugin catalog.
+    pub screenshot_urls: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3655,6 +3717,17 @@ pub enum PluginSource {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Local { path: AbsolutePathBuf },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Git {
+        url: String,
+        path: Option<String>,
+        ref_name: Option<String>,
+        sha: Option<String>,
+    },
+    /// The plugin is available in the remote catalog. Download metadata is
+    /// kept server-side and is not exposed through the app-server API.
+    Remote,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3681,11 +3754,11 @@ pub struct SkillsConfigWriteResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginInstallParams {
-    pub marketplace_path: AbsolutePathBuf,
+    #[ts(optional = nullable)]
+    pub marketplace_path: Option<AbsolutePathBuf>,
+    #[ts(optional = nullable)]
+    pub remote_marketplace_name: Option<String>,
     pub plugin_name: String,
-    /// When true, apply the remote plugin change before the local install flow.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3701,9 +3774,6 @@ pub struct PluginInstallResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginUninstallParams {
     pub plugin_id: String,
-    /// When true, apply the remote plugin change before the local uninstall flow.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4718,7 +4788,7 @@ impl ThreadItem {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Lifecycle state for a guardian approval review.
+/// [UNSTABLE] Lifecycle state for an approval auto-review.
 pub enum GuardianApprovalReviewStatus {
     InProgress,
     Approved,
@@ -4730,7 +4800,7 @@ pub enum GuardianApprovalReviewStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Source that produced a terminal guardian approval review decision.
+/// [UNSTABLE] Source that produced a terminal approval auto-review decision.
 pub enum AutoReviewDecisionSource {
     Agent,
 }
@@ -4746,7 +4816,7 @@ impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Risk level assigned by guardian approval review.
+/// [UNSTABLE] Risk level assigned by approval auto-review.
 pub enum GuardianRiskLevel {
     Low,
     Medium,
@@ -4768,7 +4838,7 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Authorization level assigned by guardian approval review.
+/// [UNSTABLE] Authorization level assigned by approval auto-review.
 pub enum GuardianUserAuthorization {
     Unknown,
     Low,
@@ -4787,7 +4857,7 @@ impl From<CoreGuardianUserAuthorization> for GuardianUserAuthorization {
     }
 }
 
-/// [UNSTABLE] Temporary guardian approval review payload used by
+/// [UNSTABLE] Temporary approval auto-review payload used by
 /// `item/autoApprovalReview/*` notifications. This shape is expected to change
 /// soon.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -5500,8 +5570,8 @@ pub struct ItemStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// [UNSTABLE] Temporary notification payload for approval auto-review. This
+/// shape is expected to change soon.
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -5526,8 +5596,8 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// [UNSTABLE] Temporary notification payload for approval auto-review. This
+/// shape is expected to change soon.
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -6478,6 +6548,7 @@ pub struct RateLimitSnapshot {
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
     pub plan_type: Option<PlanType>,
+    pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }
 
 impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
@@ -6489,6 +6560,60 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
             plan_type: value.plan_type,
+            rate_limit_reached_type: value
+                .rate_limit_reached_type
+                .map(RateLimitReachedType::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/", rename_all = "snake_case")]
+pub enum RateLimitReachedType {
+    RateLimitReached,
+    WorkspaceOwnerCreditsDepleted,
+    WorkspaceMemberCreditsDepleted,
+    WorkspaceOwnerUsageLimitReached,
+    WorkspaceMemberUsageLimitReached,
+}
+
+impl From<CoreRateLimitReachedType> for RateLimitReachedType {
+    fn from(value: CoreRateLimitReachedType) -> Self {
+        match value {
+            CoreRateLimitReachedType::RateLimitReached => Self::RateLimitReached,
+            CoreRateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
+                Self::WorkspaceOwnerCreditsDepleted
+            }
+            CoreRateLimitReachedType::WorkspaceMemberCreditsDepleted => {
+                Self::WorkspaceMemberCreditsDepleted
+            }
+            CoreRateLimitReachedType::WorkspaceOwnerUsageLimitReached => {
+                Self::WorkspaceOwnerUsageLimitReached
+            }
+            CoreRateLimitReachedType::WorkspaceMemberUsageLimitReached => {
+                Self::WorkspaceMemberUsageLimitReached
+            }
+        }
+    }
+}
+
+impl From<RateLimitReachedType> for CoreRateLimitReachedType {
+    fn from(value: RateLimitReachedType) -> Self {
+        match value {
+            RateLimitReachedType::RateLimitReached => Self::RateLimitReached,
+            RateLimitReachedType::WorkspaceOwnerCreditsDepleted => {
+                Self::WorkspaceOwnerCreditsDepleted
+            }
+            RateLimitReachedType::WorkspaceMemberCreditsDepleted => {
+                Self::WorkspaceMemberCreditsDepleted
+            }
+            RateLimitReachedType::WorkspaceOwnerUsageLimitReached => {
+                Self::WorkspaceOwnerUsageLimitReached
+            }
+            RateLimitReachedType::WorkspaceMemberUsageLimitReached => {
+                Self::WorkspaceMemberUsageLimitReached
+            }
         }
     }
 }
@@ -8442,27 +8567,44 @@ mod tests {
     }
 
     #[test]
-    fn plugin_list_params_serialization_uses_force_remote_sync() {
+    fn plugin_source_serializes_local_git_and_remote_variants() {
+        let local_path = if cfg!(windows) {
+            r"C:\plugins\linear"
+        } else {
+            "/plugins/linear"
+        };
+        let local_path = AbsolutePathBuf::try_from(PathBuf::from(local_path)).unwrap();
+        let local_path_json = local_path.as_path().display().to_string();
+
         assert_eq!(
-            serde_json::to_value(PluginListParams {
-                cwds: None,
-                force_remote_sync: false,
-            })
-            .unwrap(),
+            serde_json::to_value(PluginSource::Local { path: local_path }).unwrap(),
             json!({
-                "cwds": null,
+                "type": "local",
+                "path": local_path_json,
             }),
         );
 
         assert_eq!(
-            serde_json::to_value(PluginListParams {
-                cwds: None,
-                force_remote_sync: true,
+            serde_json::to_value(PluginSource::Git {
+                url: "https://github.com/openai/example.git".to_string(),
+                path: Some("plugins/example".to_string()),
+                ref_name: Some("main".to_string()),
+                sha: Some("abc123".to_string()),
             })
             .unwrap(),
             json!({
-                "cwds": null,
-                "forceRemoteSync": true,
+                "type": "git",
+                "url": "https://github.com/openai/example.git",
+                "path": "plugins/example",
+                "refName": "main",
+                "sha": "abc123",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginSource::Remote).unwrap(),
+            json!({
+                "type": "remote",
             }),
         );
     }
@@ -8499,7 +8641,143 @@ mod tests {
     }
 
     #[test]
-    fn plugin_install_params_serialization_uses_force_remote_sync() {
+    fn plugin_marketplace_entry_serializes_remote_only_path_as_null() {
+        assert_eq!(
+            serde_json::to_value(PluginMarketplaceEntry {
+                name: "openai-curated".to_string(),
+                path: None,
+                interface: None,
+                plugins: Vec::new(),
+            })
+            .unwrap(),
+            json!({
+                "name": "openai-curated",
+                "path": null,
+                "interface": null,
+                "plugins": [],
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_interface_serializes_local_paths_and_remote_urls_separately() {
+        let composer_icon = if cfg!(windows) {
+            r"C:\plugins\linear\icon.png"
+        } else {
+            "/plugins/linear/icon.png"
+        };
+        let composer_icon = AbsolutePathBuf::try_from(PathBuf::from(composer_icon)).unwrap();
+        let composer_icon_json = composer_icon.as_path().display().to_string();
+
+        let interface = PluginInterface {
+            display_name: Some("Linear".to_string()),
+            short_description: None,
+            long_description: None,
+            developer_name: None,
+            category: Some("Productivity".to_string()),
+            capabilities: Vec::new(),
+            website_url: None,
+            privacy_policy_url: None,
+            terms_of_service_url: None,
+            default_prompt: None,
+            brand_color: None,
+            composer_icon: Some(composer_icon),
+            composer_icon_url: Some("https://example.com/linear/icon.png".to_string()),
+            logo: None,
+            logo_url: Some("https://example.com/linear/logo.png".to_string()),
+            screenshots: Vec::new(),
+            screenshot_urls: vec!["https://example.com/linear/screenshot.png".to_string()],
+        };
+
+        assert_eq!(
+            serde_json::to_value(interface).unwrap(),
+            json!({
+                "displayName": "Linear",
+                "shortDescription": null,
+                "longDescription": null,
+                "developerName": null,
+                "category": "Productivity",
+                "capabilities": [],
+                "websiteUrl": null,
+                "privacyPolicyUrl": null,
+                "termsOfServiceUrl": null,
+                "defaultPrompt": null,
+                "brandColor": null,
+                "composerIcon": composer_icon_json,
+                "composerIconUrl": "https://example.com/linear/icon.png",
+                "logo": null,
+                "logoUrl": "https://example.com/linear/logo.png",
+                "screenshots": [],
+                "screenshotUrls": ["https://example.com/linear/screenshot.png"],
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_list_params_ignore_removed_force_remote_sync_field() {
+        assert_eq!(
+            serde_json::from_value::<PluginListParams>(json!({
+                "cwds": null,
+                "forceRemoteSync": true,
+            }))
+            .unwrap(),
+            PluginListParams { cwds: None },
+        );
+    }
+
+    #[test]
+    fn plugin_read_params_serialization_uses_install_source_fields() {
+        let marketplace_path = if cfg!(windows) {
+            r"C:\plugins\marketplace.json"
+        } else {
+            "/plugins/marketplace.json"
+        };
+        let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+        let marketplace_path_json = marketplace_path.as_path().display().to_string();
+        assert_eq!(
+            serde_json::to_value(PluginReadParams {
+                marketplace_path: Some(marketplace_path.clone()),
+                remote_marketplace_name: None,
+                plugin_name: "gmail".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "marketplacePath": marketplace_path_json,
+                "remoteMarketplaceName": null,
+                "pluginName": "gmail",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginReadParams>(json!({
+                "marketplacePath": marketplace_path_json,
+                "pluginName": "gmail",
+                "forceRemoteSync": true,
+            }))
+            .unwrap(),
+            PluginReadParams {
+                marketplace_path: Some(marketplace_path),
+                remote_marketplace_name: None,
+                plugin_name: "gmail".to_string(),
+            },
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginReadParams>(json!({
+                "remoteMarketplaceName": "openai-curated",
+                "pluginName": "gmail",
+            }))
+            .unwrap(),
+            PluginReadParams {
+                marketplace_path: None,
+                remote_marketplace_name: Some("openai-curated".to_string()),
+                plugin_name: "gmail".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn plugin_install_params_serialization_omits_force_remote_sync() {
         let marketplace_path = if cfg!(windows) {
             r"C:\plugins\marketplace.json"
         } else {
@@ -8509,38 +8787,52 @@ mod tests {
         let marketplace_path_json = marketplace_path.as_path().display().to_string();
         assert_eq!(
             serde_json::to_value(PluginInstallParams {
-                marketplace_path: marketplace_path.clone(),
+                marketplace_path: Some(marketplace_path.clone()),
+                remote_marketplace_name: None,
                 plugin_name: "gmail".to_string(),
-                force_remote_sync: false,
             })
             .unwrap(),
             json!({
                 "marketplacePath": marketplace_path_json,
+                "remoteMarketplaceName": null,
                 "pluginName": "gmail",
             }),
         );
 
         assert_eq!(
-            serde_json::to_value(PluginInstallParams {
-                marketplace_path,
-                plugin_name: "gmail".to_string(),
-                force_remote_sync: true,
-            })
-            .unwrap(),
-            json!({
+            serde_json::from_value::<PluginInstallParams>(json!({
                 "marketplacePath": marketplace_path_json,
                 "pluginName": "gmail",
                 "forceRemoteSync": true,
-            }),
+            }))
+            .unwrap(),
+            PluginInstallParams {
+                marketplace_path: Some(marketplace_path),
+                remote_marketplace_name: None,
+                plugin_name: "gmail".to_string(),
+            },
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PluginInstallParams>(json!({
+                "remoteMarketplaceName": "openai-curated",
+                "pluginName": "gmail",
+                "forceRemoteSync": true,
+            }))
+            .unwrap(),
+            PluginInstallParams {
+                marketplace_path: None,
+                remote_marketplace_name: Some("openai-curated".to_string()),
+                plugin_name: "gmail".to_string(),
+            },
         );
     }
 
     #[test]
-    fn plugin_uninstall_params_serialization_uses_force_remote_sync() {
+    fn plugin_uninstall_params_serialization_omits_force_remote_sync() {
         assert_eq!(
             serde_json::to_value(PluginUninstallParams {
                 plugin_id: "gmail@openai-curated".to_string(),
-                force_remote_sync: false,
             })
             .unwrap(),
             json!({
@@ -8549,15 +8841,14 @@ mod tests {
         );
 
         assert_eq!(
-            serde_json::to_value(PluginUninstallParams {
-                plugin_id: "gmail@openai-curated".to_string(),
-                force_remote_sync: true,
-            })
-            .unwrap(),
-            json!({
+            serde_json::from_value::<PluginUninstallParams>(json!({
                 "pluginId": "gmail@openai-curated",
                 "forceRemoteSync": true,
-            }),
+            }))
+            .unwrap(),
+            PluginUninstallParams {
+                plugin_id: "gmail@openai-curated".to_string(),
+            },
         );
     }
 

@@ -234,7 +234,7 @@ move /y tokens.next tokens.txt >nul
         ModelProviderAuthInfo {
             command: self.command.clone(),
             args: self.args.clone(),
-            // Match the provider-auth default to avoid brittle shell-startup timing in CI.
+            // Match the model-provider default to avoid brittle shell-startup timing in CI.
             timeout_ms: non_zero_u64(/*value*/ 5_000),
             refresh_interval_ms: 60_000,
             cwd: match codex_utils_absolute_path::AbsolutePathBuf::try_from(self.tempdir.path()) {
@@ -2375,7 +2375,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "resets_at": 1704074400
                 },
                 "credits": null,
-                "plan_type": null
+                "plan_type": null,
+                "rate_limit_reached_type": null
             }
         })
     );
@@ -2426,7 +2427,8 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "resets_at": 1704074400
                 },
                 "credits": null,
-                "plan_type": null
+                "plan_type": null,
+                "rate_limit_reached_type": null
             }
         })
     );
@@ -2500,7 +2502,8 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "resets_at": null
         },
         "credits": null,
-        "plan_type": null
+        "plan_type": null,
+        "rate_limit_reached_type": null
     });
 
     let submission_id = codex

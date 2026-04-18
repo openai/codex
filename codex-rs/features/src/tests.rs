@@ -92,7 +92,7 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     let stage = spec.stage;
 
     assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("Guardian Approvals"));
+    assert_eq!(stage.experimental_menu_name(), Some("Auto-review"));
     assert_eq!(
         stage.experimental_menu_description().map(str::to_owned),
         Some(
@@ -101,6 +101,23 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     );
     assert_eq!(stage.experimental_announcement(), None);
     assert_eq!(Feature::GuardianApproval.default_enabled(), false);
+}
+
+#[test]
+fn external_migration_is_experimental_and_disabled_by_default() {
+    let spec = Feature::ExternalMigration.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("External migration"));
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some(
+            "Show a startup prompt when Codex detects migratable external agent config for this machine or project."
+        )
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert_eq!(Feature::ExternalMigration.default_enabled(), false);
 }
 
 #[test]

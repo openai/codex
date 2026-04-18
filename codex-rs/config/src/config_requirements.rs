@@ -7,6 +7,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::Error as _;
+use serde::de::value::Error as ValueDeserializerError;
+use serde::de::value::StrDeserializer;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -89,6 +91,8 @@ pub struct ConfigRequirements {
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
     pub network: Option<Sourced<NetworkConstraints>>,
+    /// Managed filesystem constraints derived from requirements.
+    pub filesystem: Option<Sourced<FilesystemConstraints>>,
 }
 
 impl Default for ConfigRequirements {
@@ -119,6 +123,7 @@ impl Default for ConfigRequirements {
                 /*source*/ None,
             ),
             network: None,
+            filesystem: None,
         }
     }
 }
@@ -404,6 +409,126 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilesystemRequirementsToml {
+    pub deny_read: Option<Vec<FilesystemDenyReadPattern>>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PermissionsRequirementsToml {
+    pub filesystem: Option<FilesystemRequirementsToml>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesystemConstraints {
+    pub deny_read: Vec<FilesystemDenyReadPattern>,
+}
+
+impl From<PermissionsRequirementsToml> for FilesystemConstraints {
+    fn from(value: PermissionsRequirementsToml) -> Self {
+        let deny_read = value
+            .filesystem
+            .and_then(|filesystem| filesystem.deny_read)
+            .unwrap_or_default();
+        Self { deny_read }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(transparent)]
+pub struct FilesystemDenyReadPattern(String);
+
+impl FilesystemDenyReadPattern {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn contains_glob(&self) -> bool {
+        self.0.chars().any(is_glob_metacharacter)
+    }
+
+    pub fn from_input(input: &str) -> Result<Self, String> {
+        if !input.chars().any(is_glob_metacharacter) {
+            let path = deserialize_absolute_path(input)?;
+            return Ok(Self(path.to_string_lossy().into_owned()));
+        }
+
+        let (directory_prefix, suffix) = split_glob_pattern(input);
+        let normalized_prefix = if directory_prefix.is_empty() {
+            deserialize_absolute_path(".")?
+        } else {
+            deserialize_absolute_path(directory_prefix)?
+        };
+        let normalized_prefix = normalized_prefix.to_string_lossy();
+        let normalized = if suffix.is_empty() {
+            normalized_prefix.into_owned()
+        } else if normalized_prefix == "/" {
+            format!("/{suffix}")
+        } else {
+            format!("{normalized_prefix}/{suffix}")
+        };
+        Ok(Self(normalized))
+    }
+}
+
+impl From<AbsolutePathBuf> for FilesystemDenyReadPattern {
+    fn from(value: AbsolutePathBuf) -> Self {
+        Self(value.to_string_lossy().into_owned())
+    }
+}
+
+impl<'de> Deserialize<'de> for FilesystemDenyReadPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let input = String::deserialize(deserializer)?;
+        Self::from_input(&input).map_err(D::Error::custom)
+    }
+}
+
+fn deserialize_absolute_path(input: &str) -> Result<AbsolutePathBuf, String> {
+    AbsolutePathBuf::deserialize(StrDeserializer::<ValueDeserializerError>::new(input))
+        .map_err(|err| err.to_string())
+}
+
+fn split_glob_pattern(input: &str) -> (&str, &str) {
+    let Some(first_glob) = input.find(is_glob_metacharacter) else {
+        return ("", input);
+    };
+    let separator_index = input[..first_glob]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| is_path_separator(*ch))
+        .map(|(index, _)| index);
+
+    match separator_index {
+        Some(0) => ("/", &input[1..]),
+        Some(index)
+            if cfg!(windows)
+                && index == 2
+                && input.as_bytes().get(1) == Some(&b':')
+                && input.as_bytes().get(2).is_some() =>
+        {
+            (&input[..=index], &input[index + 1..])
+        }
+        Some(index) => (&input[..index], &input[index + 1..]),
+        None => ("", input),
+    }
+}
+
+fn is_path_separator(ch: char) -> bool {
+    if cfg!(windows) {
+        ch == '/' || ch == '\\'
+    } else {
+        ch == '/'
+    }
+}
+
+fn is_glob_metacharacter(ch: char) -> bool {
+    matches!(ch, '*' | '?' | '[')
+}
+
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum WebSearchModeRequirement {
@@ -507,6 +632,7 @@ pub struct ConfigRequirementsToml {
     pub enforce_residency: Option<ResidencyRequirement>,
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
+    pub permissions: Option<PermissionsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
 }
 
@@ -545,6 +671,7 @@ pub struct ConfigRequirementsWithSources {
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
+    pub permissions: Option<Sourced<PermissionsRequirementsToml>>,
     pub guardian_policy_config: Option<Sourced<String>>,
 }
 
@@ -578,6 +705,7 @@ impl ConfigRequirementsWithSources {
             rules: _,
             enforce_residency: _,
             network: _,
+            permissions: _,
             guardian_policy_config: _,
         } = &other;
 
@@ -604,6 +732,7 @@ impl ConfigRequirementsWithSources {
                 rules,
                 enforce_residency,
                 network,
+                permissions,
                 guardian_policy_config,
             }
         );
@@ -630,6 +759,7 @@ impl ConfigRequirementsWithSources {
             rules,
             enforce_residency,
             network,
+            permissions,
             guardian_policy_config,
         } = self;
         ConfigRequirementsToml {
@@ -644,6 +774,7 @@ impl ConfigRequirementsWithSources {
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
+            permissions: permissions.map(|sourced| sourced.value),
             guardian_policy_config: guardian_policy_config.map(|sourced| sourced.value),
         }
     }
@@ -701,6 +832,7 @@ impl ConfigRequirementsToml {
             && self.rules.is_none()
             && self.enforce_residency.is_none()
             && self.network.is_none()
+            && self.permissions.is_none()
             && self
                 .guardian_policy_config
                 .as_deref()
@@ -724,6 +856,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             rules,
             enforce_residency,
             network,
+            permissions,
             guardian_policy_config: _guardian_policy_config,
         } = toml;
 
@@ -929,6 +1062,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             let Sourced { value, source } = sourced_network;
             Sourced::new(NetworkConstraints::from(value), source)
         });
+        let filesystem = permissions.map(|sourced_permissions| {
+            let Sourced { value, source } = sourced_permissions;
+            Sourced::new(FilesystemConstraints::from(value), source)
+        });
         Ok(ConfigRequirements {
             approval_policy,
             approvals_reviewer,
@@ -940,6 +1077,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             exec_policy,
             enforce_residency,
             network,
+            filesystem,
         })
     }
 }
@@ -953,6 +1091,7 @@ mod tests {
     use codex_execpolicy::RuleMatch;
     use codex_protocol::protocol::NetworkAccess;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::AbsolutePathBufGuard;
     use pretty_assertions::assert_eq;
     use toml::from_str;
 
@@ -979,6 +1118,7 @@ mod tests {
             rules,
             enforce_residency,
             network,
+            permissions,
             guardian_policy_config,
         } = toml;
         ConfigRequirementsWithSources {
@@ -1000,6 +1140,7 @@ mod tests {
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            permissions: permissions.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
@@ -1042,6 +1183,7 @@ mod tests {
             rules: None,
             enforce_residency: Some(enforce_residency),
             network: None,
+            permissions: None,
             guardian_policy_config: Some(guardian_policy_config.clone()),
         };
 
@@ -1076,6 +1218,7 @@ mod tests {
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
+                permissions: None,
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
             }
         );
@@ -1113,6 +1256,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
                 guardian_policy_config: None,
             }
         );
@@ -1158,6 +1302,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
                 guardian_policy_config: None,
             }
         );
@@ -1237,6 +1382,71 @@ allowed_approvals_reviewers = ["user"]
         )?;
 
         assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_filesystem_deny_read_requirements() -> Result<()> {
+        let deny_read_0 = if cfg!(windows) {
+            r"C:\Users\alice\.gitconfig"
+        } else {
+            "/home/alice/.gitconfig"
+        };
+        let deny_read_1 = if cfg!(windows) {
+            r"C:\Users\alice\.ssh"
+        } else {
+            "/home/alice/.ssh"
+        };
+        let toml_str = format!(
+            r#"
+            [permissions.filesystem]
+            deny_read = [{deny_read_0:?}, {deny_read_1:?}]
+        "#
+        );
+
+        let config: ConfigRequirementsToml = from_str(&toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.filesystem,
+            Some(Sourced::new(
+                FilesystemConstraints {
+                    deny_read: vec![
+                        AbsolutePathBuf::from_absolute_path(deny_read_0)?.into(),
+                        AbsolutePathBuf::from_absolute_path(deny_read_1)?.into(),
+                    ],
+                },
+                RequirementSource::Unknown,
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_filesystem_deny_read_glob_requirements() -> Result<()> {
+        let temp_dir = std::env::temp_dir();
+        let _guard = AbsolutePathBufGuard::new(&temp_dir);
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+            [permissions.filesystem]
+            deny_read = ["./private/**/*.txt"]
+        "#,
+        )?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.filesystem,
+            Some(Sourced::new(
+                FilesystemConstraints {
+                    deny_read: vec![
+                        FilesystemDenyReadPattern::from_input("./private/**/*.txt")
+                            .expect("normalize glob pattern"),
+                    ],
+                },
+                RequirementSource::Unknown,
+            ))
+        );
         Ok(())
     }
 

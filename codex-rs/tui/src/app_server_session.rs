@@ -14,10 +14,16 @@ use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
+use codex_app_server_protocol::ExternalAgentConfigDetectParams;
+use codex_app_server_protocol::ExternalAgentConfigDetectResponse;
+use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::ExternalAgentConfigImportResponse;
+use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
@@ -285,6 +291,31 @@ impl AppServerSession {
             .wrap_err("account/read failed during TUI bootstrap")
     }
 
+    pub(crate) async fn external_agent_config_detect(
+        &mut self,
+        params: ExternalAgentConfigDetectParams,
+    ) -> Result<ExternalAgentConfigDetectResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ExternalAgentConfigDetect { request_id, params })
+            .await
+            .wrap_err("externalAgentConfig/detect failed during TUI startup")
+    }
+
+    pub(crate) async fn external_agent_config_import(
+        &mut self,
+        migration_items: Vec<ExternalAgentConfigMigrationItem>,
+    ) -> Result<ExternalAgentConfigImportResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ExternalAgentConfigImport {
+                request_id,
+                params: ExternalAgentConfigImportParams { migration_items },
+            })
+            .await
+            .wrap_err("externalAgentConfig/import failed during TUI startup")
+    }
+
     pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
         self.client.next_event().await
     }
@@ -550,6 +581,19 @@ impl AppServerSession {
             })
             .await
             .wrap_err("memory/reset failed in TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn logout_account(&mut self) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: LogoutAccountResponse = self
+            .client
+            .request_typed(ClientRequest::LogoutAccount {
+                request_id,
+                params: None,
+            })
+            .await
+            .wrap_err("account/logout failed in TUI")?;
         Ok(())
     }
 
@@ -1174,6 +1218,7 @@ pub(crate) fn app_server_rate_limit_snapshot_to_core(
         secondary: snapshot.secondary.map(app_server_rate_limit_window_to_core),
         credits: snapshot.credits.map(app_server_credits_snapshot_to_core),
         plan_type: snapshot.plan_type,
+        rate_limit_reached_type: snapshot.rate_limit_reached_type.map(Into::into),
     }
 }
 
