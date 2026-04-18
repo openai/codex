@@ -16,5 +16,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+sha2 = { workspace = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }
