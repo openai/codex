@@ -21,7 +21,6 @@ use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
-use std::path::PathBuf;
 use tempfile::tempdir;
 
 fn set_danger_full_access(turn: &mut crate::session::turn_context::TurnContext) {
@@ -2341,38 +2340,7 @@ async fn js_repl_imported_local_files_can_access_repl_globals() -> anyhow::Resul
     }
 
     let cwd_dir = tempdir()?;
-    let fake_home_dir = cwd_dir.path().join("codex-home");
-    fs::create_dir_all(&fake_home_dir)?;
-    let real_home = std::env::var_os("HOME").map(PathBuf::from);
-    let real_dotslash_cache = std::env::var_os("DOTSLASH_CACHE")
-        .map(PathBuf::from)
-        .filter(|path| path.is_dir())
-        .or_else(|| {
-            real_home
-                .as_ref()
-                .map(|home| home.join("Library").join("Caches").join("dotslash"))
-                .filter(|path| path.is_dir())
-        })
-        .or_else(|| {
-            real_home
-                .as_ref()
-                .map(|home| home.join(".cache").join("dotslash"))
-                .filter(|path| path.is_dir())
-        });
-    if let Some(real_home) = &real_home {
-        let real_dotslash_dir = real_home.join(".openai").join("dotslash");
-        if real_dotslash_dir.is_dir() {
-            let fake_dotslash_dir = fake_home_dir.join(".openai").join("dotslash");
-            fs::create_dir_all(&fake_dotslash_dir)?;
-            for entry in fs::read_dir(real_dotslash_dir)? {
-                let entry = entry?;
-                if entry.file_type()?.is_file() {
-                    fs::copy(entry.path(), fake_dotslash_dir.join(entry.file_name()))?;
-                }
-            }
-        }
-    }
-    let expected_home_dir = serde_json::to_string(&fake_home_dir.display().to_string())?;
+    let expected_home_dir = serde_json::to_string("/tmp/codex-home")?;
     write_js_repl_test_module(
         cwd_dir.path(),
         "globals.js",
@@ -2382,15 +2350,12 @@ async fn js_repl_imported_local_files_can_access_repl_globals() -> anyhow::Resul
     )?;
 
     let (session, mut turn) = make_session_and_context().await;
-    let mut dependency_env =
-        HashMap::from([("HOME".to_string(), fake_home_dir.display().to_string())]);
-    if let Some(real_dotslash_cache) = real_dotslash_cache {
-        dependency_env.insert(
-            "DOTSLASH_CACHE".to_string(),
-            real_dotslash_cache.display().to_string(),
-        );
-    }
-    session.set_dependency_env(dependency_env).await;
+    session
+        .set_dependency_env(HashMap::from([(
+            "HOME".to_string(),
+            "/tmp/codex-home".to_string(),
+        )]))
+        .await;
     turn.shell_environment_policy
         .r#set
         .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
