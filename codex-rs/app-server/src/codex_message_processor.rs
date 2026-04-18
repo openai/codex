@@ -3139,8 +3139,7 @@ impl CodexMessageProcessor {
             match state_db.get_thread_goal(thread_id).await {
                 Ok(goal) => {
                     let same_nonterminal_goal = goal.as_ref().is_some_and(|goal| {
-                        goal.objective == objective
-                            && goal.status != codex_state::ThreadGoalStatus::Complete
+                        goal.objective == objective && !goal.status.is_terminal()
                     });
                     if same_nonterminal_goal {
                         state_db
