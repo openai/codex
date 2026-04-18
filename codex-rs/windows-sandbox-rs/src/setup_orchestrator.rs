@@ -21,6 +21,7 @@ use crate::setup_error::SetupFailure;
 use crate::setup_error::clear_setup_error_report;
 use crate::setup_error::failure;
 use crate::setup_error::read_setup_error_report;
+use crate::ssh_config_dependencies::ssh_config_dependency_paths;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -792,6 +793,7 @@ fn build_payload_roots(
     let write_roots = expand_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root_exclusions(write_roots);
+    let write_roots = filter_ssh_config_dependency_roots(write_roots);
     let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
     let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
         // An explicit override is the split policy's complete readable set. Keep only the
@@ -812,6 +814,7 @@ fn build_payload_roots(
     read_roots = expand_user_profile_root(read_roots);
     read_roots = filter_user_profile_root(read_roots);
     read_roots = filter_user_profile_root_exclusions(read_roots);
+    read_roots = filter_ssh_config_dependency_roots(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -901,6 +904,45 @@ fn is_user_profile_root_exclusion(root: &Path, user_profile: &Path) -> bool {
     USERPROFILE_ROOT_EXCLUSIONS
         .iter()
         .any(|excluded| child_name.eq_ignore_ascii_case(excluded))
+}
+
+fn filter_ssh_config_dependency_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    let Ok(user_profile) = std::env::var("USERPROFILE") else {
+        return roots;
+    };
+    let user_profile = Path::new(&user_profile);
+    let dependency_paths = ssh_config_dependency_paths(user_profile);
+    roots.retain(|root| !is_ssh_config_dependency_root(root, user_profile, &dependency_paths));
+    roots
+}
+
+fn is_ssh_config_dependency_root(
+    root: &Path,
+    user_profile: &Path,
+    dependency_paths: &[PathBuf],
+) -> bool {
+    let Some(child_name) = user_profile_child_name(root, user_profile) else {
+        return false;
+    };
+
+    dependency_paths.iter().any(|path| {
+        user_profile_child_name(path, user_profile)
+            .is_some_and(|dependency_child| child_name.eq_ignore_ascii_case(&dependency_child))
+    })
+}
+
+fn user_profile_child_name(path: &Path, user_profile: &Path) -> Option<String> {
+    let root_key = canonical_path_key(path);
+    let profile_key = canonical_path_key(user_profile);
+    let profile_prefix = format!("{}/", profile_key.trim_end_matches('/'));
+    let Some(relative_key) = root_key.strip_prefix(&profile_prefix) else {
+        return None;
+    };
+    relative_key
+        .split('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
@@ -1160,6 +1202,51 @@ mod tests {
         assert!(!super::is_user_profile_root_exclusion(
             &other_root,
             &user_profile
+        ));
+    }
+
+    #[test]
+    fn is_ssh_config_dependency_root_blocks_config_dependencies() {
+        let tmp = TempDir::new().expect("tempdir");
+        let user_profile = tmp.path().join("user-profile");
+        let documents = user_profile.join("Documents");
+        let ssh_dir = user_profile.join(".ssh");
+        let key_dir = user_profile.join(".keys");
+        let include_dir = user_profile.join(".included");
+        let other_root = tmp.path().join("other-root");
+        fs::create_dir_all(&documents).expect("create documents");
+        fs::create_dir_all(&ssh_dir).expect("create .ssh");
+        fs::create_dir_all(&key_dir).expect("create key dir");
+        fs::create_dir_all(&include_dir).expect("create include dir");
+        fs::create_dir_all(&other_root).expect("create other root");
+        fs::write(
+            ssh_dir.join("config"),
+            "IdentityFile ~/.keys/id_ed25519\nInclude ~/.included/config\n",
+        )
+        .expect("write ssh config");
+        fs::write(include_dir.join("config"), "User git\n").expect("write included config");
+
+        let dependency_paths = super::ssh_config_dependency_paths(&user_profile);
+
+        assert!(!super::is_ssh_config_dependency_root(
+            &documents,
+            &user_profile,
+            &dependency_paths
+        ));
+        assert!(super::is_ssh_config_dependency_root(
+            &key_dir.join("id_ed25519"),
+            &user_profile,
+            &dependency_paths
+        ));
+        assert!(super::is_ssh_config_dependency_root(
+            &include_dir.join("config"),
+            &user_profile,
+            &dependency_paths
+        ));
+        assert!(!super::is_ssh_config_dependency_root(
+            &other_root,
+            &user_profile,
+            &dependency_paths
         ));
     }
 
