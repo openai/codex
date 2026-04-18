@@ -20,19 +20,19 @@ use tracing::warn;
 
 static CONSOLIDATION_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        include_str!("../../templates/memories/consolidation.md"),
+        codex_memory_prompts::CONSOLIDATION_PROMPT,
         "memories/consolidation.md",
     )
 });
 static STAGE_ONE_INPUT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        include_str!("../../templates/memories/stage_one_input.md"),
+        codex_memory_prompts::STAGE_ONE_INPUT_PROMPT,
         "memories/stage_one_input.md",
     )
 });
 static MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
-        include_str!("../../templates/memories/read_path.md"),
+        codex_memory_prompts::READ_PATH_PROMPT,
         "memories/read_path.md",
     )
 });

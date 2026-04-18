@@ -1,13 +1,15 @@
-use codex_code_mode::ImageDetail as CodeModeImageDetail;
+use code_mode_impl::ImageDetail as CodeModeImageDetail;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
+
+use super::code_mode_impl;
 
 trait IntoProtocol<T> {
     fn into_protocol(self) -> T;
 }
 
 pub(super) fn into_function_call_output_content_items(
-    items: Vec<codex_code_mode::FunctionCallOutputContentItem>,
+    items: Vec<code_mode_impl::FunctionCallOutputContentItem>,
 ) -> Vec<FunctionCallOutputContentItem> {
     items.into_iter().map(IntoProtocol::into_protocol).collect()
 }
@@ -24,16 +26,14 @@ impl IntoProtocol<ImageDetail> for CodeModeImageDetail {
     }
 }
 
-impl IntoProtocol<FunctionCallOutputContentItem>
-    for codex_code_mode::FunctionCallOutputContentItem
-{
+impl IntoProtocol<FunctionCallOutputContentItem> for code_mode_impl::FunctionCallOutputContentItem {
     fn into_protocol(self) -> FunctionCallOutputContentItem {
         let value = self;
         match value {
-            codex_code_mode::FunctionCallOutputContentItem::InputText { text } => {
+            code_mode_impl::FunctionCallOutputContentItem::InputText { text } => {
                 FunctionCallOutputContentItem::InputText { text }
             }
-            codex_code_mode::FunctionCallOutputContentItem::InputImage { image_url, detail } => {
+            code_mode_impl::FunctionCallOutputContentItem::InputImage { image_url, detail } => {
                 FunctionCallOutputContentItem::InputImage {
                     image_url,
                     detail: detail.map(IntoProtocol::into_protocol),

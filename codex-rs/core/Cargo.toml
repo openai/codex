@@ -26,6 +26,7 @@ bm25 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-analytics = { workspace = true }
+codex-agent-runtime = { workspace = true }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
@@ -33,14 +34,19 @@ codex-async-utils = { workspace = true }
 codex-code-mode = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
+codex-config-loader = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-core-skills = { workspace = true }
 crypto_box = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
+codex-file-watcher = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp = { workspace = true }
+codex-message-history = { workspace = true }
+codex-memory-prompts = { workspace = true }
+codex-mcp-tool-approval = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
 ed25519-dalek = { workspace = true }
@@ -49,18 +55,22 @@ codex-execpolicy = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
 codex-instructions = { workspace = true }
+codex-js-repl = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
 codex-response-debug-context = { workspace = true }
+codex-review = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-sandboxing = { workspace = true }
+codex-session-runtime = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }
+codex-tool-spec = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cache = { workspace = true }
@@ -87,7 +97,6 @@ iana-time-zone = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png", "webp"] }
 indexmap = { workspace = true }
 libc = { workspace = true }
-notify = { workspace = true }
 once_cell = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
@@ -125,9 +134,6 @@ which = { workspace = true }
 whoami = { workspace = true }
 zip = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.9"
-
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
@@ -135,13 +141,6 @@ openssl-sys = { workspace = true, features = ["vendored"] }
 # Build OpenSSL from source for musl builds.
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { workspace = true, features = ["vendored"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_System_Com",
-    "Win32_UI_Shell",
-] }
 
 [target.'cfg(unix)'.dependencies]
 codex-shell-escalation = { workspace = true }

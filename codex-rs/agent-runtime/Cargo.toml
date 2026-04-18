@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-agent-runtime"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_agent_runtime"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }

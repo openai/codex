@@ -1,15 +1,19 @@
 mod description;
 mod response;
+#[path = "runtime_stub.rs"]
 mod runtime;
+#[path = "service_stub.rs"]
 mod service;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;
 pub use description::CodeModeToolKind;
+pub use description::EnabledToolMetadata;
 pub use description::ToolDefinition;
 pub use description::ToolNamespaceDescription;
 pub use description::augment_tool_definition;
 pub use description::build_exec_tool_description;
 pub use description::build_wait_tool_description;
+pub use description::enabled_tool_metadata;
 pub use description::is_code_mode_nested_tool;
 pub use description::normalize_code_mode_identifier;
 pub use description::parse_exec_source;
@@ -23,9 +27,12 @@ pub use runtime::DEFAULT_WAIT_YIELD_TIME_MS;
 pub use runtime::ExecuteRequest;
 pub use runtime::RuntimeResponse;
 pub use runtime::WaitRequest;
+pub use service::CodeModeRuntimeFactory;
+pub use service::CodeModeRuntimeService;
 pub use service::CodeModeService;
 pub use service::CodeModeTurnHost;
 pub use service::CodeModeTurnWorker;
+pub use service::default_runtime_factory;
 
 pub const PUBLIC_TOOL_NAME: &str = "exec";
 pub const WAIT_TOOL_NAME: &str = "wait";

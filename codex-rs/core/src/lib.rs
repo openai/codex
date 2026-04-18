@@ -201,3 +201,6 @@ pub(crate) mod memory_trace;
 pub use memory_trace::BuiltMemory;
 pub use memory_trace::build_memories_from_trace_files;
 pub mod otel_init;
+
+#[cfg(test)]
+mod core_unit_tests;

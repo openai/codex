@@ -382,20 +382,22 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
         let thread_manager = if config.model_catalog.is_some() {
-            ThreadManager::new(
+            ThreadManager::new_with_code_mode_runtime_factory(
                 &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
                 CollaborationModesConfig::default(),
                 Arc::clone(&environment_manager),
                 /*analytics_events_client*/ None,
+                codex_code_mode_runtime::runtime_factory(),
             )
         } else {
-            codex_core::test_support::thread_manager_with_models_provider_and_home(
+            codex_core::test_support::thread_manager_with_models_provider_home_and_code_mode_runtime_factory(
                 auth.clone(),
                 config.model_provider.clone(),
                 config.codex_home.to_path_buf(),
                 Arc::clone(&environment_manager),
+                codex_code_mode_runtime::runtime_factory(),
             )
         };
         let thread_manager = Arc::new(thread_manager);

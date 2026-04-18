@@ -1,4 +1,59 @@
-load("//:defs.bzl", "codex_rust_crate")
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load(
+    "//:defs.bzl",
+    "WINDOWS_RUSTC_LINK_FLAGS",
+    "codex_rust_crate",
+    "workspace_root_test",
+)
+
+CORE_COMPILE_DATA = [
+    "//codex-rs:node-version.txt",
+    "hierarchical_agents_message.md",
+    "review_prompt.md",
+    "src/agent/builtins/awaiter.toml",
+    "src/agent/builtins/explorer.toml",
+    "src/guardian/policy.md",
+    "src/guardian/policy_template.md",
+    "templates/compact/prompt.md",
+    "templates/compact/summary_prefix.md",
+    "templates/realtime/backend_prompt.md",
+    "templates/review/exit_interrupted.xml",
+    "templates/review/exit_success.xml",
+]
+
+CORE_TEST_DATA = [
+    "config.schema.json",
+] + glob([
+    "src/**/snapshots/**",
+]) + [
+    # This is a bit of a hack, but empirically, some of our integration tests
+    # are relying on the presence of this file as a repo root marker. When
+    # running tests locally, this "just works," but in remote execution,
+    # the working directory is different and so the file is not found unless it
+    # is explicitly added as test data.
+    #
+    # TODO(aibrahim): Update the tests so that `just bazel-remote-test`
+    # succeeds without this workaround.
+    "//:AGENTS.md",
+]
+
+CORE_LIB_SRCS = glob(
+    ["src/**/*.rs"],
+    exclude = [
+        "src/**/*_tests.rs",
+        "src/**/tests.rs",
+        "src/**/mod_tests.rs",
+        "src/core_unit_tests.rs",
+    ],
+)
+
+CORE_UNIT_TEST_SRCS = glob(["src/**/*.rs"]) + glob(["tests/unit/**/*.rs"])
+
+filegroup(
+    name = "core_test_data",
+    srcs = CORE_TEST_DATA,
+)
 
 filegroup(
     name = "model_availability_nux_fixtures",
@@ -11,17 +66,8 @@ filegroup(
 codex_rust_crate(
     name = "core",
     crate_name = "codex_core",
-    compile_data = glob(
-        include = ["**"],
-        exclude = [
-            "**/* *",
-            "BUILD.bazel",
-            "Cargo.toml",
-        ],
-        allow_empty = True,
-    ) + [
-        "//codex-rs:node-version.txt",
-    ],
+    crate_srcs = CORE_LIB_SRCS,
+    compile_data = CORE_COMPILE_DATA,
     rustc_env = {
         # Keep manifest-root path lookups inside the Bazel execroot for code
         # that relies on env!("CARGO_MANIFEST_DIR").
@@ -29,30 +75,18 @@ codex_rust_crate(
     },
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
+        "prompt_with_apply_patch_instructions.md",
         "templates/realtime/backend_prompt.md",
     ],
     integration_test_timeout = "long",
-    test_data_extra = [
-        "config.schema.json",
-    ] + glob([
-        "src/**/snapshots/**",
-    ]) + [
-        # This is a bit of a hack, but empirically, some of our integration tests
-        # are relying on the presence of this file as a repo root marker. When
-        # running tests locally, this "just works," but in remote execution,
-        # the working directory is different and so the file is not found unless it
-        # is explicitly added as test data.
-        #
-        # TODO(aibrahim): Update the tests so that `just bazel-remote-test`
-        # succeeds without this workaround.
-        "//:AGENTS.md",
-    ],
+    test_data_extra = CORE_TEST_DATA,
     test_shard_counts = {
         "core-all-test": 8,
         "core-unit-tests": 8,
     },
     test_tags = ["no-sandbox"],
     unit_test_timeout = "long",
+    generate_unit_tests = False,
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",
@@ -60,4 +94,47 @@ codex_rust_crate(
         "//codex-rs/responses-api-proxy:codex-responses-api-proxy",
         "//codex-rs/cli:codex",
     ],
+)
+
+rust_test(
+    name = "core-unit-tests-bin",
+    crate_name = "codex_core",
+    crate_root = "src/lib.rs",
+    compile_data = CORE_COMPILE_DATA + [
+        "prompt_with_apply_patch_instructions.md",
+    ],
+    data = [":core_test_data"],
+    deps = all_crate_deps(normal = True, normal_dev = True),
+    edition = "2024",
+    experimental_enable_sharding = True,
+    rustc_env = {
+        "BAZEL_PACKAGE": "codex-rs/core",
+        # Keep manifest-root path lookups inside the Bazel execroot for code
+        # that relies on env!("CARGO_MANIFEST_DIR").
+        "CARGO_MANIFEST_DIR": "codex-rs/core",
+    },
+    rustc_flags = WINDOWS_RUSTC_LINK_FLAGS + [
+        "--remap-path-prefix=../codex-rs=",
+        "--remap-path-prefix=codex-rs=",
+    ],
+    srcs = CORE_UNIT_TEST_SRCS,
+    tags = [
+        "manual",
+        "no-sandbox",
+    ],
+)
+
+workspace_root_test(
+    name = "core-unit-tests",
+    data = [":core_test_data"],
+    env = {
+        "INSTA_SNAPSHOT_PATH": "src",
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    flaky = True,
+    shard_count = 8,
+    tags = ["no-sandbox"],
+    test_bin = ":core-unit-tests-bin",
+    timeout = "long",
+    workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
 )

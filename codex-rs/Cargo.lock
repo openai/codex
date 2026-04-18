@@ -1376,6 +1376,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-runtime"
+version = "0.0.0"
+dependencies = [
+ "codex-otel",
+ "codex-protocol",
+ "pretty_assertions",
+ "rand 0.9.3",
+ "tokio",
+]
+
+[[package]]
 name = "codex-analytics"
 version = "0.0.0"
 dependencies = [
@@ -1454,6 +1465,7 @@ dependencies = [
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cloud-requirements",
+ "codex-code-mode-runtime",
  "codex-config",
  "codex-core",
  "codex-core-plugins",
@@ -1846,9 +1858,24 @@ dependencies = [
  "async-channel",
  "async-trait",
  "codex-protocol",
- "deno_core_icudata",
  "pretty_assertions",
  "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "codex-code-mode-runtime"
+version = "0.0.0"
+dependencies = [
+ "async-channel",
+ "async-trait",
+ "codex-code-mode",
+ "codex-protocol",
+ "deno_core_icudata",
+ "pretty_assertions",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -1873,6 +1900,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path",
+ "dunce",
  "futures",
  "multimap",
  "pretty_assertions",
@@ -1888,6 +1916,28 @@ dependencies = [
  "toml_edit 0.24.0+spec-1.1.0",
  "tracing",
  "wildmatch",
+]
+
+[[package]]
+name = "codex-config-loader"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "codex-app-server-protocol",
+ "codex-config",
+ "codex-exec-server",
+ "codex-git-utils",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "core-foundation 0.9.4",
+ "dunce",
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1916,6 +1966,7 @@ dependencies = [
  "bm25",
  "chrono",
  "clap",
+ "codex-agent-runtime",
  "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
@@ -1924,6 +1975,7 @@ dependencies = [
  "codex-async-utils",
  "codex-code-mode",
  "codex-config",
+ "codex-config-loader",
  "codex-connectors",
  "codex-core-plugins",
  "codex-core-skills",
@@ -1931,12 +1983,17 @@ dependencies = [
  "codex-execpolicy",
  "codex-features",
  "codex-feedback",
+ "codex-file-watcher",
  "codex-git-utils",
  "codex-hooks",
  "codex-instructions",
+ "codex-js-repl",
  "codex-login",
  "codex-mcp",
  "codex-model-provider",
+ "codex-mcp-tool-approval",
+ "codex-memory-prompts",
+ "codex-message-history",
  "codex-model-provider-info",
  "codex-models-manager",
  "codex-network-proxy",
@@ -1944,16 +2001,19 @@ dependencies = [
  "codex-plugin",
  "codex-protocol",
  "codex-response-debug-context",
+ "codex-review",
  "codex-rmcp-client",
  "codex-rollout",
  "codex-sandboxing",
  "codex-secrets",
+ "codex-session-runtime",
  "codex-shell-command",
  "codex-shell-escalation",
  "codex-state",
  "codex-terminal-detection",
  "codex-test-binary-support",
  "codex-thread-store",
+ "codex-tool-spec",
  "codex-tools",
  "codex-utils-absolute-path",
  "codex-utils-cache",
@@ -1969,7 +2029,6 @@ dependencies = [
  "codex-utils-string",
  "codex-utils-template",
  "codex-windows-sandbox",
- "core-foundation 0.9.4",
  "core_test_support",
  "crypto_box",
  "csv",
@@ -1987,7 +2046,6 @@ dependencies = [
  "insta",
  "libc",
  "maplit",
- "notify",
  "once_cell",
  "openssl-sys",
  "opentelemetry",
@@ -2023,7 +2081,6 @@ dependencies = [
  "walkdir",
  "which 8.0.0",
  "whoami",
- "windows-sys 0.52.0",
  "wiremock",
  "zip 2.4.2",
  "zstd 0.13.3",
@@ -2263,6 +2320,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-file-watcher"
+version = "0.0.0"
+dependencies = [
+ "notify",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
@@ -2319,6 +2387,10 @@ dependencies = [
  "pretty_assertions",
  "serde",
 ]
+
+[[package]]
+name = "codex-js-repl"
+version = "0.0.0"
 
 [[package]]
 name = "codex-keyring-store"
@@ -2480,6 +2552,35 @@ dependencies = [
  "codex-protocol",
  "http 1.4.0",
  "pretty_assertions",
+]
+
+[[package]]
+name = "codex-mcp-tool-approval"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "codex-memory-prompts"
+version = "0.0.0"
+
+[[package]]
+name = "codex-message-history"
+version = "0.0.0"
+dependencies = [
+ "codex-config",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2708,6 +2809,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-review"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-git-utils",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-template",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "codex-rmcp-client"
 version = "0.0.0"
 dependencies = [
@@ -2806,6 +2919,17 @@ dependencies = [
  "sha2",
  "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "codex-session-runtime"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-rmcp-client",
+ "codex-sandboxing",
+ "rmcp",
+ "tokio",
 ]
 
 [[package]]
@@ -2930,6 +3054,15 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "uuid",
+]
+
+[[package]]
+name = "codex-tool-spec"
+version = "0.0.0"
+dependencies = [
+ "codex-mcp",
+ "codex-protocol",
+ "codex-tools",
 ]
 
 [[package]]
@@ -3493,6 +3626,7 @@ dependencies = [
  "assert_cmd",
  "base64 0.22.1",
  "codex-arg0",
+ "codex-code-mode-runtime",
  "codex-core",
  "codex-exec-server",
  "codex-features",

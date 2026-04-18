@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "analytics",
+    "agent-runtime",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -16,6 +17,8 @@ members = [
     "install-context",
     "codex-backend-openapi-models",
     "code-mode",
+    "code-mode-runtime",
+    "config-loader",
     "cloud-requirements",
     "cloud-tasks",
     "cloud-tasks-client",
@@ -38,11 +41,16 @@ members = [
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
+    "file-watcher",
     "file-search",
+    "js-repl",
     "linux-sandbox",
     "lmstudio",
     "login",
     "codex-mcp",
+    "message-history",
+    "memory-prompts",
+    "mcp-tool-approval",
     "mcp-server",
     "model-provider-info",
     "models-manager",
@@ -51,13 +59,16 @@ members = [
     "process-hardening",
     "protocol",
     "realtime-webrtc",
+    "review",
     "rollout",
     "rmcp-client",
     "responses-api-proxy",
     "response-debug-context",
     "sandboxing",
+    "session-runtime",
     "stdio-to-uds",
     "otel",
+    "tool-spec",
     "tui",
     "tools",
     "v8-poc",
@@ -109,6 +120,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-analytics = { path = "analytics" }
+codex-agent-runtime = { path = "agent-runtime" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-app-server = { path = "app-server" }
@@ -127,7 +139,9 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-cloud-tasks-client = { path = "cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
+codex-code-mode-runtime = { path = "code-mode-runtime" }
 codex-config = { path = "config" }
+codex-config-loader = { path = "config-loader" }
 codex-connectors = { path = "connectors" }
 codex-core = { path = "core" }
 codex-core-plugins = { path = "core-plugins" }
@@ -138,16 +152,21 @@ codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
+codex-file-watcher = { path = "file-watcher" }
 codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-instructions = { path = "instructions" }
+codex-js-repl = { path = "js-repl" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp = { path = "codex-mcp" }
+codex-message-history = { path = "message-history" }
+codex-memory-prompts = { path = "memory-prompts" }
+codex-mcp-tool-approval = { path = "mcp-tool-approval" }
 codex-mcp-server = { path = "mcp-server" }
 codex-model-provider-info = { path = "model-provider-info" }
 codex-models-manager = { path = "models-manager" }
@@ -161,10 +180,12 @@ codex-protocol = { path = "protocol" }
 codex-realtime-webrtc = { path = "realtime-webrtc" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
+codex-review = { path = "review" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-rollout = { path = "rollout" }
 codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
+codex-session-runtime = { path = "session-runtime" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
@@ -173,6 +194,7 @@ codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
+codex-tool-spec = { path = "tool-spec" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }

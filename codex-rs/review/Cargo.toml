@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-review"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_review"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-git-utils = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-template = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

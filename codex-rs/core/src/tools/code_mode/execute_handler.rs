@@ -8,6 +8,7 @@ use crate::tools::registry::ToolKind;
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::build_enabled_tools;
+use super::code_mode_impl;
 use super::handle_runtime_response;
 
 pub struct CodeModeExecuteHandler;
@@ -21,7 +22,7 @@ impl CodeModeExecuteHandler {
         code: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args =
-            codex_code_mode::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
+            code_mode_impl::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
         let exec = ExecContext { session, turn };
         let enabled_tools = build_enabled_tools(&exec).await;
         let stored_values = exec
@@ -35,7 +36,7 @@ impl CodeModeExecuteHandler {
             .session
             .services
             .code_mode_service
-            .execute(codex_code_mode::ExecuteRequest {
+            .execute(code_mode_impl::ExecuteRequest {
                 tool_call_id: call_id,
                 enabled_tools,
                 source: args.code,

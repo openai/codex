@@ -1,0 +1,11 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "js-repl",
+    crate_name = "codex_js_repl",
+    compile_data = [
+        "//codex-rs:node-version.txt",
+        "src/kernel.js",
+        "src/meriyah.umd.min.js",
+    ],
+)

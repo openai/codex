@@ -17,6 +17,7 @@ codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path = { workspace = true }
+dunce = { workspace = true }
 futures = { workspace = true, features = ["alloc", "std"] }
 multimap = { workspace = true }
 schemars = { workspace = true }

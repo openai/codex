@@ -1586,5 +1586,5 @@ fn configured_plugins_from_user_config_value(
 }
 
 #[cfg(test)]
-#[path = "manager_tests.rs"]
+#[path = "../../tests/unit/plugins/manager_tests.rs"]
 mod tests;

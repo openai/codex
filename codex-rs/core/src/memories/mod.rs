@@ -39,7 +39,7 @@ mod phase_one {
     /// Default reasoning effort used for phase 1.
     pub(super) const REASONING_EFFORT: super::ReasoningEffort = super::ReasoningEffort::Low;
     /// Prompt used for phase 1.
-    pub(super) const PROMPT: &str = include_str!("../../templates/memories/stage_one_system.md");
+    pub(super) const PROMPT: &str = codex_memory_prompts::STAGE_ONE_SYSTEM_PROMPT;
     /// Concurrency cap for startup memory extraction and consolidation scheduling.
     pub(super) const CONCURRENCY_LIMIT: usize = 8;
     /// Fallback stage-1 rollout truncation limit (tokens) when model metadata

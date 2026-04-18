@@ -1,0 +1,28 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-code-mode-runtime"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_code_mode_runtime"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+codex-code-mode = { workspace = true }
+codex-protocol = { workspace = true }
+deno_core_icudata = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+v8 = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

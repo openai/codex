@@ -890,5 +890,5 @@ async fn collect_policy_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, Exe
 }
 
 #[cfg(test)]
-#[path = "exec_policy_tests.rs"]
+#[path = "../tests/unit/exec_policy_tests.rs"]
 mod tests;

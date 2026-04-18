@@ -18,6 +18,7 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
+use codex_code_mode::CodeModeRuntimeFactory;
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -213,6 +214,7 @@ pub(crate) struct ThreadManagerState {
     skills_watcher: Arc<SkillsWatcher>,
     session_source: SessionSource,
     analytics_events_client: Option<AnalyticsEventsClient>,
+    code_mode_runtime_factory: CodeModeRuntimeFactory,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -225,6 +227,26 @@ impl ThreadManager {
         collaboration_modes_config: CollaborationModesConfig,
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
+    ) -> Self {
+        Self::new_with_code_mode_runtime_factory(
+            config,
+            auth_manager,
+            session_source,
+            collaboration_modes_config,
+            environment_manager,
+            analytics_events_client,
+            codex_code_mode::default_runtime_factory(),
+        )
+    }
+
+    pub fn new_with_code_mode_runtime_factory(
+        config: &Config,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        collaboration_modes_config: CollaborationModesConfig,
+        environment_manager: Arc<EnvironmentManager>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
+        code_mode_runtime_factory: CodeModeRuntimeFactory,
     ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
@@ -264,6 +286,7 @@ impl ThreadManager {
                 auth_manager,
                 session_source,
                 analytics_events_client,
+                code_mode_runtime_factory,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -302,6 +325,24 @@ impl ThreadManager {
         codex_home: PathBuf,
         environment_manager: Arc<EnvironmentManager>,
     ) -> Self {
+        Self::with_models_provider_and_home_and_code_mode_runtime_factory_for_tests(
+            auth,
+            provider,
+            codex_home,
+            environment_manager,
+            codex_code_mode::default_runtime_factory(),
+        )
+    }
+
+    /// Construct with a dummy AuthManager containing the provided CodexAuth, codex home,
+    /// and code mode runtime factory. Used for integration tests that exercise code mode.
+    pub(crate) fn with_models_provider_and_home_and_code_mode_runtime_factory_for_tests(
+        auth: CodexAuth,
+        provider: ModelProviderInfo,
+        codex_home: PathBuf,
+        environment_manager: Arc<EnvironmentManager>,
+        code_mode_runtime_factory: CodeModeRuntimeFactory,
+    ) -> Self {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let skills_codex_home = match AbsolutePathBuf::from_absolute_path_checked(&codex_home) {
@@ -338,6 +379,7 @@ impl ThreadManager {
                 auth_manager,
                 session_source: SessionSource::Exec,
                 analytics_events_client: None,
+                code_mode_runtime_factory,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -947,6 +989,7 @@ impl ThreadManagerState {
             user_shell_override,
             parent_trace,
             analytics_events_client: self.analytics_events_client.clone(),
+            code_mode_runtime_factory: Arc::clone(&self.code_mode_runtime_factory),
         })
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
