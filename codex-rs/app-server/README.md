@@ -148,7 +148,9 @@ Example with notification opt-out:
 - `memory/reset` — experimental; clear the current `CODEX_HOME/memories` directory and reset persisted memory stage data in sqlite while preserving existing thread memory modes; returns `{}` on success.
 - `thread/goal/set` — create, replace, or update the single persisted goal for a materialized thread; returns the current goal and emits `thread/goal/updated`. Supplying a new `objective` replaces the goal and resets usage accounting. Supplying the current non-terminal objective or omitting `objective` updates the existing goal’s status and/or token budget while preserving usage.
 - `thread/goal/get` — fetch the current persisted goal for a materialized thread; returns `goal: null` when no goal exists.
+- `thread/goal/clear` — clear the current persisted goal for a materialized thread; returns whether a goal was removed and emits `thread/goal/cleared` when state changes.
 - `thread/goal/updated` — notification emitted whenever a thread goal changes; includes the full current goal.
+- `thread/goal/cleared` — notification emitted whenever a thread goal is removed.
 - `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server keeps the thread loaded and unloads it only after it has had no subscribers and no thread activity for 30 minutes, then emits `thread/closed`.
@@ -502,6 +504,14 @@ Use `thread/goal/get` to read the current goal without changing it.
 ```json
 { "method": "thread/goal/get", "id": 29, "params": { "threadId": "thr_123" } }
 { "id": 29, "result": { "goal": null } }
+```
+
+Use `thread/goal/clear` to remove the current goal.
+
+```json
+{ "method": "thread/goal/clear", "id": 30, "params": { "threadId": "thr_123" } }
+{ "id": 30, "result": { "cleared": true } }
+{ "method": "thread/goal/cleared", "params": { "threadId": "thr_123" } }
 ```
 
 ### Example: Archive a thread

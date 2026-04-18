@@ -361,6 +361,15 @@ impl Session {
         Ok(goal)
     }
 
+    pub(crate) async fn clear_cached_thread_goal_after_delete(&self) {
+        self.thread_goal_may_exist.store(false, Ordering::SeqCst);
+        *self.thread_goal_cache.lock().await = None;
+        self.thread_goal_wall_clock_accounting
+            .clear_active_goal()
+            .await;
+        self.clear_queued_goal_continuations_for_next_turn().await;
+    }
+
     pub(crate) async fn mark_thread_goal_turn_started(
         &self,
         turn_context: &TurnContext,

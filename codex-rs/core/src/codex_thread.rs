@@ -95,6 +95,13 @@ impl CodexThread {
             .await;
     }
 
+    pub async fn clear_cached_thread_goal_after_delete(&self) {
+        self.codex
+            .session
+            .clear_cached_thread_goal_after_delete()
+            .await;
+    }
+
     pub async fn abort_for_goal_budget_limited(&self) {
         self.codex
             .session
