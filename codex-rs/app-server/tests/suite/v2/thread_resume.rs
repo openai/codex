@@ -170,6 +170,63 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace(
+            "general_analytics = true\n",
+            "general_analytics = true\ngoal_mode = true\n",
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let goal_id = mcp
+        .send_raw_request(
+            "thread/goal/get",
+            Some(json!({
+                "threadId": thread.id,
+            })),
+        )
+        .await?;
+    let goal_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(goal_id)),
+    )
+    .await??;
+    assert!(
+        goal_err
+            .error
+            .message
+            .contains("ephemeral thread does not support goals"),
+        "unexpected goal/get error: {}",
+        goal_err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
@@ -389,7 +446,7 @@ async fn thread_resume_emits_paused_goal_update() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_goal_set_replaces_budget_limited_same_objective() -> Result<()> {
+async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -481,8 +538,8 @@ async fn thread_goal_set_replaces_budget_limited_same_objective() -> Result<()> 
     .await??;
     let replacement: ThreadGoalSetResponse = to_response(replacement_resp)?;
 
-    assert_eq!(replacement.goal.status, ThreadGoalStatus::Active);
-    assert_eq!(replacement.goal.token_budget, None);
+    assert_eq!(replacement.goal.status, ThreadGoalStatus::BudgetLimited);
+    assert_eq!(replacement.goal.token_budget, Some(10));
     assert_eq!(replacement.goal.tokens_used, 0);
     assert_eq!(replacement.goal.time_used_seconds, 0);
 
