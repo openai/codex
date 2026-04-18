@@ -572,7 +572,7 @@ fn blocking_replace_mcp_servers_round_trips() {
                     .into_iter()
                     .collect(),
                 ),
-                env_vars: vec!["FOO".to_string()],
+                env_vars: vec!["FOO".into()],
                 cwd: None,
             },
             experimental_environment: None,

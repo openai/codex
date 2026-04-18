@@ -13,6 +13,7 @@ use std::time::Instant;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_config::types::McpServerEnvVar;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -503,7 +504,7 @@ impl RmcpClient {
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
-        env_vars: &[String],
+        env_vars: &[McpServerEnvVar],
         cwd: Option<PathBuf>,
         launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {

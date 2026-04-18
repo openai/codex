@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
 use codex_features::Feature;
@@ -196,7 +197,7 @@ struct TestMcpServerOptions {
 fn stdio_transport(
     command: String,
     env: Option<HashMap<String, String>>,
-    env_vars: Vec<String>,
+    env_vars: Vec<McpServerEnvVar>,
 ) -> McpServerTransportConfig {
     McpServerTransportConfig::Stdio {
         command,
@@ -1267,7 +1268,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
                 stdio_transport(
                     rmcp_test_server_bin,
                     /*env*/ None,
-                    vec!["MCP_TEST_VALUE".to_string()],
+                    vec!["MCP_TEST_VALUE".into()],
                 ),
                 TestMcpServerOptions {
                     experimental_environment: remote_aware_experimental_environment(),
@@ -1351,6 +1352,222 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 
     server.verify().await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_env_source)]
+async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let call_id = "call-local-source";
+    let server_name = "rmcp_local_source";
+    let namespace = format!("mcp__{server_name}__");
+    let env_name = "MCP_TEST_LOCAL_SOURCE";
+    let expected_env_value = "propagated-explicit-local-source";
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                &format!(r#"{{"message":"ping","env_var":"{env_name}"}}"#),
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let _guard = EnvVarGuard::set(env_name, OsStr::new(expected_env_value));
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(
+                    rmcp_test_server_bin,
+                    /*env*/ None,
+                    vec![McpServerEnvVar::Config {
+                        name: env_name.to_string(),
+                        source: Some("local".to_string()),
+                    }],
+                ),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_remote_aware(&server)
+        .await?;
+
+    let session_model = fixture.session_configured.model.clone();
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp echo tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let structured = end
+        .result
+        .as_ref()
+        .expect("rmcp echo tool should return success")
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    assert_eq!(structured["env"], expected_env_value);
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_env_source)]
+async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    if std::env::var_os(remote_env_env_var()).is_none() {
+        return Ok(());
+    }
+
+    let server = responses::start_mock_server().await;
+    let call_id = "call-remote-source";
+    let server_name = "rmcp_remote_source";
+    let namespace = format!("mcp__{server_name}__");
+    let env_name = "MCP_TEST_REMOTE_SOURCE_ONLY";
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                &format!(r#"{{"message":"ping","env_var":"{env_name}"}}"#),
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let _guard = EnvVarGuard::set(env_name, OsStr::new("local-value-should-not-cross"));
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(
+                    rmcp_test_server_bin,
+                    /*env*/ None,
+                    vec![McpServerEnvVar::Config {
+                        name: env_name.to_string(),
+                        source: Some("remote".to_string()),
+                    }],
+                ),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_remote_aware(&server)
+        .await?;
+
+    let session_model = fixture.session_configured.model.clone();
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp echo tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let structured = end
+        .result
+        .as_ref()
+        .expect("rmcp echo tool should return success")
+        .structured_content
+        .as_ref()
+        .expect("structured content");
+    assert_eq!(structured["env"], Value::Null);
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    server.verify().await;
     Ok(())
 }
 

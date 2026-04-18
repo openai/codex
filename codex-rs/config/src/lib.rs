@@ -69,6 +69,7 @@ pub use mcp_edit::load_global_mcp_servers;
 pub use mcp_types::AppToolApproval;
 pub use mcp_types::McpServerConfig;
 pub use mcp_types::McpServerDisabledReason;
+pub use mcp_types::McpServerEnvVar;
 pub use mcp_types::McpServerToolConfig;
 pub use mcp_types::McpServerTransportConfig;
 pub use mcp_types::RawMcpServerConfig;

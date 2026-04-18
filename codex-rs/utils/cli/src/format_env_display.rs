@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-pub fn format_env_display(env: Option<&HashMap<String, String>>, env_vars: &[String]) -> String {
+pub fn format_env_display<S: AsRef<str>>(
+    env: Option<&HashMap<String, String>>,
+    env_vars: &[S],
+) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     if let Some(map) = env {
@@ -10,7 +13,7 @@ pub fn format_env_display(env: Option<&HashMap<String, String>>, env_vars: &[Str
     }
 
     if !env_vars.is_empty() {
-        parts.extend(env_vars.iter().map(|var| format!("{var}=*****")));
+        parts.extend(env_vars.iter().map(|var| format!("{}=*****", var.as_ref())));
     }
 
     if parts.is_empty() {

@@ -31,6 +31,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
+use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
@@ -2489,7 +2490,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
-                env_vars: vec!["ALPHA".to_string(), "BETA".to_string()],
+                env_vars: vec!["ALPHA".into(), "BETA".into()],
                 cwd: None,
             },
             experimental_environment: None,
@@ -2525,10 +2526,66 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
     let docs = loaded.get("docs").expect("docs entry");
     match &docs.transport {
         McpServerTransportConfig::Stdio { env_vars, .. } => {
-            assert_eq!(env_vars, &vec!["ALPHA".to_string(), "BETA".to_string()]);
+            assert_eq!(env_vars, &vec!["ALPHA".into(), "BETA".into()]);
         }
         other => panic!("unexpected transport {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let servers = BTreeMap::from([(
+        "docs".to_string(),
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "docs-server".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: vec![
+                    "LEGACY".into(),
+                    McpServerEnvVar::Config {
+                        name: "REMOTE_TOKEN".to_string(),
+                        source: Some("remote".to_string()),
+                    },
+                ],
+                cwd: None,
+            },
+            experimental_environment: None,
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    )]);
+
+    apply_blocking(
+        codex_home.path(),
+        /*profile*/ None,
+        &[ConfigEdit::ReplaceMcpServers(servers.clone())],
+    )?;
+
+    let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let serialized = std::fs::read_to_string(&config_path)?;
+    assert!(
+        serialized
+            .contains(r#"env_vars = ["LEGACY", { name = "REMOTE_TOKEN", source = "remote" }]"#),
+        "serialized config missing sourced env_vars field:\n{serialized}"
+    );
+
+    let loaded = load_global_mcp_servers(codex_home.path()).await?;
+    assert_eq!(loaded, servers);
 
     Ok(())
 }

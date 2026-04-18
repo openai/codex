@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_config::types::McpServerEnvVar;
 use codex_config::types::ShellEnvironmentPolicyInherit;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecEnvPolicy;
@@ -52,6 +53,7 @@ use crate::executor_process_transport::ExecutorProcessTransport;
 use crate::program_resolver;
 use crate::utils::create_env_for_mcp_server;
 use crate::utils::create_env_overlay_for_remote_mcp_server;
+use crate::utils::remote_mcp_env_var_names;
 
 // General purpose public code.
 
@@ -75,7 +77,7 @@ pub struct StdioServerCommand {
     program: OsString,
     args: Vec<OsString>,
     env: Option<HashMap<OsString, OsString>>,
-    env_vars: Vec<String>,
+    env_vars: Vec<McpServerEnvVar>,
     cwd: Option<PathBuf>,
 }
 
@@ -139,7 +141,7 @@ impl StdioServerCommand {
         program: OsString,
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
-        env_vars: Vec<String>,
+        env_vars: Vec<McpServerEnvVar>,
         cwd: Option<PathBuf>,
     ) -> Self {
         Self {
@@ -200,7 +202,7 @@ impl LocalStdioServerLauncher {
             cwd,
         } = command;
         let program_name = program.to_string_lossy().into_owned();
-        let envs = create_env_for_mcp_server(env, &env_vars);
+        let envs = create_env_for_mcp_server(env, &env_vars).map_err(io::Error::other)?;
         let resolved_program =
             program_resolver::resolve(program, &envs).map_err(io::Error::other)?;
 
@@ -350,6 +352,7 @@ impl ExecutorStdioServerLauncher {
         } = command;
         let program_name = program.to_string_lossy().into_owned();
         let envs = create_env_overlay_for_remote_mcp_server(env, &env_vars);
+        let remote_env_vars = remote_mcp_env_var_names(&env_vars);
         // The executor protocol carries argv/env as UTF-8 strings. Local stdio can
         // accept arbitrary OsString values because it calls the OS directly; remote
         // stdio must reject non-Unicode command, argument, or environment data
@@ -365,7 +368,7 @@ impl ExecutorStdioServerLauncher {
                 process_id,
                 argv,
                 cwd: cwd.unwrap_or(default_cwd),
-                env_policy: Some(Self::remote_env_policy()),
+                env_policy: Some(Self::remote_env_policy(&remote_env_vars)),
                 env,
                 tty: false,
                 pipe_stdin: true,
@@ -415,13 +418,105 @@ impl ExecutorStdioServerLauncher {
             .map_err(|_| anyhow!("{label} must be valid Unicode for remote MCP stdio"))
     }
 
-    fn remote_env_policy() -> ExecEnvPolicy {
+    fn remote_env_policy(remote_env_vars: &[String]) -> ExecEnvPolicy {
+        let include_only = if remote_env_vars.is_empty() {
+            Vec::new()
+        } else {
+            // `source = "remote"` means the value is read from the executor's
+            // environment, not copied from Codex. Start from `All` only so the
+            // named remote variable is available to the filter below; the
+            // effective child env is still limited by `include_only`.
+            crate::utils::DEFAULT_ENV_VARS
+                .iter()
+                .map(|name| (*name).to_string())
+                .chain(remote_env_vars.iter().cloned())
+                .collect()
+        };
         ExecEnvPolicy {
-            inherit: ShellEnvironmentPolicyInherit::Core,
+            inherit: if remote_env_vars.is_empty() {
+                ShellEnvironmentPolicyInherit::Core
+            } else {
+                ShellEnvironmentPolicyInherit::All
+            },
             ignore_default_excludes: true,
             exclude: Vec::new(),
             r#set: HashMap::new(),
-            include_only: Vec::new(),
+            include_only,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_config::shell_environment;
+    use codex_config::types::EnvironmentVariablePattern;
+    use codex_config::types::ShellEnvironmentPolicy;
+
+    #[test]
+    fn remote_env_policy_uses_core_env_without_remote_source_vars() {
+        let policy = ExecutorStdioServerLauncher::remote_env_policy(&[]);
+
+        assert_eq!(policy.inherit, ShellEnvironmentPolicyInherit::Core);
+        assert!(policy.include_only.is_empty());
+    }
+
+    #[test]
+    fn remote_env_policy_includes_remote_source_vars_without_full_env() {
+        let policy = ExecutorStdioServerLauncher::remote_env_policy(&["REMOTE_TOKEN".to_string()]);
+
+        assert_eq!(policy.inherit, ShellEnvironmentPolicyInherit::All);
+        assert!(
+            policy.include_only.contains(&"REMOTE_TOKEN".to_string()),
+            "remote source var should be included in executor env policy"
+        );
+        assert!(
+            policy
+                .include_only
+                .contains(&crate::utils::DEFAULT_ENV_VARS[0].to_string()),
+            "remote default env vars should remain available"
+        );
+    }
+
+    #[test]
+    fn remote_env_policy_effectively_filters_unrequested_vars() {
+        let exec_policy =
+            ExecutorStdioServerLauncher::remote_env_policy(&["REMOTE_TOKEN".to_string()]);
+        let policy = ShellEnvironmentPolicy {
+            inherit: exec_policy.inherit,
+            ignore_default_excludes: exec_policy.ignore_default_excludes,
+            exclude: exec_policy
+                .exclude
+                .iter()
+                .map(|pattern| EnvironmentVariablePattern::new_case_insensitive(pattern))
+                .collect(),
+            r#set: exec_policy.r#set,
+            include_only: exec_policy
+                .include_only
+                .iter()
+                .map(|pattern| EnvironmentVariablePattern::new_case_insensitive(pattern))
+                .collect(),
+            use_profile: false,
+        };
+
+        let env = shell_environment::create_env_from_vars(
+            [
+                ("PATH".to_string(), "/remote/bin".to_string()),
+                ("REMOTE_TOKEN".to_string(), "remote-secret".to_string()),
+                (
+                    "UNREQUESTED_SECRET".to_string(),
+                    "must-not-pass".to_string(),
+                ),
+            ],
+            &policy,
+            /*thread_id*/ None,
+        );
+
+        assert_eq!(env.get("PATH").map(String::as_str), Some("/remote/bin"));
+        assert_eq!(
+            env.get("REMOTE_TOKEN").map(String::as_str),
+            Some("remote-secret")
+        );
+        assert!(!env.contains_key("UNREQUESTED_SECRET"));
     }
 }

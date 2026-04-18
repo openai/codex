@@ -128,6 +128,7 @@ pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) ->
 mod document_helpers {
     use codex_config::types::AppToolApproval;
     use codex_config::types::McpServerConfig;
+    use codex_config::types::McpServerEnvVar;
     use codex_config::types::McpServerToolConfig;
     use codex_config::types::McpServerTransportConfig;
     use toml_edit::Array as TomlArray;
@@ -190,7 +191,7 @@ mod document_helpers {
                     entry["env"] = table_from_pairs(env.iter());
                 }
                 if !env_vars.is_empty() {
-                    entry["env_vars"] = array_from_iter(env_vars.iter().cloned());
+                    entry["env_vars"] = array_from_env_vars(env_vars);
                 }
                 if let Some(cwd) = cwd {
                     entry["cwd"] = value(cwd.to_string_lossy().to_string());
@@ -336,6 +337,24 @@ mod document_helpers {
         let mut array = TomlArray::new();
         for value in iter {
             array.push(value);
+        }
+        TomlItem::Value(array.into())
+    }
+
+    fn array_from_env_vars(env_vars: &[McpServerEnvVar]) -> TomlItem {
+        let mut array = TomlArray::new();
+        for env_var in env_vars {
+            match env_var {
+                McpServerEnvVar::Name(name) => array.push(name.clone()),
+                McpServerEnvVar::Config { name, source } => {
+                    let mut table = InlineTable::new();
+                    table.insert("name", name.clone().into());
+                    if let Some(source) = source {
+                        table.insert("source", source.clone().into());
+                    }
+                    array.push(table);
+                }
+            }
         }
         TomlItem::Value(array.into())
     }
