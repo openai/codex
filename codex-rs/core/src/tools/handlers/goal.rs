@@ -5,6 +5,7 @@
 //! on the existing goal and preserves usage accounting.
 
 use crate::function_tool::FunctionCallError;
+use crate::goals::CreateGoalRequest;
 use crate::goals::GoalAccountingBoundary;
 use crate::goals::SetGoalRequest;
 use crate::session::session::Session;
@@ -134,29 +135,28 @@ async fn handle_set_goal(
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: SetGoalArgs = parse_arguments(arguments)?;
-    if session
-        .get_thread_goal()
-        .await
-        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?
-        .is_some()
-    {
-        return Err(FunctionCallError::RespondToModel(
-            "cannot set a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
-                .to_string(),
-        ));
-    }
-
     let goal = session
-        .set_thread_goal(
+        .create_thread_goal(
             turn_context,
-            SetGoalRequest {
-                objective: Some(args.objective),
-                status: Some(ThreadGoalStatus::Active),
-                token_budget: args.token_budget.map(Some),
+            CreateGoalRequest {
+                objective: args.objective,
+                token_budget: args.token_budget,
             },
         )
         .await
-        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+        .map_err(|err| {
+            if err
+                .chain()
+                .any(|cause| cause.to_string().contains("already has a goal"))
+            {
+                FunctionCallError::RespondToModel(
+                    "cannot set a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
+                        .to_string(),
+                )
+            } else {
+                FunctionCallError::RespondToModel(format_goal_error(err))
+            }
+        })?;
     goal_response(Some(goal))
 }
 
