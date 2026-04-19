@@ -276,7 +276,7 @@ Initial workflow coverage should be chosen by conformance need:
 | Tools | `tool_call.started`, `tool_call.approval_resolved`, `tool_call.ended` | OTEL, rollout |
 | Compaction | `compaction.started`, `compaction.installed`, `compaction.ended` | analytics, rollout |
 | Agents | `agent.task_sent`, `agent.message_sent`, `agent.result_delivered`, `agent.closed` | rollout, analytics subset |
-| Product features | `skill.invoked`, `app.used`, `plugin.state_changed`, `guardian.review_completed` | analytics |
+| Product features | `app.mentioned`, `app.used`, `hook.run_completed`, `plugin.used`, `plugin.state_changed`, `guardian.review_completed` | analytics |
 | Transport/auth | `transport.api_request_completed`, `transport.websocket_request_completed`, `auth.recovery_step_completed` | OTEL |
 
 This table is not a complete schema. Each event still needs a typed Rust
@@ -297,8 +297,10 @@ output schemas.
 | compaction lifecycle observations | `codex_compaction_event` |
 | skill/app/plugin/guardian observations | existing feature events |
 
-The analytics reducer continues to own batching, deduplication, connection
-metadata joins, and product event naming.
+The analytics crate should keep the observation-to-legacy-schema translation in
+a private projection module. The reducer then stays responsible for ingestion
+orchestration, batching, deduplication, connection metadata joins, and product
+event naming rather than becoming a mixed bag of mapping code.
 
 ### Rollout Trace
 

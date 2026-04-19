@@ -1598,6 +1598,123 @@ async fn app_used_observation_matches_legacy_analytics_fact() {
 }
 
 #[tokio::test]
+async fn feature_observations_match_legacy_analytics_facts() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+    let connector_ids = vec!["calendar".to_string(), "drive".to_string()];
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppMentioned(AppMentionedInput {
+                tracking: tracking.clone(),
+                mentions: vec![AppInvocation {
+                    connector_id: Some("calendar".to_string()),
+                    app_name: Some("Calendar".to_string()),
+                    invocation_type: Some(InvocationType::Explicit),
+                }],
+            })),
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::HookRun(HookRunInput {
+                tracking: tracking.clone(),
+                hook: HookRunFact {
+                    event_name: HookEventName::PostToolUse,
+                    hook_source: HookSource::Unknown,
+                    status: HookRunStatus::Failed,
+                },
+            })),
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginUsed(PluginUsedInput {
+                tracking: tracking.clone(),
+                plugin: sample_plugin_metadata(),
+            })),
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::PluginStateChanged(
+                PluginStateChangedInput {
+                    plugin: sample_plugin_metadata(),
+                    state: PluginState::Disabled,
+                },
+            )),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_app_mentioned(
+            codex_observability::events::AppMentioned {
+                model_slug: "gpt-5",
+                thread_id: "thread-1",
+                turn_id: "turn-1",
+                connector_id: Some("calendar"),
+                app_name: Some("Calendar"),
+                invocation_type: Some(codex_observability::events::InvocationType::Explicit),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer.ingest_hook_run_completed(
+        codex_observability::events::HookRunCompleted {
+            model_slug: "gpt-5",
+            thread_id: "thread-1",
+            turn_id: "turn-1",
+            hook_name: "PostToolUse",
+            hook_source: "unknown",
+            status: codex_observability::events::HookRunStatus::Failed,
+        },
+        &mut observation_events,
+    );
+    observation_reducer.ingest_plugin_used(
+        codex_observability::events::PluginUsed {
+            model_slug: "gpt-5",
+            thread_id: "thread-1",
+            turn_id: "turn-1",
+            plugin_id: "sample@test",
+            plugin_name: "sample",
+            marketplace_name: "test",
+            has_skills: Some(true),
+            mcp_server_count: Some(2),
+            connector_ids: Some(connector_ids.as_slice()),
+        },
+        &mut observation_events,
+    );
+    observation_reducer.ingest_plugin_state_changed(
+        codex_observability::events::PluginStateChanged {
+            plugin_id: "sample@test",
+            plugin_name: "sample",
+            marketplace_name: "test",
+            has_skills: Some(true),
+            mcp_server_count: Some(2),
+            connector_ids: Some(connector_ids.as_slice()),
+            state: codex_observability::events::PluginState::Disabled,
+        },
+        &mut observation_events,
+    );
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
 async fn reducer_ingests_plugin_state_changed_fact() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();

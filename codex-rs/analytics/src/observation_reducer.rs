@@ -1,4 +1,4 @@
-//! Projection from shared observations into analytics track events.
+//! Analytics reducer entrypoint for shared observations.
 //!
 //! This module deliberately reuses the existing analytics reducer while the
 //! shared observation stream is being introduced. That gives conformance tests
@@ -7,12 +7,9 @@
 //! requests.
 
 use crate::events::TrackEventRequest;
-use crate::facts;
 use crate::facts::AnalyticsFact;
-use crate::facts::AppInvocation;
-use crate::facts::AppUsedInput;
 use crate::facts::CustomAnalyticsFact;
-use crate::facts::TrackEventsContext;
+use crate::observation_projection;
 use crate::reducer::AnalyticsReducer;
 use codex_observability::events;
 
@@ -23,35 +20,66 @@ pub(crate) struct AnalyticsObservationReducer {
 }
 
 impl AnalyticsObservationReducer {
+    /// Ingests an app.mentioned observation and emits the current analytics event.
+    pub(crate) async fn ingest_app_mentioned(
+        &mut self,
+        observation: events::AppMentioned<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.legacy
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::AppMentioned(
+                    observation_projection::app_mentioned_input(observation),
+                )),
+                out,
+            )
+            .await;
+    }
+
     /// Ingests an app.used observation and emits the current analytics event.
     pub(crate) async fn ingest_app_used(
         &mut self,
         observation: events::AppUsed<'_>,
         out: &mut Vec<TrackEventRequest>,
     ) {
-        let tracking = TrackEventsContext {
-            model_slug: observation.model_slug.to_string(),
-            thread_id: observation.thread_id.to_string(),
-            turn_id: observation.turn_id.to_string(),
-        };
-        let app = AppInvocation {
-            connector_id: observation.connector_id.map(str::to_string),
-            app_name: observation.app_name.map(str::to_string),
-            invocation_type: observation.invocation_type.map(map_invocation_type),
-        };
-
         self.legacy
             .ingest(
-                AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(AppUsedInput { tracking, app })),
+                AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(
+                    observation_projection::app_used_input(observation),
+                )),
                 out,
             )
             .await;
     }
-}
 
-fn map_invocation_type(invocation_type: events::InvocationType) -> facts::InvocationType {
-    match invocation_type {
-        events::InvocationType::Explicit => facts::InvocationType::Explicit,
-        events::InvocationType::Implicit => facts::InvocationType::Implicit,
+    /// Ingests a hook.run_completed observation and emits the current analytics event.
+    pub(crate) fn ingest_hook_run_completed(
+        &mut self,
+        observation: events::HookRunCompleted<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(observation_projection::hook_run_completed_event(
+            observation,
+        ));
+    }
+
+    /// Ingests a plugin.used observation and emits the current analytics event.
+    pub(crate) fn ingest_plugin_used(
+        &mut self,
+        observation: events::PluginUsed<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(observation_projection::plugin_used_event(observation));
+    }
+
+    /// Ingests a plugin.state_changed observation and emits the current analytics event.
+    pub(crate) fn ingest_plugin_state_changed(
+        &mut self,
+        observation: events::PluginStateChanged<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        out.push(observation_projection::plugin_state_changed_event(
+            observation,
+        ));
     }
 }
