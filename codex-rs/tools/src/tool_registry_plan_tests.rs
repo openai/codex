@@ -107,7 +107,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     if config.goal_tools {
         for spec in [
             create_get_goal_tool(),
-            create_set_goal_tool(),
+            create_create_goal_tool(),
             create_update_goal_tool(),
         ] {
             expected.insert(spec.name().to_string(), spec);
@@ -217,7 +217,7 @@ fn goal_tools_require_goals_feature() {
         &[],
     );
     assert_lacks_tool_name(&tools, "get_goal");
-    assert_lacks_tool_name(&tools, "set_goal");
+    assert_lacks_tool_name(&tools, "create_goal");
     assert_lacks_tool_name(&tools, "update_goal");
 
     features.enable(Feature::GoalMode);
@@ -237,7 +237,7 @@ fn goal_tools_require_goals_feature() {
         /*deferred_mcp_tools*/ None,
         &[],
     );
-    assert_contains_tool_names(&tools, &["get_goal", "set_goal", "update_goal"]);
+    assert_contains_tool_names(&tools, &["get_goal", "create_goal", "update_goal"]);
 }
 
 #[test]

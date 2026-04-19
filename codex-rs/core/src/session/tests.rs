@@ -6149,7 +6149,7 @@ async fn sample_rollout(
 }
 
 #[tokio::test]
-async fn set_goal_tool_rejects_existing_goal() {
+async fn create_goal_tool_rejects_existing_goal() {
     let (mut session, turn_context) = make_session_and_context().await;
     let _ = session.features.enable(Feature::GoalMode);
     let session = Arc::new(session);
@@ -6163,8 +6163,8 @@ async fn set_goal_tool_rejects_existing_goal() {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&tracker),
-            call_id: "set-goal-1".to_string(),
-            tool_name: codex_tools::ToolName::plain("set_goal"),
+            call_id: "create-goal-1".to_string(),
+            tool_name: codex_tools::ToolName::plain("create_goal"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "objective": "Keep the watcher alive",
@@ -6174,15 +6174,15 @@ async fn set_goal_tool_rejects_existing_goal() {
             },
         })
         .await
-        .expect("initial set_goal should succeed");
+        .expect("initial create_goal should succeed");
 
     let response = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker,
-            call_id: "set-goal-2".to_string(),
-            tool_name: codex_tools::ToolName::plain("set_goal"),
+            call_id: "create-goal-2".to_string(),
+            tool_name: codex_tools::ToolName::plain("create_goal"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "objective": "Replace the watcher",
@@ -6194,11 +6194,11 @@ async fn set_goal_tool_rejects_existing_goal() {
         .await;
 
     let Err(FunctionCallError::RespondToModel(output)) = response else {
-        panic!("expected set_goal to reject an existing goal");
+        panic!("expected create_goal to reject an existing goal");
     };
     assert_eq!(
         output,
-        "cannot set a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
+        "cannot create a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
     );
 
     let goal = session
