@@ -198,6 +198,10 @@ impl GoalWallClockAccountingState {
     async fn clear_active_goal(&self) {
         *self.active_goal_created_at_ms.lock().await = None;
     }
+
+    async fn active_goal_created_at_ms(&self) -> Option<i64> {
+        *self.active_goal_created_at_ms.lock().await
+    }
 }
 
 impl Session {
@@ -655,8 +659,18 @@ impl Session {
                 }
             }
         };
+        let expected_created_at_ms = turn_context
+            .goal_accounting
+            .active_goal_created_at_ms()
+            .await;
         let outcome = state_db
-            .account_thread_goal_usage(self.conversation_id, time_delta_seconds, token_delta, mode)
+            .account_thread_goal_usage(
+                self.conversation_id,
+                time_delta_seconds,
+                token_delta,
+                mode,
+                expected_created_at_ms,
+            )
             .await?;
         let goal = match outcome {
             codex_state::ThreadGoalAccountingOutcome::Updated(goal) => {
@@ -754,6 +768,10 @@ impl Session {
         if time_delta_seconds == 0 {
             return Ok(None);
         }
+        let expected_created_at_ms = self
+            .thread_goal_wall_clock_accounting
+            .active_goal_created_at_ms()
+            .await;
 
         match state_db
             .account_thread_goal_usage(
@@ -761,6 +779,7 @@ impl Session {
                 time_delta_seconds,
                 /*token_delta*/ 0,
                 mode,
+                expected_created_at_ms,
             )
             .await?
         {
