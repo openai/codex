@@ -145,8 +145,8 @@ Example:
 use codex_observability::Observation;
 
 #[derive(Observation)]
-#[observation(name = "turn.config_resolved", uses = ["analytics"])]
-struct TurnConfigResolved<'a> {
+#[observation(name = "turn.started", uses = ["analytics"])]
+struct TurnStarted<'a> {
     #[obs(level = "basic", class = "identifier")]
     thread_id: &'a str,
 
@@ -154,7 +154,7 @@ struct TurnConfigResolved<'a> {
     turn_id: &'a str,
 
     #[obs(level = "basic", class = "operational")]
-    model: &'a str,
+    started_at: i64,
 }
 ```
 
@@ -292,7 +292,7 @@ output schemas.
 | Observations | Analytics output |
 | --- | --- |
 | `thread.started` | `codex_thread_initialized` |
-| `turn.started`, `turn.ended` with token usage, and future config observations | `codex_turn_event` |
+| `turn.started` with resolved config, `turn.ended` with token usage | `codex_turn_event` |
 | `turn.steer_resolved` | `codex_turn_steer_event` |
 | compaction lifecycle observations | `codex_compaction_event` |
 | skill/app/plugin/guardian observations | existing feature events |

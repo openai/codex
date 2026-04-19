@@ -1715,7 +1715,7 @@ async fn feature_observations_match_legacy_analytics_facts() {
 }
 
 #[tokio::test]
-async fn turn_lifecycle_observations_match_legacy_sources() {
+async fn turn_observations_match_legacy_sources() {
     let mut legacy_reducer = AnalyticsReducer::default();
     let mut observation_reducer = AnalyticsObservationReducer::default();
     let mut legacy_events = Vec::new();
@@ -1774,8 +1774,9 @@ async fn turn_lifecycle_observations_match_legacy_sources() {
         .await;
     observation_events.clear();
 
-    // Keep not-yet-migrated lifecycle context identical on both sides. This
-    // test swaps terminal turn lifecycle and token accounting to observations.
+    // Keep not-yet-migrated request/thread context identical on both sides.
+    // This test swaps started/ended turn facts, including resolved config and
+    // token accounting, to observations while comparing the final payload.
     observation_reducer
         .ingest_existing_fact_for_test(
             AnalyticsFact::Request {
@@ -1796,18 +1797,28 @@ async fn turn_lifecycle_observations_match_legacy_sources() {
         )
         .await;
     observation_reducer
-        .ingest_existing_fact_for_test(
-            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
-                sample_turn_resolved_config("turn-2"),
-            ))),
-            &mut observation_events,
-        )
-        .await;
-    observation_reducer
         .ingest_turn_started(
             codex_observability::events::TurnStarted {
                 thread_id: "thread-2",
                 turn_id: "turn-2",
+                config: codex_observability::events::TurnConfig {
+                    num_input_images: 1,
+                    submission_type: None,
+                    ephemeral: false,
+                    model: "gpt-5",
+                    model_provider: "openai",
+                    sandbox_mode: codex_observability::events::SandboxMode::ReadOnly,
+                    sandbox_network_access: true,
+                    reasoning_effort: None,
+                    reasoning_summary: None,
+                    service_tier: None,
+                    approval_policy: codex_observability::events::ApprovalPolicy::OnRequest,
+                    approval_reviewer:
+                        codex_observability::events::ApprovalReviewer::GuardianSubagent,
+                    collaboration_mode: codex_observability::events::CollaborationMode::Plan,
+                    personality: None,
+                    is_first_turn: true,
+                },
                 started_at: 455,
             },
             &mut observation_events,

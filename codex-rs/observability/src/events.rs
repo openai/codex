@@ -3,6 +3,10 @@
 use crate::Observation;
 use serde::Serialize;
 
+mod turn;
+
+pub use turn::*;
+
 /// How an app/tool/plugin capability was selected by the user or system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -39,87 +43,6 @@ pub enum PluginState {
     Enabled,
     /// Plugin was disabled.
     Disabled,
-}
-
-/// Terminal turn status after Codex stops working on a turn.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnStatus {
-    /// The turn completed successfully.
-    Completed,
-    /// The turn failed with an error.
-    Failed,
-    /// The turn was interrupted before normal completion.
-    Interrupted,
-}
-
-/// Observation emitted when execution of a turn starts.
-#[derive(Observation)]
-#[observation(name = "turn.started", crate = "crate", uses = ["analytics"])]
-pub struct TurnStarted<'a> {
-    /// Thread that owns the turn.
-    #[obs(level = "basic", class = "identifier")]
-    pub thread_id: &'a str,
-
-    /// Turn that started.
-    #[obs(level = "basic", class = "identifier")]
-    pub turn_id: &'a str,
-
-    /// Unix timestamp in seconds when the turn started.
-    #[obs(level = "basic", class = "operational")]
-    pub started_at: i64,
-}
-
-/// Token accounting reported for a completed turn.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub struct TurnTokenUsage {
-    /// Prompt/input token count reported by the model provider.
-    pub input_tokens: i64,
-
-    /// Input tokens served from provider-side cache.
-    pub cached_input_tokens: i64,
-
-    /// Output token count reported by the model provider.
-    pub output_tokens: i64,
-
-    /// Output tokens spent on model reasoning.
-    pub reasoning_output_tokens: i64,
-
-    /// Total token count reported by the model provider.
-    pub total_tokens: i64,
-}
-
-/// Observation emitted when a turn reaches a terminal state.
-#[derive(Observation)]
-#[observation(name = "turn.ended", crate = "crate", uses = ["analytics"])]
-pub struct TurnEnded<'a> {
-    /// Thread that owns the turn.
-    #[obs(level = "basic", class = "identifier")]
-    pub thread_id: &'a str,
-
-    /// Turn that reached a terminal state.
-    #[obs(level = "basic", class = "identifier")]
-    pub turn_id: &'a str,
-
-    /// Terminal status for the turn.
-    #[obs(level = "basic", class = "operational")]
-    pub status: TurnStatus,
-
-    /// Token usage reported by the model provider.
-    ///
-    /// This is absent when a turn ends before provider usage is available, for
-    /// example an early local failure, an interruption, or a provider failure
-    /// before a usage-bearing response is received.
-    #[obs(level = "basic", class = "operational")]
-    pub token_usage: Option<TurnTokenUsage>,
-
-    /// Unix timestamp in seconds when the turn ended.
-    #[obs(level = "basic", class = "operational")]
-    pub ended_at: i64,
-
-    /// Turn duration in milliseconds.
-    #[obs(level = "basic", class = "operational")]
-    pub duration_ms: i64,
 }
 
 /// Observation emitted when an app connector is mentioned during a turn.

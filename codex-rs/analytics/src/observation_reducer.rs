@@ -74,6 +74,15 @@ impl AnalyticsObservationReducer {
     ) {
         self.legacy
             .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                    observation_projection::turn_resolved_config_fact(&observation),
+                ))),
+                out,
+            )
+            .await;
+
+        self.legacy
+            .ingest(
                 AnalyticsFact::Notification(Box::new(
                     observation_projection::turn_started_notification(observation),
                 )),

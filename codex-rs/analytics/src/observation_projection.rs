@@ -17,6 +17,8 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnResolvedConfigFact;
+use crate::facts::TurnSubmissionType as AnalyticsTurnSubmissionType;
 use crate::facts::TurnTokenUsageFact;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::Turn;
@@ -25,7 +27,19 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_login::default_client::originator;
 use codex_observability::events;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::HookRunStatus as ProtocolHookRunStatus;
+use codex_protocol::protocol::NetworkAccess;
+use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 
 pub(crate) fn app_mentioned_input(observation: events::AppMentioned<'_>) -> AppMentionedInput {
@@ -141,6 +155,101 @@ pub(crate) fn turn_started_notification(
             duration_ms: None,
         },
     })
+}
+
+pub(crate) fn turn_resolved_config_fact(
+    observation: &events::TurnStarted<'_>,
+) -> TurnResolvedConfigFact {
+    let config = observation.config;
+    TurnResolvedConfigFact {
+        turn_id: observation.turn_id.to_string(),
+        thread_id: observation.thread_id.to_string(),
+        num_input_images: config.num_input_images,
+        submission_type: config
+            .submission_type
+            .map(|submission_type| match submission_type {
+                events::TurnSubmissionType::Default => AnalyticsTurnSubmissionType::Default,
+                events::TurnSubmissionType::Queued => AnalyticsTurnSubmissionType::Queued,
+            }),
+        ephemeral: config.ephemeral,
+        // The legacy fact carries session_source, but codex_turn_event derives
+        // thread source from thread lifecycle metadata instead. Keep this
+        // placeholder local to the projection until a consumer needs it.
+        session_source: SessionSource::Unknown,
+        model: config.model.to_string(),
+        model_provider: config.model_provider.to_string(),
+        sandbox_policy: match config.sandbox_mode {
+            events::SandboxMode::FullAccess => SandboxPolicy::DangerFullAccess,
+            events::SandboxMode::ReadOnly => SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: config.sandbox_network_access,
+            },
+            events::SandboxMode::WorkspaceWrite => SandboxPolicy::WorkspaceWrite {
+                writable_roots: Vec::new(),
+                read_only_access: ReadOnlyAccess::FullAccess,
+                network_access: config.sandbox_network_access,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            events::SandboxMode::ExternalSandbox => SandboxPolicy::ExternalSandbox {
+                network_access: if config.sandbox_network_access {
+                    NetworkAccess::Enabled
+                } else {
+                    NetworkAccess::Restricted
+                },
+            },
+        },
+        reasoning_effort: config
+            .reasoning_effort
+            .map(|reasoning_effort| match reasoning_effort {
+                events::ReasoningEffort::None => ReasoningEffort::None,
+                events::ReasoningEffort::Minimal => ReasoningEffort::Minimal,
+                events::ReasoningEffort::Low => ReasoningEffort::Low,
+                events::ReasoningEffort::Medium => ReasoningEffort::Medium,
+                events::ReasoningEffort::High => ReasoningEffort::High,
+                events::ReasoningEffort::XHigh => ReasoningEffort::XHigh,
+            }),
+        reasoning_summary: config.reasoning_summary.map(
+            |reasoning_summary| match reasoning_summary {
+                events::ReasoningSummary::Auto => ReasoningSummary::Auto,
+                events::ReasoningSummary::Concise => ReasoningSummary::Concise,
+                events::ReasoningSummary::Detailed => ReasoningSummary::Detailed,
+                events::ReasoningSummary::None => ReasoningSummary::None,
+            },
+        ),
+        service_tier: config.service_tier.map(|service_tier| match service_tier {
+            events::ServiceTier::Fast => ServiceTier::Fast,
+            events::ServiceTier::Flex => ServiceTier::Flex,
+        }),
+        approval_policy: match config.approval_policy {
+            events::ApprovalPolicy::Untrusted => AskForApproval::UnlessTrusted,
+            events::ApprovalPolicy::OnFailure => AskForApproval::OnFailure,
+            events::ApprovalPolicy::OnRequest => AskForApproval::OnRequest,
+            events::ApprovalPolicy::Granular => AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            events::ApprovalPolicy::Never => AskForApproval::Never,
+        },
+        approvals_reviewer: match config.approval_reviewer {
+            events::ApprovalReviewer::User => ApprovalsReviewer::User,
+            events::ApprovalReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
+        },
+        sandbox_network_access: config.sandbox_network_access,
+        collaboration_mode: match config.collaboration_mode {
+            events::CollaborationMode::Default => ModeKind::Default,
+            events::CollaborationMode::Plan => ModeKind::Plan,
+        },
+        personality: config.personality.map(|personality| match personality {
+            events::Personality::None => Personality::None,
+            events::Personality::Friendly => Personality::Friendly,
+            events::Personality::Pragmatic => Personality::Pragmatic,
+        }),
+        is_first_turn: config.is_first_turn,
+    }
 }
 
 pub(crate) fn turn_token_usage_fact(
