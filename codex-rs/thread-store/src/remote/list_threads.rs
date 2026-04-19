@@ -161,6 +161,7 @@ mod tests {
                 page_size: 2,
                 cursor: Some("cursor-1".to_string()),
                 sort_key: ThreadSortKey::UpdatedAt,
+                sort_direction: crate::SortDirection::Desc,
                 allowed_sources: vec![SessionSource::Cli],
                 model_providers: Some(vec!["openai".to_string()]),
                 archived: true,

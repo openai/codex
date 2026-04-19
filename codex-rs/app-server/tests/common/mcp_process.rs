@@ -58,6 +58,7 @@ use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
@@ -79,6 +80,7 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -304,6 +306,16 @@ impl McpProcess {
             .await
     }
 
+    /// Send an `account/sendAddCreditsNudgeEmail` JSON-RPC request.
+    pub async fn send_add_credits_nudge_email_request(
+        &mut self,
+        params: SendAddCreditsNudgeEmailParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("account/sendAddCreditsNudgeEmail", params)
+            .await
+    }
+
     /// Send an `account/read` JSON-RPC request.
     pub async fn send_get_account_request(
         &mut self,
@@ -462,6 +474,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/read", params).await
+    }
+
+    /// Send a `thread/turns/list` JSON-RPC request.
+    pub async fn send_thread_turns_list_request(
+        &mut self,
+        params: ThreadTurnsListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/turns/list", params).await
     }
 
     /// Send a `model/list` JSON-RPC request.

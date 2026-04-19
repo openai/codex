@@ -7,6 +7,7 @@ use crate::plugins::PluginsManager;
 use crate::plugins::add_marketplace;
 use crate::plugins::configured_plugins_from_stack;
 use crate::plugins::find_marketplace_manifest_path;
+use crate::plugins::is_local_marketplace_source;
 use crate::plugins::parse_marketplace_source;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_protocol::protocol::Product;
@@ -24,6 +25,8 @@ const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.d
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
 const EXTERNAL_AGENT_DIR: &str = ".claude";
 const EXTERNAL_AGENT_CONFIG_MD: &str = "CLAUDE.md";
+const EXTERNAL_OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
+const EXTERNAL_OFFICIAL_MARKETPLACE_SOURCE: &str = "anthropics/claude-plugins-official";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {
@@ -51,12 +54,18 @@ pub struct MigrationDetails {
     pub plugins: Vec<PluginsMigration>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPluginImport {
+    pub cwd: Option<PathBuf>,
+    pub details: MigrationDetails,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct PluginImportOutcome {
-    succeeded_marketplaces: Vec<String>,
-    succeeded_plugin_ids: Vec<String>,
-    failed_marketplaces: Vec<String>,
-    failed_plugin_ids: Vec<String>,
+pub struct PluginImportOutcome {
+    pub succeeded_marketplaces: Vec<String>,
+    pub succeeded_plugin_ids: Vec<String>,
+    pub failed_marketplaces: Vec<String>,
+    pub failed_plugin_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,7 +122,8 @@ impl ExternalAgentConfigService {
     pub async fn import(
         &self,
         migration_items: Vec<ExternalAgentConfigMigrationItem>,
-    ) -> io::Result<()> {
+    ) -> io::Result<Vec<PendingPluginImport>> {
+        let mut pending_plugin_imports = Vec::new();
         for migration_item in migration_items {
             match migration_item.item_type {
                 ExternalAgentConfigMigrationItemType::Config => {
@@ -141,17 +151,23 @@ impl ExternalAgentConfigService {
                     );
                 }
                 ExternalAgentConfigMigrationItemType::Plugins => {
-                    let service = self.clone();
                     let cwd = migration_item.cwd;
-                    let details = migration_item.details;
-                    tokio::spawn(async move {
-                        if let Err(err) = service.import_plugins(cwd.as_deref(), details).await {
-                            tracing::warn!(
-                                error = %err,
-                                "external agent config plugin import failed"
-                            );
-                        }
-                    });
+                    let details = migration_item.details.ok_or_else(|| {
+                        invalid_data_error("plugins migration item is missing details".to_string())
+                    })?;
+                    let (local_details, remote_details) =
+                        self.partition_plugin_migration_details(cwd.as_deref(), details)?;
+
+                    if let Some(local_details) = local_details {
+                        self.import_plugins(cwd.as_deref(), Some(local_details))
+                            .await?;
+                    }
+                    if let Some(remote_details) = remote_details {
+                        pending_plugin_imports.push(PendingPluginImport {
+                            cwd,
+                            details: remote_details,
+                        });
+                    }
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::Plugins,
@@ -162,7 +178,7 @@ impl ExternalAgentConfigService {
             }
         }
 
-        Ok(())
+        Ok(pending_plugin_imports)
     }
 
     async fn detect_migrations(
@@ -259,7 +275,7 @@ impl ExternalAgentConfigService {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: format!(
-                    "Import {} to {}",
+                    "Migrate {} to {}",
                     source_agents_md.display(),
                     target_agents_md.display()
                 ),
@@ -343,13 +359,58 @@ impl ExternalAgentConfigService {
 
         Some(ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Plugins,
-            description: format!("Import enabled plugins from {}", source_settings.display()),
+            description: format!("Migrate enabled plugins from {}", source_settings.display()),
             cwd,
             details: Some(plugin_details),
         })
     }
 
-    async fn import_plugins(
+    fn partition_plugin_migration_details(
+        &self,
+        cwd: Option<&Path>,
+        details: MigrationDetails,
+    ) -> io::Result<(Option<MigrationDetails>, Option<MigrationDetails>)> {
+        let source_settings = cwd.map_or_else(
+            || self.external_agent_home.join("settings.json"),
+            |cwd| cwd.join(EXTERNAL_AGENT_DIR).join("settings.json"),
+        );
+        let source_root = cwd.unwrap_or(self.external_agent_home.as_path());
+        let import_sources = read_external_settings(&source_settings)?
+            .map(|settings| collect_marketplace_import_sources(&settings, source_root))
+            .unwrap_or_default();
+
+        let mut local_plugins = Vec::new();
+        let mut remote_plugins = Vec::new();
+        for plugin_group in details.plugins {
+            let is_local = import_sources
+                .get(&plugin_group.marketplace_name)
+                .and_then(|import_source| {
+                    is_local_marketplace_source(
+                        &import_source.source,
+                        import_source.ref_name.clone(),
+                    )
+                    .ok()
+                })
+                .unwrap_or(false);
+
+            if is_local {
+                local_plugins.push(plugin_group);
+            } else {
+                remote_plugins.push(plugin_group);
+            }
+        }
+
+        let local_details = (!local_plugins.is_empty()).then_some(MigrationDetails {
+            plugins: local_plugins,
+        });
+        let remote_details = (!remote_plugins.is_empty()).then_some(MigrationDetails {
+            plugins: remote_plugins,
+        });
+
+        Ok((local_details, remote_details))
+    }
+
+    pub async fn import_plugins(
         &self,
         cwd: Option<&Path>,
         details: Option<MigrationDetails>,
@@ -647,6 +708,16 @@ fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
         .collect()
 }
 
+fn has_enabled_plugin_for_marketplace(settings: &JsonValue, marketplace_name: &str) -> bool {
+    collect_enabled_plugins(settings)
+        .into_iter()
+        .any(|plugin_id| {
+            PluginId::parse(&plugin_id)
+                .map(|plugin_id| plugin_id.marketplace_name == marketplace_name)
+                .unwrap_or(false)
+        })
+}
+
 fn configured_marketplace_plugins(
     config: &Config,
     plugins_manager: &PluginsManager,
@@ -682,48 +753,61 @@ fn collect_marketplace_import_sources(
     settings: &JsonValue,
     source_root: &Path,
 ) -> BTreeMap<String, MarketplaceImportSource> {
-    let Some(extra_known_marketplaces) = settings
+    let mut import_sources: BTreeMap<String, MarketplaceImportSource> = settings
         .as_object()
         .and_then(|settings| settings.get("extraKnownMarketplaces"))
         .and_then(JsonValue::as_object)
-    else {
-        return BTreeMap::new();
-    };
+        .map(|extra_known_marketplaces| {
+            extra_known_marketplaces
+                .iter()
+                .filter_map(|(name, value)| {
+                    let source_fields = if let Some(source) = value.get("source")
+                        && source.is_object()
+                    {
+                        source.as_object()?
+                    } else {
+                        value.as_object()?
+                    };
+                    let source = source_fields
+                        .get("repo")
+                        .or_else(|| source_fields.get("url"))
+                        .or_else(|| source_fields.get("path"))
+                        .or_else(|| value.get("source"))?
+                        .as_str()?
+                        .trim()
+                        .to_string();
+                    if source.is_empty() {
+                        return None;
+                    }
+                    let source = resolve_external_marketplace_source(&source, source_root);
 
-    extra_known_marketplaces
-        .iter()
-        .filter_map(|(name, value)| {
-            let source_fields = if let Some(source) = value.get("source")
-                && source.is_object()
-            {
-                source.as_object()?
-            } else {
-                value.as_object()?
-            };
-            let source = source_fields
-                .get("repo")
-                .or_else(|| source_fields.get("url"))
-                .or_else(|| source_fields.get("path"))
-                .or_else(|| value.get("source"))?
-                .as_str()?
-                .trim()
-                .to_string();
-            if source.is_empty() {
-                return None;
-            }
-            let source = resolve_external_marketplace_source(&source, source_root);
+                    let ref_name = source_fields
+                        .get("ref")
+                        .or_else(|| value.get("ref"))
+                        .and_then(JsonValue::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned);
 
-            let ref_name = source_fields
-                .get("ref")
-                .or_else(|| value.get("ref"))
-                .and_then(JsonValue::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned);
-
-            Some((name.clone(), MarketplaceImportSource { source, ref_name }))
+                    Some((name.clone(), MarketplaceImportSource { source, ref_name }))
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default();
+
+    if has_enabled_plugin_for_marketplace(settings, EXTERNAL_OFFICIAL_MARKETPLACE_NAME)
+        && !import_sources.contains_key(EXTERNAL_OFFICIAL_MARKETPLACE_NAME)
+    {
+        import_sources.insert(
+            EXTERNAL_OFFICIAL_MARKETPLACE_NAME.to_string(),
+            MarketplaceImportSource {
+                source: EXTERNAL_OFFICIAL_MARKETPLACE_SOURCE.to_string(),
+                ref_name: None,
+            },
+        );
+    }
+
+    import_sources
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

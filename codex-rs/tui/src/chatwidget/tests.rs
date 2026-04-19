@@ -12,6 +12,7 @@ pub(super) use crate::app_event::RealtimeAudioDeviceKind;
 pub(super) use crate::app_event_sender::AppEventSender;
 pub(super) use crate::bottom_pane::LocalImageAttachment;
 pub(super) use crate::bottom_pane::MentionBinding;
+pub(super) use crate::bottom_pane::QueuedInputAction;
 pub(super) use crate::chatwidget::realtime::RealtimeConversationPhase;
 pub(super) use crate::history_cell::UserHistoryCell;
 pub(super) use crate::legacy_core::config::Config;
@@ -46,6 +47,7 @@ pub(super) use codex_app_server_protocol::CommandAction as AppServerCommandActio
 pub(super) use codex_app_server_protocol::CommandExecutionRequestApprovalParams as AppServerCommandExecutionRequestApprovalParams;
 pub(super) use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
 pub(super) use codex_app_server_protocol::CommandExecutionStatus as AppServerCommandExecutionStatus;
+pub(super) use codex_app_server_protocol::ConfigWarningNotification;
 pub(super) use codex_app_server_protocol::ErrorNotification;
 pub(super) use codex_app_server_protocol::FileUpdateChange;
 pub(super) use codex_app_server_protocol::GuardianApprovalReview;
@@ -94,6 +96,7 @@ pub(super) use codex_app_server_protocol::TurnError as AppServerTurnError;
 pub(super) use codex_app_server_protocol::TurnStartedNotification;
 pub(super) use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 pub(super) use codex_app_server_protocol::UserInput as AppServerUserInput;
+pub(super) use codex_app_server_protocol::WarningNotification;
 pub(super) use codex_config::types::ApprovalsReviewer;
 pub(super) use codex_config::types::Notifications;
 #[cfg(target_os = "windows")]

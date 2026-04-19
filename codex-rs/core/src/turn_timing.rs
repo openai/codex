@@ -10,7 +10,7 @@ use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
 
 use crate::ResponseEvent;
-use crate::codex::TurnContext;
+use crate::session::turn_context::TurnContext;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 
 pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &ResponseEvent) {

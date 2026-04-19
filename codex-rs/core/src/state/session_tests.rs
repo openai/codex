@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent_identity::RegisteredAgentTask;
-use crate::codex::make_session_configuration_for_tests;
+use crate::session::tests::make_session_configuration_for_tests;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use pretty_assertions::assert_eq;
@@ -87,6 +87,7 @@ async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     });
 
     assert_eq!(
@@ -114,6 +115,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     });
     state.set_rate_limits(RateLimitSnapshot {
         limit_id: None,
@@ -126,6 +128,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     });
 
     assert_eq!(
@@ -157,6 +160,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
             balance: Some("50".to_string()),
         }),
         plan_type: Some(codex_protocol::account::PlanType::Plus),
+        rate_limit_reached_type: None,
     });
 
     state.set_rate_limits(RateLimitSnapshot {
@@ -170,6 +174,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     });
 
     assert_eq!(
@@ -189,6 +194,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
                 balance: Some("50".to_string()),
             }),
             plan_type: Some(codex_protocol::account::PlanType::Plus),
+            rate_limit_reached_type: None,
         })
     );
 }

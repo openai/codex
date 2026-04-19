@@ -37,3 +37,6 @@ pub const STARTUP_PREWARM_DURATION_METRIC: &str = "codex.startup_prewarm.duratio
 pub const STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC: &str =
     "codex.startup_prewarm.age_at_first_turn_ms";
 pub const THREAD_STARTED_METRIC: &str = "codex.thread.started";
+pub const THREAD_SKILLS_ENABLED_TOTAL_METRIC: &str = "codex.thread.skills.enabled_total";
+pub const THREAD_SKILLS_KEPT_TOTAL_METRIC: &str = "codex.thread.skills.kept_total";
+pub const THREAD_SKILLS_TRUNCATED_METRIC: &str = "codex.thread.skills.truncated";

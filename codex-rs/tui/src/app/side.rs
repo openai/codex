@@ -379,9 +379,8 @@ impl App {
                 self.restore_side_user_message(user_message.take());
                 self.chat_widget
                     .set_side_conversation_context_label(/*label*/ None);
-                self.chat_widget.add_error_message(format!(
-                    "Failed to fork side conversation from {parent_thread_id}: {err}"
-                ));
+                self.chat_widget
+                    .add_error_message(format!("Failed to fork side conversation: {err}"));
             }
         }
 

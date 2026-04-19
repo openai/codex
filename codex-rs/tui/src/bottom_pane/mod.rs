@@ -84,13 +84,14 @@ mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod memories_settings_view;
-mod prompt_args;
+pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
-mod slash_commands;
+pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::SelectionRowDisplay;
+pub(crate) use list_selection_view::SelectionToggle;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
@@ -120,6 +121,7 @@ mod selection_tabs;
 mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
+pub(crate) use selection_tabs::SelectionTab;
 
 /// How long the "press again to quit" hint stays visible.
 ///
@@ -152,6 +154,7 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
+pub(crate) use chat_composer::QueuedInputAction;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -864,7 +867,6 @@ impl BottomPane {
             .and_then(|view| view.selected_index())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn active_tab_id_for_active_view(&self, view_id: &'static str) -> Option<&str> {
         self.view_stack
             .last()

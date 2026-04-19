@@ -4,9 +4,9 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
-use crate::codex::Session;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::session::session::Session;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
