@@ -40,6 +40,7 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
 const WRITE_RESTRICTED: u32 = 0x08;
+const ERROR_INVALID_PARAMETER_WIN32: u32 = 87;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WIN_WORLD_SID: i32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
@@ -282,6 +283,13 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     Ok(())
 }
 
+fn restricted_token_flag_attempts() -> [u32; 2] {
+    [
+        DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
+        DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED,
+    ]
+}
+
 /// # Safety
 /// Caller must close the returned token handle.
 pub unsafe fn create_readonly_token_with_cap(
@@ -353,20 +361,38 @@ unsafe fn create_token_with_caps_from(
     entries[logon_idx + 1].Attributes = 0;
 
     let mut new_token: HANDLE = 0;
-    let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
-    let ok = CreateRestrictedToken(
-        base_token,
-        flags,
-        0,
-        std::ptr::null(),
-        0,
-        std::ptr::null(),
-        entries.len() as u32,
-        entries.as_mut_ptr(),
-        &mut new_token,
-    );
-    if ok == 0 {
-        return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
+    let attempts = restricted_token_flag_attempts();
+    let mut last_err = 0;
+    for (idx, flags) in attempts.into_iter().enumerate() {
+        // Some already-unelevated Windows sessions reject LUA_TOKEN with
+        // ERROR_INVALID_PARAMETER even though the write-restricted token shape
+        // is otherwise valid. Retry once without LUA_TOKEN so the sandbox can
+        // still be constructed for those callers.
+        let ok = CreateRestrictedToken(
+            base_token,
+            flags,
+            0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            entries.len() as u32,
+            entries.as_mut_ptr(),
+            &mut new_token,
+        );
+        if ok != 0 {
+            last_err = 0;
+            break;
+        }
+
+        last_err = GetLastError();
+        let tried_lua = (flags & LUA_TOKEN) != 0;
+        let has_retry = idx + 1 < attempts.len();
+        if !(tried_lua && has_retry && last_err == ERROR_INVALID_PARAMETER_WIN32) {
+            break;
+        }
+    }
+    if last_err != 0 {
+        return Err(anyhow!("CreateRestrictedToken failed: {}", last_err));
     }
 
     let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
@@ -377,4 +403,25 @@ unsafe fn create_token_with_caps_from(
 
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restricted_token_flag_attempts;
+    use super::DISABLE_MAX_PRIVILEGE;
+    use super::LUA_TOKEN;
+    use super::WRITE_RESTRICTED;
+
+    #[test]
+    fn restricted_token_retries_without_lua() {
+        let attempts = restricted_token_flag_attempts();
+
+        assert_eq!(
+            attempts,
+            [
+                DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED,
+                DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED,
+            ]
+        );
+    }
 }
