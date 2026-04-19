@@ -561,7 +561,9 @@ async fn load_requirements_from_legacy_scheme(
 struct ProjectTrustContext {
     project_root: AbsolutePathBuf,
     project_root_key: String,
+    project_root_lookup_keys: Vec<String>,
     repo_root_key: Option<String>,
+    repo_root_lookup_keys: Option<Vec<String>>,
     projects_trust: std::collections::HashMap<String, TrustLevel>,
     user_config_file: AbsolutePathBuf,
 }
@@ -584,28 +586,39 @@ impl ProjectTrustDecision {
 
 impl ProjectTrustContext {
     fn decision_for_dir(&self, dir: &AbsolutePathBuf) -> ProjectTrustDecision {
-        let dir_key = project_trust_key(dir.as_path());
-        if let Some(trust_level) = self.projects_trust.get(&dir_key).copied() {
-            return ProjectTrustDecision {
-                trust_level: Some(trust_level),
-                trust_key: dir_key,
-            };
+        for dir_key in normalized_project_trust_keys(dir.as_path()) {
+            if let Some((trust_key, trust_level)) =
+                project_trust_for_lookup_key(&self.projects_trust, &dir_key)
+            {
+                return ProjectTrustDecision {
+                    trust_level: Some(trust_level),
+                    trust_key,
+                };
+            }
         }
 
-        if let Some(trust_level) = self.projects_trust.get(&self.project_root_key).copied() {
-            return ProjectTrustDecision {
-                trust_level: Some(trust_level),
-                trust_key: self.project_root_key.clone(),
-            };
+        for project_root_key in &self.project_root_lookup_keys {
+            if let Some((trust_key, trust_level)) =
+                project_trust_for_lookup_key(&self.projects_trust, project_root_key)
+            {
+                return ProjectTrustDecision {
+                    trust_level: Some(trust_level),
+                    trust_key,
+                };
+            }
         }
 
-        if let Some(repo_root_key) = self.repo_root_key.as_ref()
-            && let Some(trust_level) = self.projects_trust.get(repo_root_key).copied()
-        {
-            return ProjectTrustDecision {
-                trust_level: Some(trust_level),
-                trust_key: repo_root_key.clone(),
-            };
+        if let Some(repo_root_lookup_keys) = self.repo_root_lookup_keys.as_ref() {
+            for repo_root_key in repo_root_lookup_keys {
+                if let Some((trust_key, trust_level)) =
+                    project_trust_for_lookup_key(&self.projects_trust, repo_root_key)
+                {
+                    return ProjectTrustDecision {
+                        trust_level: Some(trust_level),
+                        trust_key,
+                    };
+                }
+            }
         }
 
         ProjectTrustDecision {
@@ -617,37 +630,35 @@ impl ProjectTrustContext {
         }
     }
 
-    fn disabled_reason_for_dir(&self, dir: &AbsolutePathBuf) -> Option<String> {
-        let decision = self.decision_for_dir(dir);
+    fn disabled_reason_for_decision(&self, decision: &ProjectTrustDecision) -> Option<String> {
         if decision.is_trusted() {
             return None;
         }
 
+        let gated_features = "project-local config, hooks, and exec policies";
         let trust_key = decision.trust_key.as_str();
         let user_config_file = self.user_config_file.as_path().display();
         match decision.trust_level {
             Some(TrustLevel::Untrusted) => Some(format!(
-                "{trust_key} is marked as untrusted in {user_config_file}. To load config.toml, mark it trusted."
+                "{trust_key} is marked as untrusted in {user_config_file}. To load {gated_features}, mark it trusted."
             )),
             _ => Some(format!(
-                "To load config.toml, add {trust_key} as a trusted project in {user_config_file}."
+                "To load {gated_features}, add {trust_key} as a trusted project in {user_config_file}."
             )),
         }
     }
 }
 
 fn project_layer_entry(
-    trust_context: &ProjectTrustContext,
     dot_codex_folder: &AbsolutePathBuf,
-    layer_dir: &AbsolutePathBuf,
     config: TomlValue,
-    config_toml_exists: bool,
+    disabled_reason: Option<String>,
 ) -> ConfigLayerEntry {
     let source = ConfigLayerSource::Project {
         dot_codex_folder: dot_codex_folder.clone(),
     };
 
-    if config_toml_exists && let Some(reason) = trust_context.disabled_reason_for_dir(layer_dir) {
+    if let Some(reason) = disabled_reason {
         ConfigLayerEntry::new_disabled(source, config, reason)
     } else {
         ConfigLayerEntry::new(source, config)
@@ -673,25 +684,30 @@ async fn project_trust_context(
     let project_root = find_project_root(fs, cwd, project_root_markers).await?;
     let projects = project_trust_config.projects.unwrap_or_default();
 
-    let project_root_key = project_trust_key(project_root.as_path());
+    let project_root_lookup_keys = normalized_project_trust_keys(project_root.as_path());
+    let project_root_key = project_root_lookup_keys
+        .first()
+        .cloned()
+        .unwrap_or_else(|| project_trust_key(project_root.as_path()));
     let repo_root = resolve_root_git_project_for_trust(fs, cwd).await;
-    let repo_root_key = repo_root
+    let repo_root_lookup_keys = repo_root
         .as_ref()
-        .map(|root| project_trust_key(root.as_path()));
+        .map(|root| normalized_project_trust_keys(root.as_path()));
+    let repo_root_key = repo_root_lookup_keys
+        .as_ref()
+        .and_then(|keys| keys.first().cloned());
 
     let projects_trust = projects
         .into_iter()
-        .filter_map(|(key, project)| {
-            project
-                .trust_level
-                .map(|trust_level| (project_trust_key(Path::new(&key)), trust_level))
-        })
+        .filter_map(|(key, project)| project.trust_level.map(|trust_level| (key, trust_level)))
         .collect();
 
     Ok(ProjectTrustContext {
         project_root,
         project_root_key,
+        project_root_lookup_keys,
         repo_root_key,
+        repo_root_lookup_keys,
         projects_trust,
         user_config_file: user_config_file.clone(),
     })
@@ -700,13 +716,52 @@ async fn project_trust_context(
 /// Canonicalize the path and convert it to a string to be used as a key in the
 /// projects trust map. On Windows, strips UNC, when possible, to try to ensure
 /// that different paths that point to the same location have the same key.
-pub fn project_trust_key(project_path: &Path) -> String {
-    normalize_path(project_path)
-        .unwrap_or_else(|_| project_path.to_path_buf())
-        .to_string_lossy()
-        .to_string()
+pub fn project_trust_key(path: &Path) -> String {
+    normalized_project_trust_keys(path)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| normalize_project_trust_lookup_key(path.to_string_lossy().to_string()))
 }
 
+fn normalized_project_trust_keys(path: &Path) -> Vec<String> {
+    let normalized_path = normalize_project_trust_lookup_key(path.to_string_lossy().to_string());
+    let normalized_canonical_path = normalize_project_trust_lookup_key(
+        normalize_path(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string(),
+    );
+    if normalized_path == normalized_canonical_path {
+        vec![normalized_canonical_path]
+    } else {
+        vec![normalized_canonical_path, normalized_path]
+    }
+}
+
+fn normalize_project_trust_lookup_key(key: String) -> String {
+    if cfg!(windows) {
+        key.to_ascii_lowercase()
+    } else {
+        key
+    }
+}
+fn project_trust_for_lookup_key(
+    projects_trust: &std::collections::HashMap<String, TrustLevel>,
+    lookup_key: &str,
+) -> Option<(String, TrustLevel)> {
+    if let Some(trust_level) = projects_trust.get(lookup_key).copied() {
+        return Some((lookup_key.to_string(), trust_level));
+    }
+
+    let mut normalized_matches: Vec<_> = projects_trust
+        .iter()
+        .filter(|(key, _)| normalize_project_trust_lookup_key((*key).clone()) == lookup_key)
+        .collect();
+    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches
+        .first()
+        .map(|(key, trust_level)| ((**key).clone(), **trust_level))
+}
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
 /// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
 /// `toml::Value` with the same shape but with paths resolved.
@@ -834,6 +889,7 @@ async fn load_project_layers(
         }
 
         let decision = trust_context.decision_for_dir(&dir);
+        let disabled_reason = trust_context.disabled_reason_for_decision(&decision);
         let dot_codex_normalized =
             normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
         if dot_codex_abs == codex_home_abs || dot_codex_normalized == codex_home_normalized {
@@ -855,24 +911,16 @@ async fn load_project_layers(
                             ));
                         }
                         layers.push(project_layer_entry(
-                            trust_context,
                             &dot_codex_abs,
-                            &dir,
                             TomlValue::Table(toml::map::Map::new()),
-                            /*config_toml_exists*/ true,
+                            disabled_reason.clone(),
                         ));
                         continue;
                     }
                 };
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let entry = project_layer_entry(
-                    trust_context,
-                    &dot_codex_abs,
-                    &dir,
-                    config,
-                    /*config_toml_exists*/ true,
-                );
+                let entry = project_layer_entry(&dot_codex_abs, config, disabled_reason.clone());
                 layers.push(entry);
             }
             Err(err) => {
@@ -881,11 +929,9 @@ async fn load_project_layers(
                     // for this project layer, as this may still have subfolders
                     // that are significant in the overall ConfigLayerStack.
                     layers.push(project_layer_entry(
-                        trust_context,
                         &dot_codex_abs,
-                        &dir,
                         TomlValue::Table(toml::map::Map::new()),
-                        /*config_toml_exists*/ false,
+                        disabled_reason,
                     ));
                 } else {
                     let config_file_display = config_file.as_path().display();
@@ -900,7 +946,6 @@ async fn load_project_layers(
 
     Ok(layers)
 }
-
 /// The legacy mechanism for specifying admin-enforced configuration is to read
 /// from a file like `/etc/codex/managed_config.toml` that has the same
 /// structure as `config.toml` where fields like `approval_policy` can specify

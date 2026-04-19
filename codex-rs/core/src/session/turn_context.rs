@@ -75,9 +75,11 @@ pub(crate) struct TurnContext {
 impl TurnContext {
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
-        self.model_info.context_window.map(|context_window| {
-            context_window.saturating_mul(effective_context_window_percent) / 100
-        })
+        self.model_info
+            .resolved_context_window()
+            .map(|context_window| {
+                context_window.saturating_mul(effective_context_window_percent) / 100
+            })
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
@@ -209,6 +211,8 @@ impl TurnContext {
     ) -> FileSystemSandboxContext {
         FileSystemSandboxContext {
             sandbox_policy: self.sandbox_policy.get().clone(),
+            sandbox_policy_cwd: Some(self.cwd.clone()),
+            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config
@@ -219,6 +223,19 @@ impl TurnContext {
         }
     }
 
+    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+        // Omit the derived split filesystem policy when it is equivalent to
+        // the legacy sandbox policy. This keeps turn-context payloads stable
+        // while both fields exist; once callers consume only the split policy,
+        // this comparison and the legacy projection should go away.
+        let legacy_file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            self.sandbox_policy.get(),
+            &self.cwd,
+        );
+        (self.file_system_sandbox_policy != legacy_file_system_sandbox_policy)
+            .then(|| self.file_system_sandbox_policy.clone())
+    }
+
     pub(crate) fn compact_prompt(&self) -> &str {
         self.compact_prompt
             .as_deref()
@@ -226,18 +243,6 @@ impl TurnContext {
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
-        let legacy_file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-            self.sandbox_policy.get(),
-            &self.cwd,
-        );
-        // Omit the derived split filesystem policy when it is equivalent to
-        // the legacy sandbox policy. This keeps turn-context payloads stable
-        // while both fields exist; once callers consume only the split policy,
-        // this comparison and the legacy projection should go away.
-        let file_system_sandbox_policy = (self.file_system_sandbox_policy
-            != legacy_file_system_sandbox_policy)
-            .then(|| self.file_system_sandbox_policy.clone());
-
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
@@ -247,7 +252,7 @@ impl TurnContext {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
-            file_system_sandbox_policy,
+            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
