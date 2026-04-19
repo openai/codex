@@ -4,10 +4,9 @@
 //! binding, then validate and persist the resulting runtime keymap.
 
 mod actions;
-mod details;
+mod picker;
 
-use std::sync::Arc;
-use std::sync::Mutex;
+pub(crate) use picker::build_keymap_picker_params;
 
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
@@ -31,104 +30,33 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
-use crate::bottom_pane::SideContentWidth;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::keymap::RuntimeKeymap;
+use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use actions::KEYMAP_ACTIONS;
 use actions::action_label;
 use actions::binding_slot;
 use actions::bindings_for_action;
 use actions::format_binding_summary;
-use details::KeymapActionDetailsLayout;
-use details::KeymapActionDetailsRenderable;
-use details::build_action_details;
 
-const KEYMAP_PICKER_VIEW_ID: &str = "keymap-picker";
 pub(crate) const KEYMAP_ACTION_MENU_VIEW_ID: &str = "keymap-action-menu";
-const KEYMAP_DETAIL_PANEL_WIDTH: u16 = 46;
-const KEYMAP_DETAIL_PANEL_MIN_WIDTH: u16 = 40;
 
-pub(crate) fn build_keymap_picker_params(
-    runtime_keymap: &RuntimeKeymap,
-    keymap_config: &TuiKeymap,
-) -> SelectionViewParams {
-    let details = Arc::new(build_action_details(runtime_keymap, keymap_config));
-    let selected_detail_idx = Arc::new(Mutex::new(0usize));
-    let selected_detail_idx_for_callback = selected_detail_idx.clone();
-
-    let items = KEYMAP_ACTIONS
-        .iter()
-        .copied()
-        .map(|descriptor| {
-            let bindings =
-                bindings_for_action(runtime_keymap, descriptor.context, descriptor.action)
-                    .unwrap_or(&[]);
-            let binding_summary = format_binding_summary(bindings);
-            let context = descriptor.context.to_string();
-            let action = descriptor.action.to_string();
-            let label = action_label(descriptor.action);
-            let search_value = format!(
-                "{} {} {} {} {}",
-                descriptor.context_label,
-                descriptor.action,
-                label,
-                descriptor.description,
-                binding_summary
-            );
-
-            SelectionItem {
-                name: label,
-                name_prefix_spans: vec![format!("{:<12} ", descriptor.context_label).dim()],
-                description: Some(binding_summary),
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenKeymapActionMenu {
-                        context: context.clone(),
-                        action: action.clone(),
-                    });
-                })],
-                search_value: Some(search_value),
-                ..Default::default()
-            }
-        })
-        .collect();
-
-    let on_selection_changed = Some(Box::new(move |idx: usize, _tx: &_| {
-        if let Ok(mut selected_idx) = selected_detail_idx_for_callback.lock() {
-            *selected_idx = idx;
-        }
-    })
-        as Box<dyn Fn(usize, &crate::app_event_sender::AppEventSender) + Send + Sync>);
-
-    SelectionViewParams {
-        view_id: Some(KEYMAP_PICKER_VIEW_ID),
-        title: Some("Remap Shortcut".to_string()),
-        subtitle: Some("Search actions. Enter edits the selected shortcut.".to_string()),
-        footer_note: Some(Line::from(vec![
-            "Saves to root ".dim(),
-            "`tui.keymap.*`".cyan(),
-            " so shortcuts stay consistent across profiles.".dim(),
-        ])),
-        footer_hint: Some(standard_popup_hint_line()),
-        items,
-        is_searchable: true,
-        search_placeholder: Some("Search actions...".to_string()),
-        col_width_mode: ColumnWidthMode::AutoAllRows,
-        side_content: Box::new(KeymapActionDetailsRenderable::new(
-            details.clone(),
-            selected_detail_idx.clone(),
-            KeymapActionDetailsLayout::Wide,
-        )),
-        side_content_width: SideContentWidth::Fixed(KEYMAP_DETAIL_PANEL_WIDTH),
-        side_content_min_width: KEYMAP_DETAIL_PANEL_MIN_WIDTH,
-        stacked_side_content: Some(Box::new(KeymapActionDetailsRenderable::new(
-            details,
-            selected_detail_idx,
-            KeymapActionDetailsLayout::NarrowFooter,
-        ))),
-        on_selection_changed,
-        ..Default::default()
+fn key_binding_span(binding: &str) -> ratatui::text::Span<'static> {
+    if binding == "unbound" {
+        binding.to_string().dim()
+    } else {
+        binding.to_string().cyan()
     }
+}
+
+fn keymap_action_menu_hint_line() -> Line<'static> {
+    Line::from(vec![
+        "enter".cyan(),
+        " select · ".dim(),
+        "esc".cyan(),
+        " back".dim(),
+    ])
 }
 
 pub(crate) fn build_keymap_action_menu_params(
@@ -141,6 +69,16 @@ pub(crate) fn build_keymap_action_menu_params(
         bindings_for_action(runtime_keymap, &context, &action).unwrap_or(&[]),
     );
     let custom_binding = has_custom_binding(keymap_config, &context, &action).unwrap_or(false);
+    let descriptor = KEYMAP_ACTIONS
+        .iter()
+        .find(|descriptor| descriptor.context == context && descriptor.action == action);
+    let context_label = descriptor
+        .map(|descriptor| descriptor.context_label)
+        .unwrap_or(context.as_str())
+        .to_string();
+    let description = descriptor
+        .map(|descriptor| descriptor.description)
+        .unwrap_or("Configure this shortcut.");
     let remove_disabled_reason = (!custom_binding)
         .then(|| "There is no custom root binding for this action to remove.".to_string());
     let label = action_label(&action);
@@ -148,23 +86,46 @@ pub(crate) fn build_keymap_action_menu_params(
     let set_action = action.clone();
     let remove_context = context.clone();
     let remove_action = action.clone();
+    let config_path = format!("tui.keymap.{context}.{action}");
+    let source = if custom_binding {
+        "Custom root override".cyan()
+    } else {
+        "Default keymap".dim()
+    };
+    let mut header = ColumnRenderable::new();
+    header.push(Line::from("Edit Shortcut".bold()));
+    header.push(Line::from(vec![
+        label.bold(),
+        " · ".dim(),
+        context_label.dim(),
+    ]));
+    header.push(Line::from(vec![
+        "Current ".dim(),
+        key_binding_span(&current_binding),
+        " · ".dim(),
+        source,
+    ]));
+    header.push(Line::from(vec![
+        "Config ".dim(),
+        format!("`{config_path}`").cyan(),
+    ]));
+    header.push(Line::from(description.to_string().dim()));
 
     SelectionViewParams {
         view_id: Some(KEYMAP_ACTION_MENU_VIEW_ID),
-        title: Some("Edit Shortcut".to_string()),
-        subtitle: Some(format!("{label}  {context}.{action}")),
+        header: Box::new(header),
         footer_note: Some(Line::from(vec![
-            "Remove clears the root ".dim(),
+            "Changes write the root ".dim(),
             "`tui.keymap.*`".cyan(),
-            " entry and falls back to the default keymap.".dim(),
+            " override.".dim(),
         ])),
-        footer_hint: Some(standard_popup_hint_line()),
+        footer_hint: Some(keymap_action_menu_hint_line()),
         items: vec![
             SelectionItem {
                 name: "Set new key".to_string(),
-                description: Some(format!("Current: {current_binding}")),
+                description: Some("Capture a replacement key.".to_string()),
                 selected_description: Some(format!(
-                    "Current: {current_binding}. Capture one key and replace this action's custom binding."
+                    "Capture one key and replace the current `{current_binding}` binding."
                 )),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenKeymapCapture {
@@ -176,9 +137,13 @@ pub(crate) fn build_keymap_action_menu_params(
             },
             SelectionItem {
                 name: "Remove custom binding".to_string(),
-                description: Some("Restore the default binding for this action.".to_string()),
+                description: Some(if custom_binding {
+                    "Restore the default keymap binding.".to_string()
+                } else {
+                    "No root override to remove.".to_string()
+                }),
                 selected_description: Some(
-                    "Delete the root custom binding and use the default keymap again.".to_string(),
+                    "Delete the root override and use the default keymap again.".to_string(),
                 ),
                 disabled_reason: remove_disabled_reason,
                 actions: vec![Box::new(move |tx| {
@@ -190,8 +155,8 @@ pub(crate) fn build_keymap_action_menu_params(
                 ..Default::default()
             },
             SelectionItem {
-                name: "Cancel".to_string(),
-                description: Some("Leave keymap unchanged.".to_string()),
+                name: "Back to shortcuts".to_string(),
+                description: Some("Return to the shortcut list.".to_string()),
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -475,10 +440,14 @@ fn key_parts_to_config_key_spec(
 
 #[cfg(test)]
 mod tests {
+    use super::picker::KEYMAP_ALL_TAB_ID;
+    use super::picker::KEYMAP_CUSTOM_TAB_ID;
+    use super::picker::KEYMAP_UNBOUND_TAB_ID;
     use super::*;
     use crate::bottom_pane::BottomPane;
     use crate::bottom_pane::BottomPaneParams;
     use crate::bottom_pane::ListSelectionView;
+    use crate::bottom_pane::SelectionTab;
     use crate::tui::FrameRequester;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -547,14 +516,24 @@ mod tests {
         (pane, tx, rx)
     }
 
+    fn selection_tab<'a>(params: &'a SelectionViewParams, id: &str) -> &'a SelectionTab {
+        params
+            .tabs
+            .iter()
+            .find(|tab| tab.id == id)
+            .expect("selection tab")
+    }
+
     #[test]
     fn picker_covers_every_replaceable_action() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
 
-        assert_eq!(params.items.len(), KEYMAP_ACTIONS.len());
+        assert!(params.items.is_empty());
+        assert_eq!(all_tab.items.len(), KEYMAP_ACTIONS.len());
         assert!(
-            params.items.iter().all(|item| !item.dismiss_on_select),
+            all_tab.items.iter().all(|item| !item.dismiss_on_select),
             "keymap picker should stay open behind the action menu"
         );
         assert!(KEYMAP_ACTIONS.iter().all(|descriptor| {
@@ -574,7 +553,75 @@ mod tests {
     fn picker_content_snapshot() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
         let snapshot = params
+            .tabs
+            .iter()
+            .map(|tab| {
+                let selectable = tab.items.iter().filter(|item| !item.is_disabled).count();
+                format!("tab: {} ({selectable} selectable)", tab.label)
+            })
+            .chain(all_tab.items.iter().take(12).map(|item| {
+                format!(
+                    "{} | {} | {}",
+                    item.name,
+                    item.description.as_deref().unwrap_or_default(),
+                    item.search_value.as_deref().unwrap_or_default()
+                )
+            }))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!("keymap_picker_first_actions", snapshot);
+    }
+
+    #[test]
+    fn picker_customized_tab_contains_root_overrides() {
+        let keymap =
+            keymap_with_replacement(&TuiKeymap::default(), "composer", "submit", "ctrl-enter")
+                .expect("replace binding");
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
+        let params = build_keymap_picker_params(&runtime, &keymap);
+        let custom_tab = selection_tab(&params, KEYMAP_CUSTOM_TAB_ID);
+        let composer_tab = selection_tab(&params, "composer-shortcuts");
+
+        assert_eq!(
+            custom_tab
+                .items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Submit"]
+        );
+        assert!(
+            composer_tab
+                .items
+                .iter()
+                .any(|item| item.description.as_deref() == Some("ctrl-enter · Custom"))
+        );
+    }
+
+    #[test]
+    fn picker_unbound_tab_lists_default_unbound_actions() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let unbound_tab = selection_tab(&params, KEYMAP_UNBOUND_TAB_ID);
+
+        assert_eq!(unbound_tab.items.len(), 1);
+        assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
+        assert_eq!(
+            unbound_tab.items[0].description.as_deref(),
+            Some("unbound · Default")
+        );
+        assert!(!unbound_tab.items[0].is_disabled);
+    }
+
+    #[test]
+    fn picker_all_tab_items_remain_searchable() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
+        let snapshot = all_tab
             .items
             .iter()
             .take(12)
@@ -589,7 +636,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert_snapshot!("keymap_picker_first_actions", snapshot);
+        assert_snapshot!("keymap_picker_all_tab_search", snapshot);
     }
 
     #[test]
@@ -609,26 +656,15 @@ mod tests {
     }
 
     #[test]
-    fn picker_detail_tracks_selection() {
-        let runtime = RuntimeKeymap::defaults();
-        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
-        let mut view =
-            ListSelectionView::new(params, app_event_sender(), RuntimeKeymap::defaults().list);
-
-        view.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-
-        let rendered = render_picker_from_view(&view, /*width*/ 120);
-        assert!(rendered.contains("Open the current draft in an external editor."));
-    }
-
-    #[test]
-    fn picker_narrow_uses_compact_detail() {
+    fn picker_narrow_uses_compact_tabs() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
         let rendered = render_picker(params, /*width*/ 78);
 
-        assert!(rendered.contains("Open the transcript overlay."));
-        assert!(!rendered.contains("Current: ctrl-t"));
+        assert!(rendered.contains("Keymap"));
+        assert!(rendered.contains("Open Transcript"));
+        assert!(rendered.contains("ctrl-t"));
+        assert!(!rendered.contains("Selected Action"));
         assert!(!rendered.contains("Source: default keymap"));
     }
 
@@ -757,7 +793,7 @@ mod tests {
         pane.render(area, &mut buf);
         let rendered = render_buffer(&buf);
         assert!(
-            rendered.contains("Current: ctrl-shift-k"),
+            rendered.contains("Current ctrl-shift-k"),
             "rendered action menu did not include updated binding:\n{rendered}"
         );
     }

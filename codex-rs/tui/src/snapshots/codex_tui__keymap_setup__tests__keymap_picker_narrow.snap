@@ -3,20 +3,21 @@ source: tui/src/keymap_setup.rs
 expression: "render_picker(params, 78)"
 ---
                                                                               
-  Remap Shortcut                                                              
-  Search actions. Enter edits the selected shortcut.                          
+  Keymap                                                                      
+  All configurable shortcuts.                                                 
+  91 actions, 0 customized, 1 unbound.                                        
                                                                               
-  Search actions...                                                           
-› Global       Open Transcript                ctrl-t                          
-  Global       Open External Editor           ctrl-g                          
-  Global       Copy                           ctrl-o                          
-  Global       Toggle Vim Mode                unbound                         
-  Chat         Edit Previous Message          esc                             
-  Chat         Confirm Edit Previous Message  enter                           
-  Composer     Submit                         enter                           
-  Composer     Queue                          tab                             
+  [All]  Customized (0)  Unbound (1)  App  Composer  Editor  Vim  Navigation  
+  Approval  Onboarding                                                        
                                                                               
-  Open the transcript overlay.                                                
+  Type to search shortcuts                                                    
+› [D] Global       Open Transcript                Current ctrl-t · Default …  
+  [D] Global       Open External Editor           ctrl-g · Default            
+  [D] Global       Copy                           ctrl-o · Default            
+  [-] Global       Toggle Vim Mode                unbound · Default           
+  [D] Chat         Edit Previous Message          esc · Default               
+  [D] Chat         Confirm Edit Previous Message  enter · Default             
+  [D] Composer     Submit                         enter · Default             
+  [D] Composer     Queue                          tab · Default               
                                                                               
-  Saves to root `tui.keymap.*` so shortcuts stay consistent across profiles.  
-  Press enter to confirm or esc to go back
+  left/right group · enter edit shortcut · esc close
