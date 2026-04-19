@@ -289,6 +289,7 @@ use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::login_with_api_key;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
+use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
 use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
@@ -5769,10 +5770,40 @@ impl CodexMessageProcessor {
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
         let auth = self.auth_manager.auth().await;
+        let runtime_environment = match self.thread_manager.environment_manager().current().await {
+            Ok(Some(environment)) => {
+                // Status listing has no turn cwd. This fallback is used only
+                // by executor-backed stdio MCPs whose config omits `cwd`.
+                McpRuntimeEnvironment::new(environment, config.cwd.to_path_buf())
+            }
+            Ok(None) => McpRuntimeEnvironment::new(
+                Arc::new(codex_exec_server::Environment::default()),
+                config.cwd.to_path_buf(),
+            ),
+            Err(err) => {
+                // TODO(aibrahim): Investigate degrading MCP status listing when
+                // executor environment creation fails.
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to create environment: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request, error).await;
+                return;
+            }
+        };
 
         tokio::spawn(async move {
-            Self::list_mcp_server_status_task(outgoing, request, params, config, mcp_config, auth)
-                .await;
+            Self::list_mcp_server_status_task(
+                outgoing,
+                request,
+                params,
+                config,
+                mcp_config,
+                auth,
+                runtime_environment,
+            )
+            .await;
         });
     }
 
@@ -5783,6 +5814,7 @@ impl CodexMessageProcessor {
         config: Config,
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
+        runtime_environment: McpRuntimeEnvironment,
     ) {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
@@ -5793,6 +5825,7 @@ impl CodexMessageProcessor {
             &mcp_config,
             auth.as_ref(),
             request_id.request_id.to_string(),
+            runtime_environment,
             detail,
         )
         .await;

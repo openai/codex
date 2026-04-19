@@ -681,7 +681,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment,
+            environment: environment.clone(),
         };
         services
             .model_client
@@ -780,6 +780,12 @@ impl Session {
             INITIAL_SUBMIT_ID.to_owned(),
             tx_event.clone(),
             session_configuration.sandbox_policy.get().clone(),
+            McpRuntimeEnvironment::new(
+                environment
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(Environment::default())),
+                session_configuration.cwd.to_path_buf(),
+            ),
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,

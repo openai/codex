@@ -1,5 +1,6 @@
 mod auth_status;
 mod elicitation_client_service;
+mod executor_process_transport;
 mod logging_client_handler;
 mod oauth;
 mod perform_oauth_login;
@@ -30,5 +31,6 @@ pub use rmcp_client::ListToolsWithConnectorIdResult;
 pub use rmcp_client::RmcpClient;
 pub use rmcp_client::SendElicitation;
 pub use rmcp_client::ToolWithConnectorId;
+pub use stdio_server_launcher::ExecutorStdioServerLauncher;
 pub use stdio_server_launcher::LocalStdioServerLauncher;
 pub use stdio_server_launcher::StdioServerLauncher;
