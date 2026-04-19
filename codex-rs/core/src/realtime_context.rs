@@ -136,6 +136,7 @@ async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
             sort_direction: SortDirection::Desc,
             allowed_sources: Vec::new(),
             model_providers: None,
+            cwd_filters: None,
             archived: false,
             search_term: None,
         })

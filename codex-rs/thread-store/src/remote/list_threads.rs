@@ -30,6 +30,12 @@ pub(super) async fn list_threads(
         model_provider_filter: params
             .model_providers
             .map(|values| proto::ModelProviderFilter { values }),
+        cwd_filter: params.cwd_filters.map(|values| proto::CwdFilter {
+            values: values
+                .into_iter()
+                .map(|cwd| cwd.display().to_string())
+                .collect(),
+        }),
         archived: params.archived,
         search_term: params.search_term,
     };
@@ -95,6 +101,12 @@ mod tests {
                 request.model_provider_filter,
                 Some(proto::ModelProviderFilter {
                     values: vec!["openai".to_string()],
+                })
+            );
+            assert_eq!(
+                request.cwd_filter,
+                Some(proto::CwdFilter {
+                    values: vec!["/workspace".to_string()],
                 })
             );
             assert_eq!(request.allowed_sources.len(), 1);
@@ -164,6 +176,7 @@ mod tests {
                 sort_direction: crate::SortDirection::Desc,
                 allowed_sources: vec![SessionSource::Cli],
                 model_providers: Some(vec!["openai".to_string()]),
+                cwd_filters: Some(vec![PathBuf::from("/workspace")]),
                 archived: true,
                 search_term: Some("needle".to_string()),
             })

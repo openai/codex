@@ -359,6 +359,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 archived_only,
                 allowed_sources,
                 model_providers,
+                cwd_filters: None,
                 anchor: None,
                 sort_key: crate::SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,
@@ -437,6 +438,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 archived_only,
                 allowed_sources,
                 model_providers,
+                cwd_filters: None,
                 anchor,
                 sort_key,
                 sort_direction: SortDirection::Desc,
@@ -1002,6 +1004,7 @@ pub struct ThreadFilterOptions<'a> {
     pub archived_only: bool,
     pub allowed_sources: &'a [String],
     pub model_providers: Option<&'a [String]>,
+    pub cwd_filters: Option<&'a [PathBuf]>,
     pub anchor: Option<&'a crate::Anchor>,
     pub sort_key: SortKey,
     pub sort_direction: SortDirection,
@@ -1016,6 +1019,7 @@ pub(super) fn push_thread_filters<'a>(
         archived_only,
         allowed_sources,
         model_providers,
+        cwd_filters,
         anchor,
         sort_key,
         sort_direction,
@@ -1045,6 +1049,18 @@ pub(super) fn push_thread_filters<'a>(
             separated.push_bind(provider);
         }
         separated.push_unseparated(")");
+    }
+    if let Some(cwd_filters) = cwd_filters {
+        if cwd_filters.is_empty() {
+            builder.push(" AND 1 = 0");
+        } else {
+            builder.push(" AND threads.cwd IN (");
+            let mut separated = builder.separated(", ");
+            for cwd in cwd_filters {
+                separated.push_bind(cwd.display().to_string());
+            }
+            separated.push_unseparated(")");
+        }
     }
     if let Some(search_term) = search_term {
         builder.push(" AND instr(threads.title, ");
@@ -1188,6 +1204,7 @@ mod tests {
                     archived_only: false,
                     allowed_sources: &[],
                     model_providers: Some(&model_providers),
+                    cwd_filters: None,
                     anchor: Some(&anchor),
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Asc,
@@ -1214,6 +1231,7 @@ mod tests {
                     archived_only: false,
                     allowed_sources: &[],
                     model_providers: Some(&model_providers),
+                    cwd_filters: None,
                     anchor: page.next_anchor.as_ref(),
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Asc,
@@ -1226,6 +1244,78 @@ mod tests {
         let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
         assert_eq!(ids, vec![middle_id]);
         assert_eq!(page.next_anchor, None);
+    }
+
+    #[tokio::test]
+    async fn list_threads_filters_by_cwd() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let first_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("valid thread id");
+        let second_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000102").expect("valid thread id");
+        let other_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000103").expect("valid thread id");
+        let first_cwd = codex_home.join("first");
+        let second_cwd = codex_home.join("second");
+        let other_cwd = codex_home.join("other");
+
+        for (thread_id, cwd, updated_at) in [
+            (first_id, first_cwd.clone(), 1_700_000_100),
+            (second_id, second_cwd.clone(), 1_700_000_300),
+            (other_id, other_cwd, 1_700_000_500),
+        ] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, cwd);
+            metadata.updated_at =
+                DateTime::<Utc>::from_timestamp(updated_at, 0).expect("valid timestamp");
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("thread insert should succeed");
+        }
+
+        let cwd_filters = vec![first_cwd, second_cwd];
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 10,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: Some(cwd_filters.as_slice()),
+                    anchor: None,
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("list should succeed");
+
+        let ids = page.items.iter().map(|item| item.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec![second_id, first_id]);
+
+        let empty_cwd_filters = Vec::<PathBuf>::new();
+        let page = runtime
+            .list_threads(
+                /*page_size*/ 10,
+                ThreadFilterOptions {
+                    archived_only: false,
+                    allowed_sources: &[],
+                    model_providers: None,
+                    cwd_filters: Some(empty_cwd_filters.as_slice()),
+                    anchor: None,
+                    sort_key: SortKey::UpdatedAt,
+                    sort_direction: SortDirection::Desc,
+                    search_term: None,
+                },
+            )
+            .await
+            .expect("list with empty cwd filters should succeed");
+
+        assert_eq!(page.items, Vec::new());
     }
 
     #[tokio::test]

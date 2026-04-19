@@ -77,6 +77,7 @@ async fn list_rollout_threads(
             sort_direction,
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
+            params.cwd_filters.as_deref(),
             config.model_provider_id.as_str(),
             params.search_term.as_deref(),
         )
@@ -90,6 +91,7 @@ async fn list_rollout_threads(
             sort_direction,
             params.allowed_sources.as_slice(),
             params.model_providers.as_deref(),
+            params.cwd_filters.as_deref(),
             config.model_provider_id.as_str(),
             params.search_term.as_deref(),
         )
@@ -140,6 +142,7 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: false,
                 search_term: None,
             })
@@ -196,6 +199,7 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: false,
                 search_term: Some("needle".to_string()),
             })
@@ -233,6 +237,7 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: false,
                 search_term: None,
             })
@@ -246,6 +251,7 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: true,
                 search_term: None,
             })
@@ -295,6 +301,7 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: vec![SessionSource::Cli],
                 model_providers: Some(vec!["test-provider".to_string()]),
+                cwd_filters: None,
                 archived: false,
                 search_term: None,
             })
@@ -329,6 +336,7 @@ mod tests {
                 sort_direction: SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
+                cwd_filters: None,
                 archived: false,
                 search_term: None,
             })

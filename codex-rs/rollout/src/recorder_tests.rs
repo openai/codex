@@ -375,6 +375,7 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
         SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
     )
@@ -391,6 +392,7 @@ async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Re
         SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
     )
@@ -449,6 +451,7 @@ async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Resul
         SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
     )
@@ -512,6 +515,7 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
         SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         default_provider.as_str(),
         /*search_term*/ None,
     )

@@ -3592,13 +3592,29 @@ pub struct ThreadListParams {
     /// If false or null, only non-archived threads are returned.
     #[ts(optional = nullable)]
     pub archived: Option<bool>,
-    /// Optional cwd filters; when set, only threads whose session cwd exactly
-    /// matches one of these paths are returned.
-    #[ts(optional = nullable)]
-    pub cwd: Option<Vec<String>>,
+    /// Optional cwd filter or filters; when set, only threads whose session cwd
+    /// exactly matches one of these paths are returned.
+    #[ts(optional = nullable, type = "string | Array<string>")]
+    pub cwd: Option<ThreadListCwdFilter>,
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum ThreadListCwdFilter {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ThreadListCwdFilter {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            ThreadListCwdFilter::One(cwd) => vec![cwd],
+            ThreadListCwdFilter::Many(cwds) => cwds,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -7169,6 +7185,35 @@ mod tests {
 
     fn test_absolute_path() -> AbsolutePathBuf {
         absolute_path("readable")
+    }
+
+    #[test]
+    fn thread_list_params_accepts_single_cwd() {
+        let params = serde_json::from_value::<ThreadListParams>(json!({
+            "cwd": "/workspace",
+        }))
+        .expect("single cwd should deserialize");
+
+        assert_eq!(
+            params.cwd,
+            Some(ThreadListCwdFilter::One("/workspace".to_string()))
+        );
+    }
+
+    #[test]
+    fn thread_list_params_accepts_multiple_cwds() {
+        let params = serde_json::from_value::<ThreadListParams>(json!({
+            "cwd": ["/workspace", "/other-workspace"],
+        }))
+        .expect("cwd array should deserialize");
+
+        assert_eq!(
+            params.cwd,
+            Some(ThreadListCwdFilter::Many(vec![
+                "/workspace".to_string(),
+                "/other-workspace".to_string(),
+            ]))
+        );
     }
 
     #[test]

@@ -27,6 +27,7 @@ use codex_app_server_protocol::Account as AppServerAccount;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::Thread as AppServerThread;
+use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
@@ -613,7 +614,7 @@ fn latest_session_lookup_params(
         source_kinds: (!include_non_interactive)
             .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
-        cwd: cwd_filter.map(|cwd| vec![cwd.to_string_lossy().to_string()]),
+        cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
         search_term: None,
     }
 }
@@ -1880,7 +1881,10 @@ mod tests {
         );
 
         assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
-        assert_eq!(params.cwd, Some(vec![cwd.to_string_lossy().to_string()]));
+        assert_eq!(
+            params.cwd,
+            Some(ThreadListCwdFilter::One(cwd.to_string_lossy().to_string()))
+        );
         Ok(())
     }
 
@@ -1915,7 +1919,10 @@ mod tests {
         );
 
         assert_eq!(params.model_providers, None);
-        assert_eq!(params.cwd, Some(vec![String::from("repo/on/server")]));
+        assert_eq!(
+            params.cwd,
+            Some(ThreadListCwdFilter::One(String::from("repo/on/server")))
+        );
         Ok(())
     }
 

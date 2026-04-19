@@ -149,6 +149,7 @@ use codex_app_server_protocol::ThreadIncrementElicitationResponse;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -5226,6 +5227,7 @@ impl CodexMessageProcessor {
                     sort_direction: store_sort_direction,
                     allowed_sources: allowed_sources.to_vec(),
                     model_providers: model_provider_filter.clone(),
+                    cwd_filters: cwd.clone(),
                     archived,
                     search_term: search_term.clone(),
                 })
@@ -8733,12 +8735,13 @@ impl CodexMessageProcessor {
 }
 
 fn normalize_thread_list_cwd_filters(
-    cwd: Option<Vec<String>>,
+    cwd: Option<ThreadListCwdFilter>,
 ) -> Result<Option<Vec<PathBuf>>, JSONRPCErrorError> {
-    let Some(cwds) = cwd else {
+    let Some(cwd) = cwd else {
         return Ok(None);
     };
 
+    let cwds = cwd.into_vec();
     let mut normalized_cwds = Vec::with_capacity(cwds.len());
     for cwd in cwds {
         let cwd = AbsolutePathBuf::relative_to_current_dir(cwd.as_str())
@@ -8757,6 +8760,7 @@ fn normalize_thread_list_cwd_filters(
 #[cfg(test)]
 mod thread_list_cwd_filter_tests {
     use super::normalize_thread_list_cwd_filters;
+    use codex_app_server_protocol::ThreadListCwdFilter;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
@@ -8770,7 +8774,7 @@ mod thread_list_cwd_filter_tests {
         };
 
         assert_eq!(
-            normalize_thread_list_cwd_filters(Some(vec![cwd.clone()]))
+            normalize_thread_list_cwd_filters(Some(ThreadListCwdFilter::One(cwd.clone())))
                 .expect("cwd filter should parse"),
             Some(vec![PathBuf::from(cwd)])
         );
@@ -8782,8 +8786,10 @@ mod thread_list_cwd_filter_tests {
         let expected = AbsolutePathBuf::relative_to_current_dir("repo-b")?.to_path_buf();
 
         assert_eq!(
-            normalize_thread_list_cwd_filters(Some(vec![String::from("repo-b")]))
-                .expect("cwd filter should parse"),
+            normalize_thread_list_cwd_filters(Some(ThreadListCwdFilter::Many(vec![String::from(
+                "repo-b"
+            ),])))
+            .expect("cwd filter should parse"),
             Some(vec![expected])
         );
         Ok(())

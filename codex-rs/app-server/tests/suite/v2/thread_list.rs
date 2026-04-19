@@ -15,6 +15,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SortDirection;
+use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
@@ -525,10 +526,10 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
-            cwd: Some(vec![
+            cwd: Some(ThreadListCwdFilter::Many(vec![
                 first_target_cwd.to_string_lossy().into_owned(),
                 second_target_cwd.to_string_lossy().into_owned(),
-            ]),
+            ])),
             search_term: None,
         })
         .await?;
@@ -618,6 +619,7 @@ sqlite = true
         codex_core::SortDirection::Desc,
         &[],
         /*model_providers*/ None,
+        /*cwd_filters*/ None,
         "mock_provider",
         /*search_term*/ None,
     )

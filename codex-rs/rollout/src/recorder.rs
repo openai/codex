@@ -225,6 +225,7 @@ impl RolloutRecorder {
         sort_direction: SortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
+        cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
@@ -236,6 +237,7 @@ impl RolloutRecorder {
             sort_direction,
             allowed_sources,
             model_providers,
+            cwd_filters,
             default_provider,
             /*archived*/ false,
             search_term,
@@ -253,6 +255,7 @@ impl RolloutRecorder {
         sort_direction: SortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
+        cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
@@ -264,6 +267,7 @@ impl RolloutRecorder {
             sort_direction,
             allowed_sources,
             model_providers,
+            cwd_filters,
             default_provider,
             /*archived*/ true,
             search_term,
@@ -280,12 +284,21 @@ impl RolloutRecorder {
         sort_direction: SortDirection,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
+        cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         archived: bool,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
         let state_db_ctx = state_db::get_state_db(config).await;
+        if cwd_filters.is_some_and(<[std::path::PathBuf]>::is_empty) {
+            return Ok(ThreadsPage {
+                items: Vec::new(),
+                next_cursor: None,
+                num_scanned_files: 0,
+                reached_scan_cap: false,
+            });
+        }
 
         // Search is the SQLite-optimized path and assumes a DB marked backfill-complete is
         // actually populated enough to answer the query. If unmigrated rollout files still exist
@@ -301,6 +314,7 @@ impl RolloutRecorder {
                 sort_direction,
                 allowed_sources,
                 model_providers,
+                cwd_filters,
                 archived,
                 search_term,
             )
@@ -322,6 +336,7 @@ impl RolloutRecorder {
                     sort_key,
                     allowed_sources,
                     model_providers,
+                    cwd_filters,
                     default_provider,
                     archived,
                     search_term,
@@ -336,6 +351,7 @@ impl RolloutRecorder {
                     sort_key,
                     allowed_sources,
                     model_providers,
+                    cwd_filters,
                     default_provider,
                     archived,
                     search_term,
@@ -373,6 +389,7 @@ impl RolloutRecorder {
             sort_direction,
             allowed_sources,
             model_providers,
+            cwd_filters,
             archived,
             search_term,
         )
@@ -403,6 +420,7 @@ impl RolloutRecorder {
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home();
         let state_db_ctx = state_db::get_state_db(config).await;
+        let cwd_filter = filter_cwd.map(Path::to_path_buf);
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();
             loop {
@@ -415,6 +433,7 @@ impl RolloutRecorder {
                     SortDirection::Desc,
                     allowed_sources,
                     model_providers,
+                    cwd_filter.as_ref().map(std::slice::from_ref),
                     /*archived*/ false,
                     /*search_term*/ None,
                 )
@@ -443,6 +462,7 @@ impl RolloutRecorder {
                 sort_key,
                 allowed_sources,
                 model_providers,
+                cwd_filter.as_ref().map(std::slice::from_ref),
                 default_provider,
             )
             .await?;
@@ -804,6 +824,7 @@ async fn list_threads_from_files_desc(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
+    cwd_filters: Option<&[PathBuf]>,
     default_provider: &str,
     archived: bool,
     search_term: Option<&str>,
@@ -823,6 +844,7 @@ async fn list_threads_from_files_desc(
                 sort_key,
                 allowed_sources,
                 model_providers,
+                cwd_filters,
                 default_provider,
                 archived,
             )
@@ -864,6 +886,7 @@ async fn list_threads_from_files_desc(
         sort_key,
         allowed_sources,
         model_providers,
+        cwd_filters,
         default_provider,
         archived,
     )
@@ -878,6 +901,7 @@ async fn list_threads_from_files_desc_unfiltered(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
+    cwd_filters: Option<&[PathBuf]>,
     default_provider: &str,
     archived: bool,
 ) -> std::io::Result<ThreadsPage> {
@@ -891,6 +915,7 @@ async fn list_threads_from_files_desc_unfiltered(
             ThreadListConfig {
                 allowed_sources,
                 model_providers,
+                cwd_filters,
                 default_provider,
                 layout: ThreadListLayout::Flat,
             },
@@ -904,6 +929,7 @@ async fn list_threads_from_files_desc_unfiltered(
             sort_key,
             allowed_sources,
             model_providers,
+            cwd_filters,
             default_provider,
         )
         .await
@@ -918,6 +944,7 @@ async fn list_threads_from_files_asc(
     sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
+    cwd_filters: Option<&[PathBuf]>,
     default_provider: &str,
     archived: bool,
     search_term: Option<&str>,
@@ -935,6 +962,7 @@ async fn list_threads_from_files_asc(
             sort_key,
             allowed_sources,
             model_providers,
+            cwd_filters,
             default_provider,
             archived,
             /*search_term*/ None,
