@@ -77,7 +77,6 @@ pub fn create_update_goal_tool() -> ToolSpec {
         name: UPDATE_GOAL_TOOL_NAME.to_string(),
         description: r#"Update the existing long-running goal while preserving time/token usage accounting.
 Use this tool to pause, resume, or mark the goal achieved.
-This tool cannot change the goal objective.
 Set status to `complete` only when the objective has actually been achieved and no required work remains.
 Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.
 When marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user."#
