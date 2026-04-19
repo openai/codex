@@ -347,7 +347,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        if let Some(thread) = running_thread.as_ref() {
+        if cleared && let Some(thread) = running_thread.as_ref() {
             thread.clear_cached_thread_goal_after_delete().await;
             thread.abort_for_goal_stopped().await;
         }
