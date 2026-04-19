@@ -2878,7 +2878,9 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
-        if self.queue_keys.is_pressed(key_event) && !self.is_bang_shell_command() {
+        if self.queue_keys.is_pressed(key_event)
+            && (self.is_task_running || !self.is_bang_shell_command())
+        {
             return self.handle_submission(self.is_task_running);
         }
 
@@ -2926,19 +2928,6 @@ impl ChatComposer {
                 }
                 self.handle_input_basic(key_event)
             }
-            KeyEvent {
-                code: KeyCode::Tab,
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                ..
-            } if self.is_task_running || !self.is_bang_shell_command() => {
-                self.handle_submission(self.is_task_running)
-            }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => self.handle_submission(/*should_queue*/ false),
             input => self.handle_input_basic(input),
         }
     }
@@ -6967,6 +6956,68 @@ mod tests {
         assert_queued_slash("/review check regressions");
         assert_queued_slash("/fast on");
         assert_queued_slash("/does-not-exist");
+    }
+
+    #[test]
+    fn remapped_submit_does_not_fall_back_to_enter() {
+        use crate::key_hint;
+        use crate::keymap::RuntimeKeymap;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer
+            .textarea
+            .set_text_clearing_elements("explain the change");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.submit = vec![key_hint::ctrl(KeyCode::Char('j'))];
+        composer.set_keymap_bindings(&keymap);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("explain the change\n", composer.textarea.text());
+    }
+
+    #[test]
+    fn remapped_queue_does_not_fall_back_to_tab() {
+        use crate::key_hint;
+        use crate::keymap::RuntimeKeymap;
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_task_running(/*running*/ true);
+        composer.textarea.set_text_clearing_elements("queue me");
+        let mut keymap = RuntimeKeymap::defaults();
+        keymap.composer.queue = vec![key_hint::ctrl(KeyCode::Char('q'))];
+        composer.set_keymap_bindings(&keymap);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("queue me", composer.textarea.text());
     }
 
     #[test]
