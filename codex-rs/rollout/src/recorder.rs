@@ -300,11 +300,9 @@ impl RolloutRecorder {
             });
         }
 
-        // Search is the SQLite-optimized path and assumes a DB marked backfill-complete is
-        // actually populated enough to answer the query. If unmigrated rollout files still exist
-        // on disk, the repair path below may or may not run and catch them depending on whether
-        // SQLite already has another matching search hit.
-        if search_term.is_some()
+        // Filtered queries use the SQLite-optimized path and assume a DB marked
+        // backfill-complete is populated enough to answer the query.
+        if (search_term.is_some() || cwd_filters.is_some())
             && let Some(db_page) = state_db::list_threads_db(
                 state_db_ctx.as_deref(),
                 codex_home,
@@ -319,7 +317,7 @@ impl RolloutRecorder {
                 search_term,
             )
             .await
-            && (!db_page.items.is_empty() || cursor.is_some())
+            && (cwd_filters.is_some() || !db_page.items.is_empty() || cursor.is_some())
         {
             return Ok(db_page.into());
         }

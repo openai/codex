@@ -532,6 +532,73 @@ async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Resul
 }
 
 #[tokio::test]
+async fn list_threads_with_cwd_filter_uses_completed_db_as_authority() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+
+    let uuid = Uuid::from_u128(9012);
+    let ts = "2025-01-03T14-00-00";
+    let day_dir = home.path().join("sessions/2025/01/03");
+    fs::create_dir_all(&day_dir)?;
+    let path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let mut file = File::create(&path)?;
+    let meta = serde_json::json!({
+        "timestamp": ts,
+        "type": "session_meta",
+        "payload": {
+            "id": uuid,
+            "timestamp": ts,
+            "cwd": home.path().display().to_string(),
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "cli",
+            "model_provider": "test-provider",
+        },
+    });
+    writeln!(file, "{meta}")?;
+    let user_event = serde_json::json!({
+        "timestamp": ts,
+        "type": "event_msg",
+        "payload": {
+            "type": "user_message",
+            "message": "Hello from user",
+            "kind": "plain",
+        },
+    });
+    writeln!(file, "{user_event}")?;
+
+    let cwd_filters = vec![home.path().to_path_buf()];
+    let default_provider = config.model_provider_id.clone();
+    let page = RolloutRecorder::list_threads(
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ Some(cwd_filters.as_slice()),
+        default_provider.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+
+    assert_eq!(page.items.len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let stale_cwd = home.path().join("stale");
