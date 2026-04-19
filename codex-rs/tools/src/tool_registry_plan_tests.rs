@@ -196,7 +196,7 @@ fn test_build_specs_collab_tools_enabled() {
 }
 
 #[test]
-fn goal_tools_require_goal_mode_feature() {
+fn goal_tools_require_goals_feature() {
     let model_info = model_info();
     let available_models = Vec::new();
     let mut features = Features::with_defaults();

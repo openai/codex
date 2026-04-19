@@ -41,7 +41,7 @@ impl Session {
         request: SetGoalRequest,
     ) -> anyhow::Result<ThreadGoal> {
         if !self.enabled(Feature::GoalMode) {
-            anyhow::bail!("goal_mode feature is disabled");
+            anyhow::bail!("goals feature is disabled");
         }
 
         validate_goal_budget(request.token_budget.flatten())?;
