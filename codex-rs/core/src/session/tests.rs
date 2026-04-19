@@ -7131,6 +7131,53 @@ async fn zero_delta_budget_limited_accounting_aborts_active_turn() -> anyhow::Re
 }
 
 #[tokio::test]
+async fn zero_delta_stopped_goal_clears_accounting_before_later_turn_tokens() -> anyhow::Result<()>
+{
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: Some(Some(1_000)),
+        },
+    )
+    .await?;
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
+        .await;
+
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: None,
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::Paused),
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
+        .await?;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Turn)
+        .await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
+    assert_eq!(0, goal.tokens_used);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn budget_only_update_that_stops_goal_keeps_accounting_current_turn() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
