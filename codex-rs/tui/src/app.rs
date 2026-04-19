@@ -3763,12 +3763,30 @@ impl App {
         }
     }
 
+    fn append_history_cell_lines_for_insert(
+        &mut self,
+        lines: &mut Vec<Line<'static>>,
+        cell: &dyn HistoryCell,
+        width: u16,
+    ) {
+        lines.extend(self.display_lines_for_history_insert(cell, width));
+    }
+
+    fn terminal_resize_reflow_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::TerminalResizeReflow)
+    }
+
     fn schedule_resize_reflow(&mut self) -> bool {
+        debug_assert!(self.terminal_resize_reflow_enabled());
         self.transcript_reflow.schedule_debounced()
     }
 
     /// After stream consolidation, schedule a follow-up reflow if one ran mid-stream.
     fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) {
+        if !self.terminal_resize_reflow_enabled() {
+            self.transcript_reflow.clear();
+            return;
+        }
         if self.transcript_reflow.take_ran_during_stream() {
             if self.schedule_resize_reflow() {
                 tui.frame_requester().schedule_frame();
@@ -3782,11 +3800,19 @@ impl App {
     }
 
     fn schedule_immediate_resize_reflow(&mut self, tui: &mut tui::Tui) {
+        if !self.terminal_resize_reflow_enabled() {
+            self.transcript_reflow.clear();
+            return;
+        }
         self.transcript_reflow.schedule_immediate();
         tui.frame_requester().schedule_frame();
     }
 
     fn finish_required_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if !self.terminal_resize_reflow_enabled() {
+            self.transcript_reflow.clear();
+            return Ok(());
+        }
         self.schedule_immediate_resize_reflow(tui);
         self.maybe_run_resize_reflow(tui)?;
         if !self.transcript_reflow.has_pending_reflow() {
@@ -3804,10 +3830,14 @@ impl App {
         let width = self.transcript_reflow.note_width(size.width);
         if width.changed {
             self.chat_widget.on_terminal_resize(size.width);
-            if self.schedule_resize_reflow() {
-                frame_requester.schedule_frame();
+            if self.terminal_resize_reflow_enabled() {
+                if self.schedule_resize_reflow() {
+                    frame_requester.schedule_frame();
+                } else {
+                    frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
+                }
             } else {
-                frame_requester.schedule_frame_in(TRANSCRIPT_REFLOW_DEBOUNCE);
+                self.transcript_reflow.clear();
             }
         } else if width.initialized {
             self.chat_widget.on_terminal_resize(size.width);
@@ -3815,11 +3845,17 @@ impl App {
         if size != last_known_screen_size {
             self.refresh_status_line();
         }
-        self.maybe_clear_resize_reflow_without_terminal();
+        if self.terminal_resize_reflow_enabled() {
+            self.maybe_clear_resize_reflow_without_terminal();
+        }
         width.changed
     }
 
     fn maybe_clear_resize_reflow_without_terminal(&mut self) {
+        if !self.terminal_resize_reflow_enabled() {
+            self.transcript_reflow.clear();
+            return;
+        }
         let Some(deadline) = self.transcript_reflow.pending_until() else {
             return;
         };
@@ -3839,7 +3875,7 @@ impl App {
             tui.terminal.last_known_screen_size,
             &tui.frame_requester(),
         );
-        if width_changed {
+        if width_changed && self.terminal_resize_reflow_enabled() {
             // Width-sensitive history inserts queued before this frame may be wrapped for the old
             // viewport. Drop them and let resize reflow rebuild from transcript cells.
             tui.clear_pending_history_lines();
@@ -3849,6 +3885,10 @@ impl App {
     }
 
     fn maybe_run_resize_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if !self.terminal_resize_reflow_enabled() {
+            self.transcript_reflow.clear();
+            return Ok(());
+        }
         let Some(deadline) = self.transcript_reflow.pending_until() else {
             return Ok(());
         };
@@ -3890,10 +3930,14 @@ impl App {
         self.reset_history_emission_state();
 
         let width = tui.terminal.size()?.width;
+        let mut reflowed_lines = Vec::new();
         // Iterate by index to avoid cloning the Vec and bumping Arc refcounts.
         for i in 0..self.transcript_cells.len() {
             let cell = self.transcript_cells[i].clone();
-            self.insert_history_cell_lines(tui, cell.as_ref(), width);
+            self.append_history_cell_lines_for_insert(&mut reflowed_lines, cell.as_ref(), width);
+        }
+        if !reflowed_lines.is_empty() {
+            tui.insert_history_lines(reflowed_lines);
         }
 
         Ok(())
@@ -11123,6 +11167,7 @@ guardian_approval = true
     #[tokio::test]
     async fn resize_reflow_repro_draw_should_drain_pending_without_commit_tick() {
         let mut app = make_test_app().await;
+        let _ = app.config.features.enable(Feature::TerminalResizeReflow);
         let frame_requester = crate::tui::FrameRequester::test_dummy();
         let size = Size::new(120, 40);
 
@@ -11136,6 +11181,24 @@ guardian_approval = true
         assert!(
             !app.transcript_reflow.has_pending_reflow(),
             "resize reflow should drain on draw even when commit animation is idle",
+        );
+    }
+
+    #[tokio::test]
+    async fn resize_reflow_disabled_by_default_keeps_old_resize_behavior() {
+        let mut app = make_test_app().await;
+        let frame_requester = crate::tui::FrameRequester::test_dummy();
+        let size = Size::new(120, 40);
+
+        assert!(!app.terminal_resize_reflow_enabled());
+
+        app.transcript_reflow.set_last_render_width_for_test(100);
+        let width_changed = app.handle_draw_size_change(size, size, &frame_requester);
+
+        assert_eq!(width_changed, true);
+        assert!(
+            !app.transcript_reflow.has_pending_reflow(),
+            "disabled resize reflow should not schedule transcript rebuild work",
         );
     }
 
@@ -11154,6 +11217,25 @@ guardian_approval = true
         assert!(
             app.should_mark_reflow_as_stream_time(),
             "reflow in the pre-consolidation window should still be treated as stream-time",
+        );
+    }
+
+    #[tokio::test]
+    async fn resize_reflow_collects_history_cells_preserving_spacing() {
+        let mut app = make_test_app().await;
+        let mut lines = Vec::new();
+        let first = AgentMessageCell::new(vec![Line::from("first")], /*is_first_line*/ true);
+        let continuation =
+            AgentMessageCell::new(vec![Line::from("second")], /*is_first_line*/ false);
+        let next = AgentMessageCell::new(vec![Line::from("third")], /*is_first_line*/ true);
+
+        app.append_history_cell_lines_for_insert(&mut lines, &first, /*width*/ 80);
+        app.append_history_cell_lines_for_insert(&mut lines, &continuation, /*width*/ 80);
+        app.append_history_cell_lines_for_insert(&mut lines, &next, /*width*/ 80);
+
+        assert_eq!(
+            lines_to_single_string(&lines),
+            "• first\n  second\n\n• third"
         );
     }
 

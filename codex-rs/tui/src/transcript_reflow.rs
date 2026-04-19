@@ -30,11 +30,16 @@ impl TranscriptReflowState {
         self.last_render_width = Some(width);
     }
 
-    /// Schedule a debounced reflow. Returns true if the previous pending reflow was already due.
+    /// Schedule a coalesced reflow. Returns true if the pending reflow is already due.
+    ///
+    /// Repeated resize events keep the existing deadline instead of pushing it out, so continuous
+    /// resizing cannot postpone scrollback repair indefinitely.
     pub(crate) fn schedule_debounced(&mut self) -> bool {
         let now = Instant::now();
         let due_now = self.pending_is_due(now);
-        self.pending_until = Some(now + TRANSCRIPT_REFLOW_DEBOUNCE);
+        if self.pending_until.is_none() {
+            self.pending_until = Some(now + TRANSCRIPT_REFLOW_DEBOUNCE);
+        }
         due_now
     }
 
@@ -81,4 +86,30 @@ impl TranscriptReflowState {
 pub(crate) struct TranscriptWidthChange {
     pub(crate) changed: bool,
     pub(crate) initialized: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schedule_debounced_does_not_postpone_existing_reflow() {
+        let mut state = TranscriptReflowState::default();
+
+        assert!(!state.schedule_debounced());
+        let first_deadline = state.pending_until().expect("pending reflow");
+
+        std::thread::sleep(Duration::from_millis(1));
+        assert!(!state.schedule_debounced());
+
+        assert_eq!(state.pending_until(), Some(first_deadline));
+    }
+
+    #[test]
+    fn schedule_debounced_reports_due_existing_reflow() {
+        let mut state = TranscriptReflowState::default();
+        state.set_due_for_test();
+
+        assert!(state.schedule_debounced());
+    }
 }
