@@ -15,6 +15,7 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-pty = { workspace = true }
