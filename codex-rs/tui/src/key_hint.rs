@@ -15,6 +15,12 @@ const ALT_PREFIX: &str = "alt + ";
 const CTRL_PREFIX: &str = "ctrl + ";
 const SHIFT_PREFIX: &str = "shift + ";
 
+/// One concrete key event that can trigger a TUI action.
+///
+/// The binding stores the terminal key code plus the exact modifier set that
+/// must be present on an incoming press or repeat event. It does not model
+/// multi-key chords or partial matches; callers that need sequences must keep
+/// that state outside this type.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct KeyBinding {
     key: KeyCode,
@@ -38,6 +44,10 @@ impl KeyBinding {
 }
 
 /// Matching helpers for one action's keybinding set.
+///
+/// Implementations are expected to treat the slice as alternatives for one
+/// action. They should not interpret order as priority for dispatch; order is
+/// reserved for UI hint selection via `primary_binding`.
 pub(crate) trait KeyBindingListExt {
     /// True when any binding in this set matches `event`.
     fn is_pressed(&self, event: KeyEvent) -> bool;
