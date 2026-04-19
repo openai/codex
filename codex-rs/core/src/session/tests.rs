@@ -52,6 +52,7 @@ use crate::tasks::execute_user_shell_command;
 use crate::tools::ToolRouter;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::GoalHandler;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UnifiedExecHandler;
 use crate::tools::registry::ToolHandler;
@@ -8143,6 +8144,68 @@ async fn sample_rollout(
         rollout_items,
         live_history.for_prompt(&reconstruction_turn.model_info.input_modalities),
     )
+}
+
+#[tokio::test]
+async fn set_goal_tool_rejects_existing_goal() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let _ = session.features.enable(Feature::GoalMode);
+    let session = Arc::new(session);
+    attach_rollout_recorder(&session).await;
+    let turn_context = Arc::new(turn_context);
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let handler = GoalHandler;
+
+    handler
+        .handle(ToolInvocation {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn_context),
+            tracker: Arc::clone(&tracker),
+            call_id: "set-goal-1".to_string(),
+            tool_name: codex_tools::ToolName::plain("set_goal"),
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "objective": "Keep the watcher alive",
+                    "token_budget": 123,
+                })
+                .to_string(),
+            },
+        })
+        .await
+        .expect("initial set_goal should succeed");
+
+    let response = handler
+        .handle(ToolInvocation {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn_context),
+            tracker,
+            call_id: "set-goal-2".to_string(),
+            tool_name: codex_tools::ToolName::plain("set_goal"),
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "objective": "Replace the watcher",
+                    "token_budget": 456,
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    let Err(FunctionCallError::RespondToModel(output)) = response else {
+        panic!("expected set_goal to reject an existing goal");
+    };
+    assert_eq!(
+        output,
+        "cannot set a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
+    );
+
+    let goal = session
+        .get_thread_goal()
+        .await
+        .expect("read thread goal")
+        .expect("goal should still exist");
+    assert_eq!(goal.objective, "Keep the watcher alive");
+    assert_eq!(goal.token_budget, Some(123));
 }
 
 #[tokio::test]

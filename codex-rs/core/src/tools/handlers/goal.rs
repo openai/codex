@@ -134,6 +134,18 @@ async fn handle_set_goal(
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: SetGoalArgs = parse_arguments(arguments)?;
+    if session
+        .get_thread_goal()
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?
+        .is_some()
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "cannot set a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
+                .to_string(),
+        ));
+    }
+
     let goal = session
         .set_thread_goal(
             turn_context,
