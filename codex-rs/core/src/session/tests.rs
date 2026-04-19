@@ -6392,8 +6392,8 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
             sse(vec![
                 ev_response_created("resp-1"),
                 ev_function_call(
-                    "call-set-goal",
-                    "set_goal",
+                    "call-create-goal",
+                    "create_goal",
                     r#"{"objective":"write a cat poem"}"#,
                 ),
                 ev_completed("resp-1"),
@@ -6468,11 +6468,11 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
         Ok(result) => result?,
         Err(_) => {
             let requests = responses.requests();
-            let set_goal_output = requests
+            let create_goal_output = requests
                 .get(1)
-                .map(|request| request.function_call_output("call-set-goal"));
+                .map(|request| request.function_call_output("call-create-goal"));
             panic!(
-                "timed out waiting for continuation turn start; events={event_trace:#?}; captured {} response requests; set_goal_output={set_goal_output:#?}",
+                "timed out waiting for continuation turn start; events={event_trace:#?}; captured {} response requests; create_goal_output={create_goal_output:#?}",
                 requests.len(),
             );
         }
@@ -6686,7 +6686,7 @@ async fn goal_accounting_resets_baseline_for_out_of_band_replacement() -> anyhow
 }
 
 #[tokio::test]
-async fn set_goal_same_objective_preserves_usage_accounting() -> anyhow::Result<()> {
+async fn set_thread_goal_same_objective_preserves_usage_accounting() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
@@ -7426,8 +7426,8 @@ async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_respon
             sse(vec![
                 ev_response_created("resp-1"),
                 ev_function_call(
-                    "call-set-goal",
-                    "set_goal",
+                    "call-create-goal",
+                    "create_goal",
                     r#"{"objective":"write a report","token_budget":500}"#,
                 ),
                 ev_completed("resp-1"),
@@ -7521,8 +7521,8 @@ async fn stopping_goal_accounts_current_turn_uncached_tokens_before_tool_respons
             sse(vec![
                 ev_response_created("resp-1"),
                 ev_function_call(
-                    "call-set-goal",
-                    "set_goal",
+                    "call-create-goal",
+                    "create_goal",
                     r#"{"objective":"write a report","token_budget":1000}"#,
                 ),
                 ev_completed("resp-1"),
@@ -8147,7 +8147,7 @@ async fn sample_rollout(
 }
 
 #[tokio::test]
-async fn set_goal_tool_rejects_existing_goal() {
+async fn create_goal_tool_rejects_existing_goal() {
     let (mut session, turn_context) = make_session_and_context().await;
     let _ = session.features.enable(Feature::GoalMode);
     let session = Arc::new(session);
@@ -8161,8 +8161,8 @@ async fn set_goal_tool_rejects_existing_goal() {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&tracker),
-            call_id: "set-goal-1".to_string(),
-            tool_name: codex_tools::ToolName::plain("set_goal"),
+            call_id: "create-goal-1".to_string(),
+            tool_name: codex_tools::ToolName::plain("create_goal"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "objective": "Keep the watcher alive",
@@ -8172,15 +8172,15 @@ async fn set_goal_tool_rejects_existing_goal() {
             },
         })
         .await
-        .expect("initial set_goal should succeed");
+        .expect("initial create_goal should succeed");
 
     let response = handler
         .handle(ToolInvocation {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker,
-            call_id: "set-goal-2".to_string(),
-            tool_name: codex_tools::ToolName::plain("set_goal"),
+            call_id: "create-goal-2".to_string(),
+            tool_name: codex_tools::ToolName::plain("create_goal"),
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "objective": "Replace the watcher",
@@ -8192,11 +8192,11 @@ async fn set_goal_tool_rejects_existing_goal() {
         .await;
 
     let Err(FunctionCallError::RespondToModel(output)) = response else {
-        panic!("expected set_goal to reject an existing goal");
+        panic!("expected create_goal to reject an existing goal");
     };
     assert_eq!(
         output,
-        "cannot set a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
+        "cannot create a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
     );
 
     let goal = session
