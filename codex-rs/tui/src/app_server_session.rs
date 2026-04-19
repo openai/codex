@@ -957,7 +957,7 @@ fn thread_start_params_from_config(
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         session_start_source,
-        persist_extended_history: true,
+        persist_extended_history: false,
         ..ThreadStartParams::default()
     }
 }
@@ -977,7 +977,7 @@ fn thread_resume_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
-        persist_extended_history: true,
+        persist_extended_history: false,
         ..ThreadResumeParams::default()
     }
 }
@@ -998,7 +998,7 @@ fn thread_fork_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
         ephemeral: config.ephemeral,
-        persist_extended_history: true,
+        persist_extended_history: false,
         ..ThreadForkParams::default()
     }
 }
