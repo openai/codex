@@ -58,6 +58,7 @@ const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     r"C:\Program Files (x86)",
     r"C:\ProgramData",
 ];
+const WINDOWS_APPS_ROOT: &str = r"C:\Program Files\WindowsApps";
 
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
@@ -334,13 +335,27 @@ fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && let Some(read_root) = helper_exe_dir_read_root(dir)
     {
-        roots.push(dir.to_path_buf());
+        roots.push(read_root);
     }
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
     roots
+}
+
+fn helper_exe_dir_read_root(dir: &Path) -> Option<PathBuf> {
+    if is_windows_apps_dir(dir) {
+        return None;
+    }
+    Some(dir.to_path_buf())
+}
+
+fn is_windows_apps_dir(path: &Path) -> bool {
+    let path_key = canonical_path_key(path);
+    let windows_apps_key = canonical_path_key(Path::new(WINDOWS_APPS_ROOT));
+    path_key == windows_apps_key || path_key.starts_with(&format!("{windows_apps_key}/"))
 }
 
 fn gather_legacy_full_read_roots(
@@ -804,6 +819,8 @@ mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::helper_exe_dir_read_root;
+    use super::is_windows_apps_dir;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -1007,6 +1024,23 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn helper_exe_dir_read_root_skips_windows_apps_dir() {
+        let windows_apps_dir =
+            PathBuf::from(r"C:\Program Files\WindowsApps\OpenAI.Codex_1.2.3.4_x64__test\app");
+
+        assert!(is_windows_apps_dir(&windows_apps_dir));
+        assert_eq!(helper_exe_dir_read_root(&windows_apps_dir), None);
+    }
+
+    #[test]
+    fn helper_exe_dir_read_root_keeps_normal_install_dir() {
+        let normal_dir = PathBuf::from(r"C:\Program Files\OpenAI\Codex\app");
+
+        assert!(!is_windows_apps_dir(&normal_dir));
+        assert_eq!(helper_exe_dir_read_root(&normal_dir), Some(normal_dir));
     }
 
     #[test]
