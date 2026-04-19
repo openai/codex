@@ -3,9 +3,11 @@
 use crate::Observation;
 use serde::Serialize;
 
+mod compaction;
 mod thread;
 mod turn;
 
+pub use compaction::*;
 pub use thread::*;
 pub use turn::*;
 

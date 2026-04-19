@@ -140,6 +140,22 @@ impl AnalyticsObservationReducer {
             .ingest_observed_turn_steer(connection_id, observation, out);
     }
 
+    /// Ingests a compaction.ended observation and emits the current analytics event.
+    pub(crate) async fn ingest_compaction_ended(
+        &mut self,
+        observation: events::CompactionEnded<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.legacy
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
+                    observation_projection::compaction_ended_event(observation),
+                ))),
+                out,
+            )
+            .await;
+    }
+
     /// Ingests a hook.run_completed observation and emits the current analytics event.
     pub(crate) fn ingest_hook_run_completed(
         &mut self,

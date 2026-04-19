@@ -291,6 +291,60 @@ pub(crate) fn turn_ended_notification(observation: events::TurnEnded<'_>) -> Ser
     })
 }
 
+pub(crate) fn compaction_ended_event(
+    observation: events::CompactionEnded<'_>,
+) -> facts::CodexCompactionEvent {
+    let (status, error) = match observation.status {
+        events::CompactionStatus::Completed => (facts::CompactionStatus::Completed, None),
+        events::CompactionStatus::Failed { error } => {
+            (facts::CompactionStatus::Failed, error.map(str::to_string))
+        }
+        events::CompactionStatus::Interrupted => (facts::CompactionStatus::Interrupted, None),
+    };
+
+    facts::CodexCompactionEvent {
+        thread_id: observation.thread_id.to_string(),
+        turn_id: observation.turn_id.to_string(),
+        trigger: match observation.trigger {
+            events::CompactionTrigger::Manual => facts::CompactionTrigger::Manual,
+            events::CompactionTrigger::Auto => facts::CompactionTrigger::Auto,
+        },
+        reason: match observation.reason {
+            events::CompactionReason::UserRequested => facts::CompactionReason::UserRequested,
+            events::CompactionReason::ContextLimit => facts::CompactionReason::ContextLimit,
+            events::CompactionReason::ModelDownshift => facts::CompactionReason::ModelDownshift,
+        },
+        implementation: match observation.implementation {
+            events::CompactionImplementation::Responses => {
+                facts::CompactionImplementation::Responses
+            }
+            events::CompactionImplementation::ResponsesCompact => {
+                facts::CompactionImplementation::ResponsesCompact
+            }
+        },
+        phase: match observation.phase {
+            events::CompactionPhase::StandaloneTurn => facts::CompactionPhase::StandaloneTurn,
+            events::CompactionPhase::PreTurn => facts::CompactionPhase::PreTurn,
+            events::CompactionPhase::MidTurn => facts::CompactionPhase::MidTurn,
+        },
+        strategy: match observation.strategy {
+            events::CompactionStrategy::Memento => facts::CompactionStrategy::Memento,
+            events::CompactionStrategy::PrefixCompaction => {
+                facts::CompactionStrategy::PrefixCompaction
+            }
+        },
+        status,
+        error,
+        active_context_tokens_before: observation.active_context_tokens_before,
+        active_context_tokens_after: observation.active_context_tokens_after,
+        started_at: u64::try_from(observation.started_at).unwrap_or_default(),
+        completed_at: u64::try_from(observation.ended_at).unwrap_or_default(),
+        duration_ms: observation
+            .duration_ms
+            .and_then(|duration_ms| u64::try_from(duration_ms).ok()),
+    }
+}
+
 fn tracking_from_fields(model_slug: &str, thread_id: &str, turn_id: &str) -> TrackEventsContext {
     TrackEventsContext {
         model_slug: model_slug.to_string(),

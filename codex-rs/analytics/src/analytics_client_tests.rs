@@ -2312,6 +2312,122 @@ async fn turn_steer_observations_match_legacy_sources() {
     assert_eq!(observation_payload, legacy_payload);
 }
 
+#[tokio::test]
+async fn compaction_ended_observation_matches_legacy_fact() {
+    use codex_observability::events as observation_events;
+
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-2222-2222-222222222222")
+            .expect("valid parent thread id");
+
+    ingest_initialize(&mut legacy_reducer, &mut legacy_events).await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_resume_response_with_source(
+                    "thread-1",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                    AppServerSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    }),
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_events.clear();
+
+    observation_reducer
+        .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
+        .await;
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-2222-2222-222222222222")
+            .expect("valid parent thread id");
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_resume_response_with_source(
+                    "thread-1",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                    AppServerSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        depth: 1,
+                        agent_path: None,
+                        agent_nickname: None,
+                        agent_role: None,
+                    }),
+                )),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_events.clear();
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
+                CodexCompactionEvent {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-compact".to_string(),
+                    trigger: CompactionTrigger::Manual,
+                    reason: CompactionReason::UserRequested,
+                    implementation: CompactionImplementation::Responses,
+                    phase: CompactionPhase::StandaloneTurn,
+                    strategy: CompactionStrategy::Memento,
+                    status: CompactionStatus::Failed,
+                    error: Some("context limit exceeded".to_string()),
+                    active_context_tokens_before: 131_000,
+                    active_context_tokens_after: 131_000,
+                    started_at: 100,
+                    completed_at: 101,
+                    duration_ms: Some(1200),
+                },
+            ))),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_compaction_ended(
+            observation_events::CompactionEnded {
+                thread_id: "thread-1",
+                turn_id: "turn-compact",
+                trigger: observation_events::CompactionTrigger::Manual,
+                reason: observation_events::CompactionReason::UserRequested,
+                implementation: observation_events::CompactionImplementation::Responses,
+                phase: observation_events::CompactionPhase::StandaloneTurn,
+                strategy: observation_events::CompactionStrategy::Memento,
+                status: observation_events::CompactionStatus::Failed {
+                    error: Some("context limit exceeded"),
+                },
+                active_context_tokens_before: 131_000,
+                active_context_tokens_after: 131_000,
+                started_at: 100,
+                ended_at: 101,
+                duration_ms: Some(1200),
+            },
+            &mut observation_events,
+        )
+        .await;
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
 fn legacy_event_created_at(event: &TrackEventRequest) -> i64 {
     serde_json::to_value(event)
         .expect("serialize event")
