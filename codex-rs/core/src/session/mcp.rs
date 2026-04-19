@@ -243,6 +243,14 @@ impl Session {
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,
+            McpStartupTraceMetadata {
+                thread_id: Some(self.conversation_id.to_string()),
+                session_source: Some(turn_context.session_source.to_string()),
+                is_subagent: matches!(turn_context.session_source, SessionSource::SubAgent(_)),
+                is_guardian_reviewer: crate::guardian::is_guardian_reviewer_source(
+                    &turn_context.session_source,
+                ),
+            },
         )
         .await;
         {

@@ -177,7 +177,7 @@ async fn guardian_test_session_and_turn_with_telemetry(
     base_url: &str,
     session_telemetry: SessionTelemetry,
 ) -> (Arc<Session>, Arc<TurnContext>) {
-    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
     session.conversation_id = fixed_guardian_parent_session_id();
     session.services.session_telemetry = session_telemetry.clone();
     let mut config = (*turn.config).clone();
@@ -185,13 +185,13 @@ async fn guardian_test_session_and_turn_with_telemetry(
     config.user_instructions = None;
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
-        config.codex_home.clone(),
+        config.codex_home.to_path_buf(),
         Arc::clone(&session.services.auth_manager),
         config.model_provider.clone(),
     ));
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
-    turn.provider = config.model_provider.clone();
+    turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
     turn.user_instructions = None;
     turn.session_telemetry = session_telemetry;
 
@@ -1391,7 +1391,7 @@ async fn guardian_review_records_lifecycle_metrics() -> anyhow::Result<()> {
         GuardianApprovalRequest::Shell {
             id: "shell-guardian-metrics".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
-            cwd: PathBuf::from("/repo/codex-rs/core"),
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
             sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: Some("Need to push the reviewed docs fix.".to_string()),

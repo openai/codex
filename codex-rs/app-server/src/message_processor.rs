@@ -999,6 +999,18 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::AppsList { request_id, params } => {
+                self.codex_message_processor
+                    .apps_list(
+                        ConnectionRequestId {
+                            connection_id,
+                            request_id,
+                        },
+                        params,
+                    )
+                    .boxed()
+                    .await;
+            }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which

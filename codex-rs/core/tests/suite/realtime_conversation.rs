@@ -99,11 +99,6 @@ impl Match for RealtimeCallRequestCapture {
     }
 }
 
-fn normalized_json_string(raw: &str) -> Result<String> {
-    let value: Value = serde_json::from_str(raw).context("expected JSON fixture to parse")?;
-    serde_json::to_string(&value).context("expected JSON fixture to serialize")
-}
-
 fn websocket_request_text(
     request: &core_test_support::responses::WebSocketRequest,
 ) -> Option<String> {

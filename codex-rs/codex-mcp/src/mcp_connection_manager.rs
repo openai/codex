@@ -848,45 +848,48 @@ impl McpConnectionManager {
             let tx_event = tx_event.clone();
             let submit_id = startup_submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
-            join_set.spawn(async move {
-                let mut outcome = async_managed_client.client().await;
-                if cancel_token.is_cancelled() {
-                    Span::current().record("mcp.startup.status", "cancelled");
-                    outcome = Err(StartupOutcomeError::Cancelled);
+            join_set.spawn(
+                async move {
+                    let mut outcome = async_managed_client.client().await;
+                    if cancel_token.is_cancelled() {
+                        Span::current().record("mcp.startup.status", "cancelled");
+                        outcome = Err(StartupOutcomeError::Cancelled);
+                    }
+                    let status = match &outcome {
+                        Ok(_) => {
+                            Span::current().record("mcp.startup.status", "ready");
+                            McpStartupStatus::Ready
+                        }
+                        Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+                        Err(error) => {
+                            let status = match error {
+                                StartupOutcomeError::Cancelled => "cancelled",
+                                StartupOutcomeError::Failed { .. } => "failed",
+                            };
+                            Span::current().record("mcp.startup.status", status);
+                            let error_str = mcp_init_error_display(
+                                server_name.as_str(),
+                                auth_entry.as_ref(),
+                                error,
+                            );
+                            McpStartupStatus::Failed { error: error_str }
+                        }
+                    };
+
+                    let _ = emit_update(
+                        submit_id.as_str(),
+                        &tx_event,
+                        McpStartupUpdateEvent {
+                            server: server_name.clone(),
+                            status,
+                        },
+                    )
+                    .await;
+
+                    (server_name, outcome)
                 }
-                let status = match &outcome {
-                    Ok(_) => {
-                        Span::current().record("mcp.startup.status", "ready");
-                        McpStartupStatus::Ready
-                    }
-                    Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
-                    Err(error) => {
-                        let status = match error {
-                            StartupOutcomeError::Cancelled => "cancelled",
-                            StartupOutcomeError::Failed { .. } => "failed",
-                        };
-                        Span::current().record("mcp.startup.status", status);
-                        let error_str = mcp_init_error_display(
-                            server_name.as_str(),
-                            auth_entry.as_ref(),
-                            error,
-                        );
-                        McpStartupStatus::Failed { error: error_str }
-                    }
-                };
-
-                let _ = emit_update(
-                    submit_id.as_str(),
-                    &tx_event,
-                    McpStartupUpdateEvent {
-                        server: server_name.clone(),
-                        status,
-                    },
-                )
-                .await;
-
-                (server_name, outcome)
-            }.instrument(server_startup_span));
+                .instrument(server_startup_span),
+            );
         }
         let manager = Self {
             clients,

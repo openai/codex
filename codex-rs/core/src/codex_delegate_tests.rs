@@ -31,6 +31,7 @@ use core_test_support::tracing::install_test_tracing;
 use opentelemetry::trace::TraceContextExt;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -434,7 +435,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
 #[tokio::test]
 async fn handle_request_user_input_guardian_submission_uses_parent_trace() {
     let (parent_session, parent_ctx, _rx_events) =
-        crate::codex::make_session_and_context_with_rx().await;
+        crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let parent_trace = test_trace_context("00000000000000000000000000000033", "0000000000000044");
     let mut config = (*parent_ctx.config).clone();
@@ -516,7 +517,7 @@ async fn handle_request_user_input_guardian_submission_uses_parent_trace() {
 #[tokio::test]
 async fn handle_patch_approval_guardian_submission_uses_parent_trace() {
     let (parent_session, parent_ctx, _rx_events) =
-        crate::codex::make_session_and_context_with_rx().await;
+        crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let parent_trace = test_trace_context("00000000000000000000000000000077", "0000000000000088");
     let mut config = (*parent_ctx.config).clone();
@@ -583,7 +584,7 @@ async fn handle_patch_approval_guardian_submission_uses_parent_trace() {
 #[tokio::test]
 async fn guardian_review_span_uses_parent_turn_trace_context() {
     let _trace_test_context = install_test_tracing("codex-core-tests");
-    let (_session, mut turn) = crate::codex::make_session_and_context().await;
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let parent_trace = test_trace_context("00000000000000000000000000000011", "0000000000000022");
     turn.trace_id = Some("00000000000000000000000000000011".to_string());
     turn.trace_context = Some(parent_trace.clone());
@@ -607,7 +608,7 @@ async fn guardian_review_span_uses_parent_turn_trace_context() {
 #[tokio::test]
 async fn guardian_review_submit_trace_prefers_current_review_span_and_falls_back_to_turn_trace() {
     let _trace_test_context = install_test_tracing("codex-core-tests");
-    let (_session, mut turn) = crate::codex::make_session_and_context().await;
+    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let fallback_trace = test_trace_context("00000000000000000000000000000033", "0000000000000044");
     let current_review_trace =
         test_trace_context("00000000000000000000000000000055", "0000000000000066");

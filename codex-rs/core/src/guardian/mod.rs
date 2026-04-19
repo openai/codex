@@ -29,9 +29,9 @@ pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::GuardianNetworkAccessTrigger;
 pub(crate) use approval_request::guardian_approval_request_to_json;
 pub(crate) use review::guardian_rejection_message;
-pub(crate) use review::guardian_timeout_message;
 #[cfg(test)]
 pub(crate) use review::guardian_review_trace_for_test;
+pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::new_guardian_review_id;
 #[cfg(test)]

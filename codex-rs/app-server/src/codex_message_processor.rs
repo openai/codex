@@ -358,6 +358,8 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::UpdateThreadMetadataParams as StoreUpdateThreadMetadataParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
+use futures::FutureExt;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Error as IoError;
@@ -368,7 +370,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
-use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -1083,6 +1084,7 @@ impl CodexMessageProcessor {
             }
             ClientRequest::AppsList { request_id, params } => {
                 self.apps_list(to_connection_request_id(request_id), params)
+                    .boxed()
                     .await;
             }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
@@ -6377,7 +6379,7 @@ impl CodexMessageProcessor {
         self.finalize_thread_teardown(thread_id).await;
     }
 
-    async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
+    pub(crate) async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
         let app_list_span = app_list_span(&params);
         let analytics_context = AppListAnalyticsContext::new(
             self.analytics_events_client.clone(),
@@ -8075,7 +8077,7 @@ impl CodexMessageProcessor {
             thread_manager,
             thread_state_manager,
             pending_thread_unloads,
-            analytics_events_client: _,
+            analytics_events_client,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
@@ -8151,9 +8153,9 @@ impl CodexMessageProcessor {
                             conversation_id,
                             conversation.clone(),
                             thread_manager.clone(),
-                            listener_task_context
-                                .general_analytics_enabled
-                                .then(|| listener_task_context.analytics_events_client.clone()),
+                            conversation
+                                .enabled(Feature::GeneralAnalytics)
+                                .then(|| analytics_events_client.clone()),
                             thread_outgoing,
                             thread_state.clone(),
                             thread_watch_manager.clone(),
