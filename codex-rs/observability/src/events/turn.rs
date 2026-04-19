@@ -12,6 +12,26 @@ pub enum TurnStatus {
     Interrupted,
 }
 
+/// Result of trying to steer an active turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerResult {
+    Accepted,
+    Rejected,
+}
+
+/// Stable reason why a turn steering request was rejected.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSteerRejectionReason {
+    NoActiveTurn,
+    ExpectedTurnMismatch,
+    NonSteerableReview,
+    NonSteerableCompact,
+    EmptyInput,
+    InputTooLarge,
+}
+
 /// How a turn was submitted for execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -140,6 +160,33 @@ pub struct TurnStarted<'a> {
     /// Unix timestamp in seconds when the turn started.
     #[obs(level = "basic", class = "operational")]
     pub started_at: i64,
+}
+
+/// Observation emitted when the outcome of a same-turn steering request is known.
+#[derive(Observation)]
+#[observation(name = "turn.steer", crate = "crate", uses = ["analytics"])]
+pub struct TurnSteer<'a> {
+    #[obs(level = "basic", class = "identifier")]
+    pub thread_id: &'a str,
+
+    #[obs(level = "basic", class = "identifier")]
+    pub expected_turn_id: &'a str,
+
+    #[obs(level = "basic", class = "identifier")]
+    pub accepted_turn_id: Option<&'a str>,
+
+    #[obs(level = "basic", class = "operational")]
+    pub num_input_images: usize,
+
+    #[obs(level = "basic", class = "operational")]
+    pub result: TurnSteerResult,
+
+    #[obs(level = "basic", class = "operational")]
+    pub rejection_reason: Option<TurnSteerRejectionReason>,
+
+    /// Unix timestamp in seconds when the steering request was made.
+    #[obs(level = "basic", class = "operational")]
+    pub created_at: i64,
 }
 
 /// Token accounting reported for a completed turn.

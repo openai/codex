@@ -129,6 +129,17 @@ impl AnalyticsObservationReducer {
             .await;
     }
 
+    /// Ingests a turn.steer observation and emits the current analytics event.
+    pub(crate) fn ingest_turn_steer(
+        &mut self,
+        connection_id: u64,
+        observation: events::TurnSteer<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.legacy
+            .ingest_observed_turn_steer(connection_id, observation, out);
+    }
+
     /// Ingests a hook.run_completed observation and emits the current analytics event.
     pub(crate) fn ingest_hook_run_completed(
         &mut self,

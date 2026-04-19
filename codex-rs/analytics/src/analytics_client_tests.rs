@@ -2194,6 +2194,133 @@ async fn accepted_turn_steer_emits_expected_event() {
 }
 
 #[tokio::test]
+async fn turn_steer_observations_match_legacy_sources() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    ingest_initialize(&mut legacy_reducer, &mut legacy_events).await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_events.clear();
+
+    observation_reducer
+        .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_events.clear();
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(4),
+                request: Box::new(sample_turn_steer_request(
+                    "thread-2", "turn-2", /*request_id*/ 4,
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 4)),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    let accepted_created_at = legacy_event_created_at(&legacy_events[0]);
+    observation_reducer.ingest_turn_steer(
+        7,
+        codex_observability::events::TurnSteer {
+            thread_id: "thread-2",
+            expected_turn_id: "turn-2",
+            accepted_turn_id: Some("turn-2"),
+            num_input_images: 1,
+            result: codex_observability::events::TurnSteerResult::Accepted,
+            rejection_reason: None,
+            created_at: accepted_created_at,
+        },
+        &mut observation_events,
+    );
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(5),
+                request: Box::new(sample_turn_steer_request(
+                    "thread-2", "turn-2", /*request_id*/ 5,
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::ErrorResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(5),
+                error: no_active_turn_steer_error(),
+                error_type: Some(no_active_turn_steer_error_type()),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    let rejected_created_at = legacy_event_created_at(&legacy_events[1]);
+    observation_reducer.ingest_turn_steer(
+        7,
+        codex_observability::events::TurnSteer {
+            thread_id: "thread-2",
+            expected_turn_id: "turn-2",
+            accepted_turn_id: None,
+            num_input_images: 1,
+            result: codex_observability::events::TurnSteerResult::Rejected,
+            rejection_reason: Some(
+                codex_observability::events::TurnSteerRejectionReason::NoActiveTurn,
+            ),
+            created_at: rejected_created_at,
+        },
+        &mut observation_events,
+    );
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+fn legacy_event_created_at(event: &TrackEventRequest) -> i64 {
+    serde_json::to_value(event)
+        .expect("serialize event")
+        .pointer("/event_params/created_at")
+        .and_then(serde_json::Value::as_i64)
+        .expect("created_at")
+}
+
+#[tokio::test]
 async fn rejected_turn_steer_uses_request_connection_metadata() {
     let mut reducer = AnalyticsReducer::default();
     let mut out = Vec::new();

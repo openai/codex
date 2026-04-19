@@ -751,6 +751,57 @@ impl AnalyticsReducer {
         self.emit_thread_initialized_event(input, out);
     }
 
+    pub(crate) fn ingest_observed_turn_steer(
+        &mut self,
+        connection_id: u64,
+        observation: observation_events::TurnSteer<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        if let Some(accepted_turn_id) = observation.accepted_turn_id
+            && let Some(turn_state) = self.turns.get_mut(accepted_turn_id)
+        {
+            turn_state.steer_count += 1;
+        }
+
+        self.emit_turn_steer_event(
+            connection_id,
+            PendingTurnSteerState {
+                thread_id: observation.thread_id.to_string(),
+                expected_turn_id: observation.expected_turn_id.to_string(),
+                num_input_images: observation.num_input_images,
+                created_at: u64::try_from(observation.created_at).unwrap_or_default(),
+            },
+            observation.accepted_turn_id.map(str::to_string),
+            match observation.result {
+                observation_events::TurnSteerResult::Accepted => TurnSteerResult::Accepted,
+                observation_events::TurnSteerResult::Rejected => TurnSteerResult::Rejected,
+            },
+            observation
+                .rejection_reason
+                .map(|rejection_reason| match rejection_reason {
+                    observation_events::TurnSteerRejectionReason::NoActiveTurn => {
+                        TurnSteerRejectionReason::NoActiveTurn
+                    }
+                    observation_events::TurnSteerRejectionReason::ExpectedTurnMismatch => {
+                        TurnSteerRejectionReason::ExpectedTurnMismatch
+                    }
+                    observation_events::TurnSteerRejectionReason::NonSteerableReview => {
+                        TurnSteerRejectionReason::NonSteerableReview
+                    }
+                    observation_events::TurnSteerRejectionReason::NonSteerableCompact => {
+                        TurnSteerRejectionReason::NonSteerableCompact
+                    }
+                    observation_events::TurnSteerRejectionReason::EmptyInput => {
+                        TurnSteerRejectionReason::EmptyInput
+                    }
+                    observation_events::TurnSteerRejectionReason::InputTooLarge => {
+                        TurnSteerRejectionReason::InputTooLarge
+                    }
+                }),
+            out,
+        );
+    }
+
     fn emit_thread_initialized_event(
         &mut self,
         input: ThreadInitializedInput,
