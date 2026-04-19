@@ -65,6 +65,7 @@ use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
@@ -189,6 +190,27 @@ fn sample_thread_resume_response_with_source(
         request_id: RequestId::Integer(2),
         response: ThreadResumeResponse {
             thread: sample_thread_with_source(thread_id, ephemeral, source),
+            model: model.to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd: test_path_buf("/tmp").abs(),
+            instruction_sources: Vec::new(),
+            approval_policy: AppServerAskForApproval::OnFailure,
+            approvals_reviewer: AppServerApprovalsReviewer::User,
+            sandbox: AppServerSandboxPolicy::DangerFullAccess,
+            reasoning_effort: None,
+        },
+    }
+}
+
+fn sample_thread_fork_response(thread_id: &str, ephemeral: bool, model: &str) -> ClientResponse {
+    let mut thread = sample_thread(thread_id, ephemeral);
+    thread.forked_from_id = Some("parent-thread".to_string());
+
+    ClientResponse::ThreadFork {
+        request_id: RequestId::Integer(3),
+        response: ThreadForkResponse {
+            thread,
             model: model.to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
@@ -1714,7 +1736,84 @@ async fn feature_observations_match_legacy_analytics_facts() {
 }
 
 #[tokio::test]
-async fn thread_started_observation_matches_legacy_response() {
+async fn thread_started_observation_matches_legacy_responses() {
+    assert_thread_started_observation_matches_legacy_response(
+        sample_thread_start_response("thread-observed", /*ephemeral*/ false, "gpt-5"),
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-observed",
+            source: codex_observability::events::ThreadSource::User,
+            parent_thread_id: None,
+            initialization_mode: codex_observability::events::ThreadInitializationMode::New,
+            model: "gpt-5",
+            ephemeral: false,
+            created_at: 1,
+        },
+    )
+    .await;
+
+    assert_thread_started_observation_matches_legacy_response(
+        sample_thread_resume_response("thread-resumed", /*ephemeral*/ true, "gpt-5.1"),
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-resumed",
+            source: codex_observability::events::ThreadSource::User,
+            parent_thread_id: None,
+            initialization_mode: codex_observability::events::ThreadInitializationMode::Resumed,
+            model: "gpt-5.1",
+            ephemeral: true,
+            created_at: 1,
+        },
+    )
+    .await;
+
+    assert_thread_started_observation_matches_legacy_response(
+        sample_thread_fork_response("thread-forked", /*ephemeral*/ false, "gpt-5.2"),
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-forked",
+            source: codex_observability::events::ThreadSource::User,
+            parent_thread_id: None,
+            initialization_mode: codex_observability::events::ThreadInitializationMode::Forked,
+            model: "gpt-5.2",
+            ephemeral: false,
+            created_at: 1,
+        },
+    )
+    .await;
+
+    let parent_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-2222-2222-222222222222")
+            .expect("valid parent thread id");
+    assert_thread_started_observation_matches_legacy_response(
+        sample_thread_resume_response_with_source(
+            "thread-subagent",
+            /*ephemeral*/ false,
+            "gpt-5",
+            AppServerSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+        ),
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-subagent",
+            source: codex_observability::events::ThreadSource::Subagent(
+                codex_observability::events::ThreadSubagentKind::ThreadSpawn,
+            ),
+            parent_thread_id: Some("22222222-2222-2222-2222-222222222222"),
+            initialization_mode: codex_observability::events::ThreadInitializationMode::Resumed,
+            model: "gpt-5",
+            ephemeral: false,
+            created_at: 1,
+        },
+    )
+    .await;
+}
+
+async fn assert_thread_started_observation_matches_legacy_response(
+    legacy_response: ClientResponse,
+    observation: codex_observability::events::ThreadStarted<'_>,
+) {
     let mut legacy_reducer = AnalyticsReducer::default();
     let mut observation_reducer = AnalyticsObservationReducer::default();
     let mut legacy_events = Vec::new();
@@ -1725,11 +1824,7 @@ async fn thread_started_observation_matches_legacy_response() {
         .ingest(
             AnalyticsFact::Response {
                 connection_id: 7,
-                response: Box::new(sample_thread_start_response(
-                    "thread-observed",
-                    /*ephemeral*/ false,
-                    "gpt-5",
-                )),
+                response: Box::new(legacy_response),
             },
             &mut legacy_events,
         )
@@ -1738,19 +1833,7 @@ async fn thread_started_observation_matches_legacy_response() {
     observation_reducer
         .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
         .await;
-    observation_reducer.ingest_thread_started(
-        7,
-        codex_observability::events::ThreadStarted {
-            thread_id: "thread-observed",
-            source: codex_observability::events::ThreadSource::User,
-            parent_thread_id: None,
-            initialization_mode: codex_observability::events::ThreadInitializationMode::New,
-            model: "gpt-5",
-            ephemeral: false,
-            created_at: 1,
-        },
-        &mut observation_events,
-    );
+    observation_reducer.ingest_thread_started(7, observation, &mut observation_events);
 
     let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
     let observation_payload =
