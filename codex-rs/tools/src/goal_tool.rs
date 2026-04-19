@@ -46,7 +46,7 @@ pub fn create_create_goal_tool() -> ToolSpec {
         name: CREATE_GOAL_TOOL_NAME.to_string(),
         description: r#"Create a new long-running goal for this thread when no goal is already defined.
 This tool creates a fresh active goal and resets time/token usage accounting to zero.
-It fails if any goal already exists. Use update_goal, not create_goal, to pause, resume, or mark an existing goal achieved while preserving usage accounting.
+It fails if any goal already exists. Use update_goal, not create_goal, only to mark an existing goal achieved while preserving usage accounting.
 To replace the objective, the user must clear or replace the goal through goal-management UI or API.
 Set token_budget here when the goal should have a budget."#
             .to_string(),
@@ -65,9 +65,9 @@ pub fn create_update_goal_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "status".to_string(),
         JsonSchema::string_enum(
-            vec![json!("active"), json!("paused"), json!("complete")],
+            vec![json!("complete")],
             Some(
-                "Optional. Set to active, paused, or complete. Use complete only when the objective is achieved and no required work remains."
+                "Required. Set to complete only when the objective is achieved and no required work remains."
                     .to_string(),
             ),
         ),
@@ -76,9 +76,10 @@ pub fn create_update_goal_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: UPDATE_GOAL_TOOL_NAME.to_string(),
         description: r#"Update the existing long-running goal while preserving time/token usage accounting.
-Use this tool to pause, resume, or mark the goal achieved.
+Use this tool only to mark the goal achieved.
 Set status to `complete` only when the objective has actually been achieved and no required work remains.
 Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.
+You cannot use this tool to pause, resume, or budget-limit a goal; those status changes are controlled by the user or system.
 When marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user."#
             .to_string(),
         strict: false,
@@ -90,4 +91,24 @@ When marking a budgeted goal achieved with status `complete`, report the final t
         ),
         output_schema: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_goal_tool_only_exposes_complete_status() {
+        let ToolSpec::Function(tool) = create_update_goal_tool() else {
+            panic!("update_goal should be a function tool");
+        };
+        let status = tool
+            .parameters
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.get("status"))
+            .expect("status property should exist");
+
+        assert_eq!(status.enum_values, Some(vec![json!("complete")]));
+    }
 }
