@@ -184,6 +184,16 @@ fn run_setup_refresh_inner(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
+    let cleared_report = match clear_setup_error_report(request.codex_home) {
+        Ok(()) => true,
+        Err(err) => {
+            log_note(
+                &format!("setup refresh: failed to clear setup_error.json before launch: {err}"),
+                Some(&sandbox_dir(request.codex_home)),
+            );
+            false
+        }
+    };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -212,7 +222,17 @@ fn run_setup_refresh_inner(
             &format!("setup refresh: exited with status {status:?}"),
             Some(&sandbox_dir(request.codex_home)),
         );
-        return Err(anyhow!("setup refresh failed with status {status}"));
+        return Err(report_helper_failure(
+            request.codex_home,
+            cleared_report,
+            status.code(),
+        ));
+    }
+    if let Err(err) = clear_setup_error_report(request.codex_home) {
+        log_note(
+            &format!("setup refresh: failed to clear setup_error.json after success: {err}"),
+            Some(&sandbox_dir(request.codex_home)),
+        );
     }
     Ok(())
 }
@@ -869,8 +889,12 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::report_helper_failure;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
+    use crate::setup_error::SetupErrorCode;
+    use crate::setup_error::SetupErrorReport;
+    use crate::write_setup_error_report;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -931,6 +955,30 @@ mod tests {
         );
 
         assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080]);
+    }
+
+    #[test]
+    fn report_helper_failure_uses_structured_helper_report_when_available() {
+        let tmp = TempDir::new().expect("tempdir");
+        write_setup_error_report(
+            tmp.path(),
+            &SetupErrorReport {
+                code: SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                message: "SetRemoteAddresses failed".to_string(),
+            },
+        )
+        .expect("write setup error report");
+
+        let err = report_helper_failure(tmp.path(), true, Some(1));
+        let failure = err
+            .downcast_ref::<crate::setup_error::SetupFailure>()
+            .expect("structured setup failure");
+
+        assert_eq!(
+            failure.code,
+            SetupErrorCode::HelperFirewallRuleCreateOrAddFailed
+        );
+        assert_eq!(failure.message, "SetRemoteAddresses failed");
     }
 
     #[test]
