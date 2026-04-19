@@ -340,6 +340,7 @@ impl App {
                 self.overlay = Some(Overlay::new_static_with_lines(
                     pager_lines,
                     "D I F F".to_string(),
+                    self.keymap.pager.clone(),
                 ));
                 tui.frame_requester().schedule_frame();
             }
@@ -1590,6 +1591,7 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![diff_summary.into()],
                         "P A T C H".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
                 ApprovalRequest::Exec { command, .. } => {
@@ -1599,6 +1601,7 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_lines(
                         full_cmd_lines,
                         "E X E C".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
                 ApprovalRequest::Permissions {
@@ -1623,6 +1626,7 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(Paragraph::new(lines).wrap(Wrap { trim: false }))],
                         "P E R M I S S I O N S".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
                 ApprovalRequest::McpElicitation {
@@ -1640,6 +1644,7 @@ impl App {
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
                         "E L I C I T A T I O N".to_string(),
+                        self.keymap.pager.clone(),
                     ));
                 }
             },
