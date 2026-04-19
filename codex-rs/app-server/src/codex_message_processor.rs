@@ -4517,7 +4517,7 @@ impl CodexMessageProcessor {
                 )
                 .await;
                 if self.config.features.enabled(Feature::Goals) {
-                    self.emit_thread_goal_updated_if_present(thread_id).await;
+                    self.emit_thread_goal_snapshot(thread_id).await;
                 }
             }
             Err(err) => {
@@ -8990,7 +8990,15 @@ async fn handle_pending_thread_resume_request(
                         ))
                         .await;
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    outgoing
+                        .send_server_notification(ServerNotification::ThreadGoalCleared(
+                            ThreadGoalClearedNotification {
+                                thread_id: conversation_id.to_string(),
+                            },
+                        ))
+                        .await;
+                }
                 Err(err) => {
                     tracing::warn!(
                         thread_id = %conversation_id,
