@@ -333,6 +333,17 @@ fn process_cwd_assertion_value(path: &Path) -> String {
         .into_owned()
 }
 
+fn normalize_cwd_tool_output(structured: Value) -> Value {
+    let Some(cwd) = structured.get("cwd").and_then(Value::as_str) else {
+        return structured;
+    };
+    json!({
+        // Windows can report the same directory through an 8.3 path. Normalize
+        // only the path spelling so the assertion stays about cwd selection.
+        "cwd": process_cwd_assertion_value(Path::new(cwd)),
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
 async fn stdio_server_round_trip() -> anyhow::Result<()> {
@@ -541,7 +552,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
     let structured = call_cwd_tool(&server, &fixture, server_name, "call-configured-cwd").await?;
 
     assert_eq!(
-        structured,
+        normalize_cwd_tool_output(structured),
         json!({
             "cwd": process_cwd_assertion_value(&expected_cwd),
         })
@@ -599,7 +610,7 @@ async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -
     let structured = call_cwd_tool(&server, &fixture, server_name, "call-fallback-cwd").await?;
 
     assert_eq!(
-        structured,
+        normalize_cwd_tool_output(structured),
         json!({
             "cwd": process_cwd_assertion_value(&expected_cwd),
         })
