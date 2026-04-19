@@ -146,6 +146,10 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
+        cmd.env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            codex_home.join("managed_config.toml"),
+        );
         cmd.env("RUST_LOG", "info");
         // Keep integration tests isolated from host managed configuration.
         cmd.env(

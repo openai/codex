@@ -10,6 +10,8 @@ use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_mock_responses_config_toml;
 use codex_analytics::AppServerRpcTransport;
+use codex_app_server_protocol::AppsListParams;
+use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::DeviceKeySignParams;
@@ -587,7 +589,9 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
         spans.iter().any(|span| {
             span.span_kind == SpanKind::Server
                 && span_attr(span, "rpc.method") == Some("thread/start")
-        })
+        }) && spans
+            .iter()
+            .any(|span| span.name.as_ref() == "mcp_servers_startup")
     })
     .await;
     let untraced_server_span = find_rpc_span_with_trace(
@@ -616,6 +620,14 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
         untraced_server_span,
         /*min_depth*/ 1,
     );
+    let mcp_startup_span = find_span_with_trace(
+        &untraced_spans,
+        untraced_server_span.span_context.trace_id(),
+        "mcp_servers_startup",
+        |span| span.name.as_ref() == "mcp_servers_startup",
+    );
+    assert!(span_attr(mcp_startup_span, "codex.thread_id").is_some());
+    assert_span_descends_from(&untraced_spans, mcp_startup_span, untraced_server_span);
 
     let baseline_len = untraced_spans.len();
     let _: ThreadStartResponse = harness
@@ -685,6 +697,75 @@ async fn remote_control_origin_rejects_device_key_requests() -> Result<()> {
     );
 
     harness.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial(app_server_tracing)]
+async fn app_list_jsonrpc_span_exports_app_list_span_with_thread_id() -> Result<()> {
+    let mut harness = TracingHarness::new().await?;
+    let thread_start_response = harness
+        .start_thread(/*request_id*/ 30, /*trace*/ None)
+        .await;
+    let thread_id = thread_start_response.thread.id.clone();
+
+    harness.reset_tracing();
+
+    let RemoteTrace {
+        trace_id: remote_trace_id,
+        parent_span_id: remote_parent_span_id,
+        context: remote_trace,
+    } = RemoteTrace::new("00000000000000000000000000000033", "0000000000000044");
+    let response: AppsListResponse = harness
+        .request(
+            ClientRequest::AppsList {
+                request_id: RequestId::Integer(31),
+                params: AppsListParams {
+                    thread_id: Some(thread_id.clone()),
+                    ..AppsListParams::default()
+                },
+            },
+            Some(remote_trace),
+        )
+        .await;
+    assert_eq!(
+        response,
+        AppsListResponse {
+            data: Vec::new(),
+            next_cursor: None,
+        }
+    );
+
+    let spans = wait_for_exported_spans(harness.tracing, |spans| {
+        spans.iter().any(|span| {
+            span.span_kind == SpanKind::Server
+                && span_attr(span, "rpc.method") == Some("app/list")
+                && span.span_context.trace_id() == remote_trace_id
+        }) && spans.iter().any(|span| {
+            span.name.as_ref() == "app_list" && span.span_context.trace_id() == remote_trace_id
+        })
+    })
+    .await;
+
+    let server_request_span =
+        find_rpc_span_with_trace(&spans, SpanKind::Server, "app/list", remote_trace_id);
+    let app_list_span = find_span_with_trace(&spans, remote_trace_id, "app_list", |span| {
+        span.name.as_ref() == "app_list"
+    });
+
+    assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
+    assert!(server_request_span.parent_span_is_remote);
+    assert_eq!(
+        span_attr(app_list_span, "codex.thread_id"),
+        Some(thread_id.as_str())
+    );
+    assert_eq!(
+        span_attr(app_list_span, "app_list.result"),
+        Some("disabled")
+    );
+    assert_span_descends_from(&spans, app_list_span, server_request_span);
+    harness.shutdown().await;
+
     Ok(())
 }
 

@@ -24,6 +24,8 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::AnalyticsJsonRpcError;
+use codex_analytics::AppListEvent;
+use codex_analytics::AppListResult;
 use codex_analytics::InputError;
 use codex_analytics::TurnSteerRequestError;
 use codex_app_server_protocol::Account;
@@ -366,6 +368,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::SystemTime;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -374,8 +377,11 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use toml::Value as TomlValue;
 use tracing::Instrument;
+use tracing::Span;
 use tracing::error;
+use tracing::field;
 use tracing::info;
+use tracing::info_span;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -458,6 +464,97 @@ enum AppListLoadResult {
     Directory(Result<Vec<AppInfo>, String>),
 }
 
+fn app_list_span(params: &AppsListParams) -> Span {
+    let span = info_span!(
+        "app_list",
+        otel.name = "app_list",
+        rpc.method = "app/list",
+        thread.id = params.thread_id.as_deref().unwrap_or(""),
+        codex.thread_id = params.thread_id.as_deref().unwrap_or(""),
+        app_list.force_refetch = params.force_refetch,
+        app_list.cursor_present = params.cursor.is_some(),
+        app_list.limit = params.limit.map(i64::from).unwrap_or(-1),
+        app_list.result = field::Empty,
+        app_list.cached_accessible_count = field::Empty,
+        app_list.cached_directory_count = field::Empty,
+        app_list.accessible_count = field::Empty,
+        app_list.directory_count = field::Empty,
+        app_list.merged_count = field::Empty,
+        app_list.returned_count = field::Empty,
+        app_list.next_cursor_present = field::Empty,
+    );
+    span
+}
+
+fn record_app_list_response(span: &Span, result: &'static str, response: &AppsListResponse) {
+    span.record("app_list.result", result);
+    span.record("app_list.returned_count", response.data.len());
+    span.record(
+        "app_list.next_cursor_present",
+        response.next_cursor.is_some(),
+    );
+}
+
+#[derive(Clone, Copy, Default)]
+struct AppListAnalyticsCounts {
+    cached_accessible_count: Option<usize>,
+    cached_directory_count: Option<usize>,
+    accessible_count: Option<usize>,
+    directory_count: Option<usize>,
+    merged_count: Option<usize>,
+    returned_count: Option<usize>,
+    next_cursor_present: Option<bool>,
+}
+
+#[derive(Clone)]
+struct AppListAnalyticsContext {
+    client: AnalyticsEventsClient,
+    enabled: bool,
+    connection_id: u64,
+    params: AppsListParams,
+    started_at: Instant,
+}
+
+impl AppListAnalyticsContext {
+    fn new(
+        client: AnalyticsEventsClient,
+        enabled: bool,
+        connection_id: u64,
+        params: AppsListParams,
+    ) -> Self {
+        Self {
+            client,
+            enabled,
+            connection_id,
+            params,
+            started_at: Instant::now(),
+        }
+    }
+
+    fn record(&self, result: AppListResult, counts: AppListAnalyticsCounts) {
+        if !self.enabled {
+            return;
+        }
+        let duration_ms = u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.client.track_app_list(AppListEvent {
+            connection_id: self.connection_id,
+            thread_id: self.params.thread_id.clone(),
+            force_refetch: self.params.force_refetch,
+            cursor_present: self.params.cursor.is_some(),
+            limit: self.params.limit,
+            result,
+            cached_accessible_count: counts.cached_accessible_count,
+            cached_directory_count: counts.cached_directory_count,
+            accessible_count: counts.accessible_count,
+            directory_count: counts.directory_count,
+            merged_count: counts.merged_count,
+            returned_count: counts.returned_count,
+            next_cursor_present: counts.next_cursor_present,
+            duration_ms: Some(duration_ms),
+        });
+    }
+}
+
 enum ThreadShutdownResult {
     Complete,
     SubmitFailed,
@@ -512,7 +609,6 @@ struct ListenerTaskContext {
     outgoing: Arc<OutgoingMessageSender>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     analytics_events_client: AnalyticsEventsClient,
-    general_analytics_enabled: bool,
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
@@ -2392,7 +2488,6 @@ impl CodexMessageProcessor {
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             analytics_events_client: self.analytics_events_client.clone(),
-            general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
@@ -2655,6 +2750,7 @@ impl CodexMessageProcessor {
                         .await;
                     return;
                 }
+                let general_analytics_enabled = thread.enabled(Feature::GeneralAnalytics);
                 let config_snapshot = thread
                     .config_snapshot()
                     .instrument(tracing::info_span!(
@@ -2727,7 +2823,7 @@ impl CodexMessageProcessor {
                     permission_profile,
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
-                if listener_task_context.general_analytics_enabled {
+                if general_analytics_enabled {
                     listener_task_context
                         .analytics_events_client
                         .track_response(
@@ -6282,51 +6378,89 @@ impl CodexMessageProcessor {
     }
 
     async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
-        let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
-            Ok(config) => config,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        if let Some(thread_id) = params.thread_id.as_deref() {
-            let (_, thread) = match self.load_thread(thread_id).await {
-                Ok(result) => result,
+        let app_list_span = app_list_span(&params);
+        let analytics_context = AppListAnalyticsContext::new(
+            self.analytics_events_client.clone(),
+            self.config.features.enabled(Feature::GeneralAnalytics),
+            request_id.connection_id.0,
+            params.clone(),
+        );
+        async {
+            let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+                Ok(config) => config,
                 Err(error) => {
+                    Span::current().record("app_list.result", "config_error");
+                    analytics_context.record(
+                        AppListResult::ConfigError,
+                        AppListAnalyticsCounts::default(),
+                    );
                     self.outgoing.send_error(request_id, error).await;
                     return;
                 }
             };
 
-            let _ = config
+            if let Some(thread_id) = params.thread_id.as_deref() {
+                let (_, thread) = match self.load_thread(thread_id).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        Span::current().record("app_list.result", "thread_load_error");
+                        analytics_context.record(
+                            AppListResult::ThreadLoadError,
+                            AppListAnalyticsCounts::default(),
+                        );
+                        self.outgoing.send_error(request_id, error).await;
+                        return;
+                    }
+                };
+
+                let _ = config
+                    .features
+                    .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
+            }
+
+            let auth = self.auth_manager.auth().await;
+            if !config
                 .features
-                .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
-        }
-
-        let auth = self.auth_manager.auth().await;
-        if !config
-            .features
-            .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
-        {
-            self.outgoing
-                .send_response(
-                    request_id,
-                    AppsListResponse {
-                        data: Vec::new(),
-                        next_cursor: None,
+                .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth))
+            {
+                let response = AppsListResponse {
+                    data: Vec::new(),
+                    next_cursor: None,
+                };
+                record_app_list_response(&Span::current(), "disabled", &response);
+                analytics_context.record(
+                    AppListResult::Disabled,
+                    AppListAnalyticsCounts {
+                        returned_count: Some(0),
+                        next_cursor_present: Some(false),
+                        ..AppListAnalyticsCounts::default()
                     },
-                )
-                .await;
-            return;
-        }
+                );
+                self.outgoing.send_response(request_id, response).await;
+                return;
+            }
 
-        let request = request_id.clone();
-        let outgoing = Arc::clone(&self.outgoing);
-        let environment_manager = self.thread_manager.environment_manager();
-        tokio::spawn(async move {
-            Self::apps_list_task(outgoing, request, params, config, environment_manager).await;
-        });
+            let request = request_id.clone();
+            let outgoing = Arc::clone(&self.outgoing);
+            let environment_manager = self.thread_manager.environment_manager();
+            let span = Span::current();
+            tokio::spawn(
+                async move {
+                    Self::apps_list_task(
+                        outgoing,
+                        request,
+                        params,
+                        config,
+                        environment_manager,
+                        analytics_context,
+                    )
+                    .await;
+                }
+                .instrument(span),
+            );
+        }
+        .instrument(app_list_span)
+        .await;
     }
 
     async fn apps_list_task(
@@ -6335,6 +6469,7 @@ impl CodexMessageProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        analytics_context: AppListAnalyticsContext,
     ) {
         let AppsListParams {
             cursor,
@@ -6346,6 +6481,11 @@ impl CodexMessageProcessor {
             Some(cursor) => match cursor.parse::<usize>() {
                 Ok(idx) => idx,
                 Err(_) => {
+                    Span::current().record("app_list.result", "invalid_cursor");
+                    analytics_context.record(
+                        AppListResult::InvalidCursor,
+                        AppListAnalyticsCounts::default(),
+                    );
                     let error = JSONRPCErrorError {
                         code: INVALID_REQUEST_ERROR_CODE,
                         message: format!("invalid cursor: {cursor}"),
@@ -6358,36 +6498,99 @@ impl CodexMessageProcessor {
             None => 0,
         };
 
-        let (mut accessible_connectors, mut all_connectors) = tokio::join!(
-            connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
-            connectors::list_cached_all_connectors(&config)
-        );
+        let (mut accessible_connectors, mut all_connectors) = async {
+            tokio::join!(
+                connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
+                connectors::list_cached_all_connectors(&config)
+            )
+        }
+        .instrument(info_span!(
+            "app_list.load_cached",
+            otel.name = "app_list.load_cached",
+        ))
+        .await;
+        let span = Span::current();
+        if let Some(accessible_connectors) = accessible_connectors.as_ref() {
+            span.record(
+                "app_list.cached_accessible_count",
+                accessible_connectors.len(),
+            );
+        }
+        if let Some(all_connectors) = all_connectors.as_ref() {
+            span.record("app_list.cached_directory_count", all_connectors.len());
+        }
+        let mut analytics_counts = AppListAnalyticsCounts {
+            cached_accessible_count: accessible_connectors.as_ref().map(Vec::len),
+            cached_directory_count: all_connectors.as_ref().map(Vec::len),
+            ..AppListAnalyticsCounts::default()
+        };
         let cached_all_connectors = all_connectors.clone();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let accessible_config = config.clone();
         let accessible_tx = tx.clone();
-        tokio::spawn(async move {
-            let result =
-                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
-                    &accessible_config,
-                    force_refetch,
-                    &environment_manager,
-                )
-                .await
-                .map(|status| status.connectors)
-                .map_err(|err| format!("failed to load accessible apps: {err}"));
-            let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
-        });
+        let accessible_span = info_span!(
+            "app_list.load_accessible",
+            otel.name = "app_list.load_accessible",
+            app_list.force_refetch = force_refetch,
+            app_list.result = field::Empty,
+            app_list.returned_count = field::Empty,
+        );
+        tokio::spawn(
+            async move {
+                let result =
+                    connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                        &accessible_config,
+                        force_refetch,
+                        &environment_manager,
+                    )
+                    .await
+                    .map(|status| status.connectors)
+                    .map_err(|err| format!("failed to load accessible apps: {err}"));
+                let span = Span::current();
+                match &result {
+                    Ok(connectors) => {
+                        span.record("app_list.result", "success");
+                        span.record("app_list.returned_count", connectors.len());
+                    }
+                    Err(_) => {
+                        span.record("app_list.result", "error");
+                    }
+                }
+                let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
+            }
+            .instrument(accessible_span),
+        );
 
         let all_config = config.clone();
-        tokio::spawn(async move {
-            let result = connectors::list_all_connectors_with_options(&all_config, force_refetch)
-                .await
-                .map_err(|err| format!("failed to list apps: {err}"));
-            let _ = tx.send(AppListLoadResult::Directory(result));
-        });
+        let directory_span = info_span!(
+            "app_list.load_directory",
+            otel.name = "app_list.load_directory",
+            app_list.force_refetch = force_refetch,
+            app_list.result = field::Empty,
+            app_list.returned_count = field::Empty,
+        );
+        tokio::spawn(
+            async move {
+                let result =
+                    connectors::list_all_connectors_with_options(&all_config, force_refetch)
+                        .await
+                        .map_err(|err| format!("failed to list apps: {err}"));
+                let span = Span::current();
+                match &result {
+                    Ok(connectors) => {
+                        span.record("app_list.result", "success");
+                        span.record("app_list.returned_count", connectors.len());
+                    }
+                    Err(_) => {
+                        span.record("app_list.result", "error");
+                    }
+                }
+                let _ = tx.send(AppListLoadResult::Directory(result));
+            }
+            .instrument(directory_span),
+        );
 
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
         let mut accessible_loaded = false;
@@ -6417,6 +6620,8 @@ impl CodexMessageProcessor {
             let result = match tokio::time::timeout_at(app_list_deadline, rx.recv()).await {
                 Ok(Some(result)) => result,
                 Ok(None) => {
+                    Span::current().record("app_list.result", "load_channel_closed");
+                    analytics_context.record(AppListResult::LoadChannelClosed, analytics_counts);
                     let error = JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
                         message: "failed to load app lists".to_string(),
@@ -6426,6 +6631,8 @@ impl CodexMessageProcessor {
                     return;
                 }
                 Err(_) => {
+                    Span::current().record("app_list.result", "timeout");
+                    analytics_context.record(AppListResult::Timeout, analytics_counts);
                     let timeout_seconds = APP_LIST_LOAD_TIMEOUT.as_secs();
                     let error = JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
@@ -6441,10 +6648,14 @@ impl CodexMessageProcessor {
 
             match result {
                 AppListLoadResult::Accessible(Ok(connectors)) => {
+                    Span::current().record("app_list.accessible_count", connectors.len());
+                    analytics_counts.accessible_count = Some(connectors.len());
                     accessible_connectors = Some(connectors);
                     accessible_loaded = true;
                 }
                 AppListLoadResult::Accessible(Err(err)) => {
+                    Span::current().record("app_list.result", "accessible_error");
+                    analytics_context.record(AppListResult::AccessibleError, analytics_counts);
                     let error = JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
                         message: err,
@@ -6454,10 +6665,14 @@ impl CodexMessageProcessor {
                     return;
                 }
                 AppListLoadResult::Directory(Ok(connectors)) => {
+                    Span::current().record("app_list.directory_count", connectors.len());
+                    analytics_counts.directory_count = Some(connectors.len());
                     all_connectors = Some(connectors);
                     all_loaded = true;
                 }
                 AppListLoadResult::Directory(Err(err)) => {
+                    Span::current().record("app_list.result", "directory_error");
+                    analytics_context.record(AppListResult::DirectoryError, analytics_counts);
                     let error = JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
                         message: err,
@@ -6488,6 +6703,8 @@ impl CodexMessageProcessor {
                 ),
                 &config,
             );
+            Span::current().record("app_list.merged_count", merged.len());
+            analytics_counts.merged_count = Some(merged.len());
             if apps_list_helpers::should_send_app_list_updated_notification(
                 merged.as_slice(),
                 accessible_loaded,
@@ -6502,10 +6719,16 @@ impl CodexMessageProcessor {
             if accessible_loaded && all_loaded {
                 match apps_list_helpers::paginate_apps(merged.as_slice(), start, limit) {
                     Ok(response) => {
+                        record_app_list_response(&Span::current(), "success", &response);
+                        analytics_counts.returned_count = Some(response.data.len());
+                        analytics_counts.next_cursor_present = Some(response.next_cursor.is_some());
+                        analytics_context.record(AppListResult::Success, analytics_counts);
                         outgoing.send_response(request_id, response).await;
                         return;
                     }
                     Err(error) => {
+                        Span::current().record("app_list.result", "pagination_error");
+                        analytics_context.record(AppListResult::PaginationError, analytics_counts);
                         outgoing.send_error(request_id, error).await;
                         return;
                     }
@@ -7688,7 +7911,6 @@ impl CodexMessageProcessor {
                 outgoing: Arc::clone(&self.outgoing),
                 pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
                 analytics_events_client: self.analytics_events_client.clone(),
-                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
@@ -7806,7 +8028,6 @@ impl CodexMessageProcessor {
                 outgoing: Arc::clone(&self.outgoing),
                 pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
                 analytics_events_client: self.analytics_events_client.clone(),
-                general_analytics_enabled: self.config.features.enabled(Feature::GeneralAnalytics),
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
@@ -7855,7 +8076,6 @@ impl CodexMessageProcessor {
             thread_state_manager,
             pending_thread_unloads,
             analytics_events_client: _,
-            general_analytics_enabled: _,
             thread_watch_manager,
             fallback_model_provider,
             codex_home,

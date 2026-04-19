@@ -18,6 +18,7 @@ use crate::events::GuardianReviewedAction;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::TrackEventRequest;
+use crate::events::codex_app_list_event_params;
 use crate::events::codex_app_metadata;
 use crate::events::codex_hook_run_metadata;
 use crate::events::codex_plugin_metadata;
@@ -26,6 +27,8 @@ use crate::events::subagent_thread_started_event_request;
 use crate::facts::AnalyticsFact;
 use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
+use crate::facts::AppListEvent;
+use crate::facts::AppListResult;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
@@ -694,6 +697,70 @@ fn app_used_event_serializes_expected_shape() {
 }
 
 #[test]
+fn app_list_event_serializes_expected_shape() {
+    let event = TrackEventRequest::AppList(Box::new(crate::events::CodexAppListEventRequest {
+        event_type: "codex_app_list",
+        event_params: codex_app_list_event_params(
+            AppListEvent {
+                connection_id: 7,
+                thread_id: Some("thread-2".to_string()),
+                force_refetch: true,
+                cursor_present: true,
+                limit: Some(25),
+                result: AppListResult::Success,
+                cached_accessible_count: Some(2),
+                cached_directory_count: Some(10),
+                accessible_count: Some(4),
+                directory_count: Some(12),
+                merged_count: Some(12),
+                returned_count: Some(10),
+                next_cursor_present: Some(true),
+                duration_ms: Some(1234),
+            },
+            sample_app_server_client_metadata(),
+            sample_runtime_metadata(),
+        ),
+    }));
+
+    let payload = serde_json::to_value(&event).expect("serialize app list event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_app_list",
+            "event_params": {
+                "app_server_client": {
+                    "product_client_id": DEFAULT_ORIGINATOR,
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "stdio",
+                    "experimental_api_enabled": true
+                },
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "thread_id": "thread-2",
+                "force_refetch": true,
+                "cursor_present": true,
+                "limit": 25,
+                "result": "success",
+                "cached_accessible_count": 2,
+                "cached_directory_count": 10,
+                "accessible_count": 4,
+                "directory_count": 12,
+                "merged_count": 12,
+                "returned_count": 10,
+                "next_cursor_present": true,
+                "duration_ms": 1234
+            }
+        })
+    );
+}
+
+#[test]
 fn compaction_event_serializes_expected_shape() {
     let event = TrackEventRequest::Compaction(Box::new(CodexCompactionEventRequest {
         event_type: "codex_compaction_event",
@@ -762,6 +829,67 @@ fn compaction_event_serializes_expected_shape() {
             }
         })
     );
+}
+
+#[tokio::test]
+async fn app_list_event_ingests_custom_fact_with_connection_metadata() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: Some(InitializeCapabilities {
+                        experimental_api: false,
+                        opt_out_notification_methods: None,
+                    }),
+                },
+                product_client_id: DEFAULT_ORIGINATOR.to_string(),
+                runtime: sample_runtime_metadata(),
+                rpc_transport: AppServerRpcTransport::Websocket,
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppList(Box::new(AppListEvent {
+                connection_id: 7,
+                thread_id: None,
+                force_refetch: false,
+                cursor_present: false,
+                limit: None,
+                result: AppListResult::Disabled,
+                cached_accessible_count: None,
+                cached_directory_count: None,
+                accessible_count: None,
+                directory_count: None,
+                merged_count: None,
+                returned_count: Some(0),
+                next_cursor_present: Some(false),
+                duration_ms: Some(42),
+            }))),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_app_list");
+    assert_eq!(payload[0]["event_params"]["result"], "disabled");
+    assert_eq!(
+        payload[0]["event_params"]["app_server_client"]["rpc_transport"],
+        "websocket"
+    );
+    assert_eq!(payload[0]["event_params"]["returned_count"], 0);
+    assert_eq!(payload[0]["event_params"]["next_cursor_present"], false);
 }
 
 #[test]

@@ -40,6 +40,7 @@ pub use mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_META_CAPABILITY;
 pub use mcp_connection_manager::McpConnectionManager;
 pub use mcp_connection_manager::McpRuntimeEnvironment;
+pub use mcp_connection_manager::McpStartupTraceMetadata;
 pub use mcp_connection_manager::SandboxState;
 pub use mcp_connection_manager::ToolInfo;
 pub use mcp_connection_manager::codex_apps_tools_cache_key;

@@ -5,10 +5,13 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
+use super::analytics::enable_analytics_capture;
+use super::analytics::wait_for_analytics_payload;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
+use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
@@ -86,6 +89,70 @@ async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
 
     assert!(data.is_empty());
     assert!(next_cursor.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_apps_tracks_app_list_analytics_event() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        format!(
+            r#"
+chatgpt_base_url = "{}"
+
+[features]
+apps = false
+general_analytics = true
+"#,
+            server.uri()
+        ),
+    )?;
+    enable_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: Some(50),
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let AppsListResponse { data, next_cursor } = to_response(response)?;
+    assert!(data.is_empty());
+    assert!(next_cursor.is_none());
+
+    let payload = wait_for_analytics_payload(&server, DEFAULT_TIMEOUT).await?;
+    let events = payload["events"].as_array().expect("events array");
+    assert_eq!(events.len(), 1);
+    let event = events
+        .iter()
+        .find(|event| event["event_type"] == "codex_app_list")
+        .expect("codex_app_list event should be present");
+    assert_eq!(event["event_params"]["result"], "disabled");
+    assert_eq!(event["event_params"]["force_refetch"], false);
+    assert_eq!(event["event_params"]["cursor_present"], false);
+    assert_eq!(event["event_params"]["limit"], 50);
+    assert_eq!(event["event_params"]["returned_count"], 0);
+    assert_eq!(event["event_params"]["next_cursor_present"], false);
+    assert!(
+        event["event_params"]["duration_ms"].as_u64().is_some(),
+        "duration_ms should be recorded"
+    );
+    assert_eq!(
+        event["event_params"]["app_server_client"]["client_name"],
+        app_test_support::DEFAULT_CLIENT_NAME
+    );
     Ok(())
 }
 
