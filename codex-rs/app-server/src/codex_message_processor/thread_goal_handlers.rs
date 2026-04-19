@@ -6,7 +6,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadGoalSetParams,
     ) {
-        if !self.config.features.enabled(Feature::GoalMode) {
+        if !self.config.features.enabled(Feature::Goals) {
             self.send_invalid_request_error(request_id, "goals feature is disabled".to_string())
                 .await;
             return;
@@ -223,7 +223,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadGoalGetParams,
     ) {
-        if !self.config.features.enabled(Feature::GoalMode) {
+        if !self.config.features.enabled(Feature::Goals) {
             self.send_invalid_request_error(request_id, "goals feature is disabled".to_string())
                 .await;
             return;
@@ -261,7 +261,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadGoalClearParams,
     ) {
-        if !self.config.features.enabled(Feature::GoalMode) {
+        if !self.config.features.enabled(Feature::Goals) {
             self.send_invalid_request_error(request_id, "goals feature is disabled".to_string())
                 .await;
             return;

@@ -172,7 +172,7 @@ pub enum Feature {
     /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Enable persisted thread goals and automatic goal continuation.
-    GoalMode,
+    Goals,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
@@ -899,7 +899,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::GoalMode,
+        id: Feature::Goals,
         key: "goals",
         stage: Stage::Experimental {
             name: "Goals",
