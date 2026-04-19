@@ -401,7 +401,7 @@
             "general_analytics": {
               "type": "boolean"
             },
-            "goal_mode": {
+            "goals": {
               "type": "boolean"
             },
             "guardian_approval": {
@@ -2350,7 +2350,7 @@
         "general_analytics": {
           "type": "boolean"
         },
-        "goal_mode": {
+        "goals": {
           "type": "boolean"
         },
         "guardian_approval": {
