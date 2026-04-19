@@ -9884,6 +9884,28 @@ guardian_approval = true
         assert_eq!(app.side_start_block_message(), None);
     }
 
+    #[test]
+    fn side_start_error_message_explains_missing_first_prompt() {
+        let err = color_eyre::eyre::eyre!(
+            "thread/fork failed during TUI bootstrap: thread/fork failed: no rollout found for thread id 019da1a1-bed9-7a43-88a2-b49d43915021"
+        );
+
+        assert_eq!(
+            App::side_start_error_message(&err),
+            "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
+        );
+    }
+
+    #[test]
+    fn side_start_error_message_uses_generic_start_wording() {
+        let err = color_eyre::eyre::eyre!("transport disconnected");
+
+        assert_eq!(
+            App::side_start_error_message(&err),
+            "Failed to start side conversation: transport disconnected"
+        );
+    }
+
     #[tokio::test]
     async fn side_thread_snapshot_hides_forked_parent_transcript() {
         let parent_thread_id = ThreadId::new();

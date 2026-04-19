@@ -1,3 +1,9 @@
+//! Chat widget hooks for side-conversation mode.
+//!
+//! App-level side-thread lifecycle lives in `app::side`; this module owns the
+//! chat-surface pieces that side mode toggles, such as the composer placeholder,
+//! footer label, and inline `/side` message submission behavior.
+
 use super::*;
 
 impl ChatWidget {

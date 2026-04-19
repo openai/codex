@@ -15,6 +15,10 @@ use codex_protocol::models::ResponseItem;
 const SIDE_RENAME_BLOCK_MESSAGE: &str = "Side conversations are ephemeral and cannot be renamed.";
 const SIDE_MAIN_THREAD_UNAVAILABLE_MESSAGE: &str =
     "'/side' is unavailable until the main thread is ready.";
+const SIDE_NO_STARTED_CONVERSATION_MESSAGE: &str = concat!(
+    "'/side' is unavailable until the current conversation has started. ",
+    "Send a message first, then try /side again."
+);
 const SIDE_ALREADY_OPEN_MESSAGE: &str =
     "A side conversation is already open. Press Esc to return before starting another.";
 const SIDE_BOUNDARY_PROMPT: &str = r#"Side conversation boundary.
@@ -251,6 +255,18 @@ impl App {
         }
     }
 
+    pub(super) fn side_start_error_message(err: &color_eyre::Report) -> String {
+        if err.chain().any(|cause| {
+            let message = cause.to_string();
+            message.contains("no rollout found for thread id")
+                || message.contains("includeTurns is unavailable before first user message")
+        }) {
+            SIDE_NO_STARTED_CONVERSATION_MESSAGE.to_string()
+        } else {
+            format!("Failed to start side conversation: {err}")
+        }
+    }
+
     pub(super) fn restore_side_user_message(
         &mut self,
         user_message: Option<crate::chatwidget::UserMessage>,
@@ -380,7 +396,7 @@ impl App {
                 self.chat_widget
                     .set_side_conversation_context_label(/*label*/ None);
                 self.chat_widget
-                    .add_error_message(format!("Failed to fork side conversation: {err}"));
+                    .add_error_message(Self::side_start_error_message(&err));
             }
         }
 
