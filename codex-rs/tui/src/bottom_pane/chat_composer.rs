@@ -5089,11 +5089,11 @@ mod tests {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
-            true,
+            /*has_input_focus*/ true,
             sender,
-            false,
+            /*enhanced_keys_supported*/ false,
             "Ask Codex to do anything".to_string(),
-            false,
+            /*disable_paste_burst*/ false,
         );
         composer.set_steer_enabled(true);
 
