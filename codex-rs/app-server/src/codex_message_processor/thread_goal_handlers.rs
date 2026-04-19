@@ -80,6 +80,8 @@ impl CodexMessageProcessor {
         let thread_state = self.thread_state_manager.thread_state(thread_id).await;
         let thread_state = thread_state.lock().await;
         let status = params.status.map(thread_goal_status_to_state);
+        let mut previous_status = None;
+        let mut replacing_goal = params.objective.is_some();
 
         let goal = if let Some(objective) = params.objective {
             let objective = objective.trim();
@@ -106,11 +108,13 @@ impl CodexMessageProcessor {
             }
             match state_db.get_thread_goal(thread_id).await {
                 Ok(goal) => {
+                    previous_status = goal.as_ref().map(|goal| goal.status);
                     let same_incomplete_goal = goal.as_ref().is_some_and(|goal| {
                         goal.objective == objective
                             && goal.status != codex_state::ThreadGoalStatus::Complete
                     });
                     if same_incomplete_goal {
+                        replacing_goal = false;
                         state_db
                             .update_thread_goal(
                                 thread_id,
@@ -156,6 +160,14 @@ impl CodexMessageProcessor {
                     "failed to account active goal progress before app-server goal update: {err}"
                 );
             }
+            previous_status = match state_db.get_thread_goal(thread_id).await {
+                Ok(goal) => goal.as_ref().map(|goal| goal.status),
+                Err(err) => {
+                    self.send_invalid_request_error(request_id, err.to_string())
+                        .await;
+                    return;
+                }
+            };
             state_db
                 .update_thread_goal(
                     thread_id,
@@ -194,19 +206,29 @@ impl CodexMessageProcessor {
         if self.config.features.enabled(Feature::GoalMode)
             && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
         {
+            let goal_was_active = previous_status == Some(codex_state::ThreadGoalStatus::Active);
             match goal_status {
-                ThreadGoalStatus::Active => {
+                ThreadGoalStatus::Active
+                    if replacing_goal
+                        || previous_status.is_some_and(|status| {
+                            status != codex_state::ThreadGoalStatus::Active
+                        }) =>
+                {
                     thread.clear_queued_goal_continuations().await;
                     thread.continue_active_goal_if_idle().await;
                 }
-                ThreadGoalStatus::BudgetLimited => {
+                ThreadGoalStatus::Active => {}
+                ThreadGoalStatus::BudgetLimited if goal_was_active => {
                     thread.clear_queued_goal_continuations().await;
                     thread.abort_for_goal_budget_limited().await;
                 }
-                ThreadGoalStatus::Paused | ThreadGoalStatus::Complete => {
+                ThreadGoalStatus::Paused | ThreadGoalStatus::Complete if goal_was_active => {
                     thread.clear_queued_goal_continuations().await;
                     thread.abort_for_goal_stopped().await;
                 }
+                ThreadGoalStatus::BudgetLimited
+                | ThreadGoalStatus::Paused
+                | ThreadGoalStatus::Complete => {}
             }
         }
     }

@@ -761,6 +761,11 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
+        self.account_thread_goal_wall_clock_usage(
+            &state_db,
+            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+        )
+        .await?;
         let Some(goal) = state_db
             .pause_active_thread_goal(self.conversation_id)
             .await?
