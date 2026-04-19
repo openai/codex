@@ -102,7 +102,7 @@ fn ignores_empty_handoff_request_input_transcript() {
 #[test]
 fn wraps_realtime_delegation_input() {
     assert_eq!(
-        wrap_realtime_delegation_input("hello", None),
+        wrap_realtime_delegation_input("hello", /*transcript_delta*/ None),
         "<realtime_delegation>\n  <input>hello</input>\n</realtime_delegation>"
     );
 }
@@ -118,7 +118,7 @@ fn wraps_realtime_delegation_input_with_xml_escaping() {
 #[test]
 fn wraps_realtime_delegation_input_with_xml_escaping_without_transcript() {
     assert_eq!(
-        wrap_realtime_delegation_input("use a < b && c > d", None),
+        wrap_realtime_delegation_input("use a < b && c > d", /*transcript_delta*/ None),
         "<realtime_delegation>\n  <input>use a &lt; b &amp;&amp; c &gt; d</input>\n</realtime_delegation>"
     );
 }
