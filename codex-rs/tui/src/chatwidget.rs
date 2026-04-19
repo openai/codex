@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -218,6 +219,7 @@ use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
+use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::Multiplexer;
@@ -317,6 +319,7 @@ use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::MemoriesSettingsView;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
+use crate::bottom_pane::QueuedInputAction;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -883,8 +886,8 @@ pub(crate) struct ChatWidget {
     // history has been rendered so resumed/forked prompts keep chronological
     // order.
     suppress_initial_user_message_submit: bool,
-    // User messages queued while a turn is in progress
-    queued_user_messages: VecDeque<UserMessage>,
+    // User inputs queued while a turn is in progress.
+    queued_user_messages: VecDeque<QueuedUserMessage>,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
@@ -1043,6 +1046,45 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct QueuedUserMessage {
+    user_message: UserMessage,
+    action: QueuedInputAction,
+}
+
+impl QueuedUserMessage {
+    fn new(user_message: UserMessage, action: QueuedInputAction) -> Self {
+        Self {
+            user_message,
+            action,
+        }
+    }
+
+    fn into_user_message(self) -> UserMessage {
+        self.user_message
+    }
+}
+
+impl From<UserMessage> for QueuedUserMessage {
+    fn from(user_message: UserMessage) -> Self {
+        Self::new(user_message, QueuedInputAction::Plain)
+    }
+}
+
+impl Deref for QueuedUserMessage {
+    type Target = UserMessage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.user_message
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueDrain {
+    Continue,
+    Stop,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 struct ThreadComposerState {
     text: String,
@@ -1069,7 +1111,7 @@ pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
     rejected_steers_queue: VecDeque<UserMessage>,
-    queued_user_messages: VecDeque<UserMessage>,
+    queued_user_messages: VecDeque<QueuedUserMessage>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -2134,6 +2176,7 @@ impl ChatWidget {
             self.refresh_terminal_title();
             self.refresh_status_surfaces();
             self.request_redraw();
+            self.maybe_send_next_queued_input();
         }
     }
 
@@ -2495,19 +2538,20 @@ impl ChatWidget {
         !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
     }
 
-    fn pop_next_queued_user_message(&mut self) -> Option<UserMessage> {
+    fn pop_next_queued_user_message(&mut self) -> Option<QueuedUserMessage> {
         if self.rejected_steers_queue.is_empty() {
             self.queued_user_messages.pop_front()
         } else {
-            Some(merge_user_messages(
+            Some(QueuedUserMessage::from(merge_user_messages(
                 self.rejected_steers_queue.drain(..).collect(),
-            ))
+            )))
         }
     }
 
     fn pop_latest_queued_user_message(&mut self) -> Option<UserMessage> {
         self.queued_user_messages
             .pop_back()
+            .map(QueuedUserMessage::into_user_message)
             .or_else(|| self.rejected_steers_queue.pop_back())
     }
 
@@ -3180,7 +3224,11 @@ impl ChatWidget {
                 .drain(..)
                 .map(|steer| steer.user_message),
         );
-        to_merge.extend(self.queued_user_messages.drain(..));
+        to_merge.extend(
+            self.queued_user_messages
+                .drain(..)
+                .map(QueuedUserMessage::into_user_message),
+        );
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty()
@@ -4429,6 +4477,7 @@ impl ChatWidget {
         let parsed = self.annotate_skill_reads_in_parsed_cmd(parsed);
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
+        let is_user_shell = source == ExecCommandSource::UserShell;
         let end_target = match self.active_cell.as_ref() {
             Some(cell) => match cell.as_any().downcast_ref::<ExecCell>() {
                 Some(exec_cell)
@@ -4522,6 +4571,9 @@ impl ChatWidget {
         }
         // Mark that actual work was done (command executed)
         self.had_work_activity = true;
+        if is_user_shell {
+            self.maybe_send_next_queued_input();
+        }
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -5085,70 +5137,77 @@ impl ChatWidget {
             {
                 self.cycle_collaboration_mode();
             }
-            _ => match self.bottom_pane.handle_key_event(key_event) {
-                InputResult::Submitted {
-                    text,
-                    text_elements,
-                } => {
-                    let local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_remote_image_urls();
-                    let user_message = UserMessage {
+            _ => {
+                let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
+                match self.bottom_pane.handle_key_event(key_event) {
+                    InputResult::Submitted {
                         text,
-                        local_images,
-                        remote_image_urls,
                         text_elements,
-                        mention_bindings: self
+                    } => {
+                        let local_images = self
                             .bottom_pane
-                            .take_recent_submission_mention_bindings(),
-                    };
-                    if user_message.text.is_empty()
-                        && user_message.local_images.is_empty()
-                        && user_message.remote_image_urls.is_empty()
-                    {
-                        return;
+                            .take_recent_submission_images_with_placeholders();
+                        let remote_image_urls = self.take_remote_image_urls();
+                        let user_message = UserMessage {
+                            text,
+                            local_images,
+                            remote_image_urls,
+                            text_elements,
+                            mention_bindings: self
+                                .bottom_pane
+                                .take_recent_submission_mention_bindings(),
+                        };
+                        if user_message.text.is_empty()
+                            && user_message.local_images.is_empty()
+                            && user_message.remote_image_urls.is_empty()
+                        {
+                            return;
+                        }
+                        let should_submit_now =
+                            self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                        if should_submit_now {
+                            // Submitted is emitted when user submits.
+                            // Reset any reasoning header only when we are actually submitting a turn.
+                            self.reasoning_buffer.clear();
+                            self.full_reasoning_buffer.clear();
+                            self.set_status_header(String::from("Working"));
+                            self.submit_user_message(user_message);
+                        } else {
+                            self.queue_user_message(user_message);
+                        }
                     }
-                    let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
-                    if should_submit_now {
-                        // Submitted is emitted when user submits.
-                        // Reset any reasoning header only when we are actually submitting a turn.
-                        self.reasoning_buffer.clear();
-                        self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
-                        self.submit_user_message(user_message);
-                    } else {
-                        self.queue_user_message(user_message);
-                    }
-                }
-                InputResult::Queued {
-                    text,
-                    text_elements,
-                } => {
-                    let local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_remote_image_urls();
-                    let user_message = UserMessage {
+                    InputResult::Queued {
                         text,
-                        local_images,
-                        remote_image_urls,
                         text_elements,
-                        mention_bindings: self
+                        action,
+                    } => {
+                        let local_images = self
                             .bottom_pane
-                            .take_recent_submission_mention_bindings(),
-                    };
-                    self.queue_user_message(user_message);
+                            .take_recent_submission_images_with_placeholders();
+                        let remote_image_urls = self.take_remote_image_urls();
+                        let user_message = UserMessage {
+                            text,
+                            local_images,
+                            remote_image_urls,
+                            text_elements,
+                            mention_bindings: self
+                                .bottom_pane
+                                .take_recent_submission_mention_bindings(),
+                        };
+                        self.queue_user_message_with_options(user_message, action);
+                    }
+                    InputResult::Command(cmd) => {
+                        self.handle_slash_command_dispatch(cmd);
+                    }
+                    InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                        self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
+                    }
+                    InputResult::None => {}
                 }
-                InputResult::Command(cmd) => {
-                    self.handle_slash_command_dispatch(cmd);
+                if had_modal_or_popup && self.bottom_pane.no_modal_or_popup_active() {
+                    self.maybe_send_next_queued_input();
                 }
-                InputResult::CommandWithArgs(cmd, args, text_elements) => {
-                    self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
-                }
-                InputResult::None => {}
-            },
+            }
         }
     }
 
@@ -5329,18 +5388,54 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
+        self.queue_user_message_with_options(user_message, QueuedInputAction::Plain);
+    }
+
+    fn queue_user_message_with_options(
+        &mut self,
+        user_message: UserMessage,
+        action: QueuedInputAction,
+    ) {
         if !self.is_session_configured() || self.bottom_pane.is_task_running() {
-            self.queued_user_messages.push_back(user_message);
+            self.queued_user_messages
+                .push_back(QueuedUserMessage::new(user_message, action));
             self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
         }
     }
 
+    fn submit_shell_command(&mut self, command: &str) -> QueueDrain {
+        let cmd = command.trim();
+        if cmd.is_empty() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    USER_SHELL_COMMAND_HELP_TITLE.to_string(),
+                    Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
+                ),
+            )));
+            QueueDrain::Continue
+        } else {
+            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
+            QueueDrain::Stop
+        }
+    }
+
+    fn submit_queued_shell_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
+        match user_message.text.strip_prefix('!') {
+            Some(command) => self.submit_shell_command(command),
+            None => {
+                self.submit_user_message(user_message);
+                QueueDrain::Stop
+            }
+        }
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
-            self.queued_user_messages.push_front(user_message);
+            self.queued_user_messages
+                .push_front(QueuedUserMessage::from(user_message));
             self.refresh_pending_input_preview();
             return;
         }
@@ -5372,17 +5467,7 @@ impl ChatWidget {
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
         if let Some(stripped) = text.strip_prefix('!') {
-            let cmd = stripped.trim();
-            if cmd.is_empty() {
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_info_event(
-                        USER_SHELL_COMMAND_HELP_TITLE.to_string(),
-                        Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
-                    ),
-                )));
-                return;
-            }
-            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
+            self.submit_shell_command(stripped);
             return;
         }
 
@@ -7075,8 +7160,28 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() {
             return;
         }
-        if let Some(user_message) = self.pop_next_queued_user_message() {
-            self.submit_user_message(user_message);
+        while !self.bottom_pane.is_task_running() {
+            let Some(queued_message) = self.pop_next_queued_user_message() else {
+                break;
+            };
+            match queued_message.action {
+                QueuedInputAction::Plain => {
+                    self.submit_user_message(queued_message.into_user_message());
+                    break;
+                }
+                QueuedInputAction::ParseSlash => {
+                    let drain = self.submit_queued_slash_prompt(queued_message.into_user_message());
+                    if drain == QueueDrain::Stop {
+                        break;
+                    }
+                }
+                QueuedInputAction::RunShell => {
+                    let drain = self.submit_queued_shell_prompt(queued_message.into_user_message());
+                    if drain == QueueDrain::Stop {
+                        break;
+                    }
+                }
+            }
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
