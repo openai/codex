@@ -60,6 +60,7 @@ type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 type WorkspaceSetup = dyn FnOnce(AbsolutePathBuf, Arc<dyn ExecutorFileSystem>) -> BoxFuture<'static, Result<()>>
     + Send;
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
+const TEST_MODEL_BASE: &str = "gpt-5.4";
 const REMOTE_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_TEST_REMOTE_EXEC_SERVER_URL";
 static REMOTE_TEST_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const SUBMIT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -515,8 +516,8 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"))
         .models
         .into_iter()
-        .next()
-        .context("bundled models.json should contain at least one model")?;
+        .find(|candidate| candidate.slug == TEST_MODEL_BASE)
+        .with_context(|| format!("missing bundled model {TEST_MODEL_BASE}"))?;
     model.slug = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.experimental_supported_tools = vec!["test_sync_tool".to_string()];

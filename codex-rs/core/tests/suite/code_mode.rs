@@ -42,6 +42,8 @@ use std::time::Duration;
 use std::time::Instant;
 use wiremock::MockServer;
 
+const TEST_CODE_MODE_MODEL: &str = "gpt-5.4";
+
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
         Some(Value::Array(items)) => items.clone(),
@@ -417,10 +419,11 @@ if (!tool) {
                 .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
             let model = model_catalog
                 .models
-                .first_mut()
-                .expect("bundled models.json should contain at least one model");
+                .iter_mut()
+                .find(|model| model.slug == TEST_CODE_MODE_MODEL)
+                .expect("gpt-5.4 exists in bundled models.json");
             config.chatgpt_base_url = apps_base_url;
-            config.model = Some(model.slug.clone());
+            config.model = Some(TEST_CODE_MODE_MODEL.to_string());
             model.supports_search_tool = true;
             config.model_catalog = Some(model_catalog);
         });

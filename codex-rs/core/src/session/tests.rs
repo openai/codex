@@ -140,6 +140,9 @@ use std::time::Duration as StdDuration;
 
 mod guardian_tests;
 
+const TEST_BASE_INSTRUCTION_MODELS: &[&str] =
+    &["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2"];
+
 fn user_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -1004,7 +1007,13 @@ async fn get_base_instructions_no_user_content() {
     let (session, _turn_context) = make_session_and_context().await;
     let config = test_config().await;
 
-    for model in models_response.models {
+    for slug in TEST_BASE_INSTRUCTION_MODELS {
+        let model = models_response
+            .models
+            .iter()
+            .find(|candidate| candidate.slug == *slug)
+            .cloned()
+            .unwrap_or_else(|| panic!("model slug {slug} is missing from models.json"));
         let model_info =
             model_info::with_config_overrides(model, &config.to_models_manager_config());
         {

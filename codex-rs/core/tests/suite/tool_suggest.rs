@@ -24,6 +24,7 @@ use serde_json::Value;
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
+const TEST_MODEL_WITHOUT_SEARCH: &str = "gpt-5.4";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -75,10 +76,11 @@ fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) 
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = model_catalog
         .models
-        .first_mut()
-        .expect("bundled models.json should contain at least one model");
+        .iter_mut()
+        .find(|model| model.slug == TEST_MODEL_WITHOUT_SEARCH)
+        .expect("gpt-5.4 exists in bundled models.json");
     config.chatgpt_base_url = apps_base_url.to_string();
-    config.model = Some(model.slug.clone());
+    config.model = Some(TEST_MODEL_WITHOUT_SEARCH.to_string());
     config.tool_suggest.discoverables = vec![ToolSuggestDiscoverable {
         kind: ToolSuggestDiscoverableType::Connector,
         id: DISCOVERABLE_GMAIL_ID.to_string(),
