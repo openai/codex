@@ -240,6 +240,37 @@ impl RolloutRecorder {
             cwd_filters,
             default_provider,
             /*archived*/ false,
+            /*use_state_db_only*/ false,
+            search_term,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_threads_from_state_db(
+        config: &impl RolloutConfigView,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
+        sort_direction: SortDirection,
+        allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
+        cwd_filters: Option<&[PathBuf]>,
+        default_provider: &str,
+        search_term: Option<&str>,
+    ) -> std::io::Result<ThreadsPage> {
+        Self::list_threads_with_db_fallback(
+            config,
+            page_size,
+            cursor,
+            sort_key,
+            sort_direction,
+            allowed_sources,
+            model_providers,
+            cwd_filters,
+            default_provider,
+            /*archived*/ false,
+            /*use_state_db_only*/ true,
             search_term,
         )
         .await
@@ -270,6 +301,37 @@ impl RolloutRecorder {
             cwd_filters,
             default_provider,
             /*archived*/ true,
+            /*use_state_db_only*/ false,
+            search_term,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_archived_threads_from_state_db(
+        config: &impl RolloutConfigView,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
+        sort_direction: SortDirection,
+        allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
+        cwd_filters: Option<&[PathBuf]>,
+        default_provider: &str,
+        search_term: Option<&str>,
+    ) -> std::io::Result<ThreadsPage> {
+        Self::list_threads_with_db_fallback(
+            config,
+            page_size,
+            cursor,
+            sort_key,
+            sort_direction,
+            allowed_sources,
+            model_providers,
+            cwd_filters,
+            default_provider,
+            /*archived*/ true,
+            /*use_state_db_only*/ true,
             search_term,
         )
         .await
@@ -287,23 +349,17 @@ impl RolloutRecorder {
         cwd_filters: Option<&[PathBuf]>,
         default_provider: &str,
         archived: bool,
+        use_state_db_only: bool,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
         let codex_home = config.codex_home();
         let state_db_ctx = state_db::get_state_db(config).await;
         if cwd_filters.is_some_and(<[std::path::PathBuf]>::is_empty) {
-            return Ok(ThreadsPage {
-                items: Vec::new(),
-                next_cursor: None,
-                num_scanned_files: 0,
-                reached_scan_cap: false,
-            });
+            return Ok(ThreadsPage::default());
         }
 
-        // Filtered queries use the SQLite-optimized path and assume a DB marked
-        // backfill-complete is populated enough to answer the query.
-        if (search_term.is_some() || cwd_filters.is_some())
-            && let Some(db_page) = state_db::list_threads_db(
+        if use_state_db_only {
+            return Ok(state_db::list_threads_db(
                 state_db_ctx.as_deref(),
                 codex_home,
                 page_size,
@@ -317,14 +373,17 @@ impl RolloutRecorder {
                 search_term,
             )
             .await
-            && (cwd_filters.is_some() || !db_page.items.is_empty() || cursor.is_some())
-        {
-            return Ok(db_page.into());
+            .map(Into::into)
+            .unwrap_or_default());
         }
 
+        let listing_has_metadata_filters = !allowed_sources.is_empty()
+            || model_providers.is_some()
+            || cwd_filters.is_some()
+            || search_term.is_some();
         // Filesystem-first listing intentionally overfetches so we can repair stale/missing
-        // SQLite rollout paths before the final DB-backed page is returned.
-        let fs_page_size = page_size.saturating_mul(2).max(page_size);
+        // SQLite rows before returning the scan page for filtered listings or the DB page for
+        // unfiltered listings.
         let fs_page = match sort_direction {
             SortDirection::Asc => {
                 list_threads_from_files_asc(
@@ -344,7 +403,7 @@ impl RolloutRecorder {
             SortDirection::Desc => {
                 list_threads_from_files_desc(
                     codex_home,
-                    fs_page_size,
+                    page_size.saturating_mul(2),
                     cursor,
                     sort_key,
                     allowed_sources,
@@ -361,24 +420,39 @@ impl RolloutRecorder {
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
-            return Ok(match sort_direction {
-                SortDirection::Asc => fs_page,
-                SortDirection::Desc => truncate_fs_page(fs_page, page_size, sort_key),
-            });
+            return Ok(page_from_filesystem_scan(
+                fs_page,
+                sort_direction,
+                page_size,
+                sort_key,
+            ));
         }
 
         // Warm the DB by repairing every filesystem hit before querying SQLite.
         for item in &fs_page.items {
-            state_db::read_repair_rollout_path(
-                state_db_ctx.as_deref(),
-                item.thread_id,
-                Some(archived),
-                item.path.as_path(),
-            )
-            .await;
+            if listing_has_metadata_filters {
+                state_db::reconcile_rollout(
+                    state_db_ctx.as_deref(),
+                    item.path.as_path(),
+                    default_provider,
+                    /*builder*/ None,
+                    &[],
+                    Some(archived),
+                    /*new_thread_memory_mode*/ None,
+                )
+                .await;
+            } else {
+                state_db::read_repair_rollout_path(
+                    state_db_ctx.as_deref(),
+                    item.thread_id,
+                    Some(archived),
+                    item.path.as_path(),
+                )
+                .await;
+            }
         }
 
-        if let Some(db_page) = state_db::list_threads_db(
+        let db_page = state_db::list_threads_db(
             state_db_ctx.as_deref(),
             codex_home,
             page_size,
@@ -391,17 +465,41 @@ impl RolloutRecorder {
             archived,
             search_term,
         )
-        .await
-        {
+        .await;
+        if listing_has_metadata_filters {
+            if let Some(db_page) = &db_page {
+                for item in &db_page.items {
+                    state_db::reconcile_rollout(
+                        state_db_ctx.as_deref(),
+                        item.rollout_path.as_path(),
+                        default_provider,
+                        /*builder*/ None,
+                        &[],
+                        Some(archived),
+                        /*new_thread_memory_mode*/ None,
+                    )
+                    .await;
+                }
+            }
+            return Ok(page_from_filesystem_scan(
+                fs_page,
+                sort_direction,
+                page_size,
+                sort_key,
+            ));
+        }
+        if let Some(db_page) = db_page {
             return Ok(db_page.into());
         }
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
         tracing::warn!("state db discrepancy during list_threads_with_db_fallback: falling_back");
-        Ok(match sort_direction {
-            SortDirection::Asc => fs_page,
-            SortDirection::Desc => truncate_fs_page(fs_page, page_size, sort_key),
-        })
+        Ok(page_from_filesystem_scan(
+            fs_page,
+            sort_direction,
+            page_size,
+            sort_key,
+        ))
     }
 
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
@@ -812,6 +910,18 @@ fn truncate_fs_page(
         parse_cursor(cursor_token.as_str())
     });
     page
+}
+
+fn page_from_filesystem_scan(
+    page: ThreadsPage,
+    sort_direction: SortDirection,
+    page_size: usize,
+    sort_key: ThreadSortKey,
+) -> ThreadsPage {
+    match sort_direction {
+        SortDirection::Asc => page,
+        SortDirection::Desc => truncate_fs_page(page, page_size, sort_key),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

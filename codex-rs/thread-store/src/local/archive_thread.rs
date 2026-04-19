@@ -106,6 +106,7 @@ mod tests {
                 cwd_filters: None,
                 archived: true,
                 search_term: None,
+                use_state_db_only: false,
             })
             .await
             .expect("archived listing");

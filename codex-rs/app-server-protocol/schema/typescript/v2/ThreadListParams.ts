@@ -43,6 +43,12 @@ archived?: boolean | null,
  */
 cwd?: string | Array<string>,
 /**
+ * If true, return from the state DB without scanning JSONL rollouts to
+ * repair thread metadata. Omitted or false preserves scan-and-repair
+ * behavior.
+ */
+useStateDbOnly?: boolean,
+/**
  * Optional substring filter for the extracted thread title.
  */
 searchTerm?: string | null, };

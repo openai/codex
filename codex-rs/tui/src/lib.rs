@@ -523,6 +523,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
                 cwd: None,
+                use_state_db_only: false,
                 search_term: Some(name.to_string()),
             })
             .await?;
@@ -615,6 +616,7 @@ fn latest_session_lookup_params(
             .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
+        use_state_db_only: false,
         search_term: None,
     }
 }

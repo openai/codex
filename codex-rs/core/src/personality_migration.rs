@@ -85,6 +85,7 @@ async fn has_threads(store: &LocalThreadStore, archived: bool) -> io::Result<boo
             cwd_filters: None,
             archived,
             search_term: None,
+            use_state_db_only: false,
         })
         .await
         .map(|page| !page.items.is_empty())

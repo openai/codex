@@ -38,6 +38,7 @@ pub(super) async fn list_threads(
         }),
         archived: params.archived,
         search_term: params.search_term,
+        use_state_db_only: params.use_state_db_only,
     };
 
     let response = store
@@ -97,6 +98,7 @@ mod tests {
             );
             assert_eq!(request.archived, true);
             assert_eq!(request.search_term.as_deref(), Some("needle"));
+            assert!(request.use_state_db_only);
             assert_eq!(
                 request.model_provider_filter,
                 Some(proto::ModelProviderFilter {
@@ -179,6 +181,7 @@ mod tests {
                 cwd_filters: Some(vec![PathBuf::from("/workspace")]),
                 archived: true,
                 search_term: Some("needle".to_string()),
+                use_state_db_only: true,
             })
             .await
             .expect("list threads");

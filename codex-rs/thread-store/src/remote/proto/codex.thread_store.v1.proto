@@ -15,6 +15,7 @@ message ListThreadsRequest {
   bool archived = 6;
   optional string search_term = 7;
   optional CwdFilter cwd_filter = 8;
+  bool use_state_db_only = 9;
 }
 
 message ModelProviderFilter {

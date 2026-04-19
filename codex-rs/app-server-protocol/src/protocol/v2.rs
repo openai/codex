@@ -3596,6 +3596,11 @@ pub struct ThreadListParams {
     /// exactly matches one of these paths are returned.
     #[ts(optional = nullable, type = "string | Array<string>")]
     pub cwd: Option<ThreadListCwdFilter>,
+    /// If true, return from the state DB without scanning JSONL rollouts to
+    /// repair thread metadata. Omitted or false preserves scan-and-repair
+    /// behavior.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_state_db_only: bool,
     /// Optional substring filter for the extracted thread title.
     #[ts(optional = nullable)]
     pub search_term: Option<String>,
@@ -7198,6 +7203,7 @@ mod tests {
             params.cwd,
             Some(ThreadListCwdFilter::One("/workspace".to_string()))
         );
+        assert!(!params.use_state_db_only);
     }
 
     #[test]
@@ -7214,6 +7220,16 @@ mod tests {
                 "/other-workspace".to_string(),
             ]))
         );
+    }
+
+    #[test]
+    fn thread_list_params_accepts_state_db_only_flag() {
+        let params = serde_json::from_value::<ThreadListParams>(json!({
+            "useStateDbOnly": true,
+        }))
+        .expect("state db only flag should deserialize");
+
+        assert!(params.use_state_db_only);
     }
 
     #[test]

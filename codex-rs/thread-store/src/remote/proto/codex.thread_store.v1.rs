@@ -19,6 +19,8 @@ pub struct ListThreadsRequest {
     pub search_term: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag = "8")]
     pub cwd_filter: ::core::option::Option<CwdFilter>,
+    #[prost(bool, tag = "9")]
+    pub use_state_db_only: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ModelProviderFilter {
