@@ -935,9 +935,7 @@ fn user_profile_child_name(path: &Path, user_profile: &Path) -> Option<String> {
     let root_key = canonical_path_key(path);
     let profile_key = canonical_path_key(user_profile);
     let profile_prefix = format!("{}/", profile_key.trim_end_matches('/'));
-    let Some(relative_key) = root_key.strip_prefix(&profile_prefix) else {
-        return None;
-    };
+    let relative_key = root_key.strip_prefix(&profile_prefix)?;
     relative_key
         .split('/')
         .next()
