@@ -4842,7 +4842,6 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             multi_agent_v2: MultiAgentV2Config::default(),
-            prefix_compaction: PrefixCompactionConfig::default(),
             features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("o3".to_string()),
@@ -4993,7 +4992,6 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
-        prefix_compaction: PrefixCompactionConfig::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt3".to_string()),
@@ -5142,7 +5140,6 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
-        prefix_compaction: PrefixCompactionConfig::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("zdr".to_string()),
@@ -5276,7 +5273,6 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         multi_agent_v2: MultiAgentV2Config::default(),
-        prefix_compaction: PrefixCompactionConfig::default(),
         features: Features::with_defaults().into(),
         suppress_unstable_features_warning: false,
         active_profile: Some("gpt5".to_string()),
@@ -6526,7 +6522,7 @@ hide_spawn_agent_metadata = false
 }
 
 #[tokio::test]
-async fn prefix_compaction_bool_feature_enables_with_default_threshold() -> std::io::Result<()> {
+async fn prefix_compaction_bool_feature_enables() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -6542,56 +6538,6 @@ prefix_compaction = true
         .await?;
 
     assert!(config.features.enabled(Feature::PrefixCompaction));
-    assert_eq!(config.prefix_compaction.threshold_percent, None);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn prefix_compaction_config_from_feature_table() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features.prefix_compaction]
-enabled = true
-threshold_percent = 75
-"#,
-    )?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert!(config.features.enabled(Feature::PrefixCompaction));
-    assert_eq!(config.prefix_compaction.threshold_percent, Some(75));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn profile_prefix_compaction_config_overrides_base() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"profile = "custom_prefix"
-
-[features.prefix_compaction]
-threshold_percent = 75
-
-[profiles.custom_prefix.features.prefix_compaction]
-threshold_percent = 80
-"#,
-    )?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert_eq!(config.prefix_compaction.threshold_percent, Some(80));
 
     Ok(())
 }

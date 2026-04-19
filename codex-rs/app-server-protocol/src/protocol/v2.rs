@@ -51,7 +51,6 @@ use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use codex_protocol::protocol::ContextCompactionKind as CoreContextCompactionKind;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
@@ -141,38 +140,6 @@ macro_rules! v2_enum_from_core {
 pub enum NonSteerableTurnKind {
     Review,
     Compact,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case", export_to = "v2/")]
-pub enum ContextCompactionKind {
-    #[default]
-    Classic,
-    Prefix,
-}
-
-impl ContextCompactionKind {
-    pub fn is_classic(&self) -> bool {
-        matches!(self, Self::Classic)
-    }
-
-    pub fn default_classic_option() -> Option<Self> {
-        Some(Self::Classic)
-    }
-
-    pub fn is_classic_option(kind: &Option<Self>) -> bool {
-        kind.as_ref().is_none_or(Self::is_classic)
-    }
-}
-
-impl From<CoreContextCompactionKind> for ContextCompactionKind {
-    fn from(kind: CoreContextCompactionKind) -> Self {
-        match kind {
-            CoreContextCompactionKind::Classic => Self::Classic,
-            CoreContextCompactionKind::Prefix => Self::Prefix,
-        }
-    }
 }
 
 /// This translation layer make sure that we expose codex error code in camel case.
@@ -4774,15 +4741,7 @@ pub enum ThreadItem {
     ExitedReviewMode { id: String, review: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ContextCompaction {
-        id: String,
-        #[serde(
-            default = "ContextCompactionKind::default_classic_option",
-            skip_serializing_if = "ContextCompactionKind::is_classic_option"
-        )]
-        #[ts(optional)]
-        kind: Option<ContextCompactionKind>,
-    },
+    ContextCompaction { id: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -5217,10 +5176,9 @@ impl From<CoreTurnItem> for ThreadItem {
                 result: image.result,
                 saved_path: image.saved_path,
             },
-            CoreTurnItem::ContextCompaction(compaction) => ThreadItem::ContextCompaction {
-                id: compaction.id,
-                kind: compaction.kind.map(Into::into),
-            },
+            CoreTurnItem::ContextCompaction(compaction) => {
+                ThreadItem::ContextCompaction { id: compaction.id }
+            }
         }
     }
 }
@@ -5877,12 +5835,6 @@ pub struct WindowsSandboxSetupCompletedNotification {
 pub struct ContextCompactedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    #[serde(
-        default = "ContextCompactionKind::default_classic_option",
-        skip_serializing_if = "ContextCompactionKind::is_classic_option"
-    )]
-    #[ts(optional)]
-    pub kind: Option<ContextCompactionKind>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -6798,7 +6750,7 @@ mod tests {
     }
 
     #[test]
-    fn context_compaction_thread_item_defaults_to_classic_kind() {
+    fn context_compaction_thread_item_serializes_without_kind() {
         let item: ThreadItem = serde_json::from_value(json!({
             "type": "contextCompaction",
             "id": "compact-1"
@@ -6809,7 +6761,6 @@ mod tests {
             item,
             ThreadItem::ContextCompaction {
                 id: "compact-1".to_string(),
-                kind: Some(ContextCompactionKind::Classic)
             }
         );
 
@@ -6819,24 +6770,6 @@ mod tests {
             json!({
                 "type": "contextCompaction",
                 "id": "compact-1"
-            })
-        );
-    }
-
-    #[test]
-    fn context_compaction_thread_item_serializes_prefix_kind() {
-        let item = ThreadItem::ContextCompaction {
-            id: "compact-1".to_string(),
-            kind: Some(ContextCompactionKind::Prefix),
-        };
-
-        let serialized = serde_json::to_value(&item).expect("thread item should serialize");
-        assert_eq!(
-            serialized,
-            json!({
-                "type": "contextCompaction",
-                "id": "compact-1",
-                "kind": "prefix"
             })
         );
     }

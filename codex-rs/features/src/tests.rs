@@ -430,64 +430,6 @@ prefix_compaction = true
         features.entries(),
         BTreeMap::from([("prefix_compaction".to_string(), true)])
     );
-    assert_eq!(features.prefix_compaction, Some(FeatureToml::Enabled(true)));
-}
-
-#[test]
-fn prefix_compaction_feature_config_deserializes_table() {
-    let features: FeaturesToml = toml::from_str(
-        r#"
-[prefix_compaction]
-enabled = true
-threshold_percent = 75
-"#,
-    )
-    .expect("features table should deserialize");
-
-    assert_eq!(
-        features.entries(),
-        BTreeMap::from([("prefix_compaction".to_string(), true)])
-    );
-    assert_eq!(
-        features.prefix_compaction,
-        Some(crate::FeatureToml::Config(
-            crate::PrefixCompactionConfigToml {
-                enabled: Some(true),
-                threshold_percent: Some(75),
-            }
-        ))
-    );
-}
-
-#[test]
-fn prefix_compaction_threshold_percent_does_not_enable_feature() {
-    let features_toml: FeaturesToml = toml::from_str(
-        r#"
-[prefix_compaction]
-threshold_percent = 75
-"#,
-    )
-    .expect("features table should deserialize");
-    let features = Features::from_sources(
-        FeatureConfigSource {
-            features: Some(&features_toml),
-            ..Default::default()
-        },
-        FeatureConfigSource::default(),
-        FeatureOverrides::default(),
-    );
-
-    assert_eq!(features.enabled(Feature::PrefixCompaction), false);
-    assert_eq!(features_toml.entries(), BTreeMap::new());
-    assert_eq!(
-        features_toml.prefix_compaction,
-        Some(crate::FeatureToml::Config(
-            crate::PrefixCompactionConfigToml {
-                enabled: None,
-                threshold_percent: Some(75),
-            }
-        ))
-    );
 }
 
 #[test]

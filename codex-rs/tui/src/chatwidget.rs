@@ -2206,16 +2206,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_context_compacted(&mut self, prefix_compacted: bool) {
+    fn on_context_compacted(&mut self) {
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
-        let message = if prefix_compacted {
-            "Context prefix compacted"
-        } else {
-            "Context compacted"
-        };
         self.add_to_history(history_cell::new_info_event(
-            message.to_owned(),
+            "Context compacted".to_owned(),
             /*hint*/ None,
         ));
         self.request_redraw();
@@ -5994,11 +5989,8 @@ impl ChatWidget {
             ThreadItem::ExitedReviewMode { .. } => {
                 self.exit_review_mode_after_item();
             }
-            ThreadItem::ContextCompaction { kind, .. } => {
-                self.on_context_compacted(matches!(
-                    kind,
-                    Some(codex_app_server_protocol::ContextCompactionKind::Prefix)
-                ));
+            ThreadItem::ContextCompaction { .. } => {
+                self.on_context_compacted();
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {

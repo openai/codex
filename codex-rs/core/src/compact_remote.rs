@@ -31,6 +31,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 
+const PREFIX_COMPACTION_MODE: &str = "prefix";
+
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -96,23 +98,13 @@ pub(crate) async fn run_remote_prefix_compact_task(
     }
 
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let tool_router = built_tools(
+    let prompt = build_remote_compact_prompt(
         sess.as_ref(),
         turn_context.as_ref(),
-        &prompt_input,
-        &HashSet::new(),
-        /*skills_outcome*/ None,
-        &CancellationToken::new(),
+        prompt_input,
+        base_instructions,
     )
     .await?;
-    let prompt = Prompt {
-        input: prompt_input,
-        tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        base_instructions,
-        personality: turn_context.personality,
-        output_schema: None,
-    };
 
     let new_history = sess
         .services
@@ -123,7 +115,7 @@ pub(crate) async fn run_remote_prefix_compact_task(
             turn_context.reasoning_effort,
             turn_context.reasoning_summary,
             &turn_context.session_telemetry,
-            Some(codex_api::CompactionMode::Prefix),
+            Some(PREFIX_COMPACTION_MODE),
         )
         .or_else(|err| async {
             let total_usage_breakdown = sess.get_total_token_usage_breakdown().await;
@@ -215,23 +207,13 @@ async fn run_remote_compact_task_inner_impl(
         .collect();
 
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
-    let tool_router = built_tools(
+    let prompt = build_remote_compact_prompt(
         sess.as_ref(),
         turn_context.as_ref(),
-        &prompt_input,
-        &HashSet::new(),
-        /*skills_outcome*/ None,
-        &CancellationToken::new(),
+        prompt_input,
+        base_instructions,
     )
     .await?;
-    let prompt = Prompt {
-        input: prompt_input,
-        tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
-        base_instructions,
-        personality: turn_context.personality,
-        output_schema: None,
-    };
 
     let mut new_history = sess
         .services
@@ -283,6 +265,31 @@ async fn run_remote_compact_task_inner_impl(
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
     Ok(())
+}
+
+async fn build_remote_compact_prompt(
+    sess: &Session,
+    turn_context: &TurnContext,
+    prompt_input: Vec<ResponseItem>,
+    base_instructions: BaseInstructions,
+) -> CodexResult<Prompt> {
+    let tool_router = built_tools(
+        sess,
+        turn_context,
+        &prompt_input,
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &CancellationToken::new(),
+    )
+    .await?;
+    Ok(Prompt {
+        input: prompt_input,
+        tools: tool_router.model_visible_specs(),
+        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        base_instructions,
+        personality: turn_context.personality,
+        output_schema: None,
+    })
 }
 
 pub(crate) async fn process_compacted_history(

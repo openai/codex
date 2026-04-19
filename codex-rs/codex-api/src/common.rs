@@ -33,13 +33,7 @@ pub struct CompactionInput<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<CompactionMode>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CompactionMode {
-    Prefix,
+    pub mode: Option<&'a str>,
 }
 
 /// Canonical input payload for the memory summarize endpoint.

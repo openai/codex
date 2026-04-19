@@ -21,7 +21,6 @@ pub use crate::auth::AuthProvider;
 pub use crate::auth::SharedAuthProvider;
 pub use crate::auth::auth_header_telemetry;
 pub use crate::common::CompactionInput;
-pub use crate::common::CompactionMode;
 pub use crate::common::MemorySummarizeInput;
 pub use crate::common::MemorySummarizeOutput;
 pub use crate::common::OpenAiVerbosity;

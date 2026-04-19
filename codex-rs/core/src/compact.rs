@@ -58,20 +58,12 @@ pub(crate) enum InitialContextInjection {
     DoNotInject,
 }
 
-pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
-    provider.supports_remote_compaction()
-        || provider
-            .base_url
-            .as_deref()
-            .is_some_and(is_codex_backend_base_url)
+pub(crate) fn provider_supports_inline_remote_compaction(provider: &ModelProviderInfo) -> bool {
+    provider.is_openai() || provider.supports_remote_compaction()
 }
 
-fn is_codex_backend_base_url(base_url: &str) -> bool {
-    let Ok(url) = url::Url::parse(base_url) else {
-        return false;
-    };
-    let path = url.path().trim_end_matches('/');
-    path.ends_with("/api/codex") || path.ends_with("/backend-api/codex")
+pub(crate) fn should_use_remote_compact_task(provider: &ModelProviderInfo) -> bool {
+    provider_supports_inline_remote_compaction(provider)
 }
 
 pub(crate) async fn run_inline_auto_compact_task(

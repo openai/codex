@@ -21,20 +21,3 @@ impl FeatureConfig for MultiAgentV2ConfigToml {
         self.enabled
     }
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PrefixCompactionConfigToml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-    /// Percentage of the auto-compaction threshold that starts background
-    /// prefix compaction. When omitted, Codex uses 60%.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub threshold_percent: Option<i64>,
-}
-
-impl FeatureConfig for PrefixCompactionConfigToml {
-    fn enabled(&self) -> Option<bool> {
-        self.enabled
-    }
-}

@@ -9,6 +9,8 @@ use std::collections::HashSet;
 use crate::agent_identity::RegisteredAgentTask;
 use crate::context_manager::ContextManager;
 use crate::session::PreviousTurnSettings;
+use crate::session::prefix_compaction::PrefixCompactTask;
+use crate::session::prefix_compaction::abort_prefix_compact_task;
 use crate::session::session::SessionConfiguration;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -35,8 +37,7 @@ pub(crate) struct SessionState {
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<PermissionProfile>,
-    next_prefix_compact_generation: u64,
-    prefix_compact: PrefixCompactState,
+    pub(crate) prefix_compact_task: Option<PrefixCompactTask>,
     next_turn_is_first: bool,
 }
 
@@ -57,8 +58,7 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
             granted_permissions: None,
-            next_prefix_compact_generation: 0,
-            prefix_compact: PrefixCompactState::Idle,
+            prefix_compact_task: None,
             next_turn_is_first: true,
         }
     }
@@ -104,74 +104,7 @@ impl SessionState {
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
-        self.prefix_compact = PrefixCompactState::Idle;
-    }
-
-    pub(crate) fn begin_prefix_compact(
-        &mut self,
-        model_slug: String,
-    ) -> Option<PrefixCompactStart> {
-        if !matches!(self.prefix_compact, PrefixCompactState::Idle) {
-            return None;
-        }
-
-        let base_history = self.history.raw_items().to_vec();
-        if base_history.is_empty() {
-            return None;
-        }
-
-        let generation = self.next_prefix_compact_generation;
-        self.next_prefix_compact_generation = self.next_prefix_compact_generation.saturating_add(1);
-        self.prefix_compact = PrefixCompactState::Running { generation };
-        Some(PrefixCompactStart {
-            generation,
-            model_slug,
-            base_history,
-            captured_context: Vec::new(),
-            captured_reference_context_item: None,
-        })
-    }
-
-    pub(crate) fn finish_prefix_compact(&mut self, candidate: PrefixCompactCandidate) {
-        if matches!(
-            self.prefix_compact,
-            PrefixCompactState::Running { generation } if generation == candidate.generation
-        ) {
-            self.prefix_compact = PrefixCompactState::Ready(Box::new(candidate));
-        }
-    }
-
-    pub(crate) fn fail_prefix_compact(&mut self, generation: u64) {
-        if matches!(
-            self.prefix_compact,
-            PrefixCompactState::Running { generation: running } if running == generation
-        ) {
-            self.prefix_compact = PrefixCompactState::Idle;
-        }
-    }
-
-    pub(crate) fn abandon_prefix_compact(&mut self) {
-        self.prefix_compact = PrefixCompactState::Idle;
-    }
-
-    pub(crate) fn take_ready_prefix_compact(
-        &mut self,
-        model_slug: &str,
-    ) -> Option<PrefixCompactCandidate> {
-        let PrefixCompactState::Ready(candidate) = std::mem::take(&mut self.prefix_compact) else {
-            return None;
-        };
-
-        let current_history = self.history.raw_items();
-        let prefix_is_current = candidate.model_slug == model_slug
-            && current_history.len() >= candidate.base_history.len()
-            && current_history[..candidate.base_history.len()] == candidate.base_history;
-
-        if prefix_is_current {
-            Some(*candidate)
-        } else {
-            None
-        }
+        abort_prefix_compact_task(&mut self.prefix_compact_task);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -313,35 +246,6 @@ impl SessionState {
     pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
         self.granted_permissions.clone()
     }
-}
-
-#[derive(Debug, Default)]
-enum PrefixCompactState {
-    #[default]
-    Idle,
-    Running {
-        generation: u64,
-    },
-    Ready(Box<PrefixCompactCandidate>),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PrefixCompactStart {
-    pub(crate) generation: u64,
-    pub(crate) model_slug: String,
-    pub(crate) base_history: Vec<ResponseItem>,
-    pub(crate) captured_context: Vec<ResponseItem>,
-    pub(crate) captured_reference_context_item: Option<TurnContextItem>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PrefixCompactCandidate {
-    pub(crate) generation: u64,
-    pub(crate) model_slug: String,
-    pub(crate) base_history: Vec<ResponseItem>,
-    pub(crate) replacement_prefix: Vec<ResponseItem>,
-    pub(crate) captured_context: Vec<ResponseItem>,
-    pub(crate) captured_reference_context_item: Option<TurnContextItem>,
 }
 
 // Sometimes new snapshots don't include credits or plan information.

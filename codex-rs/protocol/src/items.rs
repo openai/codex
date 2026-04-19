@@ -7,7 +7,6 @@ use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentEvent;
 use crate::protocol::ContextCompactedEvent;
-use crate::protocol::ContextCompactionKind;
 use crate::protocol::EventMsg;
 use crate::protocol::ImageGenerationEndEvent;
 use crate::protocol::UserMessageEvent;
@@ -131,33 +130,17 @@ pub struct ImageGenerationItem {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ContextCompactionItem {
     pub id: String,
-    #[serde(
-        default = "ContextCompactionKind::default_classic_option",
-        skip_serializing_if = "ContextCompactionKind::is_classic_option"
-    )]
-    #[ts(optional)]
-    pub kind: Option<ContextCompactionKind>,
 }
 
 impl ContextCompactionItem {
     pub fn new() -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            kind: Some(ContextCompactionKind::Classic),
-        }
-    }
-
-    pub fn new_prefix() -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            kind: Some(ContextCompactionKind::Prefix),
         }
     }
 
     pub fn as_legacy_event(&self) -> EventMsg {
-        EventMsg::ContextCompacted(ContextCompactedEvent {
-            kind: self.kind.clone(),
-        })
+        EventMsg::ContextCompacted(ContextCompactedEvent {})
     }
 }
 

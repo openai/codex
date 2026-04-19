@@ -890,17 +890,9 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
             result: result.clone(),
             saved_path: saved_path.clone(),
         })),
-        ThreadItem::ContextCompaction { id, kind } => {
+        ThreadItem::ContextCompaction { id } => {
             Some(TurnItem::ContextCompaction(ContextCompactionItem {
                 id: id.clone(),
-                kind: kind.clone().map(|kind| match kind {
-                    codex_app_server_protocol::ContextCompactionKind::Classic => {
-                        codex_protocol::protocol::ContextCompactionKind::Classic
-                    }
-                    codex_app_server_protocol::ContextCompactionKind::Prefix => {
-                        codex_protocol::protocol::ContextCompactionKind::Prefix
-                    }
-                }),
             }))
         }
         ThreadItem::CommandExecution { .. }
@@ -1603,7 +1595,6 @@ mod tests {
                     },
                     ThreadItem::ContextCompaction {
                         id: "compact-1".to_string(),
-                        kind: Some(codex_app_server_protocol::ContextCompactionKind::Classic),
                     },
                 ],
                 status: TurnStatus::Completed,

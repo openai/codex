@@ -164,6 +164,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod handlers;
 mod mcp;
+pub(crate) mod prefix_compaction;
 mod review;
 mod rollout_reconstruction;
 #[allow(clippy::module_inception)]
@@ -173,6 +174,8 @@ pub(crate) mod turn_context;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
+#[cfg(test)]
+use self::prefix_compaction::prefix_compact_token_limit;
 use self::review::spawn_review_thread;
 use self::session::AppServerClientMetadata;
 use self::session::Session;
@@ -184,8 +187,6 @@ use self::turn::AssistantMessageStreamParsers;
 use self::turn::collect_explicit_app_ids_from_skill_items;
 #[cfg(test)]
 use self::turn::filter_connectors_for_input;
-#[cfg(test)]
-use self::turn::prefix_compact_token_limit;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 use self::turn_context::TurnSkillsContext;
@@ -268,8 +269,6 @@ use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
-use crate::state::PrefixCompactCandidate;
-use crate::state::PrefixCompactStart;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 #[cfg(test)]
@@ -2277,37 +2276,6 @@ impl Session {
                 .await;
         }
         self.services.model_client.advance_window_generation();
-    }
-
-    pub(crate) async fn begin_prefix_compact(
-        &self,
-        model_slug: String,
-    ) -> Option<PrefixCompactStart> {
-        let mut state = self.state.lock().await;
-        state.begin_prefix_compact(model_slug)
-    }
-
-    pub(crate) async fn finish_prefix_compact(&self, candidate: PrefixCompactCandidate) {
-        let mut state = self.state.lock().await;
-        state.finish_prefix_compact(candidate);
-    }
-
-    pub(crate) async fn fail_prefix_compact(&self, generation: u64) {
-        let mut state = self.state.lock().await;
-        state.fail_prefix_compact(generation);
-    }
-
-    pub(crate) async fn abandon_prefix_compact(&self) {
-        let mut state = self.state.lock().await;
-        state.abandon_prefix_compact();
-    }
-
-    pub(crate) async fn take_ready_prefix_compact(
-        &self,
-        model_slug: &str,
-    ) -> Option<PrefixCompactCandidate> {
-        let mut state = self.state.lock().await;
-        state.take_ready_prefix_compact(model_slug)
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {

@@ -27,15 +27,7 @@ async fn process_compacted_history_with_test_session(
 fn remote_compact_task_supports_openai_provider() {
     let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
 
-    assert!(should_use_remote_compact_task(&provider));
-}
-
-#[test]
-fn remote_compact_task_supports_local_codex_backend_provider() {
-    let provider =
-        create_oss_provider_with_base_url("http://localhost:8061/api/codex", WireApi::Responses);
-
-    assert!(should_use_remote_compact_task(&provider));
+    assert!(provider_supports_inline_remote_compaction(&provider));
 }
 
 #[test]
@@ -43,7 +35,7 @@ fn remote_compact_task_ignores_generic_openai_compatible_provider() {
     let provider =
         create_oss_provider_with_base_url("http://localhost:8082/v1", WireApi::Responses);
 
-    assert!(!should_use_remote_compact_task(&provider));
+    assert!(!provider_supports_inline_remote_compaction(&provider));
 }
 
 #[test]
@@ -212,7 +204,7 @@ fn build_token_limited_compacted_history_appends_summary_message() {
 }
 
 #[test]
-fn should_use_remote_compact_task_for_azure_provider() {
+fn provider_supports_inline_remote_compaction_for_azure_provider() {
     let provider = ModelProviderInfo {
         name: "Azure".into(),
         base_url: Some("https://example.com/openai".into()),
@@ -232,7 +224,7 @@ fn should_use_remote_compact_task_for_azure_provider() {
         supports_websockets: false,
     };
 
-    assert!(should_use_remote_compact_task(&provider));
+    assert!(provider_supports_inline_remote_compaction(&provider));
 }
 
 #[tokio::test]

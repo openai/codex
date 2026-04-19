@@ -199,13 +199,6 @@
       ],
       "type": "string"
     },
-    "ContextCompactionKind": {
-      "enum": [
-        "classic",
-        "prefix"
-      ],
-      "type": "string"
-    },
     "DynamicToolCallOutputContentItem": {
       "oneOf": [
         {
@@ -1130,16 +1123,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "kind": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ContextCompactionKind"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "type": {
               "enum": [

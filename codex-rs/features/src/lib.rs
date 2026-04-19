@@ -17,7 +17,6 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 pub use feature_configs::MultiAgentV2ConfigToml;
-pub use feature_configs::PrefixCompactionConfigToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -533,8 +532,6 @@ pub fn is_known_feature_key(key: &str) -> bool {
 pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prefix_compaction: Option<FeatureToml<PrefixCompactionConfigToml>>,
     /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
     entries: BTreeMap<String, bool>,
@@ -552,13 +549,6 @@ impl FeaturesToml {
         let mut entries = self.entries.clone();
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
-        }
-        if let Some(enabled) = self
-            .prefix_compaction
-            .as_ref()
-            .and_then(FeatureToml::enabled)
-        {
-            entries.insert(Feature::PrefixCompaction.key().to_string(), enabled);
         }
         entries
     }
