@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use codex_app_server_protocol::JSONRPCErrorError;
 
 use crate::ExecServerRuntimePaths;
+use crate::http_request::run_http_request;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCopyParams;
@@ -22,6 +23,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
+use crate::protocol::HttpRequestParams;
+use crate::protocol::HttpRequestResponse;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
@@ -145,6 +148,14 @@ impl ExecServerHandler {
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         let session = self.require_initialized_for("exec")?;
         session.process().terminate(params).await
+    }
+
+    pub(crate) async fn http_request(
+        &self,
+        params: HttpRequestParams,
+    ) -> Result<HttpRequestResponse, JSONRPCErrorError> {
+        self.require_initialized_for("http")?;
+        run_http_request(params, self.notifications.clone()).await
     }
 
     pub(crate) async fn fs_read_file(
