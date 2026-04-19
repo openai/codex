@@ -453,6 +453,99 @@ async fn queued_bare_rename_drains_next_input_after_name_update() {
 }
 
 #[tokio::test]
+async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    queue_composer_text_with_tab(&mut chat, "/rename Queued rename");
+    queue_composer_text_with_tab(&mut chat, "first after rename");
+    queue_composer_text_with_tab(&mut chat, "second after rename");
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("done"))),
+    });
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::CodexOp(Op::SetThreadName { name }) if name == "Queued rename"
+        )),
+        "expected queued /rename to submit thread name; events: {events:?}"
+    );
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "first after rename".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected first queued message after /rename, got {other:?}"),
+    }
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::AddToHistory { text }) if text == "first after rename"
+    );
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["second after rename"]
+    );
+
+    chat.handle_codex_event(Event {
+        id: "rename".into(),
+        msg: EventMsg::ThreadNameUpdated(codex_protocol::protocol::ThreadNameUpdatedEvent {
+            thread_id,
+            thread_name: Some("Queued rename".to_string()),
+        }),
+    });
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["second after rename"]
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-2-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-2".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-2-complete".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-2", Some("done"))),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "second after rename".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected second queued message after turn complete, got {other:?}"),
+    }
+    assert!(chat.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
 async fn queued_unknown_slash_reports_error_when_dequeued() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());

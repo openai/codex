@@ -888,6 +888,8 @@ pub(crate) struct ChatWidget {
     suppress_initial_user_message_submit: bool,
     // User inputs queued while a turn is in progress.
     queued_user_messages: VecDeque<QueuedUserMessage>,
+    // A user turn has been submitted to core, but `TurnStarted` has not arrived yet.
+    user_turn_pending_start: bool,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
@@ -2369,6 +2371,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.user_turn_pending_start = false;
         self.agent_turn_running = true;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
@@ -2463,6 +2466,7 @@ impl ChatWidget {
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
+        self.user_turn_pending_start = false;
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -2843,6 +2847,7 @@ impl ChatWidget {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
+        self.user_turn_pending_start = false;
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
@@ -4949,6 +4954,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            user_turn_pending_start: false,
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -5396,7 +5402,7 @@ impl ChatWidget {
         user_message: UserMessage,
         action: QueuedInputAction,
     ) {
-        if !self.is_session_configured() || self.bottom_pane.is_task_running() {
+        if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
             self.queued_user_messages
                 .push_back(QueuedUserMessage::new(user_message, action));
             self.refresh_pending_input_preview();
@@ -5642,6 +5648,9 @@ impl ChatWidget {
 
         if !self.submit_op(op) {
             return;
+        }
+        if render_in_history {
+            self.user_turn_pending_start = true;
         }
 
         // Persist the text to cross-session message history. Mentions are
@@ -7157,10 +7166,10 @@ impl ChatWidget {
         if self.suppress_queue_autosend {
             return;
         }
-        if self.bottom_pane.is_task_running() {
+        if self.is_user_turn_pending_or_running() {
             return;
         }
-        while !self.bottom_pane.is_task_running() {
+        while !self.is_user_turn_pending_or_running() {
             let Some(queued_message) = self.pop_next_queued_user_message() else {
                 break;
             };
@@ -7185,6 +7194,10 @@ impl ChatWidget {
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
+    }
+
+    pub(super) fn is_user_turn_pending_or_running(&self) -> bool {
+        self.user_turn_pending_start || self.bottom_pane.is_task_running()
     }
 
     /// Rebuild and update the bottom-pane pending-input preview.
