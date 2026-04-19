@@ -9632,7 +9632,7 @@ impl ChatWidget {
             self.sync_plugins_command_enabled();
             self.refresh_plugin_mentions();
         }
-        if feature == Feature::GoalMode {
+        if feature == Feature::Goals {
             self.sync_goal_command_enabled();
             if !enabled {
                 self.current_goal_status_indicator = None;
@@ -9886,7 +9886,7 @@ impl ChatWidget {
 
     fn sync_goal_command_enabled(&mut self) {
         self.bottom_pane
-            .set_goal_command_enabled(self.config.features.enabled(Feature::GoalMode));
+            .set_goal_command_enabled(self.config.features.enabled(Feature::Goals));
     }
 
     fn current_model_supports_personality(&self) -> bool {
@@ -10083,7 +10083,7 @@ impl ChatWidget {
     }
 
     fn goal_status_indicator(&self, now: Instant) -> Option<GoalStatusIndicator> {
-        if !self.config.features.enabled(Feature::GoalMode) {
+        if !self.config.features.enabled(Feature::Goals) {
             return None;
         }
         self.current_goal_status
@@ -10092,7 +10092,7 @@ impl ChatWidget {
     }
 
     fn active_goal_in_progress(&self) -> bool {
-        self.config.features.enabled(Feature::GoalMode)
+        self.config.features.enabled(Feature::Goals)
             && self
                 .current_goal_status
                 .as_ref()
@@ -10105,7 +10105,7 @@ impl ChatWidget {
         {
             return;
         }
-        if !self.config.features.enabled(Feature::GoalMode) {
+        if !self.config.features.enabled(Feature::Goals) {
             self.current_goal_status_indicator = None;
             self.current_goal_status = None;
             self.update_collaboration_mode_indicator();

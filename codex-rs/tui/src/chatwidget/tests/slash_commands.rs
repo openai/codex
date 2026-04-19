@@ -140,7 +140,7 @@ async fn inline_slash_command_is_available_from_local_recall_after_dispatch() {
 #[tokio::test]
 async fn goal_slash_command_records_original_command_in_history() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     let command = "/goal write a cat poem for 5 minutes";
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
@@ -202,7 +202,7 @@ async fn goal_slash_command_records_original_command_in_history() {
 #[tokio::test]
 async fn goal_slash_command_records_mentions_in_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     chat.bottom_pane.set_composer_text_with_mention_bindings(
         "/goal use $figma for the mockup".to_string(),
@@ -239,7 +239,7 @@ async fn goal_slash_command_records_mentions_in_history() {
 #[tokio::test]
 async fn goal_slash_command_preserves_attached_images() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     let remote_url = "https://example.com/goal.png".to_string();
     let local_image = PathBuf::from("/tmp/goal-local.png");
@@ -283,7 +283,7 @@ async fn goal_slash_command_preserves_attached_images() {
 #[tokio::test]
 async fn goal_slash_command_keeps_draft_when_model_is_unavailable() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     chat.set_model("");
     let placeholder = "[Image #2]";
@@ -315,7 +315,7 @@ async fn goal_slash_command_keeps_draft_when_model_is_unavailable() {
 #[tokio::test]
 async fn queued_goal_slash_command_records_original_command_in_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     let command = "/goal write a cat poem";
 
     submit_composer_text(&mut chat, command);
@@ -342,7 +342,7 @@ async fn queued_goal_slash_command_records_original_command_in_history() {
 #[tokio::test]
 async fn restored_queued_goal_slash_command_records_original_command_in_history() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     let command = "/goal write a cat poem";
 
     submit_composer_text(&mut chat, command);
@@ -352,7 +352,7 @@ async fn restored_queued_goal_slash_command_records_original_command_in_history(
 
     let (mut restored_chat, _restored_rx, mut restored_op_rx) =
         make_chatwidget_manual(/*model_override*/ None).await;
-    restored_chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    restored_chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     restored_chat.restore_thread_input_state(Some(input_state));
     restored_chat.thread_id = Some(ThreadId::new());
     restored_chat.maybe_send_next_queued_input();
@@ -375,7 +375,7 @@ async fn restored_queued_goal_slash_command_records_original_command_in_history(
 #[tokio::test]
 async fn rejected_goal_slash_command_retry_records_original_command_in_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
@@ -441,7 +441,7 @@ async fn rejected_goal_slash_command_retry_records_original_command_in_history()
 #[tokio::test]
 async fn interrupted_goal_slash_command_restores_original_command_to_composer() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
@@ -486,7 +486,7 @@ async fn interrupted_goal_slash_command_restores_original_command_to_composer() 
 #[tokio::test]
 async fn committed_pending_goal_slash_command_renders_original_command() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
@@ -536,7 +536,7 @@ async fn committed_pending_goal_slash_command_renders_original_command() {
 #[tokio::test]
 async fn interrupted_goal_slash_command_resubmit_records_original_command_in_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.on_agent_message_delta("Final answer line\n".to_string());
@@ -1115,7 +1115,7 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
 #[tokio::test]
 async fn active_goal_suppresses_agent_turn_complete_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.handle_server_notification(
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {

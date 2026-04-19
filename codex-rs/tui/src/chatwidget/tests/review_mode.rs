@@ -1241,7 +1241,7 @@ async fn interrupted_turn_error_message_snapshot() {
 #[tokio::test]
 async fn interrupted_turn_after_goal_budget_limited_uses_budget_message_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
 
     chat.handle_server_notification(
         codex_app_server_protocol::ServerNotification::TurnStarted(

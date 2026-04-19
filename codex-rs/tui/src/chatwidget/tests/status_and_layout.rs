@@ -1233,7 +1233,7 @@ async fn status_line_goal_active_token_budget_footer_snapshot() {
     use ratatui::backend::TestBackend;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.show_welcome_banner = false;
     chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
     chat.refresh_status_line();
@@ -1270,7 +1270,7 @@ async fn status_line_goal_complete_elapsed_footer_snapshot() {
     use ratatui::backend::TestBackend;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.show_welcome_banner = false;
     chat.config.tui_status_line = Some(vec!["model-name".to_string()]);
     chat.refresh_status_line();
@@ -1304,7 +1304,7 @@ async fn status_line_goal_complete_elapsed_footer_snapshot() {
 #[tokio::test]
 async fn session_configured_clears_goal_status_footer() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.handle_server_notification(
         ServerNotification::ThreadGoalUpdated(
             codex_app_server_protocol::ThreadGoalUpdatedNotification {
@@ -1357,7 +1357,7 @@ async fn session_configured_clears_goal_status_footer() {
 #[tokio::test]
 async fn thread_goal_update_for_other_thread_is_ignored() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
     chat.thread_id = Some(ThreadId::new());
     let other_thread_id = ThreadId::new().to_string();
     let mut goal = test_thread_goal(

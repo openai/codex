@@ -152,7 +152,7 @@ impl ChatWidget {
                 self.apply_plan_slash_command();
             }
             SlashCommand::Goal => {
-                if !self.config.features.enabled(Feature::GoalMode) {
+                if !self.config.features.enabled(Feature::Goals) {
                     return;
                 }
                 if let Some(thread_id) = self.thread_id {
@@ -489,7 +489,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Goal if !trimmed.is_empty() => {
-                if !self.config.features.enabled(Feature::GoalMode) {
+                if !self.config.features.enabled(Feature::Goals) {
                     return;
                 }
                 let Some((prepared_args, prepared_elements)) = self
