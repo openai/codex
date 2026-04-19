@@ -9518,7 +9518,9 @@ guardian_approval = true
         let mut replayed_history = String::new();
         while let Ok(event) = app_event_rx.try_recv() {
             if let AppEvent::InsertHistoryCell(cell) = event {
-                replayed_history.push_str(&lines_to_single_string(&cell.transcript_lines(80)));
+                replayed_history.push_str(&lines_to_single_string(
+                    &cell.transcript_lines(/*width*/ 80),
+                ));
             }
         }
 
