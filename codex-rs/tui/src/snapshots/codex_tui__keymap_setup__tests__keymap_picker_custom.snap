@@ -10,13 +10,14 @@ expression: "render_picker(params, 120)"
   [All]  Common  Customized (1)  Unbound (1)  App  Composer  Editor  Vim  Navigation  Approval                          
                                                                                                                         
   Type to search shortcuts                                                                                              
-› Global         Open Transcript                Current ctrl-t · Default keymap. Open the transcript overlay.           
-  Global         Open External Editor           ctrl-g · Default                                                        
-  Global         Copy                           ctrl-o · Default                                                        
-  Global       - Toggle Vim Mode                unbound · Default                                                       
-  Chat           Edit Previous Message          esc · Default                                                           
-  Chat           Confirm Edit Previous Message  enter · Default                                                         
-  Composer     * Submit                         ctrl-enter · Custom                                                     
-  Composer       Queue                          tab · Default                                                           
+› Global         Open Transcript                ctrl-t                                                                  
+  Global         Open External Editor           ctrl-g                                                                  
+  Global         Copy                           ctrl-o                                                                  
+  Global       - Toggle Vim Mode                unbound                                                                 
+  Chat           Edit Previous Message          esc                                                                     
+  Chat           Confirm Edit Previous Message  enter                                                                   
+  Composer     * Submit                         ctrl-enter                                                              
+  Composer       Queue                          tab                                                                     
                                                                                                                         
-  left/right group · enter edit shortcut · esc close
+  Open Transcript: Open the transcript overlay.                                                                         
+  left/right group · enter edit shortcut · * custom · - unbound · esc close

@@ -957,7 +957,7 @@ mod tests {
             composer_tab
                 .items
                 .iter()
-                .any(|item| item.description.as_deref() == Some("ctrl-enter · Custom"))
+                .any(|item| item.description.as_deref() == Some("ctrl-enter"))
         );
     }
 
@@ -971,7 +971,7 @@ mod tests {
         assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
         assert_eq!(
             unbound_tab.items[0].description.as_deref(),
-            Some("unbound · Default")
+            Some("unbound")
         );
         assert!(!unbound_tab.items[0].is_disabled);
     }

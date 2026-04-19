@@ -135,6 +135,7 @@ pub(crate) struct SelectionItem {
     pub display_shortcut: Option<KeyBinding>,
     pub description: Option<String>,
     pub selected_description: Option<String>,
+    pub selected_footer_note: Option<String>,
     pub is_current: bool,
     pub is_default: bool,
     pub is_disabled: bool,
@@ -391,6 +392,20 @@ impl ListSelectionView {
         self.state
             .selected_idx
             .and_then(|visible_idx| self.filtered_indices.get(visible_idx).copied())
+    }
+
+    fn selected_footer_note_line(&self) -> Option<Line<'static>> {
+        let selected_item = self
+            .selected_actual_idx()
+            .and_then(|actual_idx| self.active_items().get(actual_idx));
+
+        selected_item
+            .and_then(|item| {
+                item.selected_footer_note
+                    .as_ref()
+                    .map(|note| Line::from(note.clone()).dim())
+            })
+            .or_else(|| self.footer_note.clone())
     }
 
     fn apply_filter(&mut self) {
@@ -967,9 +982,9 @@ impl Renderable for ListSelectionView {
             }
         }
 
-        if let Some(note) = &self.footer_note {
+        if let Some(note) = self.selected_footer_note_line() {
             let note_width = width.saturating_sub(2);
-            let note_lines = wrap_styled_line(note, note_width);
+            let note_lines = wrap_styled_line(&note, note_width);
             height = height.saturating_add(note_lines.len() as u16);
         }
         if self.footer_hint.is_some() {
@@ -984,8 +999,8 @@ impl Renderable for ListSelectionView {
         }
 
         let note_width = area.width.saturating_sub(2);
-        let note_lines = self
-            .footer_note
+        let note_line = self.selected_footer_note_line();
+        let note_lines = note_line
             .as_ref()
             .map(|note| wrap_styled_line(note, note_width));
         let note_height = note_lines.as_ref().map_or(0, |lines| lines.len() as u16);

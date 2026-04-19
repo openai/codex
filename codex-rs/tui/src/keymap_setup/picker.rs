@@ -290,7 +290,11 @@ fn keymap_selection_items<'a>(
 fn keymap_selection_item(row: &KeymapActionRow) -> SelectionItem {
     let context = row.context.to_string();
     let action = row.action.to_string();
-    let source = keymap_source_label(row);
+    let source = if row.custom_binding {
+        "Custom"
+    } else {
+        "Default"
+    };
     let search_value = format!(
         "{} {} {} {} {} {}",
         row.context_label, row.action, row.label, row.description, row.binding_summary, source
@@ -299,13 +303,8 @@ fn keymap_selection_item(row: &KeymapActionRow) -> SelectionItem {
     SelectionItem {
         name: row.label.clone(),
         name_prefix_spans: keymap_row_prefix(row),
-        description: Some(format!("{} · {source}", row.binding_summary)),
-        selected_description: Some(format!(
-            "{} · {}. {}",
-            current_binding_sentence(row),
-            keymap_source_sentence(row),
-            row.description
-        )),
+        description: Some(row.binding_summary.clone()),
+        selected_footer_note: Some(format!("{}: {}", row.label, row.description)),
         actions: vec![Box::new(move |tx| {
             tx.send(AppEvent::OpenKeymapActionMenu {
                 context: context.clone(),
@@ -338,30 +337,6 @@ fn keymap_row_prefix(row: &KeymapActionRow) -> Vec<Span<'static>> {
     ]
 }
 
-fn keymap_source_label(row: &KeymapActionRow) -> &'static str {
-    if row.custom_binding {
-        "Custom"
-    } else {
-        "Default"
-    }
-}
-
-fn keymap_source_sentence(row: &KeymapActionRow) -> &'static str {
-    if row.custom_binding {
-        "Custom root override"
-    } else {
-        "Default keymap"
-    }
-}
-
-fn current_binding_sentence(row: &KeymapActionRow) -> String {
-    if row.is_unbound() {
-        "Unbound".to_string()
-    } else {
-        format!("Current {}", row.binding_summary)
-    }
-}
-
 fn keymap_header(description: String, summary: String) -> Box<dyn Renderable> {
     let mut header = ColumnRenderable::new();
     header.push(Line::from("Keymap".bold()));
@@ -383,6 +358,10 @@ fn keymap_picker_hint_line() -> Line<'static> {
         " group · ".dim(),
         "enter".cyan(),
         " edit shortcut · ".dim(),
+        "*".cyan(),
+        " custom · ".dim(),
+        "-".cyan(),
+        " unbound · ".dim(),
         "esc".cyan(),
         " close".dim(),
     ])
