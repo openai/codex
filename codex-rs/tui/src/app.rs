@@ -1417,10 +1417,12 @@ impl App {
             return;
         }
 
+        let memory_tool_was_enabled = self.config.features.enabled(Feature::MemoryTool);
         self.config = next_config;
-        let show_memory_enable_notice = feature_updates_to_apply
-            .iter()
-            .any(|(feature, enabled)| *feature == Feature::MemoryTool && *enabled);
+        let show_memory_enable_notice =
+            feature_updates_to_apply.iter().any(|(feature, enabled)| {
+                *feature == Feature::MemoryTool && *enabled && !memory_tool_was_enabled
+            });
         for (feature, effective_enabled) in feature_updates_to_apply {
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
