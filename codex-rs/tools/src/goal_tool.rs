@@ -16,7 +16,7 @@ pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
 pub fn create_get_goal_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: GET_GOAL_TOOL_NAME.to_string(),
-        description: "Get the current long-running goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget."
+        description: "Get the current goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -30,7 +30,7 @@ pub fn create_create_goal_tool() -> ToolSpec {
         (
             "objective".to_string(),
             JsonSchema::string(Some(
-                "Required. The concrete objective to start pursuing. This starts a fresh active goal only when no goal is currently defined; if a goal already exists, this tool fails."
+                "Required. The concrete objective to start pursuing. This starts a new active goal only when no goal is currently defined; if a goal already exists, this tool fails."
                     .to_string(),
             )),
         ),
@@ -44,10 +44,9 @@ pub fn create_create_goal_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: CREATE_GOAL_TOOL_NAME.to_string(),
-        description: r#"Create a new long-running goal for this thread when no goal is already defined.
-This tool creates a fresh active goal and resets time/token usage accounting to zero.
-It fails if any goal already exists. Use update_goal, not create_goal, only to mark an existing goal achieved while preserving usage accounting.
-To replace the objective, the user must clear or replace the goal through goal-management UI or API.
+        description: r#"Create a new goal for this thread when no goal is already defined.
+This tool creates a new active goal and resets time/token usage accounting to zero.
+It fails if any goal already exists. Use update_goal, not create_goal, only to mark an existing goal achieved.
 Set token_budget here when the goal should have a budget."#
             .to_string(),
         strict: false,
@@ -75,7 +74,7 @@ pub fn create_update_goal_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: UPDATE_GOAL_TOOL_NAME.to_string(),
-        description: r#"Update the existing long-running goal while preserving time/token usage accounting.
+        description: r#"Update the existing goal.
 Use this tool only to mark the goal achieved.
 Set status to `complete` only when the objective has actually been achieved and no required work remains.
 Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.
