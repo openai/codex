@@ -408,14 +408,41 @@ impl CodexMessageProcessor {
             .ok_or_else(|| internal_error("sqlite state db unavailable for thread goals"))
     }
 
-    pub(super) async fn emit_thread_goal_updated_if_present(&self, thread_id: ThreadId) {
-        let Some(goal) = self.thread_goal_updated_notification_goal(thread_id).await else {
-            return;
-        };
+    pub(super) async fn emit_thread_goal_snapshot(&self, thread_id: ThreadId) {
         let thread_state = self.thread_state_manager.thread_state(thread_id).await;
         let thread_state = thread_state.lock().await;
-        self.emit_thread_goal_updated_ordered(thread_id, goal, thread_state.listener_command_tx())
-            .await;
+        let listener_command_tx = thread_state.listener_command_tx();
+        drop(thread_state);
+
+        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
+            Ok(state_db) => state_db,
+            Err(err) => {
+                warn!(
+                    "failed to open state db before emitting thread goal resume snapshot for {thread_id}: {}",
+                    err.message
+                );
+                return;
+            }
+        };
+        match state_db.get_thread_goal(thread_id).await {
+            Ok(Some(goal)) => {
+                self.emit_thread_goal_updated_ordered(
+                    thread_id,
+                    api_thread_goal_from_state(goal),
+                    listener_command_tx,
+                )
+                .await;
+            }
+            Ok(None) => {
+                self.emit_thread_goal_cleared_ordered(thread_id, listener_command_tx)
+                    .await;
+            }
+            Err(err) => {
+                warn!(
+                    "failed to read thread goal before emitting resume snapshot for {thread_id}: {err}"
+                );
+            }
+        }
     }
 
     async fn emit_thread_goal_updated_ordered(
@@ -467,32 +494,6 @@ impl CodexMessageProcessor {
                 },
             ))
             .await;
-    }
-
-    async fn thread_goal_updated_notification_goal(
-        &self,
-        thread_id: ThreadId,
-    ) -> Option<ThreadGoal> {
-        let state_db = match self.state_db_for_materialized_thread(thread_id).await {
-            Ok(state_db) => state_db,
-            Err(err) => {
-                warn!(
-                    "failed to open state db before emitting thread goal update for {thread_id}: {}",
-                    err.message
-                );
-                return None;
-            }
-        };
-        match state_db.get_thread_goal(thread_id).await {
-            Ok(Some(goal)) => Some(api_thread_goal_from_state(goal)),
-            Ok(None) => None,
-            Err(err) => {
-                warn!(
-                    "failed to read thread goal before emitting resume update for {thread_id}: {err}"
-                );
-                None
-            }
-        }
     }
 }
 
