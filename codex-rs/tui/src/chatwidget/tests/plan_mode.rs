@@ -14,7 +14,9 @@ async fn plan_implementation_popup_snapshot() {
 #[tokio::test]
 async fn plan_implementation_popup_context_usage_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_token_info(Some(make_token_info(90_000, 100_000)));
+    chat.set_token_info(Some(make_token_info(
+        /*total_tokens*/ 90_000, /*context_window*/ 100_000,
+    )));
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();
 
