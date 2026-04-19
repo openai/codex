@@ -14,6 +14,7 @@ pub struct ElevatedSandboxCaptureRequest<'a> {
     pub proxy_enforced: bool,
     pub read_roots_override: Option<&'a [PathBuf]>,
     pub write_roots_override: Option<&'a [PathBuf]>,
+    pub deny_read_paths_override: &'a [PathBuf],
     pub deny_write_paths_override: &'a [PathBuf],
 }
 
@@ -239,6 +240,7 @@ mod windows_impl {
             proxy_enforced,
             read_roots_override,
             write_roots_override,
+            deny_read_paths_override,
             deny_write_paths_override,
         } = request;
         let policy = parse_policy(policy_json_or_preset)?;
@@ -260,6 +262,7 @@ mod windows_impl {
             codex_home,
             read_roots_override,
             write_roots_override,
+            deny_read_paths_override,
             deny_write_paths_override,
             proxy_enforced,
         )?;
