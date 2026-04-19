@@ -245,6 +245,42 @@ fn read_mask_allows_or_log(
     }
 }
 
+fn collect_existing_descendants(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = vec![root.to_path_buf()];
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .with_context(|| format!("read_dir failed for {}", dir.display()))?;
+        for entry in entries {
+            let entry =
+                entry.with_context(|| format!("read_dir entry failed for {}", dir.display()))?;
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("file_type failed for {}", entry.path().display()))?;
+            let path = entry.path();
+            paths.push(path.clone());
+            if file_type.is_dir() && !file_type.is_symlink() {
+                stack.push(path);
+            }
+        }
+    }
+
+    Ok(paths)
+}
+
+unsafe fn ensure_allow_write_aces_recursively(path: &Path, sids: &[*mut c_void]) -> Result<usize> {
+    let mut repaired = 0usize;
+    for descendant in collect_existing_descendants(path)? {
+        if ensure_allow_write_aces(&descendant, sids)
+            .with_context(|| format!("repair write ACEs on {}", descendant.display()))?
+        {
+            repaired += 1;
+        }
+    }
+    Ok(repaired)
+}
+
 fn lock_sandbox_dir(
     dir: &Path,
     real_user: &str,
@@ -706,11 +742,19 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     root.display()
                 ),
             )?;
-            grant_tasks.push(root.clone());
+        } else {
+            log_line(
+                log,
+                &format!(
+                    "verifying existing descendant write ACEs under {}",
+                    root.display()
+                ),
+            )?;
         }
+        grant_tasks.push(root.clone());
     }
 
-    let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
+    let (tx, rx) = mpsc::channel::<(PathBuf, Result<usize>)>();
     std::thread::scope(|scope| {
         for root in grant_tasks {
             let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
@@ -732,7 +776,7 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                     }
                 }
 
-                let res = unsafe { ensure_allow_write_aces(&root, &psids) };
+                let res = unsafe { ensure_allow_write_aces_recursively(&root, &psids) };
 
                 for psid in psids {
                     unsafe {
@@ -745,7 +789,18 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         drop(tx);
         for (root, res) in rx {
             match res {
-                Ok(_) => {}
+                Ok(repaired) => {
+                    if repaired > 0 {
+                        let _ = log_line(
+                            log,
+                            &format!(
+                                "repaired write ACEs on {} existing paths under {}",
+                                repaired,
+                                root.display()
+                            ),
+                        );
+                    }
+                }
                 Err(e) => {
                     refresh_errors.push(format!("write ACE failed on {}: {}", root.display(), e));
                     if log_line(
