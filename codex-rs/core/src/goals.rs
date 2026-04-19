@@ -1,9 +1,8 @@
-//! Runtime orchestration for persisted thread goals.
+//! Core support for persisted thread goals.
 //!
-//! This module is the small bridge between the state-db representation of a
-//! thread goal and the core turn lifecycle. It owns validation, protocol
-//! conversion, active-work accounting, budget-abort behavior, and the hidden
-//! continuation prompt that wakes an idle thread while a goal remains active.
+//! This module bridges core sessions and the state-db goal table. It validates
+//! goal mutations, converts between state and protocol shapes, emits goal-update
+//! events, and owns helper hooks used by goal lifecycle behavior.
 
 use crate::StateDbHandle;
 use crate::session::session::Session;
