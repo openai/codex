@@ -191,7 +191,7 @@ async fn no_marker_sessions_sets_personality() -> io::Result<()> {
 async fn no_marker_sessions_preserves_existing_config_fields() -> io::Result<()> {
     let temp = TempDir::new()?;
     write_session_with_user_event(temp.path()).await?;
-    tokio::fs::write(temp.path().join("config.toml"), "model = \"gpt-5-codex\"\n").await?;
+    tokio::fs::write(temp.path().join("config.toml"), "model = \"gpt-5.4\"\n").await?;
     let config_toml = read_config_toml(temp.path()).await?;
 
     let status = maybe_migrate_personality(temp.path(), &config_toml).await?;

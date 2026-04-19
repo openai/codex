@@ -565,10 +565,11 @@ async fn test_gpt_5_defaults() {
         "gpt-5.2",
         &features,
         Some(WebSearchMode::Cached),
-        "shell",
+        "shell_command",
         &[
             "update_plan",
             "request_user_input",
+            "apply_patch",
             "web_search",
             "image_generation",
             "view_image",
