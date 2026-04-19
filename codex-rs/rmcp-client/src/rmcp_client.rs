@@ -14,6 +14,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_config::types::McpServerEnvVar;
+use codex_exec_server::ExecServerClient;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -75,6 +76,8 @@ use crate::oauth::StoredOAuthTokens;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerTransport;
+use crate::streamable_http_environment_client::EnvironmentStreamableHttpClient;
+use crate::streamable_http_environment_client::EnvironmentStreamableHttpClientError;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -310,8 +313,15 @@ enum PendingTransport {
     StreamableHttp {
         transport: StreamableHttpClientTransport<StreamableHttpResponseClient>,
     },
+    EnvironmentStreamableHttp {
+        transport: StreamableHttpClientTransport<EnvironmentStreamableHttpClient>,
+    },
     StreamableHttpWithOAuth {
         transport: StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
+        oauth_persistor: OAuthPersistor,
+    },
+    EnvironmentStreamableHttpWithOAuth {
+        transport: StreamableHttpClientTransport<AuthClient<EnvironmentStreamableHttpClient>>,
         oauth_persistor: OAuthPersistor,
     },
 }
@@ -339,6 +349,15 @@ enum TransportRecipe {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+    },
+    EnvironmentStreamableHttp {
+        server_name: String,
+        url: String,
+        bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+        store_mode: OAuthCredentialsStoreMode,
+        exec_client: ExecServerClient,
     },
 }
 
@@ -544,6 +563,43 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
+        };
+        let transport = Self::create_pending_transport(&transport_recipe).await?;
+        Ok(Self {
+            state: Mutex::new(ClientState::Connecting {
+                transport: Some(transport),
+            }),
+            transport_recipe,
+            initialize_context: Mutex::new(None),
+            session_recovery_lock: Semaphore::new(/*permits*/ 1),
+            elicitation_pause_state: ElicitationPauseState::new(),
+        })
+    }
+
+    /// Creates a Streamable HTTP MCP client whose HTTP requests run through an
+    /// exec-server connection.
+    ///
+    /// This keeps MCP protocol handling local to this crate while letting the
+    /// executor environment own DNS resolution, network reachability, and
+    /// response-body streaming for remote MCP servers.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_environment_streamable_http_client(
+        server_name: &str,
+        url: &str,
+        bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+        store_mode: OAuthCredentialsStoreMode,
+        exec_client: ExecServerClient,
+    ) -> Result<Self> {
+        let transport_recipe = TransportRecipe::EnvironmentStreamableHttp {
+            server_name: server_name.to_string(),
+            url: url.to_string(),
+            bearer_token,
+            http_headers,
+            env_http_headers,
+            store_mode,
+            exec_client,
         };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
@@ -970,6 +1026,90 @@ impl RmcpClient {
                     Ok(PendingTransport::StreamableHttp { transport })
                 }
             }
+            TransportRecipe::EnvironmentStreamableHttp {
+                server_name,
+                url,
+                bearer_token,
+                http_headers,
+                env_http_headers,
+                store_mode,
+                exec_client,
+            } => {
+                let default_headers =
+                    build_default_headers(http_headers.clone(), env_http_headers.clone())?;
+
+                let initial_oauth_tokens =
+                    if bearer_token.is_none() && !default_headers.contains_key(AUTHORIZATION) {
+                        match load_oauth_tokens(server_name, url, *store_mode) {
+                            Ok(tokens) => tokens,
+                            Err(err) => {
+                                warn!("failed to read tokens for server `{server_name}`: {err}");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                if let Some(initial_tokens) = initial_oauth_tokens.clone() {
+                    match create_environment_oauth_transport_and_runtime(
+                        server_name,
+                        url,
+                        initial_tokens.clone(),
+                        *store_mode,
+                        default_headers.clone(),
+                        exec_client.clone(),
+                    )
+                    .await
+                    {
+                        Ok((transport, oauth_persistor)) => {
+                            Ok(PendingTransport::EnvironmentStreamableHttpWithOAuth {
+                                transport,
+                                oauth_persistor,
+                            })
+                        }
+                        Err(err)
+                            if err.downcast_ref::<AuthError>().is_some_and(|auth_err| {
+                                matches!(auth_err, AuthError::NoAuthorizationSupport)
+                            }) =>
+                        {
+                            let access_token = initial_tokens
+                                .token_response
+                                .0
+                                .access_token()
+                                .secret()
+                                .to_string();
+                            warn!(
+                                "OAuth metadata discovery is unavailable for MCP server `{server_name}`; falling back to stored bearer token authentication"
+                            );
+                            let http_config =
+                                StreamableHttpClientTransportConfig::with_uri(url.clone())
+                                    .auth_header(access_token);
+                            let transport = StreamableHttpClientTransport::with_client(
+                                EnvironmentStreamableHttpClient::new(
+                                    exec_client.clone(),
+                                    default_headers,
+                                ),
+                                http_config,
+                            );
+                            Ok(PendingTransport::EnvironmentStreamableHttp { transport })
+                        }
+                        Err(err) => Err(err),
+                    }
+                } else {
+                    let mut http_config =
+                        StreamableHttpClientTransportConfig::with_uri(url.clone());
+                    if let Some(bearer_token) = bearer_token.clone() {
+                        http_config = http_config.auth_header(bearer_token);
+                    }
+
+                    let transport = StreamableHttpClientTransport::with_client(
+                        EnvironmentStreamableHttpClient::new(exec_client.clone(), default_headers),
+                        http_config,
+                    );
+                    Ok(PendingTransport::EnvironmentStreamableHttp { transport })
+                }
+            }
         }
     }
 
@@ -990,7 +1130,18 @@ impl RmcpClient {
                 service::serve_client(client_service, transport).boxed(),
                 None,
             ),
+            PendingTransport::EnvironmentStreamableHttp { transport } => (
+                service::serve_client(client_service, transport).boxed(),
+                None,
+            ),
             PendingTransport::StreamableHttpWithOAuth {
+                transport,
+                oauth_persistor,
+            } => (
+                service::serve_client(client_service, transport).boxed(),
+                Some(oauth_persistor),
+            ),
+            PendingTransport::EnvironmentStreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
             } => (
@@ -1093,6 +1244,17 @@ impl RmcpClient {
                     )
                 )
             })
+            || error
+                .error
+                .downcast_ref::<StreamableHttpError<EnvironmentStreamableHttpClientError>>()
+                .is_some_and(|error| {
+                    matches!(
+                        error,
+                        StreamableHttpError::Client(
+                            EnvironmentStreamableHttpClientError::SessionExpired404
+                        )
+                    )
+                })
     }
 
     async fn reinitialize_after_session_expiry(
@@ -1179,6 +1341,60 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(StreamableHttpResponseClient::new(http_client), manager);
+    let auth_manager = auth_client.auth_manager.clone();
+
+    let transport = StreamableHttpClientTransport::with_client(
+        auth_client,
+        StreamableHttpClientTransportConfig::with_uri(url.to_string()),
+    );
+
+    let runtime = OAuthPersistor::new(
+        server_name.to_string(),
+        url.to_string(),
+        auth_manager,
+        credentials_store,
+        Some(initial_tokens),
+    );
+
+    Ok((transport, runtime))
+}
+
+/// Builds an executor-backed Streamable HTTP transport with stored OAuth tokens.
+async fn create_environment_oauth_transport_and_runtime(
+    server_name: &str,
+    url: &str,
+    initial_tokens: StoredOAuthTokens,
+    credentials_store: OAuthCredentialsStoreMode,
+    default_headers: HeaderMap,
+    exec_client: ExecServerClient,
+) -> Result<(
+    StreamableHttpClientTransport<AuthClient<EnvironmentStreamableHttpClient>>,
+    OAuthPersistor,
+)> {
+    // OAuth discovery still runs from the orchestrator because credentials are
+    // persisted locally, while MCP traffic after auth goes through exec-server.
+    let metadata_client = build_http_client(&default_headers)?;
+    let mut oauth_state = OAuthState::new(url.to_string(), Some(metadata_client)).await?;
+
+    oauth_state
+        .set_credentials(
+            &initial_tokens.client_id,
+            initial_tokens.token_response.0.clone(),
+        )
+        .await?;
+
+    let manager = match oauth_state {
+        OAuthState::Authorized(manager) => manager,
+        OAuthState::Unauthorized(manager) => manager,
+        OAuthState::Session(_) | OAuthState::AuthorizedHttpClient(_) => {
+            return Err(anyhow!("unexpected OAuth state during client setup"));
+        }
+    };
+
+    let auth_client = AuthClient::new(
+        EnvironmentStreamableHttpClient::new(exec_client, default_headers),
+        manager,
+    );
     let auth_manager = auth_client.auth_manager.clone();
 
     let transport = StreamableHttpClientTransport::with_client(

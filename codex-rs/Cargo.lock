@@ -2721,6 +2721,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bytes",
  "codex-client",
  "codex-config",
  "codex-exec-server",
