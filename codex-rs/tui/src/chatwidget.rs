@@ -895,13 +895,17 @@ pub(crate) struct ChatWidget {
     suppress_initial_user_message_submit: bool,
     // User messages queued while a turn is in progress.
     queued_user_messages: VecDeque<UserMessage>,
-    // History records for queued user messages. This is kept in lockstep with
-    // `queued_user_messages`, with missing entries treated as user-message text.
+    // History records for queued user messages. Slash commands such as `/goal`
+    // can render history that differs from the text submitted to core, so this
+    // stays in lockstep with `queued_user_messages`, with missing entries
+    // treated as user-message text.
     queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
-    // History records for rejected steers. This is kept in lockstep with
-    // `rejected_steers_queue`, with missing entries treated as user-message text.
+    // History records for rejected steers. Slash commands such as `/goal` can
+    // render history that differs from the text submitted to core, so this stays
+    // in lockstep with `rejected_steers_queue`, with missing entries treated as
+    // user-message text.
     rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     // Steers already submitted to core but not yet committed into history.
     //
