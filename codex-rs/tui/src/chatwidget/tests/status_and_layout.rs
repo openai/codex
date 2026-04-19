@@ -161,6 +161,7 @@ async fn flush_answer_stream_does_not_stop_animation_while_plan_stream_is_active
     chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
         Some(80),
         cwd.as_path(),
+        false,
     ));
 
     while rx.try_recv().is_ok() {}
@@ -185,8 +186,11 @@ async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.to_path_buf();
 
-    let mut controller =
-        crate::streaming::controller::StreamController::new(Some(80), cwd.as_path());
+    let mut controller = crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+        /*live_tail_reflow_enabled*/ false,
+    );
     assert!(controller.push("plain response line\n"));
     chat.stream_controller = Some(controller);
 
@@ -199,7 +203,18 @@ async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
     while let Ok(event) = rx.try_recv() {
         match event {
             AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
-            AppEvent::ConsolidateAgentMessage { .. } => saw_consolidate = true,
+            AppEvent::ConsolidateAgentMessage {
+                scrollback_reflow,
+                deferred_history_cell,
+                ..
+            } => {
+                saw_consolidate = true;
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
+                );
+                assert!(deferred_history_cell.is_none());
+            }
             _ => {}
         }
     }
@@ -211,6 +226,63 @@ async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
     assert!(
         saw_insert_history,
         "plain text should still insert history before consolidation"
+    );
+}
+
+#[tokio::test]
+async fn flush_answer_stream_requests_scrollback_reflow_for_live_table_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+        /*live_tail_reflow_enabled*/ false,
+    );
+    controller.push("| Name | Notes |\n");
+    controller.push("| --- | --- |\n");
+    controller.push("| alpha | tail held until final table render |\n");
+    assert!(
+        controller.has_live_tail(),
+        "expected table holdback to leave a live tail for this regression",
+    );
+    chat.stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_consolidate = false;
+    let mut saw_insert_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
+            AppEvent::ConsolidateAgentMessage {
+                scrollback_reflow,
+                deferred_history_cell,
+                ..
+            } => {
+                saw_consolidate = true;
+                assert_eq!(
+                    scrollback_reflow,
+                    crate::app_event::ConsolidationScrollbackReflow::Required
+                );
+                assert!(
+                    deferred_history_cell.is_some(),
+                    "live table tail should be staged for consolidation",
+                );
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "expected stream finalization to consolidate"
+    );
+    assert!(
+        !saw_insert_history,
+        "live table tail should not be inserted before canonical reflow"
     );
 }
 
@@ -233,6 +305,7 @@ async fn flush_answer_stream_does_not_stop_animation_while_second_plan_stream_is
     chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
         Some(80),
         cwd.as_path(),
+        /*live_tail_reflow_enabled*/ false,
     ));
 
     while rx.try_recv().is_ok() {}

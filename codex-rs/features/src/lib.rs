@@ -197,6 +197,8 @@ pub enum Feature {
     PreventIdleSleep,
     /// Enable workspace-specific owner nudge copy and prompts in the TUI.
     WorkspaceOwnerUsageNudge,
+    /// Speculatively re-render table holdback tail with uncommitted source.
+    StreamTableLiveTailReflow,
     /// Legacy rollout flag for Responses API WebSocket transport experiments.
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
@@ -981,6 +983,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WorkspaceOwnerUsageNudge,
         key: "workspace_owner_usage_nudge",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::StreamTableLiveTailReflow,
+        key: "stream_table_live_tail_reflow",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

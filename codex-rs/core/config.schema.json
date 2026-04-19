@@ -494,6 +494,9 @@
             "steer": {
               "type": "boolean"
             },
+            "stream_table_live_tail_reflow": {
+              "type": "boolean"
+            },
             "telepathy": {
               "type": "boolean"
             },
@@ -2470,6 +2473,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "stream_table_live_tail_reflow": {
           "type": "boolean"
         },
         "telepathy": {

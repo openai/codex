@@ -88,6 +88,11 @@ impl MarkdownStreamCollector {
         Some(out)
     }
 
+    /// Peek at uncommitted source content beyond the latest commit boundary.
+    pub fn peek_uncommitted(&self) -> &str {
+        &self.buffer[self.committed_source_len..]
+    }
+
     /// Finalize the stream and return any remaining raw source.
     ///
     /// Ensures the returned source chunk is newline-terminated when non-empty so callers can
@@ -838,5 +843,59 @@ mod tests {
     #[tokio::test]
     async fn table_like_lines_inside_fenced_code_are_not_held() {
         assert_streamed_equals_full(&["```\n", "| a | b |\n", "```\n"]).await;
+    }
+
+    #[tokio::test]
+    async fn peek_uncommitted_tracks_buffer_after_commits() {
+        let mut collector = super::MarkdownStreamCollector::new(None, &super::test_cwd());
+
+        collector.push_delta("alpha");
+        assert_eq!(collector.peek_uncommitted(), "alpha");
+
+        collector.push_delta("\n");
+        assert_eq!(
+            collector.commit_complete_source(),
+            Some("alpha\n".to_string())
+        );
+        assert_eq!(collector.peek_uncommitted(), "");
+
+        collector.push_delta("beta");
+        assert_eq!(collector.peek_uncommitted(), "beta");
+    }
+
+    #[tokio::test]
+    async fn collector_source_chunks_round_trip_into_agent_fence_unwrapping() {
+        let deltas = [
+            "```md\n",
+            "| A | B |\n",
+            "|---|---|\n",
+            "| 1 | 2 |\n",
+            "```\n",
+        ];
+        let mut collector = super::MarkdownStreamCollector::new(None, &super::test_cwd());
+        let mut raw_source = String::new();
+
+        for delta in deltas {
+            collector.push_delta(delta);
+            if delta.contains('\n')
+                && let Some(chunk) = collector.commit_complete_source()
+            {
+                raw_source.push_str(&chunk);
+            }
+        }
+        raw_source.push_str(&collector.finalize_and_drain_source());
+
+        let mut rendered = Vec::new();
+        crate::markdown::append_markdown_agent(&raw_source, /*width*/ None, &mut rendered);
+        let rendered_strs = lines_to_plain_strings(&rendered);
+
+        assert!(
+            rendered_strs.iter().any(|line| line.contains('┌')),
+            "expected markdown-fenced table to render as boxed table: {rendered_strs:?}"
+        );
+        assert!(
+            !rendered_strs.iter().any(|line| line.trim() == "| A | B |"),
+            "did not expect raw table header after markdown-fence unwrapping: {rendered_strs:?}"
+        );
     }
 }
