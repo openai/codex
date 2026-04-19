@@ -458,7 +458,10 @@ fn v2_background_agent_tool_call(call_id: &str, prompt: &str) -> Value {
 async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let responses_server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("delegated")?,
+    ])
+    .await;
     let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
             "type": "session.updated",
@@ -488,6 +491,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             json!({
                 "type": "response.output_text.delta",
                 "delta": "working"
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "text": "working on it"
             }),
             json!({
                 "type": "conversation.item.done",
