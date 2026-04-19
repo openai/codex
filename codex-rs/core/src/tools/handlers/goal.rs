@@ -1,8 +1,8 @@
 //! Built-in model tool handlers for persisted thread goals.
 //!
-//! The public tool contract intentionally splits goal creation from updates:
-//! `create_goal` starts an active objective, while `update_goal` changes status
-//! on the existing goal and preserves usage accounting.
+//! The public tool contract intentionally splits goal creation from completion:
+//! `create_goal` starts an active objective, while `update_goal` can only mark
+//! the existing goal complete and preserve usage accounting.
 
 use crate::function_tool::FunctionCallError;
 use crate::goals::CreateGoalRequest;
@@ -47,16 +47,6 @@ enum ToolGoalStatus {
     Active,
     Paused,
     Complete,
-}
-
-impl From<ToolGoalStatus> for ThreadGoalStatus {
-    fn from(value: ToolGoalStatus) -> Self {
-        match value {
-            ToolGoalStatus::Active => Self::Active,
-            ToolGoalStatus::Paused => Self::Paused,
-            ToolGoalStatus::Complete => Self::Complete,
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -150,7 +140,7 @@ async fn handle_create_goal(
                 .any(|cause| cause.to_string().contains("already has a goal"))
             {
                 FunctionCallError::RespondToModel(
-                    "cannot create a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
+                    "cannot create a new goal because this thread already has a goal; use update_goal only when the existing goal is complete"
                         .to_string(),
                 )
             } else {
@@ -166,51 +156,35 @@ async fn handle_update_goal(
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: UpdateGoalArgs = parse_arguments(arguments)?;
-    let status = args.status;
-    let request = SetGoalRequest {
-        objective: None,
-        status: Some(status.into()),
-        token_budget: None,
-    };
-
-    if matches!(status, ToolGoalStatus::Paused | ToolGoalStatus::Complete) {
-        if status == ToolGoalStatus::Paused {
-            let goal = session
-                .get_thread_goal()
-                .await
-                .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-            if goal
-                .as_ref()
-                .is_some_and(|goal| goal.status == ThreadGoalStatus::BudgetLimited)
-            {
-                session
-                    .clear_queued_goal_continuations_for_next_turn()
-                    .await;
-                return goal_response(goal);
-            }
-        }
-        session
-            .set_thread_goal(turn_context, request)
-            .await
-            .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-        session
-            .account_thread_goal_progress(turn_context, GoalAccountingBoundary::Tool)
-            .await
-            .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-        let goal = session
-            .get_thread_goal()
-            .await
-            .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-        session
-            .clear_queued_goal_continuations_for_next_turn()
-            .await;
-        return goal_response(goal);
+    if args.status != ToolGoalStatus::Complete {
+        return Err(FunctionCallError::RespondToModel(
+            "update_goal can only mark the existing goal complete; pause, resume, and budget-limited status changes are controlled by the user or system"
+                .to_string(),
+        ));
     }
-    let goal = session
-        .set_thread_goal(turn_context, request)
+    session
+        .set_thread_goal(
+            turn_context,
+            SetGoalRequest {
+                objective: None,
+                status: Some(ThreadGoalStatus::Complete),
+                token_budget: None,
+            },
+        )
         .await
         .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
-    goal_response(Some(goal))
+    session
+        .account_thread_goal_progress(turn_context, GoalAccountingBoundary::Tool)
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+    let goal = session
+        .get_thread_goal()
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format_goal_error(err)))?;
+    session
+        .clear_queued_goal_continuations_for_next_turn()
+        .await;
+    goal_response(goal)
 }
 
 fn format_goal_error(err: anyhow::Error) -> String {
