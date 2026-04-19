@@ -29,6 +29,8 @@ use codex_analytics::TurnSteerRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -117,6 +119,8 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SkillSummary;
@@ -203,6 +207,7 @@ use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_app_server_protocol::WindowsSandboxSetupStartResponse;
 use codex_app_server_protocol::build_turns_from_rollout_items;
 use codex_arg0::Arg0DispatchPaths;
+use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCreditType;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_cloud_requirements::cloud_requirements_loader;
@@ -1187,6 +1192,10 @@ impl CodexMessageProcessor {
                 self.get_account_rate_limits(to_connection_request_id(request_id))
                     .await;
             }
+            ClientRequest::SendAddCreditsNudgeEmail { request_id, params } => {
+                self.send_add_credits_nudge_email(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::FeedbackUpload { request_id, params } => {
                 self.upload_feedback(to_connection_request_id(request_id), params)
                     .await;
@@ -1898,6 +1907,74 @@ impl CodexMessageProcessor {
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
             }
+        }
+    }
+
+    async fn send_add_credits_nudge_email(
+        &self,
+        request_id: ConnectionRequestId,
+        params: SendAddCreditsNudgeEmailParams,
+    ) {
+        match self.send_add_credits_nudge_email_inner(params).await {
+            Ok(status) => {
+                self.outgoing
+                    .send_response(request_id, SendAddCreditsNudgeEmailResponse { status })
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn send_add_credits_nudge_email_inner(
+        &self,
+        params: SendAddCreditsNudgeEmailParams,
+    ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "codex account authentication required to notify workspace owner"
+                    .to_string(),
+                data: None,
+            });
+        };
+
+        if !auth.is_chatgpt_auth() {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "chatgpt authentication required to notify workspace owner".to_string(),
+                data: None,
+            });
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to construct backend client: {err}"),
+                data: None,
+            })?;
+
+        match client
+            .send_add_credits_nudge_email(Self::backend_credit_type(params.credit_type))
+            .await
+        {
+            Ok(()) => Ok(AddCreditsNudgeEmailStatus::Sent),
+            Err(err) if err.status().is_some_and(|status| status.as_u16() == 429) => {
+                Ok(AddCreditsNudgeEmailStatus::CooldownActive)
+            }
+            Err(err) => Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to notify workspace owner: {err}"),
+                data: None,
+            }),
+        }
+    }
+
+    fn backend_credit_type(value: AddCreditsNudgeCreditType) -> BackendAddCreditsNudgeCreditType {
+        match value {
+            AddCreditsNudgeCreditType::Credits => BackendAddCreditsNudgeCreditType::Credits,
+            AddCreditsNudgeCreditType::UsageLimit => BackendAddCreditsNudgeCreditType::UsageLimit,
         }
     }
 
@@ -4314,6 +4391,7 @@ impl CodexMessageProcessor {
                 thread_id,
                 thread: codex_thread,
                 session_configured,
+                ..
             }) => {
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {

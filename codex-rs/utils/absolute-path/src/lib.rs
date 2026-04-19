@@ -328,6 +328,8 @@ mod tests {
     use crate::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
     use std::fs;
+    #[cfg(unix)]
+    use std::process::Command;
     use tempfile::tempdir;
 
     #[test]
@@ -339,6 +341,46 @@ mod tests {
         let abs_path_buf =
             AbsolutePathBuf::resolve_path_against_base(absolute_path.clone(), base_path);
         assert_eq!(abs_path_buf.as_path(), absolute_path.as_path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_absolute_path_does_not_read_current_dir_when_path_is_absolute() {
+        let status = Command::new(std::env::current_exe().expect("current test binary"))
+            .arg("from_absolute_path_with_removed_current_dir_child")
+            .arg("--ignored")
+            .env("CODEX_ABSOLUTE_PATH_REMOVED_CWD_CHILD", "1")
+            .status()
+            .expect("run child test");
+
+        assert!(status.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    fn from_absolute_path_with_removed_current_dir_child() {
+        if std::env::var_os("CODEX_ABSOLUTE_PATH_REMOVED_CWD_CHILD").is_none() {
+            return;
+        }
+
+        let original_cwd = std::env::current_dir().expect("original cwd");
+        let temp_dir = tempdir().expect("temp dir");
+        let removed_cwd = temp_dir.path().to_path_buf();
+        std::env::set_current_dir(&removed_cwd).expect("enter temp dir");
+        std::fs::remove_dir(&removed_cwd).expect("remove current dir");
+        std::env::current_dir().expect_err("current dir should be unavailable");
+
+        let path = AbsolutePathBuf::from_absolute_path(test_path_buf(
+            "/tmp/codex/../codex-home/plugins/cache",
+        ))
+        .expect("absolute path should not require current dir");
+
+        std::env::set_current_dir(original_cwd).expect("restore cwd");
+        assert_eq!(
+            path.as_path(),
+            test_path_buf("/tmp/codex-home/plugins/cache")
+        );
     }
 
     #[test]

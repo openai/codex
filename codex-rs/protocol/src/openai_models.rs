@@ -277,6 +277,9 @@ pub struct ModelInfo {
     pub supports_image_detail_original: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
+    /// Maximum context window allowed for config overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
     /// from `context_window` (90%). When provided, core clamps it to 90% of the
     /// context window when available.
@@ -300,9 +303,13 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    pub fn resolved_context_window(&self) -> Option<i64> {
+        self.context_window.or(self.max_context_window)
+    }
+
     pub fn auto_compact_token_limit(&self) -> Option<i64> {
         let context_limit = self
-            .context_window
+            .resolved_context_window()
             .map(|context_window| (context_window * 9) / 10);
         let config_limit = self.auto_compact_token_limit;
         if let Some(context_limit) = context_limit {
@@ -555,6 +562,7 @@ mod tests {
             supports_parallel_tool_calls: false,
             supports_image_detail_original: false,
             context_window: None,
+            max_context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
@@ -778,6 +786,29 @@ mod tests {
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
         assert!(!model.supports_search_tool);
+    }
+
+    #[test]
+    fn resolved_context_window_prefers_context_window() {
+        let model = ModelInfo {
+            context_window: Some(273_000),
+            max_context_window: Some(400_000),
+            ..test_model(/*spec*/ None)
+        };
+
+        assert_eq!(model.resolved_context_window(), Some(273_000));
+    }
+
+    #[test]
+    fn resolved_context_window_falls_back_to_max_context_window() {
+        let model = ModelInfo {
+            context_window: None,
+            max_context_window: Some(400_000),
+            ..test_model(/*spec*/ None)
+        };
+
+        assert_eq!(model.resolved_context_window(), Some(400_000));
+        assert_eq!(model.auto_compact_token_limit(), Some(360_000));
     }
 
     #[test]
