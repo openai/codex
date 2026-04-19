@@ -20,6 +20,11 @@ pub(super) const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_PREFIX: &str = concat!(
 pub(super) const PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE: &str = "Default mode unavailable";
 pub(super) const PLAN_IMPLEMENTATION_NO_APPROVED_PLAN: &str = "No approved plan available";
 
+/// Builds the confirmation prompt shown after a plan is approved in Plan mode.
+///
+/// The optional usage label is already phrased for display, such as `89% used`
+/// or `123K used`. This module only decides where that label belongs in the
+/// decision copy so action wiring stays separate from token accounting.
 pub(super) fn selection_view_params(
     default_mask: Option<CollaborationModeMask>,
     plan_markdown: Option<&str>,

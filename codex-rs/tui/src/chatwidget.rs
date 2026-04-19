@@ -2493,6 +2493,13 @@ impl ChatWidget {
         });
     }
 
+    /// Returns a context-used label for the plan implementation prompt.
+    ///
+    /// The footer reports context remaining because it is ambient status, but
+    /// this prompt is asking whether to discard prior conversation state before
+    /// implementing a plan. Reporting used context makes the cleanup tradeoff
+    /// explicit. A fully fresh or unknown context window returns no label so
+    /// the clear-context option does not imply urgency without evidence.
     fn plan_implementation_context_usage_label(&self) -> Option<String> {
         let info = self.token_info.as_ref()?;
         let percent = self.context_remaining_percent(info);
