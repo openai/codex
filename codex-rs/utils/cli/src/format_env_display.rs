@@ -29,10 +29,11 @@ mod tests {
 
     #[test]
     fn returns_dash_when_empty() {
-        assert_eq!(format_env_display(/*env*/ None, &[]), "-");
+        let empty_vars: &[String] = &[];
+        assert_eq!(format_env_display(/*env*/ None, empty_vars), "-");
 
         let empty_map = HashMap::new();
-        assert_eq!(format_env_display(Some(&empty_map), &[]), "-");
+        assert_eq!(format_env_display(Some(&empty_map), empty_vars), "-");
     }
 
     #[test]
@@ -41,7 +42,10 @@ mod tests {
         env.insert("B".to_string(), "two".to_string());
         env.insert("A".to_string(), "one".to_string());
 
-        assert_eq!(format_env_display(Some(&env), &[]), "A=*****, B=*****");
+        assert_eq!(
+            format_env_display(Some(&env), &[] as &[String]),
+            "A=*****, B=*****"
+        );
     }
 
     #[test]
