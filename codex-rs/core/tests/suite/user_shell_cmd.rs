@@ -439,11 +439,9 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5.4")
-        .with_config(|config| {
-            config.tool_output_token_limit = Some(100);
-        });
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.tool_output_token_limit = Some(100);
+    });
     let fixture = builder.build(&server).await?;
 
     let call_id = "user-shell-double-truncation";

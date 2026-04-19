@@ -545,11 +545,9 @@ async fn token_policy_marker_reports_tokens() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.4")
-        .with_config(|config| {
-            config.tool_output_token_limit = Some(50); // small budget to force truncation
-        });
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.tool_output_token_limit = Some(50); // small budget to force truncation
+    });
     let fixture = builder.build(&server).await?;
 
     let call_id = "shell-token-marker";
@@ -649,11 +647,9 @@ async fn shell_command_output_not_truncated_with_custom_limit() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.4")
-        .with_config(|config| {
-            config.tool_output_token_limit = Some(50_000); // ample budget
-        });
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.tool_output_token_limit = Some(50_000); // ample budget
+    });
     let fixture = builder.build(&server).await?;
 
     let call_id = "shell-no-trunc";
