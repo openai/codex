@@ -40,7 +40,7 @@ jobs:
           )
 
           url="${base_url%/}/models?client_version=${client_version}"
-          curl --http1.1 --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/core/models.json
+          curl --http1.1 --fail --show-error --location "${headers[@]}" "${url}" | jq '.' > codex-rs/models-manager/models.json
 
       - name: Open pull request (if changed)
         uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0 # v8
