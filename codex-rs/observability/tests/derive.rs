@@ -2,8 +2,10 @@ use codex_observability::DataClass;
 use codex_observability::DetailLevel;
 use codex_observability::FieldMeta;
 use codex_observability::FieldPolicy;
+use codex_observability::FieldUse;
 use codex_observability::Observation;
 use codex_observability::ObservationFieldVisitor;
+use codex_observability::visit_fields_for_use;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde::Serializer;
@@ -23,7 +25,7 @@ struct TurnConfigResolved<'a> {
 }
 
 #[derive(Observation)]
-#[observation(name = "test.policy_filtered")]
+#[observation(name = "test.policy_filtered", uses = ["analytics"])]
 struct PolicyFiltered<'a> {
     #[obs(level = "basic", class = "identifier")]
     thread_id: &'a str,
@@ -36,6 +38,9 @@ struct PolicyFiltered<'a> {
 
     #[obs(level = "basic", class = "secret_risk")]
     api_key: PanicsIfSerialized,
+
+    #[obs(level = "basic", class = "operational", uses = ["rollout_trace"])]
+    rollout_only_status: PanicsIfSerialized,
 }
 
 struct PanicsIfSerialized;
@@ -61,11 +66,6 @@ struct CapturingVisitor {
     fields: Vec<CapturedField>,
 }
 
-struct PolicyCapturingVisitor {
-    policy: FieldPolicy,
-    fields: Vec<CapturedField>,
-}
-
 impl ObservationFieldVisitor for CapturingVisitor {
     fn field<T: serde::Serialize + ?Sized>(
         &mut self,
@@ -76,25 +76,6 @@ impl ObservationFieldVisitor for CapturingVisitor {
         let value = match serde_json::to_value(value) {
             Ok(value) => value,
             Err(err) => panic!("field should serialize: {err}"),
-        };
-        self.fields.push(CapturedField { name, meta, value });
-    }
-}
-
-impl ObservationFieldVisitor for PolicyCapturingVisitor {
-    fn field<T: serde::Serialize + ?Sized>(
-        &mut self,
-        name: &'static str,
-        meta: FieldMeta,
-        value: &T,
-    ) {
-        if !self.policy.allows(meta) {
-            return;
-        }
-
-        let value = match serde_json::to_value(value) {
-            Ok(value) => value,
-            Err(err) => panic!("allowed field should serialize: {err}"),
         };
         self.fields.push(CapturedField { name, meta, value });
     }
@@ -135,34 +116,44 @@ fn derive_visits_annotated_fields_with_metadata() {
 }
 
 #[test]
-fn policy_visitor_does_not_serialize_denied_fields() {
+fn use_and_policy_filter_before_serializing_denied_fields() {
     let event = PolicyFiltered {
         thread_id: "thread-1",
         status: "completed",
         raw_prompt: PanicsIfSerialized,
         api_key: PanicsIfSerialized,
+        rollout_only_status: PanicsIfSerialized,
     };
-    let mut visitor = PolicyCapturingVisitor {
-        policy: FieldPolicy::new(
+    let mut visitor = CapturingVisitor::default();
+    visit_fields_for_use(
+        &event,
+        FieldUse::Analytics,
+        FieldPolicy::new(
             DetailLevel::Basic,
             &[DataClass::Identifier, DataClass::Operational],
         ),
-        fields: Vec::new(),
-    };
-
-    event.visit_fields(&mut visitor);
+        &mut visitor,
+    );
 
     assert_eq!(
         visitor.fields,
         vec![
             CapturedField {
                 name: "thread_id",
-                meta: FieldMeta::new(DetailLevel::Basic, DataClass::Identifier),
+                meta: FieldMeta::with_uses(
+                    DetailLevel::Basic,
+                    DataClass::Identifier,
+                    &[FieldUse::Analytics],
+                ),
                 value: Value::String("thread-1".to_string()),
             },
             CapturedField {
                 name: "status",
-                meta: FieldMeta::new(DetailLevel::Basic, DataClass::Operational),
+                meta: FieldMeta::with_uses(
+                    DetailLevel::Basic,
+                    DataClass::Operational,
+                    &[FieldUse::Analytics],
+                ),
                 value: Value::String("completed".to_string()),
             },
         ]

@@ -67,6 +67,46 @@ pub trait ObservationSink {
     fn observe<E: Observation>(&self, event: &E);
 }
 
+/// Visits fields intended for one sink and allowed by the supplied policy.
+///
+/// This helper is the safe path for sinks that serialize fields in their
+/// visitor. The explicit field-use marker selects the intended fields; the
+/// policy gate then rejects unsafe metadata before the wrapped visitor can
+/// materialize the value.
+pub fn visit_fields_for_use<E, V>(
+    event: &E,
+    field_use: FieldUse,
+    policy: FieldPolicy,
+    visitor: &mut V,
+) where
+    E: Observation,
+    V: ObservationFieldVisitor,
+{
+    let mut visitor = PolicyFilteredVisitor {
+        field_use,
+        policy,
+        inner: visitor,
+    };
+    event.visit_fields(&mut visitor);
+}
+
+struct PolicyFilteredVisitor<'a, V> {
+    field_use: FieldUse,
+    policy: FieldPolicy,
+    inner: &'a mut V,
+}
+
+impl<V> ObservationFieldVisitor for PolicyFilteredVisitor<'_, V>
+where
+    V: ObservationFieldVisitor,
+{
+    fn field<T: Serialize + ?Sized>(&mut self, name: &'static str, meta: FieldMeta, value: &T) {
+        if meta.is_used_by(self.field_use) && self.policy.allows(meta) {
+            self.inner.field(name, meta, value);
+        }
+    }
+}
+
 /// Policy metadata attached to a single observation field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FieldMeta {
@@ -74,12 +114,36 @@ pub struct FieldMeta {
     pub detail: DetailLevel,
     /// Semantic/privacy class for the field.
     pub class: DataClass,
+    /// Exact sinks or projections that are intended to consume the field.
+    pub uses: &'static [FieldUse],
 }
 
 impl FieldMeta {
-    /// Creates metadata for a field.
+    /// Creates metadata for a field that is not consumed by any exact sink.
     pub const fn new(detail: DetailLevel, class: DataClass) -> Self {
-        Self { detail, class }
+        Self {
+            detail,
+            class,
+            uses: &[],
+        }
+    }
+
+    /// Creates metadata for a field with explicit sink-use markers.
+    pub const fn with_uses(
+        detail: DetailLevel,
+        class: DataClass,
+        uses: &'static [FieldUse],
+    ) -> Self {
+        Self {
+            detail,
+            class,
+            uses,
+        }
+    }
+
+    /// Returns true when the field was explicitly marked for `field_use`.
+    pub fn is_used_by(self, field_use: FieldUse) -> bool {
+        self.uses.contains(&field_use)
     }
 }
 
@@ -144,6 +208,21 @@ pub enum DataClass {
     SecretRisk,
 }
 
+/// Exact sink or projection that is intended to consume a field.
+///
+/// This marker is separate from `DetailLevel` and `DataClass`: it expresses
+/// intent, while detail/class remain guardrails that a sink policy enforces
+/// before it serializes or exports the selected field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FieldUse {
+    /// Remote product analytics.
+    Analytics,
+    /// OpenTelemetry events, logs, or metrics.
+    Otel,
+    /// Local rollout trace bundles.
+    RolloutTrace,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +235,7 @@ mod tests {
             FieldMeta {
                 detail: DetailLevel::Trace,
                 class: DataClass::Content,
+                uses: &[],
             }
         );
     }

@@ -145,7 +145,7 @@ Example:
 use codex_observability::Observation;
 
 #[derive(Observation)]
-#[observation(name = "turn.config_resolved")]
+#[observation(name = "turn.config_resolved", uses = ["analytics"])]
 struct TurnConfigResolved<'a> {
     #[obs(level = "basic", class = "identifier")]
     thread_id: &'a str,
@@ -217,25 +217,35 @@ local-only content.
 
 Each field should carry at least:
 
+- **Use markers**: exact projections intended to consume the field, for example
+  `analytics`, `otel`, or `rollout_trace`.
 - **Detail level**: `basic`, `detailed`, or `trace`.
 - **Data class**: `identifier`, `operational`, `environment`, `content`, or
   `secret_risk`.
 
+Use markers express intent. Detail level and data class are guardrails. A sink
+must first select only fields explicitly marked for that sink, then enforce its
+detail/class policy before serializing values.
+Event structs may define default use markers when most fields feed the same
+projection; field-level use markers override that default for mixed events.
+
 Detail level is not privacy by itself. A tiny field can still be unsafe for
 remote export, and a trace-level field can be trace-level because it is large
-rather than sensitive. Sinks must filter by both axes.
+rather than sensitive. Data class is also not enough for selection: analytics
+must not consume every basic operational field just because it would be safe.
 
 Expected sink policies:
 
-- Analytics allows basic identifiers/operational fields plus selected
-  environment fields; it denies content and secret-risk fields.
+- Analytics selects only fields marked `analytics`, then allows basic
+  identifiers/operational fields plus selected environment fields; it denies
+  content and secret-risk fields even if they are marked accidentally.
 - Rollout trace allows rich local fields, with explicit redaction rules for
   secret-risk material.
 - OTEL logs preserve today's log export behavior, including account/email only
   where today's policy allows them.
 - OTEL trace-safe events prefer lengths, counts, status, timing, and coarse
   categories over content.
-- OTEL metrics read only the dimensions needed for existing metric names/tags.
+- OTEL metrics select exact metric dimensions and then apply the OTEL policy.
 - Feedback upload applies an explicit user-approved policy over the ringbuffer.
 
 ## Event Taxonomy
@@ -333,8 +343,9 @@ same E2E Codex run
 assert exact equality after stable JSON normalization
 ```
 
-At least one conformance path should apply the analytics field policy so bad
-or missing annotations fail tests. Recommended first scenarios:
+At least one conformance path should apply exact analytics use markers plus the
+analytics guardrail policy, so missing markers and unsafe annotations fail
+tests. Recommended first scenarios:
 
 - thread start
 - normal turn

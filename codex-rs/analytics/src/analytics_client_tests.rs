@@ -1560,6 +1560,14 @@ async fn app_used_observation_matches_legacy_analytics_fact() {
     let mut observation_reducer = AnalyticsObservationReducer::default();
     let mut legacy_events = Vec::new();
     let mut observation_events = Vec::new();
+    let observation = codex_observability::events::AppUsed {
+        model_slug: "gpt-5",
+        thread_id: "thread-1",
+        turn_id: "turn-1",
+        connector_id: Some("drive"),
+        app_name: Some("Drive"),
+        invocation_type: Some(codex_observability::events::InvocationType::Implicit),
+    };
 
     legacy_reducer
         .ingest(
@@ -1580,17 +1588,7 @@ async fn app_used_observation_matches_legacy_analytics_fact() {
         .await;
 
     observation_reducer
-        .ingest_app_used(
-            codex_observability::events::AppUsed {
-                model_slug: "gpt-5",
-                thread_id: "thread-1",
-                turn_id: "turn-1",
-                connector_id: Some("drive"),
-                app_name: Some("Drive"),
-                invocation_type: Some(codex_observability::events::InvocationType::Implicit),
-            },
-            &mut observation_events,
-        )
+        .ingest_app_used(observation, &mut observation_events)
         .await;
 
     let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");

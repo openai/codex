@@ -11,7 +11,9 @@ use quote::quote;
 use syn::Data;
 use syn::DeriveInput;
 use syn::Expr;
+use syn::ExprLit;
 use syn::Fields;
+use syn::Lit;
 use syn::LitStr;
 use syn::Path;
 use syn::parse_macro_input;
@@ -22,6 +24,8 @@ use syn::parse_macro_input;
 ///
 /// - `#[observation(name = "domain.event")]` on the struct.
 /// - `#[obs(level = "basic|detailed|trace", class = "...")]` on every field.
+/// - Optional struct-level or field-level uses markers for exact sink
+///   selection. Field-level markers override the struct default.
 ///
 /// Event definitions inside `codex-observability` itself may use
 /// `#[observation(crate = "crate")]` so generated code refers to local types
@@ -39,6 +43,7 @@ fn expand_observation(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     let observation_attr = observation_attr(&input.attrs)?;
     let event_name = observation_attr.name;
     let crate_path = observation_attr.crate_path;
+    let default_uses = observation_attr.uses;
     let Data::Struct(data) = input.data else {
         return Err(syn::Error::new_spanned(
             name,
@@ -57,7 +62,7 @@ fn expand_observation(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         let Some(field_name) = field.ident else {
             continue;
         };
-        let meta = obs_meta(&field.attrs, &field_name, &crate_path)?;
+        let meta = obs_meta(&field.attrs, &field_name, &crate_path, &default_uses)?;
         let field_name_lit = LitStr::new(&field_name.to_string(), field_name.span());
         visits.push(quote! {
             visitor.field(#field_name_lit, #meta, &self.#field_name);
@@ -79,6 +84,7 @@ fn expand_observation(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 struct ObservationAttr {
     name: LitStr,
     crate_path: Path,
+    uses: Vec<LitStr>,
 }
 
 fn observation_attr(attrs: &[syn::Attribute]) -> syn::Result<ObservationAttr> {
@@ -88,6 +94,7 @@ fn observation_attr(attrs: &[syn::Attribute]) -> syn::Result<ObservationAttr> {
         }
         let mut name = None;
         let mut crate_path = None;
+        let mut uses = Vec::new();
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("name") {
                 name = Some(meta.value()?.parse::<LitStr>()?);
@@ -99,6 +106,9 @@ fn observation_attr(attrs: &[syn::Attribute]) -> syn::Result<ObservationAttr> {
                 // not available. Ordinary users get the stable public path.
                 crate_path = Some(value.parse::<Path>()?);
                 Ok(())
+            } else if meta.path.is_ident("uses") {
+                uses = use_literals(meta.value()?.parse::<Expr>()?)?;
+                Ok(())
             } else {
                 Err(meta.error("unsupported observation attribute"))
             }
@@ -107,6 +117,7 @@ fn observation_attr(attrs: &[syn::Attribute]) -> syn::Result<ObservationAttr> {
             return Ok(ObservationAttr {
                 name,
                 crate_path: crate_path.unwrap_or_else(|| syn::parse_quote!(::codex_observability)),
+                uses,
             });
         }
     }
@@ -120,6 +131,7 @@ fn obs_meta(
     attrs: &[syn::Attribute],
     field_name: &syn::Ident,
     crate_path: &Path,
+    default_uses: &[LitStr],
 ) -> syn::Result<proc_macro2::TokenStream> {
     for attr in attrs {
         if !attr.path().is_ident("obs") {
@@ -127,12 +139,16 @@ fn obs_meta(
         }
         let mut level = None;
         let mut class = None;
+        let mut uses = None;
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("level") {
                 level = Some(meta.value()?.parse::<LitStr>()?);
                 Ok(())
             } else if meta.path.is_ident("class") {
                 class = Some(meta.value()?.parse::<LitStr>()?);
+                Ok(())
+            } else if meta.path.is_ident("uses") {
+                uses = Some(use_literals(meta.value()?.parse::<Expr>()?)?);
                 Ok(())
             } else {
                 Err(meta.error("unsupported obs attribute"))
@@ -146,14 +162,44 @@ fn obs_meta(
         })?;
         let detail = detail_expr(&level, crate_path)?;
         let data_class = data_class_expr(&class, crate_path)?;
+        let uses = uses
+            .as_deref()
+            .unwrap_or(default_uses)
+            .iter()
+            .map(|value| field_use_expr(value, crate_path))
+            .collect::<syn::Result<Vec<_>>>()?;
         return Ok(quote! {
-            #crate_path::FieldMeta::new(#detail, #data_class)
+            #crate_path::FieldMeta::with_uses(#detail, #data_class, &[#(#uses),*])
         });
     }
     Err(syn::Error::new_spanned(
         field_name,
         "missing #[obs(level = \"...\", class = \"...\")]",
     ))
+}
+
+fn use_literals(expr: Expr) -> syn::Result<Vec<LitStr>> {
+    let Expr::Array(array) = expr else {
+        return Err(syn::Error::new_spanned(
+            expr,
+            "obs uses must be a string array, for example uses = [\"analytics\"]",
+        ));
+    };
+
+    array
+        .elems
+        .into_iter()
+        .map(|elem| match elem {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(value),
+                ..
+            }) => Ok(value),
+            other => Err(syn::Error::new_spanned(
+                other,
+                "obs uses entries must be string literals",
+            )),
+        })
+        .collect()
 }
 
 fn detail_expr(value: &LitStr, crate_path: &Path) -> syn::Result<proc_macro2::TokenStream> {
@@ -181,6 +227,19 @@ fn data_class_expr(value: &LitStr, crate_path: &Path) -> syn::Result<proc_macro2
             ("secret_risk", "SecretRisk"),
         ],
         quote!(#crate_path::DataClass),
+    )
+}
+
+fn field_use_expr(value: &LitStr, crate_path: &Path) -> syn::Result<proc_macro2::TokenStream> {
+    enum_expr(
+        value,
+        "field use",
+        &[
+            ("analytics", "Analytics"),
+            ("otel", "Otel"),
+            ("rollout_trace", "RolloutTrace"),
+        ],
+        quote!(#crate_path::FieldUse),
     )
 }
 

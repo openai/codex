@@ -15,7 +15,7 @@ pub enum InvocationType {
 
 /// Observation emitted when Codex uses an app connector during a turn.
 #[derive(Observation)]
-#[observation(name = "app.used", crate = "crate")]
+#[observation(name = "app.used", crate = "crate", uses = ["analytics"])]
 pub struct AppUsed<'a> {
     /// Model slug active for the turn where the app was used.
     #[obs(level = "basic", class = "operational")]
