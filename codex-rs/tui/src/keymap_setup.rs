@@ -1016,6 +1016,17 @@ mod tests {
     }
 
     #[test]
+    fn picker_custom_render_snapshot() {
+        let keymap =
+            keymap_with_replacement(&TuiKeymap::default(), "composer", "submit", "ctrl-enter")
+                .expect("replace binding");
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
+        let params = build_keymap_picker_params(&runtime, &keymap);
+
+        assert_snapshot!("keymap_picker_custom", render_picker(params, /*width*/ 120));
+    }
+
+    #[test]
     fn picker_narrow_uses_compact_tabs() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());

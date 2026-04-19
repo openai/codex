@@ -28,7 +28,7 @@ pub(super) const KEYMAP_COMMON_TAB_ID: &str = "common-shortcuts";
 pub(super) const KEYMAP_CUSTOM_TAB_ID: &str = "custom-shortcuts";
 pub(super) const KEYMAP_UNBOUND_TAB_ID: &str = "unbound-shortcuts";
 const KEYMAP_CONTEXT_LABEL_WIDTH: usize = 12;
-const KEYMAP_ROW_PREFIX_WIDTH: usize = 4 + KEYMAP_CONTEXT_LABEL_WIDTH + 1;
+const KEYMAP_ROW_PREFIX_WIDTH: usize = KEYMAP_CONTEXT_LABEL_WIDTH + 3;
 
 #[derive(Clone, Debug)]
 struct KeymapActionRow {
@@ -318,22 +318,23 @@ fn keymap_selection_item(row: &KeymapActionRow) -> SelectionItem {
 }
 
 fn keymap_row_prefix(row: &KeymapActionRow) -> Vec<Span<'static>> {
-    let status = if row.custom_binding {
-        "[C] ".cyan()
+    let indicator = if row.custom_binding {
+        "*".cyan()
     } else if row.is_unbound() {
-        "[-] ".dim()
+        "-".dim()
     } else {
-        "[D] ".dim()
+        " ".into()
     };
 
     vec![
-        status,
         format!(
             "{:<width$} ",
             row.context_label,
             width = KEYMAP_CONTEXT_LABEL_WIDTH
         )
         .dim(),
+        indicator,
+        " ".dim(),
     ]
 }
 

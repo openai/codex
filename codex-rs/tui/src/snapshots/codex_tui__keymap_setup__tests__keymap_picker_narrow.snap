@@ -11,13 +11,13 @@ expression: "render_picker(params, 78)"
   Navigation  Approval                                                        
                                                                               
   Type to search shortcuts                                                    
-› [D] Global       Open Transcript                Current ctrl-t · Default …  
-  [D] Global       Open External Editor           ctrl-g · Default            
-  [D] Global       Copy                           ctrl-o · Default            
-  [-] Global       Toggle Vim Mode                unbound · Default           
-  [D] Chat         Edit Previous Message          esc · Default               
-  [D] Chat         Confirm Edit Previous Message  enter · Default             
-  [D] Composer     Submit                         enter · Default             
-  [D] Composer     Queue                          tab · Default               
+› Global         Open Transcript                Current ctrl-t · Default ke…  
+  Global         Open External Editor           ctrl-g · Default              
+  Global         Copy                           ctrl-o · Default              
+  Global       - Toggle Vim Mode                unbound · Default             
+  Chat           Edit Previous Message          esc · Default                 
+  Chat           Confirm Edit Previous Message  enter · Default               
+  Composer       Submit                         enter · Default               
+  Composer       Queue                          tab · Default                 
                                                                               
   left/right group · enter edit shortcut · esc close
