@@ -4516,7 +4516,7 @@ impl CodexMessageProcessor {
                     token_usage_turn_id,
                 )
                 .await;
-                if self.config.features.enabled(Feature::GoalMode) {
+                if self.config.features.enabled(Feature::Goals) {
                     self.emit_thread_goal_updated_if_present(thread_id).await;
                 }
             }
@@ -4702,7 +4702,7 @@ impl CodexMessageProcessor {
                 return true;
             };
 
-            let emit_thread_goal_update = self.config.features.enabled(Feature::GoalMode);
+            let emit_thread_goal_update = self.config.features.enabled(Feature::Goals);
             let thread_goal_state_db = if emit_thread_goal_update {
                 if let Some(state_db) = existing_thread.state_db() {
                     Some(state_db)
