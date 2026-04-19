@@ -10,8 +10,8 @@ expression: popup
   Time used: 1m
   Tokens used: 12.5K
 
-› 1. Unpause goal  Resume automatic goal continuation.
-  2. Clear goal    Remove the current goal.
-  3. Cancel        Keep the goal unchanged.
+› 1. Unpause goal  Resume automatic goal continuation
+  2. Clear goal    Remove the current goal
+  3. Cancel        Keep the goal unchanged
 
   Press enter to confirm or esc to go back

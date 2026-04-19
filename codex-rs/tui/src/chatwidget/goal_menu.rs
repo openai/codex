@@ -34,20 +34,20 @@ fn goal_menu_items(thread_id: ThreadId, status: AppThreadGoalStatus) -> Vec<Sele
         AppThreadGoalStatus::Active => items.push(goal_status_item(
             thread_id,
             "Pause goal",
-            "Stop automatic goal continuation until you unpause it.",
+            "Stop automatic goal continuation until you unpause it",
             AppThreadGoalStatus::Paused,
         )),
         AppThreadGoalStatus::Paused => items.push(goal_status_item(
             thread_id,
             "Unpause goal",
-            "Resume automatic goal continuation.",
+            "Resume automatic goal continuation",
             AppThreadGoalStatus::Active,
         )),
         AppThreadGoalStatus::BudgetLimited | AppThreadGoalStatus::Complete => {}
     }
     items.push(SelectionItem {
         name: "Clear goal".to_string(),
-        description: Some("Remove the current goal.".to_string()),
+        description: Some("Remove the current goal".to_string()),
         actions: vec![Box::new(move |tx| {
             tx.send(AppEvent::ClearThreadGoal { thread_id });
         })],
@@ -56,7 +56,7 @@ fn goal_menu_items(thread_id: ThreadId, status: AppThreadGoalStatus) -> Vec<Sele
     });
     items.push(SelectionItem {
         name: "Cancel".to_string(),
-        description: Some("Keep the goal unchanged.".to_string()),
+        description: Some("Keep the goal unchanged".to_string()),
         dismiss_on_select: true,
         ..Default::default()
     });
