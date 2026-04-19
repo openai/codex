@@ -124,9 +124,10 @@ impl TestToolServer {
                         { "type": "string" },
                         { "type": "null" }
                     ]
-                }
+                },
+                "cwd": { "type": "string" }
             },
-            "required": ["echo", "env"],
+            "required": ["echo", "env", "cwd"],
             "additionalProperties": false
         }))
         .expect("echo tool output schema should deserialize");
@@ -468,9 +469,13 @@ impl ServerHandler for TestToolServer {
 
                 let env_snapshot: HashMap<String, String> = std::env::vars().collect();
                 let env_name = args.env_var.as_deref().unwrap_or("MCP_TEST_VALUE");
+                let cwd = std::env::current_dir()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|err| McpError::internal_error(err.to_string(), None))?;
                 let structured_content = json!({
                     "echo": format!("ECHOING: {}", args.message),
                     "env": env_snapshot.get(env_name),
+                    "cwd": cwd,
                 });
 
                 Ok(CallToolResult {

@@ -8,8 +8,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -18,6 +20,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::MCP_SANDBOX_STATE_META_CAPABILITY;
@@ -61,6 +64,7 @@ use tokio::process::Child;
 use tokio::process::Command;
 use tokio::time::Instant;
 use tokio::time::sleep;
+use wiremock::MockServer;
 
 static OPENAI_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAD0AAAA9CAYAAAAeYmHpAAAE6klEQVR4Aeyau44UVxCGx1fZsmRLlm3Zoe0XcGQ5cUiCCIgJeS9CHgAhMkISQnIuGQgJEkBcxLW+nqnZ6uqqc+nuWRC7q/P3qetf9e+MtOwyX25O4Nep6JPyop++0qev9HrfgZ+F6r2DuB/vHOrt/UIkqdDHYvujOW6fO7h/CNEI+a5jc+pBR8uy0jVFsziYu5HtfSUk+Io34q921hLNctFSX0gwww+S8wce8K1LfCU+cYW4888aov8NxqvQILUPPReLOrm6zyLxa4i+6VZuFbJo8d1MOHZm+7VUtB/aIvhPWc/3SWg49JcwFLlHxuXKjtyloo+YNhuW3VS+WPBuUEMvCFKjEDVgFBQHXrnazpqiSxNZCkQ1kYiozsbm9Oz7l4i2Il7vGccGNWAc3XosDrZe/9P3ZnMmzHNEQw4smf8RQ87XEAMsC7Az0Au+dgXerfH4+sHvEc0SYGic8WBBUGqFH2gN7yDrazy7m2pbRTeRmU3+MjZmr1h6LJgPbGy23SI6GlYT0brQ71IY8Us4PNQCm+zepSbaD2BY9xCaAsD9IIj/IzFmKMSdHHonwdZATbTnYREf6/VZGER98N9yCWIvXQwXDoDdhZJoT8jwLnJXDB9w4Sb3e6nK5ndzlkTLnP3JBu4LKkbrYrU69gCVceV0JvpyuW1xlsUVngzhwMetn/XamtTORF9IO5YnWNiyeF9zCAfqR3fUW+vZZKLtgP+ts8BmQRBREAdRDhH3o8QuRh/YucNFz2BEjxbRN6LGzphfKmvP6v6QhqIQyZ8XNJ0W0X83MR1PEcJBNO2KC2Z1TW/v244scp9FwRViZxIOBF0Lctk7ZVSavdLvRlV1hz/ysUi9sr8CIcB3nvWBwA93ykTz18eAYxQ6N/K2DkPA1lv3iXCwmDUT7YkjIby9siXueIJj9H+pzSqJ9oIuJWTUgSSt4WO7o/9GGg0viR4VinNRUDoIj34xoCd6pxD3aK3zfdbnx5v1J3ZNNEJsE0sBG7N27ReDrJc4sFxz7dI/ZAbOmmiKvHBitQXpAdR6+F7v+/ol/tOouUV01EeMZQF2BoQDn6dP4XNr+j9GZEtEK1/L8pFw7bd3a53tsTa7WD+054jOFmPg1XBKPQgnqFfmFcy32ZRvjmiIIQTYFvyDxQ8nH8WIwwGwlyDjDznnilYyFr6njrlZwsKkBpO59A7OwgdzPEWRm+G+oeb7IfyNuzjEEVLrOVxJsxvxwF8kmCM6I2QYmJunz4u4TrADpfl7mlbRTWQ7VmrBzh3+C9f6Grc3YoGN9dg/SXFthpRsT6vobfXRs2VBlgBHXVMLHjDNbIZv1sZ9+X3hB09cXdH1JKViyG0+W9bWZDa/r2f9zAFR71sTzGpMSWz2iI4YssWjWo3REy1MDGjdwe5e0dFSiAC1JakBvu4/CUS8Eh6dqHdU0Or0ioY3W5ClSqDXAy7/6SRfgw8vt4I+tbvvNtFT2kVDhY5+IGb1rCqYaXNF08vSALsXCPmt0kQNqJT1p5eI1mkIV/BxCY1z85lOzeFbPBQHURkkPTlwTYK9gTVE25l84IbFFN+YJDHjdpn0gq6mrHht0dkcjbM4UL9283O5p77GN+SPW/QwVB4IUYg7Or+Kp7naR6qktP98LNF2UxWo9yObPIT9KYg+hK4i56no4rfnM0qeyFf6AwAAAP//trwR3wAAAAZJREFUAwBZ0sR75itw5gAAAABJRU5ErkJggg==";
 
@@ -199,12 +203,21 @@ fn stdio_transport(
     env: Option<HashMap<String, String>>,
     env_vars: Vec<McpServerEnvVar>,
 ) -> McpServerTransportConfig {
+    stdio_transport_with_cwd(command, env, env_vars, /*cwd*/ None)
+}
+
+fn stdio_transport_with_cwd(
+    command: String,
+    env: Option<HashMap<String, String>>,
+    env_vars: Vec<McpServerEnvVar>,
+    cwd: Option<PathBuf>,
+) -> McpServerTransportConfig {
     McpServerTransportConfig::Stdio {
         command,
         args: Vec::new(),
         env,
         env_vars,
-        cwd: None,
+        cwd,
     }
 }
 
@@ -237,6 +250,92 @@ fn insert_mcp_server(
     if let Err(err) = config.mcp_servers.set(servers) {
         panic!("test mcp servers should accept any configuration: {err}");
     }
+}
+
+async fn call_echo_tool(
+    server: &MockServer,
+    fixture: &TestCodex,
+    server_name: &str,
+    call_id: &str,
+) -> anyhow::Result<Value> {
+    let namespace = format!("mcp__{server_name}__");
+    mount_sse_once(
+        server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                r#"{"message":"ping"}"#,
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp echo tool completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = fixture.session_configured.model.clone();
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp echo tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let structured_content = end
+        .result
+        .as_ref()
+        .expect("rmcp echo tool should return success")
+        .structured_content
+        .as_ref()
+        .expect("structured content")
+        .clone();
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    Ok(structured_content)
+}
+
+fn process_cwd_assertion_value(path: &Path) -> String {
+    if std::env::var_os(remote_env_env_var()).is_some() {
+        return path.to_string_lossy().into_owned();
+    }
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -389,6 +488,132 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     server.verify().await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_cwd)]
+async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let server_name = "rmcp_configured_cwd";
+    let expected_cwd = Arc::new(Mutex::new(None::<PathBuf>));
+    let expected_cwd_for_config = Arc::clone(&expected_cwd);
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.create_directory(
+                &cwd.join("mcp-configured-cwd"),
+                CreateDirectoryOptions { recursive: true },
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .with_config(move |config| {
+            let configured_cwd = config.cwd.join("mcp-configured-cwd").into_path_buf();
+            *expected_cwd_for_config
+                .lock()
+                .expect("expected cwd lock should not be poisoned") = Some(configured_cwd.clone());
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport_with_cwd(
+                    rmcp_test_server_bin,
+                    Some(HashMap::from([(
+                        "MCP_TEST_VALUE".to_string(),
+                        "configured-cwd".to_string(),
+                    )])),
+                    Vec::new(),
+                    Some(configured_cwd),
+                ),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_remote_aware(&server)
+        .await?;
+
+    let expected_cwd = expected_cwd
+        .lock()
+        .expect("expected cwd lock should not be poisoned")
+        .clone()
+        .expect("test config should record configured MCP cwd");
+    let structured = call_echo_tool(&server, &fixture, server_name, "call-configured-cwd").await?;
+
+    assert_eq!(
+        structured,
+        json!({
+            "echo": "ECHOING: ping",
+            "env": "configured-cwd",
+            "cwd": process_cwd_assertion_value(&expected_cwd),
+        })
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(mcp_cwd)]
+async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    if std::env::var_os(remote_env_env_var()).is_none() {
+        return Ok(());
+    }
+
+    let server = responses::start_mock_server().await;
+    let server_name = "rmcp_fallback_cwd";
+    let expected_cwd = Arc::new(Mutex::new(None::<PathBuf>));
+    let expected_cwd_for_config = Arc::clone(&expected_cwd);
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            *expected_cwd_for_config
+                .lock()
+                .expect("expected cwd lock should not be poisoned") =
+                Some(config.cwd.to_path_buf());
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(
+                    rmcp_test_server_bin,
+                    Some(HashMap::from([(
+                        "MCP_TEST_VALUE".to_string(),
+                        "fallback-cwd".to_string(),
+                    )])),
+                    Vec::new(),
+                ),
+                TestMcpServerOptions {
+                    experimental_environment: remote_aware_experimental_environment(),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_remote_aware(&server)
+        .await?;
+
+    let expected_cwd = expected_cwd
+        .lock()
+        .expect("expected cwd lock should not be poisoned")
+        .clone()
+        .expect("test config should record runtime fallback cwd");
+    let structured = call_echo_tool(&server, &fixture, server_name, "call-fallback-cwd").await?;
+
+    assert_eq!(
+        structured,
+        json!({
+            "echo": "ECHOING: ping",
+            "env": "fallback-cwd",
+            "cwd": process_cwd_assertion_value(&expected_cwd),
+        })
+    );
+    server.verify().await;
     Ok(())
 }
 

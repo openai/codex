@@ -665,24 +665,29 @@ pub struct McpConnectionManager {
 /// `McpConfig` describes what servers exist. This value describes where those
 /// servers should run for the current caller. Keep it explicit at manager
 /// construction time so status/snapshot paths and real sessions make the same
-/// local-vs-remote decision.
+/// local-vs-remote decision. `fallback_cwd` is not a per-server override; it is
+/// used only when an executor-backed stdio server omits `cwd` and the executor
+/// API still needs a concrete process working directory.
 #[derive(Clone)]
 pub struct McpRuntimeEnvironment {
     environment: Arc<Environment>,
-    cwd: PathBuf,
+    fallback_cwd: PathBuf,
 }
 
 impl McpRuntimeEnvironment {
-    pub fn new(environment: Arc<Environment>, cwd: PathBuf) -> Self {
-        Self { environment, cwd }
+    pub fn new(environment: Arc<Environment>, fallback_cwd: PathBuf) -> Self {
+        Self {
+            environment,
+            fallback_cwd,
+        }
     }
 
     fn environment(&self) -> Arc<Environment> {
         Arc::clone(&self.environment)
     }
 
-    fn cwd(&self) -> PathBuf {
-        self.cwd.clone()
+    fn fallback_cwd(&self) -> PathBuf {
+        self.fallback_cwd.clone()
     }
 }
 
@@ -1565,7 +1570,7 @@ async fn make_rmcp_client(
                 }
                 Arc::new(ExecutorStdioServerLauncher::new(
                     exec_environment.get_exec_backend(),
-                    runtime_environment.cwd(),
+                    runtime_environment.fallback_cwd(),
                 ))
             } else {
                 Arc::new(LocalStdioServerLauncher) as Arc<dyn StdioServerLauncher>

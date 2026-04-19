@@ -305,19 +305,19 @@ impl Drop for ProcessGroupGuard {
 #[derive(Clone)]
 pub struct ExecutorStdioServerLauncher {
     exec_backend: Arc<dyn ExecBackend>,
-    default_cwd: PathBuf,
+    fallback_cwd: PathBuf,
 }
 
 impl ExecutorStdioServerLauncher {
     /// Creates a stdio server launcher backed by the executor process API.
     ///
-    /// `default_cwd` is used only when the MCP server config omits `cwd`.
+    /// `fallback_cwd` is used only when the MCP server config omits `cwd`.
     /// Executor `process/start` requires an explicit working directory, unlike
     /// local `tokio::process::Command`, which can inherit the orchestrator cwd.
-    pub fn new(exec_backend: Arc<dyn ExecBackend>, default_cwd: PathBuf) -> Self {
+    pub fn new(exec_backend: Arc<dyn ExecBackend>, fallback_cwd: PathBuf) -> Self {
         Self {
             exec_backend,
-            default_cwd,
+            fallback_cwd,
         }
     }
 }
@@ -328,8 +328,8 @@ impl StdioServerLauncher for ExecutorStdioServerLauncher {
         command: StdioServerCommand,
     ) -> BoxFuture<'static, io::Result<StdioServerTransport>> {
         let exec_backend = Arc::clone(&self.exec_backend);
-        let default_cwd = self.default_cwd.clone();
-        async move { Self::launch_server(command, exec_backend, default_cwd).await }.boxed()
+        let fallback_cwd = self.fallback_cwd.clone();
+        async move { Self::launch_server(command, exec_backend, fallback_cwd).await }.boxed()
     }
 }
 
@@ -341,7 +341,7 @@ impl ExecutorStdioServerLauncher {
     async fn launch_server(
         command: StdioServerCommand,
         exec_backend: Arc<dyn ExecBackend>,
-        default_cwd: PathBuf,
+        fallback_cwd: PathBuf,
     ) -> io::Result<StdioServerTransport> {
         let StdioServerCommand {
             program,
@@ -367,7 +367,7 @@ impl ExecutorStdioServerLauncher {
             .start(ExecParams {
                 process_id,
                 argv,
-                cwd: cwd.unwrap_or(default_cwd),
+                cwd: cwd.unwrap_or(fallback_cwd),
                 env_policy: Some(Self::remote_env_policy(&remote_env_vars)),
                 env,
                 tty: false,
