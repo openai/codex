@@ -52,6 +52,7 @@ WHERE thread_id = ?
         token_budget: Option<i64>,
     ) -> anyhow::Result<crate::ThreadGoal> {
         let now_ms = datetime_to_epoch_millis(Utc::now());
+        let status = status_after_budget_limit(status, /*tokens_used*/ 0, token_budget);
         sqlx::query(
             r#"
 INSERT INTO thread_goals (
@@ -251,6 +252,20 @@ WHERE thread_id = ?
     }
 }
 
+fn status_after_budget_limit(
+    status: crate::ThreadGoalStatus,
+    tokens_used: i64,
+    token_budget: Option<i64>,
+) -> crate::ThreadGoalStatus {
+    if status == crate::ThreadGoalStatus::Active
+        && token_budget.is_some_and(|budget| tokens_used >= budget)
+    {
+        crate::ThreadGoalStatus::BudgetLimited
+    } else {
+        status
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +352,28 @@ mod tests {
         assert!(runtime.delete_thread_goal(thread_id).await.unwrap());
         assert_eq!(None, runtime.get_thread_goal(thread_id).await.unwrap());
         assert!(!runtime.delete_thread_goal(thread_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn replace_thread_goal_applies_budget_limit_immediately() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+
+        let replaced = runtime
+            .replace_thread_goal(
+                thread_id,
+                "stay within budget",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(0),
+            )
+            .await
+            .expect("goal replacement should succeed");
+
+        assert_eq!(crate::ThreadGoalStatus::BudgetLimited, replaced.status);
+        assert_eq!(Some(0), replaced.token_budget);
+        assert_eq!(0, replaced.tokens_used);
+        assert_eq!(0, replaced.time_used_seconds);
     }
 
     #[tokio::test]
