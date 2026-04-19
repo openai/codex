@@ -23,6 +23,7 @@ pub(super) const PLAN_IMPLEMENTATION_NO_APPROVED_PLAN: &str = "No approved plan 
 pub(super) fn selection_view_params(
     default_mask: Option<CollaborationModeMask>,
     plan_markdown: Option<&str>,
+    clear_context_usage_label: Option<&str>,
 ) -> SelectionViewParams {
     let (implement_actions, implement_disabled_reason) = match default_mask.clone() {
         Some(mask) => {
@@ -63,6 +64,11 @@ pub(super) fn selection_view_params(
         ),
     };
 
+    let clear_context_description = clear_context_usage_label.map_or_else(
+        || "Fresh thread with this plan.".to_string(),
+        |label| format!("Fresh thread. Context: {label}."),
+    );
+
     SelectionViewParams {
         title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
         subtitle: None,
@@ -80,7 +86,7 @@ pub(super) fn selection_view_params(
             },
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_CLEAR_CONTEXT.to_string(),
-                description: Some("Fresh thread with this plan.".to_string()),
+                description: Some(clear_context_description),
                 selected_description: None,
                 is_current: false,
                 actions: clear_context_actions,

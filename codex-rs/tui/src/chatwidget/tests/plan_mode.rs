@@ -12,6 +12,17 @@ async fn plan_implementation_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn plan_implementation_popup_context_usage_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_token_info(Some(make_token_info(90_000, 100_000)));
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.open_plan_implementation_prompt();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("plan_implementation_popup_context_usage", popup);
+}
+
+#[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
@@ -74,8 +85,11 @@ async fn plan_implementation_clear_context_requires_default_mode_and_plan() {
     let default_mask = collaboration_modes::default_mode_mask(chat.model_catalog.as_ref())
         .expect("expected default collaboration mode");
 
-    let params =
-        plan_implementation::selection_view_params(/*default_mask*/ None, Some("- Step\n"));
+    let params = plan_implementation::selection_view_params(
+        /*default_mask*/ None,
+        Some("- Step\n"),
+        /*clear_context_usage_label*/ None,
+    );
     assert_eq!(
         params.items[1].disabled_reason.as_deref(),
         Some(plan_implementation::PLAN_IMPLEMENTATION_DEFAULT_UNAVAILABLE)
@@ -84,22 +98,45 @@ async fn plan_implementation_clear_context_requires_default_mode_and_plan() {
     let params = plan_implementation::selection_view_params(
         Some(default_mask.clone()),
         /*plan_markdown*/ None,
+        /*clear_context_usage_label*/ None,
     );
     assert_eq!(
         params.items[1].disabled_reason.as_deref(),
         Some(plan_implementation::PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
     );
 
-    let params =
-        plan_implementation::selection_view_params(Some(default_mask.clone()), Some("  \n"));
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask.clone()),
+        Some("  \n"),
+        /*clear_context_usage_label*/ None,
+    );
     assert_eq!(
         params.items[1].disabled_reason.as_deref(),
         Some(plan_implementation::PLAN_IMPLEMENTATION_NO_APPROVED_PLAN)
     );
 
-    let params = plan_implementation::selection_view_params(Some(default_mask), Some("- Step\n"));
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask.clone()),
+        Some("- Step\n"),
+        /*clear_context_usage_label*/ None,
+    );
     assert_eq!(params.items[1].disabled_reason, None);
     assert!(!params.items[1].actions.is_empty());
+
+    assert_eq!(
+        params.items[1].description.as_deref(),
+        Some("Fresh thread with this plan.")
+    );
+
+    let params = plan_implementation::selection_view_params(
+        Some(default_mask),
+        Some("- Step\n"),
+        Some("89% used"),
+    );
+    assert_eq!(
+        params.items[1].description.as_deref(),
+        Some("Fresh thread. Context: 89% used.")
+    );
 }
 
 #[tokio::test]

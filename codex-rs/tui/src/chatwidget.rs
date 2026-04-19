@@ -2480,15 +2480,39 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
+        let context_usage_label = self.plan_implementation_context_usage_label();
 
         self.bottom_pane
             .show_selection_view(plan_implementation::selection_view_params(
                 default_mask,
                 self.latest_proposed_plan_markdown.as_deref(),
+                context_usage_label.as_deref(),
             ));
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });
+    }
+
+    fn plan_implementation_context_usage_label(&self) -> Option<String> {
+        let info = self.token_info.as_ref()?;
+        let percent = self.context_remaining_percent(info);
+
+        let used_tokens = self.context_used_tokens(info, percent.is_some());
+        if let Some(percent) = percent {
+            let used_percent = 100 - percent.clamp(0, 100);
+            if used_percent <= 0 {
+                return None;
+            }
+            return Some(format!("{used_percent}% used"));
+        }
+
+        if let Some(tokens) = used_tokens
+            && tokens > 0
+        {
+            return Some(format!("{} used", format_tokens_compact(tokens)));
+        }
+
+        None
     }
 
     fn has_queued_follow_up_messages(&self) -> bool {
