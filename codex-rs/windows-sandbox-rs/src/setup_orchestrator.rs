@@ -1234,7 +1234,7 @@ mod tests {
             &dependency_paths
         ));
         assert!(super::is_ssh_config_dependency_root(
-            &key_dir.join("id_ed25519"),
+            &key_dir,
             &user_profile,
             &dependency_paths
         ));

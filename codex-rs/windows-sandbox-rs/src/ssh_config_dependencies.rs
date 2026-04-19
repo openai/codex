@@ -21,7 +21,7 @@ pub(crate) fn ssh_config_dependency_paths(user_profile: &Path) -> Vec<PathBuf> {
         &ssh_dir,
         &mut HashSet::new(),
         &mut paths,
-        0,
+        /*depth*/ 0,
     );
     paths
 }
@@ -57,7 +57,9 @@ fn visit_config(
             }
             key if SSH_PROFILE_PATH_DIRECTIVES.contains(&key) => {
                 for arg in args {
-                    if let Some(path) = profile_path_arg(&arg, user_profile, None) {
+                    if let Some(path) =
+                        profile_path_arg(&arg, user_profile, /*relative_base*/ None)
+                    {
                         paths.push(path);
                     }
                 }
