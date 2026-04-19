@@ -1136,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_prompt_does_not_tell_model_to_set_budget_limited() {
+    fn continuation_prompt_only_tells_model_to_update_goal_when_complete() {
         let prompt = continuation_prompt(&ThreadGoal {
             thread_id: ThreadId::new(),
             objective: "finish the stack".to_string(),
@@ -1150,7 +1150,12 @@ mod tests {
 
         assert!(prompt.contains("finish the stack"));
         assert!(prompt.contains("Token budget: 10000"));
+        assert!(prompt.contains("call update_goal with status \"complete\""));
+        assert!(prompt.contains(
+            "leave the goal active and explain the blocker or next required input to the user"
+        ));
         assert!(!prompt.contains("budgetLimited"));
+        assert!(!prompt.contains("status \"paused\""));
     }
 
     #[tokio::test]

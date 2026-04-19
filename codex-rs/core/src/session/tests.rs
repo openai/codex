@@ -7506,8 +7506,7 @@ async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_respon
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stopping_goal_accounts_current_turn_uncached_tokens_before_tool_response()
--> anyhow::Result<()> {
+async fn rejected_pause_goal_accounts_current_turn_without_pausing_goal() -> anyhow::Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config
@@ -7516,7 +7515,7 @@ async fn stopping_goal_accounts_current_turn_uncached_tokens_before_tool_respons
             .expect("goal mode should be enableable in tests");
     });
     let test = builder.build(&server).await?;
-    let responses = mount_sse_sequence(
+    let _responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -7538,7 +7537,7 @@ async fn stopping_goal_accounts_current_turn_uncached_tokens_before_tool_respons
                 ),
             ]),
             sse(vec![
-                ev_assistant_message("msg-1", "Goal paused."),
+                ev_assistant_message("msg-1", "Goal remains active."),
                 ev_completed("resp-3"),
             ]),
         ],
@@ -7566,13 +7565,17 @@ async fn stopping_goal_accounts_current_turn_uncached_tokens_before_tool_respons
     })
     .await??;
 
-    let pause_output = responses
-        .function_call_output_text("call-pause-goal")
-        .expect("pause tool output should be sent to the model");
-    let pause_output: serde_json::Value = serde_json::from_str(&pause_output)?;
-    assert_eq!(pause_output["goal"]["tokensUsed"], 580);
-    assert_eq!(pause_output["remainingTokens"], 420);
-    assert_eq!(pause_output["goal"]["status"], "paused");
+    let state_db = codex_state::StateRuntime::init(
+        test.config.sqlite_home.clone(),
+        test.config.model_provider_id.clone(),
+    )
+    .await?;
+    let persisted_goal = state_db
+        .get_thread_goal(test.session_configured.session_id)
+        .await?
+        .expect("goal should be persisted");
+    assert_eq!(codex_state::ThreadGoalStatus::Active, persisted_goal.status);
+    assert_eq!(580, persisted_goal.tokens_used);
 
     Ok(())
 }
