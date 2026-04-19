@@ -323,25 +323,32 @@ async fn call_cwd_tool(
     Ok(structured_content)
 }
 
-fn process_cwd_assertion_value(path: &Path) -> String {
-    if std::env::var_os(remote_env_env_var()).is_some() {
-        return path.to_string_lossy().into_owned();
-    }
-    path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .into_owned()
-}
+fn assert_cwd_tool_output(structured: &Value, expected_cwd: &Path) {
+    let actual_cwd = structured
+        .get("cwd")
+        .and_then(Value::as_str)
+        .expect("cwd tool should return a string cwd");
 
-fn normalize_cwd_tool_output(structured: Value) -> Value {
-    let Some(cwd) = structured.get("cwd").and_then(Value::as_str) else {
-        return structured;
-    };
-    json!({
-        // Windows can report the same directory through an 8.3 path. Normalize
-        // only the path spelling so the assertion stays about cwd selection.
-        "cwd": process_cwd_assertion_value(Path::new(cwd)),
-    })
+    if std::env::var_os(remote_env_env_var()).is_some() {
+        assert_eq!(
+            structured,
+            &json!({
+                "cwd": expected_cwd.to_string_lossy(),
+            })
+        );
+        return;
+    }
+
+    // Local Windows can report the same absolute directory through an 8.3 path.
+    // Canonical paths keep the assertion focused on cwd precedence.
+    assert_eq!(
+        Path::new(actual_cwd)
+            .canonicalize()
+            .expect("cwd tool path should exist"),
+        expected_cwd
+            .canonicalize()
+            .expect("expected cwd should exist"),
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -551,12 +558,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
         .expect("test config should record configured MCP cwd");
     let structured = call_cwd_tool(&server, &fixture, server_name, "call-configured-cwd").await?;
 
-    assert_eq!(
-        normalize_cwd_tool_output(structured),
-        json!({
-            "cwd": process_cwd_assertion_value(&expected_cwd),
-        })
-    );
+    assert_cwd_tool_output(&structured, &expected_cwd);
     server.verify().await;
     Ok(())
 }
@@ -609,12 +611,7 @@ async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -
         .expect("test config should record runtime fallback cwd");
     let structured = call_cwd_tool(&server, &fixture, server_name, "call-fallback-cwd").await?;
 
-    assert_eq!(
-        normalize_cwd_tool_output(structured),
-        json!({
-            "cwd": process_cwd_assertion_value(&expected_cwd),
-        })
-    );
+    assert_cwd_tool_output(&structured, &expected_cwd);
     server.verify().await;
     Ok(())
 }
