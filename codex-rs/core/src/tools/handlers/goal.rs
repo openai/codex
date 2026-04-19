@@ -2,7 +2,7 @@
 //!
 //! The public tool contract intentionally splits goal creation from completion:
 //! `create_goal` starts an active objective, while `update_goal` can only mark
-//! the existing goal complete and preserve usage accounting.
+//! the existing goal complete.
 
 use crate::function_tool::FunctionCallError;
 use crate::goals::CreateGoalRequest;
@@ -36,15 +36,7 @@ struct CreateGoalArgs {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct UpdateGoalArgs {
-    status: ToolGoalStatus,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-enum ToolGoalStatus {
-    Active,
-    Paused,
-    Complete,
+    status: ThreadGoalStatus,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -158,7 +150,7 @@ async fn handle_update_goal(
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let args: UpdateGoalArgs = parse_arguments(arguments)?;
-    if args.status != ToolGoalStatus::Complete {
+    if args.status != ThreadGoalStatus::Complete {
         return Err(FunctionCallError::RespondToModel(
             "update_goal can only mark the existing goal complete; pause, resume, and budget-limited status changes are controlled by the user or system"
                 .to_string(),
