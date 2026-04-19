@@ -790,7 +790,6 @@ impl Session {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) async fn queue_goal_continuation_if_active(self: &Arc<Self>) {
         let _continuation_guard = self.goal_continuation_lock.lock().await;
         let Some(items) = self.goal_continuation_items_if_active().await else {
