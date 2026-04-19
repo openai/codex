@@ -19,6 +19,7 @@ use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_rollout::state_db::reconcile_rollout;
 use codex_utils_template::Template;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -905,6 +906,20 @@ impl Session {
         )
         .await
         .context("failed to initialize sqlite state db for thread goals")?;
+
+        if let Some(rollout_path) = self.current_rollout_path().await {
+            reconcile_rollout(
+                Some(&state_db),
+                rollout_path.as_path(),
+                config.model_provider_id.as_str(),
+                /*builder*/ None,
+                &[],
+                /*archived_only*/ None,
+                /*new_thread_memory_mode*/ None,
+            )
+            .await;
+        }
+
         *self.thread_goal_state_db.lock().await = Some(state_db.clone());
         Ok(Some(state_db))
     }

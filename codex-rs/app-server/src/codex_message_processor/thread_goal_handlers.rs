@@ -330,7 +330,18 @@ impl CodexMessageProcessor {
 
         let thread_state = self.thread_state_manager.thread_state(thread_id).await;
         let thread_state = thread_state.lock().await;
-        if let Some(thread) = running_thread.as_ref()
+        let goal_was_active = match state_db.get_thread_goal(thread_id).await {
+            Ok(goal) => goal
+                .as_ref()
+                .is_some_and(|goal| goal.status == codex_state::ThreadGoalStatus::Active),
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to read thread goal: {err}"))
+                    .await;
+                return;
+            }
+        };
+        if goal_was_active
+            && let Some(thread) = running_thread.as_ref()
             && let Err(err) = thread
                 .account_goal_progress_before_external_mutation()
                 .await
@@ -347,7 +358,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        if cleared && let Some(thread) = running_thread.as_ref() {
+        if cleared
+            && goal_was_active
+            && let Some(thread) = running_thread.as_ref()
+        {
             thread.apply_goal_clear_runtime_effects().await;
         }
 
