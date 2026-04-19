@@ -112,6 +112,146 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
         "expected /status to avoid raw config context window, got: {context_line}"
     );
 }
+
+#[tokio::test]
+async fn current_stream_width_clamps_to_minimum_when_reserved_columns_exhaust_width() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.last_rendered_width.set(None);
+    assert_eq!(chat.current_stream_width(2), None);
+
+    chat.last_rendered_width.set(Some(2));
+    assert_eq!(chat.current_stream_width(2), Some(1));
+
+    chat.last_rendered_width.set(Some(4));
+    assert_eq!(chat.current_stream_width(4), Some(1));
+
+    chat.last_rendered_width.set(Some(5));
+    assert_eq!(chat.current_stream_width(4), Some(1));
+}
+
+#[tokio::test]
+async fn on_terminal_resize_initial_width_requests_redraw() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (draw_tx, mut draw_rx) = tokio::sync::broadcast::channel(8);
+    chat.frame_requester = FrameRequester::new(draw_tx);
+    chat.last_rendered_width.set(None);
+
+    chat.on_terminal_resize(120);
+
+    let draw = tokio::time::timeout(std::time::Duration::from_millis(200), draw_rx.recv())
+        .await
+        .expect("timed out waiting for redraw request");
+    assert!(draw.is_ok(), "expected redraw notification to be sent");
+}
+
+#[tokio::test]
+async fn flush_answer_stream_does_not_stop_animation_while_plan_stream_is_active() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut plan_controller =
+        crate::streaming::controller::PlanStreamController::new(Some(80), cwd.as_path());
+    assert!(plan_controller.push("- Step 1\n"));
+    assert!(
+        plan_controller.queued_lines() > 0,
+        "expected plan stream to have queued lines for this repro",
+    );
+    chat.plan_stream_controller = Some(plan_controller);
+    chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+    ));
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_stop = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, AppEvent::StopCommitAnimation) {
+            saw_stop = true;
+        }
+    }
+
+    assert!(
+        !saw_stop,
+        "did not expect StopCommitAnimation while plan stream still has queued lines",
+    );
+}
+
+#[tokio::test]
+async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller =
+        crate::streaming::controller::StreamController::new(Some(80), cwd.as_path());
+    assert!(controller.push("plain response line\n"));
+    chat.stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_consolidate = false;
+    let mut saw_insert_history = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => saw_insert_history = true,
+            AppEvent::ConsolidateAgentMessage { .. } => saw_consolidate = true,
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "expected stream finalization to consolidate"
+    );
+    assert!(
+        saw_insert_history,
+        "plain text should still insert history before consolidation"
+    );
+}
+
+#[tokio::test]
+async fn flush_answer_stream_does_not_stop_animation_while_second_plan_stream_is_active() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut plan_controller =
+        crate::streaming::controller::PlanStreamController::new(Some(80), cwd.as_path());
+    assert!(
+        plan_controller.push("- Step 1\n"),
+        "expected plan line to enqueue while plan stream is active",
+    );
+    assert!(
+        plan_controller.queued_lines() > 0,
+        "expected queued plan lines for this repro",
+    );
+    chat.plan_stream_controller = Some(plan_controller);
+    chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
+        Some(80),
+        cwd.as_path(),
+    ));
+
+    while rx.try_recv().is_ok() {}
+
+    chat.flush_answer_stream_with_separator();
+
+    let mut saw_stop = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, AppEvent::StopCommitAnimation) {
+            saw_stop = true;
+        }
+    }
+
+    assert!(
+        !saw_stop,
+        "did not expect StopCommitAnimation while plan stream is still active",
+    );
+}
+
 #[tokio::test]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();

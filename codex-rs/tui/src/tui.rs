@@ -274,6 +274,7 @@ fn set_panic_hook() {
 pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
+    Resize,
     Draw,
 }
 
@@ -294,6 +295,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     notification_condition: NotificationCondition,
     is_zellij: bool,
+    force_full_repaint: bool,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
 }
@@ -329,6 +331,7 @@ impl Tui {
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             notification_condition: NotificationCondition::default(),
             is_zellij,
+            force_full_repaint: false,
             alt_screen_enabled: true,
         }
     }
@@ -349,6 +352,10 @@ impl Tui {
 
     pub fn frame_requester(&self) -> FrameRequester {
         self.frame_requester.clone()
+    }
+
+    pub(crate) fn force_full_repaint(&mut self) {
+        self.force_full_repaint = true;
     }
 
     pub fn enhanced_keys_supported(&self) -> bool {
@@ -498,6 +505,7 @@ impl Tui {
         self.frame_requester().schedule_frame();
     }
 
+    /// Drop any queued history lines that have not yet been flushed to the terminal.
     pub fn clear_pending_history_lines(&mut self) {
         self.pending_history_lines.clear();
     }
@@ -590,9 +598,18 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
+        let force_full_repaint = self.force_full_repaint;
+        self.force_full_repaint = false;
+
         // Precompute any viewport updates that need a cursor-position query before entering
-        // the synchronized update, to avoid racing with the event reader.
-        let mut pending_viewport_area = self.pending_viewport_area()?;
+        // the synchronized update, to avoid racing with the event reader. Explicit resize
+        // events skip this heuristic because xterm.js can report stale cursor positions while
+        // a blurred split pane is being resized rapidly.
+        let mut pending_viewport_area = if force_full_repaint {
+            None
+        } else {
+            self.pending_viewport_area()?
+        };
 
         stdout().sync_update(|_| {
             #[cfg(unix)]
@@ -613,6 +630,11 @@ impl Tui {
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
+
+            if force_full_repaint {
+                terminal.clear()?;
+                needs_full_repaint = true;
+            }
 
             if needs_full_repaint {
                 terminal.invalidate_viewport();

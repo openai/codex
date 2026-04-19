@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use crate::app::app_server_requests::ResolvedAppServerRequest;
+use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
@@ -33,6 +34,7 @@ use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
 use codex_file_search::FileMatch;
 use codex_plugin::PluginCapabilitySummary;
+use codex_protocol::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
@@ -488,10 +490,13 @@ impl BottomPane {
                 && self.is_task_running
                 && !is_agent_command
                 && !self.composer.popup_active()
-                && let Some(status) = &self.status
             {
-                // Send Op::Interrupt
-                status.interrupt();
+                if let Some(status) = &self.status {
+                    // Send Op::Interrupt
+                    status.interrupt();
+                } else {
+                    self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+                }
                 self.request_redraw();
                 return InputResult::None;
             }
@@ -1807,6 +1812,36 @@ mod tests {
         let area = Rect::new(0, 0, width, after);
         let rendered = render_snapshot(&pane, area);
         assert!(rendered.contains("background terminal running · /ps to view"));
+    }
+
+    #[test]
+    fn esc_interrupts_running_task_when_status_hidden() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.hide_status_indicator();
+        assert!(
+            !pane.status_indicator_visible(),
+            "status indicator must be hidden for this repro"
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt while status is hidden"
+        );
     }
 
     #[test]

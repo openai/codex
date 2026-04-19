@@ -539,6 +539,43 @@ impl RateLimitWarningState {
     }
 }
 
+#[cfg(test)]
+fn is_interrupt_droppable_stream_event(msg: &EventMsg) -> bool {
+    match msg {
+        EventMsg::AgentMessage(_)
+        | EventMsg::AgentMessageDelta(_)
+        | EventMsg::PlanDelta(_)
+        | EventMsg::AgentReasoning(_)
+        | EventMsg::AgentReasoningDelta(_)
+        | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::AgentReasoningRawContentDelta(_)
+        | EventMsg::AgentReasoningSectionBreak(_)
+        | EventMsg::AgentMessageContentDelta(_)
+        | EventMsg::ReasoningContentDelta(_)
+        | EventMsg::ReasoningRawContentDelta(_) => true,
+        EventMsg::ItemCompleted(event) => matches!(
+            &event.item,
+            codex_protocol::items::TurnItem::AgentMessage(_)
+                | codex_protocol::items::TurnItem::Plan(_)
+        ),
+        _ => false,
+    }
+}
+
+fn is_interrupt_droppable_server_notification(notification: &ServerNotification) -> bool {
+    match notification {
+        ServerNotification::AgentMessageDelta(_)
+        | ServerNotification::PlanDelta(_)
+        | ServerNotification::ReasoningSummaryTextDelta(_)
+        | ServerNotification::ReasoningTextDelta(_) => true,
+        ServerNotification::ItemCompleted(notification) => matches!(
+            &notification.item,
+            ThreadItem::AgentMessage { .. } | ThreadItem::Plan { .. }
+        ),
+        _ => false,
+    }
+}
+
 pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
     const MINUTES_PER_HOUR: i64 = 60;
     const MINUTES_PER_DAY: i64 = 24 * MINUTES_PER_HOUR;
@@ -836,6 +873,11 @@ pub(crate) struct ChatWidget {
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// True once an interrupt was requested for the active turn.
+    ///
+    /// While this is set, inbound stream deltas are dropped locally so a large
+    /// queued backlog cannot keep rendering stale content after user interrupt.
+    interrupt_requested_for_turn: bool,
     /// Expected MCP servers for the current startup round, seeded from enabled local config.
     mcp_startup_expected_servers: Option<HashSet<String>>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
@@ -1803,12 +1845,25 @@ impl ChatWidget {
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
-        if let Some(mut controller) = self.stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        let had_stream_controller = self.stream_controller.is_some();
+        if let Some(mut controller) = self.stream_controller.take() {
+            let (cell, source) = controller.finalize();
+            if let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
+            // that can re-render from source on resize.
+            if let Some(source) = source {
+                self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
+                    source,
+                    cwd: self.config.cwd.to_path_buf(),
+                });
+            }
         }
         self.adaptive_chunking.reset();
+        if had_stream_controller && self.stream_controllers_idle() {
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+        }
     }
 
     fn stream_controllers_idle(&self) -> bool {
@@ -2314,7 +2369,7 @@ impl ChatWidget {
 
         if self.plan_stream_controller.is_none() {
             self.plan_stream_controller = Some(PlanStreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(4)),
+                self.current_stream_width(4),
                 &self.config.cwd,
             ));
         }
@@ -2344,18 +2399,25 @@ impl ChatWidget {
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.saw_plan_item_this_turn = true;
-        let finalized_streamed_cell =
+        let (finalized_streamed_cell, consolidated_plan_source) =
             if let Some(mut controller) = self.plan_stream_controller.take() {
                 controller.finalize()
             } else {
-                None
+                (None, None)
             };
         if let Some(cell) = finalized_streamed_cell {
             self.add_boxed_history(cell);
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
+            if let Some(source) = consolidated_plan_source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
         } else if !plan_text.is_empty() {
             self.add_to_history(history_cell::new_proposed_plan(plan_text, &self.config.cwd));
+        } else if let Some(source) = consolidated_plan_source {
+            self.app_event_tx
+                .send(AppEvent::ConsolidateProposedPlan(source));
         }
         if should_restore_after_stream {
             self.pending_status_indicator_restore = true;
@@ -2415,6 +2477,7 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ true);
         self.saw_copy_source_this_turn = false;
+        self.interrupt_requested_for_turn = false;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
         self.latest_proposed_plan_markdown = None;
@@ -2473,10 +2536,15 @@ impl ChatWidget {
         self.saw_copy_source_this_turn = false;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
-        if let Some(mut controller) = self.plan_stream_controller.take()
-            && let Some(cell) = controller.finalize()
-        {
-            self.add_boxed_history(cell);
+        if let Some(mut controller) = self.plan_stream_controller.take() {
+            let (cell, source) = controller.finalize();
+            if let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            if let Some(source) = source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
@@ -2509,6 +2577,7 @@ impl ChatWidget {
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
+        self.interrupt_requested_for_turn = false;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -2927,6 +2996,7 @@ impl ChatWidget {
         self.agent_turn_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
+        self.interrupt_requested_for_turn = false;
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -4541,11 +4611,11 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.stream_controller.is_none() {
+            // Before streaming agent content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
@@ -4565,7 +4635,7 @@ impl ChatWidget {
                 self.needs_final_message_separator = false;
             }
             self.stream_controller = Some(StreamController::new(
-                self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+                self.current_stream_width(2),
                 &self.config.cwd,
             ));
         }
@@ -4576,6 +4646,34 @@ impl ChatWidget {
             self.run_catch_up_commit_tick();
         }
         self.request_redraw();
+    }
+
+    fn current_stream_width(&self, reserved_cols: usize) -> Option<usize> {
+        self.last_rendered_width.get().and_then(|w| {
+            if w == 0 {
+                None
+            } else {
+                // Keep a 1-column minimum for active stream controllers so they can
+                // continue accepting deltas on ultra-narrow layouts.
+                Some(crate::width::usable_content_width(w, reserved_cols).unwrap_or(1))
+            }
+        })
+    }
+
+    pub(crate) fn on_terminal_resize(&mut self, width: u16) {
+        let had_rendered_width = self.last_rendered_width.get().is_some();
+        self.last_rendered_width.set(Some(width as usize));
+        let stream_width = self.current_stream_width(2);
+        let plan_stream_width = self.current_stream_width(4);
+        if let Some(controller) = self.stream_controller.as_mut() {
+            controller.set_width(stream_width);
+        }
+        if let Some(controller) = self.plan_stream_controller.as_mut() {
+            controller.set_width(plan_stream_width);
+        }
+        if !had_rendered_width {
+            self.request_redraw();
+        }
     }
 
     fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {
@@ -5066,6 +5164,7 @@ impl ChatWidget {
             last_agent_markdown: None,
             latest_proposed_plan_markdown: None,
             saw_copy_source_this_turn: false,
+            interrupt_requested_for_turn: false,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
             mcp_startup_allow_terminal_only_next_round: false,
@@ -5316,7 +5415,7 @@ impl ChatWidget {
                             return;
                         }
                         let should_submit_now =
-                            self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                            self.is_session_configured() && !self.has_active_plan_stream();
                         if should_submit_now {
                             // Submitted is emitted when user submits.
                             // Reset any reasoning header only when we are actually submitting a turn.
@@ -5549,6 +5648,7 @@ impl ChatWidget {
             self.flush_active_cell();
             self.needs_final_message_separator = true;
         }
+
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
@@ -6317,6 +6417,13 @@ impl ChatWidget {
         if !is_resume_initial_replay && !is_retry_error {
             self.restore_retry_status_header_if_present();
         }
+        if !from_replay
+            && self.interrupt_requested_for_turn
+            && is_interrupt_droppable_server_notification(&notification)
+        {
+            tracing::trace!("dropping app-server stream notification while interrupt is pending");
+            return;
+        }
         match notification {
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.set_token_info(Some(token_usage_info_from_app_server(
@@ -6852,6 +6959,15 @@ impl ChatWidget {
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
+
+        if !from_replay
+            && self.interrupt_requested_for_turn
+            && is_interrupt_droppable_stream_event(&msg)
+        {
+            tracing::trace!("dropping stream event while interrupt is pending");
+            return;
+        }
+
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
         if !is_resume_initial_replay && !is_stream_error {
             self.restore_retry_status_header_if_present();
@@ -10565,7 +10681,12 @@ impl ChatWidget {
         self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
-    fn is_plan_streaming_in_tui(&self) -> bool {
+    /// Whether an agent message stream is active (not a plan stream).
+    pub(crate) fn has_active_agent_stream(&self) -> bool {
+        self.stream_controller.is_some()
+    }
+
+    pub(crate) fn has_active_plan_stream(&self) -> bool {
         self.plan_stream_controller.is_some()
     }
 
@@ -10597,7 +10718,7 @@ impl ChatWidget {
             return;
         }
         self.set_collaboration_mask(collaboration_mode);
-        let should_queue = self.is_plan_streaming_in_tui();
+        let should_queue = self.has_active_plan_stream();
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),
@@ -10691,6 +10812,7 @@ impl ChatWidget {
         T: Into<AppCommand>,
     {
         let op: AppCommand = op.into();
+        self.prepare_local_op_submission(&op);
         if op.is_review() && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
@@ -10707,6 +10829,21 @@ impl ChatWidget {
             }
         }
         true
+    }
+
+    pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
+        if matches!(op.view(), crate::app_command::AppCommandView::Interrupt)
+            && self.agent_turn_running
+        {
+            self.interrupt_requested_for_turn = true;
+            if let Some(controller) = self.stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            if let Some(controller) = self.plan_stream_controller.as_mut() {
+                controller.clear_queue();
+            }
+            self.request_redraw();
+        }
     }
 
     #[cfg(test)]

@@ -1069,6 +1069,110 @@ async fn interrupt_restores_queued_messages_into_composer() {
 }
 
 #[tokio::test]
+async fn interrupt_drops_stream_deltas_until_turn_aborted() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+            started_at: None,
+        }),
+    });
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    let mut saw_interrupt = false;
+    while let Ok(op) = op_rx.try_recv() {
+        if matches!(op, Op::Interrupt) {
+            saw_interrupt = true;
+            break;
+        }
+    }
+    assert!(saw_interrupt, "expected Ctrl+C to submit Op::Interrupt");
+
+    // Simulate stale stream backlog that arrives before TurnAborted.
+    chat.stream_controller = None;
+    chat.handle_codex_event(Event {
+        id: "delta-stale".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "stale row\n".to_string(),
+        }),
+    });
+    assert!(
+        chat.stream_controller.is_none(),
+        "expected stale delta to be dropped while interrupt is pending",
+    );
+
+    chat.handle_codex_event(Event {
+        id: "abort-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+            completed_at: None,
+            duration_ms: None,
+        }),
+    });
+
+    // A subsequent turn should stream normally.
+    chat.handle_codex_event(Event {
+        id: "turn-2".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-2".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+            started_at: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "delta-fresh".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "fresh row\n".to_string(),
+        }),
+    });
+    assert!(
+        chat.stream_controller.is_some(),
+        "expected new-turn delta to stream after interrupt completion",
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn app_event_interrupt_prepares_local_stream_cleanup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+    let mut controller =
+        crate::streaming::controller::StreamController::new(Some(80), cwd.as_path());
+    assert!(controller.push("stale backlog\n"));
+
+    chat.agent_turn_running = true;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+    chat.bottom_pane.hide_status_indicator();
+    chat.stream_controller = Some(controller);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    let command = loop {
+        match rx.try_recv() {
+            Ok(AppEvent::CodexOp(op)) => break AppCommand::from(op),
+            Ok(_) => continue,
+            Err(err) => panic!("expected app-level interrupt event, got {err:?}"),
+        }
+    };
+    chat.prepare_local_op_submission(&command);
+
+    assert!(chat.interrupt_requested_for_turn);
+    assert_eq!(
+        chat.stream_controller
+            .as_ref()
+            .map(crate::streaming::controller::StreamController::queued_lines),
+        Some(0),
+    );
+}
+
+#[tokio::test]
 async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

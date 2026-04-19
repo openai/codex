@@ -159,6 +159,7 @@ mod terminal_title;
 mod text_formatting;
 mod theme_picker;
 mod tooltips;
+mod transcript_reflow;
 mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
@@ -222,6 +223,7 @@ mod voice {
         pub(crate) fn clear(&self) {}
     }
 }
+mod width;
 
 mod wrapping;
 
