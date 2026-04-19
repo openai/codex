@@ -881,6 +881,33 @@ async fn ctrl_o_copy_reports_when_no_agent_response_exists() {
 }
 
 #[tokio::test]
+async fn copy_shortcut_can_be_remapped() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut keymap_config = chat.config_ref().tui_keymap.clone();
+    keymap_config.global.copy = Some(codex_config::types::KeybindingsSpec::One(
+        codex_config::types::KeybindingSpec("ctrl-u".to_string()),
+    ));
+    let runtime_keymap =
+        crate::keymap::RuntimeKeymap::from_config(&keymap_config).expect("valid copy remap");
+    chat.apply_keymap_update(keymap_config, &runtime_keymap);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "old copy shortcut should no longer copy"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one info message");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("No agent response to copy"),
+        "expected remapped copy shortcut to run, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_copy_stores_clipboard_lease_and_preserves_it_on_failure() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.last_agent_markdown = Some("copy me".to_string());
