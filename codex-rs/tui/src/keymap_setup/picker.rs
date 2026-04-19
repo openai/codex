@@ -22,7 +22,7 @@ use super::actions::bindings_for_action;
 use super::actions::format_binding_summary;
 use super::has_custom_binding;
 
-const KEYMAP_PICKER_VIEW_ID: &str = "keymap-picker";
+pub(crate) const KEYMAP_PICKER_VIEW_ID: &str = "keymap-picker";
 pub(super) const KEYMAP_ALL_TAB_ID: &str = "all-shortcuts";
 pub(super) const KEYMAP_COMMON_TAB_ID: &str = "common-shortcuts";
 pub(super) const KEYMAP_CUSTOM_TAB_ID: &str = "custom-shortcuts";
@@ -119,10 +119,35 @@ pub(crate) fn build_keymap_picker_params(
     runtime_keymap: &RuntimeKeymap,
     keymap_config: &TuiKeymap,
 ) -> SelectionViewParams {
+    build_keymap_picker_params_for_action(
+        runtime_keymap,
+        keymap_config,
+        /*selected_action*/ None,
+    )
+}
+
+pub(crate) fn build_keymap_picker_params_for_selected_action(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    context: &str,
+    action: &str,
+) -> SelectionViewParams {
+    build_keymap_picker_params_for_action(runtime_keymap, keymap_config, Some((context, action)))
+}
+
+fn build_keymap_picker_params_for_action(
+    runtime_keymap: &RuntimeKeymap,
+    keymap_config: &TuiKeymap,
+    selected_action: Option<(&str, &str)>,
+) -> SelectionViewParams {
     let rows = build_keymap_rows(runtime_keymap, keymap_config);
     let total = rows.len();
     let custom_count = rows.iter().filter(|row| row.custom_binding).count();
     let unbound_count = rows.iter().filter(|row| row.is_unbound()).count();
+    let initial_selected_idx = selected_action.and_then(|(context, action)| {
+        rows.iter()
+            .position(|row| row.context == context && row.action == action)
+    });
     let name_column_width = rows
         .iter()
         .map(|row| KEYMAP_ROW_PREFIX_WIDTH + UnicodeWidthStr::width(row.label.as_str()))
@@ -224,6 +249,7 @@ pub(crate) fn build_keymap_picker_params(
         col_width_mode: ColumnWidthMode::AutoAllRows,
         row_display: SelectionRowDisplay::SingleLine,
         name_column_width,
+        initial_selected_idx,
         ..Default::default()
     }
 }

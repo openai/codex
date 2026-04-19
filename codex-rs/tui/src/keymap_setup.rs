@@ -6,7 +6,9 @@
 mod actions;
 mod picker;
 
+pub(crate) use picker::KEYMAP_PICKER_VIEW_ID;
 pub(crate) use picker::build_keymap_picker_params;
+pub(crate) use picker::build_keymap_picker_params_for_selected_action;
 
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
@@ -969,11 +971,26 @@ mod tests {
 
         assert_eq!(unbound_tab.items.len(), 1);
         assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
-        assert_eq!(
-            unbound_tab.items[0].description.as_deref(),
-            Some("unbound")
-        );
+        assert_eq!(unbound_tab.items[0].description.as_deref(), Some("unbound"));
         assert!(!unbound_tab.items[0].is_disabled);
+    }
+
+    #[test]
+    fn picker_selected_action_starts_on_matching_all_tab_row() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params_for_selected_action(
+            &runtime,
+            &TuiKeymap::default(),
+            "composer",
+            "submit",
+        );
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
+
+        assert_eq!(params.initial_tab_id.as_deref(), Some(KEYMAP_ALL_TAB_ID));
+        assert_eq!(
+            params.initial_selected_idx,
+            all_tab.items.iter().position(|item| item.name == "Submit")
+        );
     }
 
     #[test]
@@ -1124,10 +1141,7 @@ mod tests {
             !add_alternate.dismiss_on_select,
             "add alternate should keep the action menu under key capture"
         );
-        assert!(
-            !remove.dismiss_on_select,
-            "clear-key should keep the action menu open for refresh"
-        );
+        assert!(!remove.dismiss_on_select, "clear-key waits for save result");
         assert!(
             back.dismiss_on_select,
             "back should dismiss the action menu"
@@ -1152,9 +1166,10 @@ mod tests {
     }
 
     #[test]
-    fn capture_completion_returns_to_keymap_action_menu() {
+    fn capture_completion_returns_to_selected_keymap_picker_row() {
         let (mut pane, tx, mut rx) = test_pane();
         let runtime = RuntimeKeymap::defaults();
+        pane.show_selection_view(build_keymap_picker_params(&runtime, &TuiKeymap::default()));
         pane.show_selection_view(build_keymap_action_menu_params(
             "composer".to_string(),
             "submit".to_string(),
@@ -1198,18 +1213,137 @@ mod tests {
         let keymap =
             keymap_with_replacement(&TuiKeymap::default(), &context, &action, &key).unwrap();
         let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
-        let params = build_keymap_action_menu_params(context, action, &runtime, &keymap);
+        let params =
+            build_keymap_picker_params_for_selected_action(&runtime, &keymap, &context, &action);
+        let selected_idx = params.initial_selected_idx;
         assert!(
-            pane.replace_selection_view_if_active(KEYMAP_ACTION_MENU_VIEW_ID, params),
-            "active action menu should refresh after a successful assignment"
+            pane.replace_active_views_with_selection_view(
+                &[
+                    KEYMAP_PICKER_VIEW_ID,
+                    KEYMAP_ACTION_MENU_VIEW_ID,
+                    KEYMAP_REPLACE_BINDING_MENU_VIEW_ID,
+                ],
+                params
+            ),
+            "successful assignment should return to the main picker"
         );
-        let area = Rect::new(0, 0, 80, pane.desired_height(/*width*/ 80));
-        let mut buf = Buffer::empty(area);
-        pane.render(area, &mut buf);
-        let rendered = render_buffer(&buf);
+        assert_eq!(pane.active_view_id(), Some(KEYMAP_PICKER_VIEW_ID));
+        assert_eq!(
+            pane.selected_index_for_active_view(KEYMAP_PICKER_VIEW_ID),
+            selected_idx
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(
-            rendered.contains("Current ctrl-shift-k"),
-            "rendered action menu did not include updated binding:\n{rendered}"
+            pane.no_modal_or_popup_active(),
+            "the original picker should not remain behind the refreshed picker"
+        );
+    }
+
+    #[test]
+    fn clear_completion_returns_to_selected_keymap_picker_row() {
+        let (mut pane, _tx, mut rx) = test_pane();
+        let keymap =
+            keymap_with_replacement(&TuiKeymap::default(), "composer", "submit", "ctrl-enter")
+                .unwrap();
+        let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+        pane.show_selection_view(build_keymap_picker_params(&runtime, &keymap));
+        pane.show_selection_view(build_keymap_action_menu_params(
+            "composer".to_string(),
+            "submit".to_string(),
+            &runtime,
+            &keymap,
+        ));
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let AppEvent::KeymapCleared { context, action } =
+            rx.try_recv().expect("clear keymap event")
+        else {
+            panic!("expected KeymapCleared event");
+        };
+        assert_eq!(context, "composer");
+        assert_eq!(action, "submit");
+        assert_eq!(pane.active_view_id(), Some(KEYMAP_ACTION_MENU_VIEW_ID));
+
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params_for_selected_action(
+            &runtime,
+            &TuiKeymap::default(),
+            &context,
+            &action,
+        );
+        let selected_idx = params.initial_selected_idx;
+        assert!(
+            pane.replace_active_views_with_selection_view(
+                &[
+                    KEYMAP_PICKER_VIEW_ID,
+                    KEYMAP_ACTION_MENU_VIEW_ID,
+                    KEYMAP_REPLACE_BINDING_MENU_VIEW_ID,
+                ],
+                params
+            ),
+            "successful clear should return to the main picker"
+        );
+        assert_eq!(pane.active_view_id(), Some(KEYMAP_PICKER_VIEW_ID));
+        assert_eq!(
+            pane.selected_index_for_active_view(KEYMAP_PICKER_VIEW_ID),
+            selected_idx
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            pane.no_modal_or_popup_active(),
+            "the original picker should not remain behind the refreshed picker"
+        );
+    }
+
+    #[test]
+    fn replace_one_completion_drops_focused_keymap_submenus() {
+        let (mut pane, _tx, _rx) = test_pane();
+        let runtime = RuntimeKeymap::defaults();
+        pane.show_selection_view(build_keymap_picker_params(&runtime, &TuiKeymap::default()));
+        pane.show_selection_view(build_keymap_action_menu_params(
+            "composer".to_string(),
+            "toggle_shortcuts".to_string(),
+            &runtime,
+            &TuiKeymap::default(),
+        ));
+        pane.show_selection_view(build_keymap_replace_binding_menu_params(
+            "composer".to_string(),
+            "toggle_shortcuts".to_string(),
+            &runtime,
+        ));
+        assert_eq!(
+            pane.active_view_id(),
+            Some(KEYMAP_REPLACE_BINDING_MENU_VIEW_ID)
+        );
+
+        let params = build_keymap_picker_params_for_selected_action(
+            &runtime,
+            &TuiKeymap::default(),
+            "composer",
+            "toggle_shortcuts",
+        );
+        assert!(
+            pane.replace_active_views_with_selection_view(
+                &[
+                    KEYMAP_PICKER_VIEW_ID,
+                    KEYMAP_ACTION_MENU_VIEW_ID,
+                    KEYMAP_REPLACE_BINDING_MENU_VIEW_ID,
+                ],
+                params
+            ),
+            "successful replace-one should return to the main picker"
+        );
+        assert_eq!(pane.active_view_id(), Some(KEYMAP_PICKER_VIEW_ID));
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            pane.no_modal_or_popup_active(),
+            "the parent action menu should not remain behind the picker"
         );
     }
 
