@@ -1114,6 +1114,7 @@ pub(crate) struct ThreadInputState {
     pending_steers: VecDeque<UserMessage>,
     rejected_steers_queue: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<QueuedUserMessage>,
+    user_turn_pending_start: bool,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -3280,6 +3281,7 @@ impl ChatWidget {
                 .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
+            user_turn_pending_start: self.user_turn_pending_start,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3293,6 +3295,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.user_turn_pending_start = input_state.user_turn_pending_start;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             if let Some(composer) = input_state.composer {
@@ -3336,6 +3339,7 @@ impl ChatWidget {
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
             self.agent_turn_running = false;
+            self.user_turn_pending_start = false;
             self.pending_steers.clear();
             self.rejected_steers_queue.clear();
             self.set_remote_image_urls(Vec::new());

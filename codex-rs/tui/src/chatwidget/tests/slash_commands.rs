@@ -503,6 +503,16 @@ async fn queued_inline_rename_does_not_drain_again_before_turn_started() {
         chat.queued_user_message_texts(),
         vec!["second after rename"]
     );
+    let input_state = chat.capture_thread_input_state().unwrap();
+    assert!(input_state.user_turn_pending_start);
+    chat.restore_thread_input_state(/*input_state*/ None);
+    assert!(!chat.user_turn_pending_start);
+    chat.restore_thread_input_state(Some(input_state));
+    assert!(chat.user_turn_pending_start);
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["second after rename"]
+    );
 
     chat.handle_codex_event(Event {
         id: "rename".into(),

@@ -800,6 +800,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         pending_steers: VecDeque::new(),
         rejected_steers_queue: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
+        user_turn_pending_start: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: true,
