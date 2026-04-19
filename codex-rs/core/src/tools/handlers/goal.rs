@@ -1,7 +1,7 @@
 //! Built-in model tool handlers for persisted thread goals.
 //!
 //! The public tool contract intentionally splits goal creation from updates:
-//! `set_goal` starts an active objective, while `update_goal` changes status
+//! `create_goal` starts an active objective, while `update_goal` changes status
 //! on the existing goal and preserves usage accounting.
 
 use crate::function_tool::FunctionCallError;
@@ -18,8 +18,8 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
+use codex_tools::CREATE_GOAL_TOOL_NAME;
 use codex_tools::GET_GOAL_TOOL_NAME;
-use codex_tools::SET_GOAL_TOOL_NAME;
 use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use serde::Deserialize;
 use serde::Serialize;
@@ -30,7 +30,7 @@ pub struct GoalHandler;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
-struct SetGoalArgs {
+struct CreateGoalArgs {
     objective: String,
     token_budget: Option<i64>,
 }
@@ -112,7 +112,7 @@ impl ToolHandler for GoalHandler {
 
         match tool_name.name.as_str() {
             GET_GOAL_TOOL_NAME => handle_get_goal(session.as_ref()).await,
-            SET_GOAL_TOOL_NAME => handle_set_goal(&session, turn.as_ref(), &arguments).await,
+            CREATE_GOAL_TOOL_NAME => handle_create_goal(&session, turn.as_ref(), &arguments).await,
             UPDATE_GOAL_TOOL_NAME => handle_update_goal(&session, turn.as_ref(), &arguments).await,
             other => Err(FunctionCallError::Fatal(format!(
                 "goal handler received unsupported tool: {other}"
@@ -129,12 +129,12 @@ async fn handle_get_goal(session: &Session) -> Result<FunctionToolOutput, Functi
     goal_response(goal)
 }
 
-async fn handle_set_goal(
+async fn handle_create_goal(
     session: &Arc<Session>,
     turn_context: &TurnContext,
     arguments: &str,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
-    let args: SetGoalArgs = parse_arguments(arguments)?;
+    let args: CreateGoalArgs = parse_arguments(arguments)?;
     let goal = session
         .create_thread_goal(
             turn_context,
@@ -150,7 +150,7 @@ async fn handle_set_goal(
                 .any(|cause| cause.to_string().contains("already has a goal"))
             {
                 FunctionCallError::RespondToModel(
-                    "cannot set a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
+                    "cannot create a new goal because this thread already has a goal; use update_goal to pause, resume, or mark the existing goal complete"
                         .to_string(),
                 )
             } else {

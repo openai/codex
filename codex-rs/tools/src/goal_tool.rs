@@ -10,7 +10,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
-pub const SET_GOAL_TOOL_NAME: &str = "set_goal";
+pub const CREATE_GOAL_TOOL_NAME: &str = "create_goal";
 pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
 
 pub fn create_get_goal_tool() -> ToolSpec {
@@ -25,7 +25,7 @@ pub fn create_get_goal_tool() -> ToolSpec {
     })
 }
 
-pub fn create_set_goal_tool() -> ToolSpec {
+pub fn create_create_goal_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "objective".to_string(),
@@ -43,10 +43,10 @@ pub fn create_set_goal_tool() -> ToolSpec {
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: SET_GOAL_TOOL_NAME.to_string(),
-        description: r#"Start a new long-running goal for this thread when no goal is already defined.
+        name: CREATE_GOAL_TOOL_NAME.to_string(),
+        description: r#"Create a new long-running goal for this thread when no goal is already defined.
 This tool creates a fresh active goal and resets time/token usage accounting to zero.
-It fails if any goal already exists. Use update_goal, not set_goal, to pause, resume, or mark an existing goal achieved while preserving usage accounting.
+It fails if any goal already exists. Use update_goal, not create_goal, to pause, resume, or mark an existing goal achieved while preserving usage accounting.
 To replace the objective, the user must clear or replace the goal through goal-management UI or API.
 Set token_budget here when the goal should have a budget."#
             .to_string(),

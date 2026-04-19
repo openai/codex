@@ -411,7 +411,7 @@ impl Session {
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "cannot set a new goal because thread {} already has a goal",
+                    "cannot create a new goal because thread {} already has a goal",
                     self.conversation_id
                 )
             })?;
