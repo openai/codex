@@ -1742,8 +1742,9 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
     let model = model_catalog
         .models
         .iter_mut()
-        .find(|model| model.slug == "gpt-5.1")
-        .expect("gpt-5.1 exists in bundled models.json");
+        .next()
+        .expect("bundled models.json should contain at least one model");
+    let model_slug = model.slug.clone();
     model.supports_reasoning_summaries = true;
     model.default_reasoning_summary = ReasoningSummary::Detailed;
 
@@ -1753,7 +1754,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
         session_configured,
         ..
     } = test_codex()
-        .with_model("gpt-5.1")
+        .with_model(&model_slug)
         .with_config(move |config| {
             config.model_catalog = Some(model_catalog);
         })
@@ -1856,13 +1857,14 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
     let model = model_catalog
         .models
         .iter_mut()
-        .find(|model| model.slug == "gpt-5.1")
-        .expect("gpt-5.1 exists in bundled models.json");
+        .next()
+        .expect("bundled models.json should contain at least one model");
+    let model_slug = model.slug.clone();
     model.supports_reasoning_summaries = true;
     model.default_reasoning_summary = ReasoningSummary::Detailed;
 
     let TestCodex { codex, .. } = test_codex()
-        .with_model("gpt-5.1")
+        .with_model(&model_slug)
         .with_config(move |config| {
             config.model_reasoning_summary = Some(ReasoningSummary::None);
             config.model_catalog = Some(model_catalog);

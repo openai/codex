@@ -511,14 +511,12 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    let bundled_models = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
-    let mut model = bundled_models
+    let mut model = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"))
         .models
-        .iter()
-        .find(|candidate| candidate.slug == "gpt-5.1-codex")
-        .cloned()
-        .unwrap_or_else(|| panic!("missing bundled model gpt-5.1-codex"));
+        .into_iter()
+        .next()
+        .context("bundled models.json should contain at least one model")?;
     model.slug = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.experimental_supported_tools = vec!["test_sync_tool".to_string()];

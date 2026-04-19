@@ -105,8 +105,8 @@ fn configure_shell_model(
 ) -> TestCodexBuilder {
     let builder = match (output_type, include_apply_patch_tool) {
         (ShellModelOutput::ShellCommand, _) => builder.with_model("test-gpt-5-codex"),
-        (ShellModelOutput::LocalShell, true) => builder.with_model("gpt-5.1-codex"),
-        (ShellModelOutput::Shell, true) => builder.with_model("gpt-5.1-codex"),
+        (ShellModelOutput::LocalShell, true) => builder.with_model("gpt-5.4"),
+        (ShellModelOutput::Shell, true) => builder.with_model("gpt-5.4"),
         (ShellModelOutput::LocalShell, false) => builder.with_model("codex-mini-latest"),
         (ShellModelOutput::Shell, false) => builder.with_model("gpt-5"),
     };
@@ -717,7 +717,7 @@ async fn shell_output_is_structured_for_nonzero_exit(output_type: ShellModelOutp
 
     let server = start_mock_server().await;
     let mut builder = test_codex()
-        .with_model("gpt-5.1-codex")
+        .with_model("gpt-5.4")
         .with_config(move |config| {
             config.include_apply_patch_tool = true;
         });
@@ -910,11 +910,9 @@ async fn local_shell_call_output_is_structured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex()
-        .with_model("gpt-5.1-codex")
-        .with_config(|config| {
-            config.include_apply_patch_tool = true;
-        });
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.include_apply_patch_tool = true;
+    });
     let test = builder.build(&server).await?;
 
     let call_id = "local-shell-call";

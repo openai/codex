@@ -413,16 +413,14 @@ if (!tool) {
                 .features
                 .enable(Feature::CodeModeOnly)
                 .expect("test config should allow feature update");
-            config.chatgpt_base_url = apps_base_url;
-            config.model = Some("gpt-5-codex".to_string());
-
             let mut model_catalog = bundled_models_response()
                 .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
             let model = model_catalog
                 .models
-                .iter_mut()
-                .find(|model| model.slug == "gpt-5-codex")
-                .expect("gpt-5-codex exists in bundled models.json");
+                .first_mut()
+                .expect("bundled models.json should contain at least one model");
+            config.chatgpt_base_url = apps_base_url;
+            config.model = Some(model.slug.clone());
             model.supports_search_tool = true;
             config.model_catalog = Some(model_catalog);
         });
