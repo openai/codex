@@ -48,7 +48,6 @@ const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
-const TEST_SEARCH_MODEL: &str = "gpt-5.4";
 const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
 const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
 const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
@@ -105,9 +104,9 @@ fn configure_search_capable_model(config: &mut Config) {
     let model = model_catalog
         .models
         .iter_mut()
-        .find(|model| model.slug == TEST_SEARCH_MODEL)
+        .find(|model| model.slug == "gpt-5.4")
         .expect("gpt-5.4 exists in bundled models.json");
-    config.model = Some(TEST_SEARCH_MODEL.to_string());
+    config.model = Some("gpt-5.4".to_string());
     model.supports_search_tool = true;
     config.model_catalog = Some(model_catalog);
 }
