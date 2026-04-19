@@ -68,6 +68,7 @@ impl TestToolServer {
         let tools = vec![
             Self::echo_tool(),
             Self::echo_dash_tool(),
+            Self::cwd_tool(),
             Self::sync_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
@@ -125,12 +126,40 @@ impl TestToolServer {
                         { "type": "null" }
                     ]
                 },
-                "cwd": { "type": "string" }
             },
-            "required": ["echo", "env", "cwd"],
+            "required": ["echo", "env"],
             "additionalProperties": false
         }))
         .expect("echo tool output schema should deserialize");
+        tool.output_schema = Some(Arc::new(output_schema));
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
+    }
+
+    fn cwd_tool() -> Tool {
+        #[expect(clippy::expect_used)]
+        let schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }))
+        .expect("cwd tool schema should deserialize");
+
+        let mut tool = Tool::new(
+            Cow::Borrowed("cwd"),
+            Cow::Borrowed("Return the current working directory of this test server process."),
+            Arc::new(schema),
+        );
+        #[expect(clippy::expect_used)]
+        let output_schema: JsonObject = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "cwd": { "type": "string" }
+            },
+            "required": ["cwd"],
+            "additionalProperties": false
+        }))
+        .expect("cwd tool output schema should deserialize");
         tool.output_schema = Some(Arc::new(output_schema));
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
@@ -453,6 +482,17 @@ impl ServerHandler for TestToolServer {
                 is_error: Some(false),
                 meta: None,
             }),
+            "cwd" => {
+                let cwd = std::env::current_dir()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|err| McpError::internal_error(err.to_string(), None))?;
+                Ok(CallToolResult {
+                    content: Vec::new(),
+                    structured_content: Some(json!({ "cwd": cwd })),
+                    is_error: Some(false),
+                    meta: None,
+                })
+            }
             "echo" | "echo-tool" => {
                 let args: EchoArgs = match request.arguments {
                     Some(arguments) => serde_json::from_value(serde_json::Value::Object(
@@ -469,13 +509,9 @@ impl ServerHandler for TestToolServer {
 
                 let env_snapshot: HashMap<String, String> = std::env::vars().collect();
                 let env_name = args.env_var.as_deref().unwrap_or("MCP_TEST_VALUE");
-                let cwd = std::env::current_dir()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .map_err(|err| McpError::internal_error(err.to_string(), None))?;
                 let structured_content = json!({
                     "echo": format!("ECHOING: {}", args.message),
                     "env": env_snapshot.get(env_name),
-                    "cwd": cwd,
                 });
 
                 Ok(CallToolResult {

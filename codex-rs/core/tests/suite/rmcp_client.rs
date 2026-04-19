@@ -328,6 +328,77 @@ async fn call_echo_tool(
     Ok(structured_content)
 }
 
+async fn call_cwd_tool(
+    server: &MockServer,
+    fixture: &TestCodex,
+    server_name: &str,
+    call_id: &str,
+) -> anyhow::Result<Value> {
+    let namespace = format!("mcp__{server_name}__");
+    mount_sse_once(
+        server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call_with_namespace(call_id, &namespace, "cwd", r#"{}"#),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp cwd tool completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = fixture.session_configured.model.clone();
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "call the rmcp cwd tool".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallBegin(_))
+    })
+    .await;
+    let end_event = wait_for_event(&fixture.codex, |ev| {
+        matches!(ev, EventMsg::McpToolCallEnd(_))
+    })
+    .await;
+    let EventMsg::McpToolCallEnd(end) = end_event else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    let structured_content = end
+        .result
+        .as_ref()
+        .expect("rmcp cwd tool should return success")
+        .structured_content
+        .as_ref()
+        .expect("structured content")
+        .clone();
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    Ok(structured_content)
+}
+
 fn process_cwd_assertion_value(path: &Path) -> String {
     if std::env::var_os(remote_env_env_var()).is_some() {
         return path.to_string_lossy().into_owned();
@@ -543,13 +614,11 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
         .expect("expected cwd lock should not be poisoned")
         .clone()
         .expect("test config should record configured MCP cwd");
-    let structured = call_echo_tool(&server, &fixture, server_name, "call-configured-cwd").await?;
+    let structured = call_cwd_tool(&server, &fixture, server_name, "call-configured-cwd").await?;
 
     assert_eq!(
         structured,
         json!({
-            "echo": "ECHOING: ping",
-            "env": "configured-cwd",
             "cwd": process_cwd_assertion_value(&expected_cwd),
         })
     );
@@ -603,13 +672,11 @@ async fn remote_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() -
         .expect("expected cwd lock should not be poisoned")
         .clone()
         .expect("test config should record runtime fallback cwd");
-    let structured = call_echo_tool(&server, &fixture, server_name, "call-fallback-cwd").await?;
+    let structured = call_cwd_tool(&server, &fixture, server_name, "call-fallback-cwd").await?;
 
     assert_eq!(
         structured,
         json!({
-            "echo": "ECHOING: ping",
-            "env": "fallback-cwd",
             "cwd": process_cwd_assertion_value(&expected_cwd),
         })
     );
