@@ -244,6 +244,8 @@ impl Session {
         self.start_task(turn_context, input, task).await;
     }
 
+    /// Starts a task in the current turn, moving queued next-turn and mailbox input into the
+    /// turn state before spawning the task body.
     async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -365,6 +367,8 @@ impl Session {
             .await;
     }
 
+    /// Starts queued user/mailbox work first; if that leaves the session idle, queues an active
+    /// goal continuation through the same pending-work path and tries again.
     pub(crate) async fn maybe_start_turn_for_pending_work_or_goal_continuation(self: &Arc<Self>) {
         self.clear_stale_goal_continuations_for_next_turn().await;
         self.maybe_start_turn_for_pending_work().await;
@@ -372,6 +376,7 @@ impl Session {
         self.maybe_start_turn_for_pending_work().await;
     }
 
+    /// Queues an active goal continuation and starts a regular turn for it if the session is idle.
     pub(crate) async fn maybe_start_turn_for_active_goal_continuation(self: &Arc<Self>) {
         self.clear_stale_goal_continuations_for_next_turn().await;
         self.queue_goal_continuation_if_active().await;
