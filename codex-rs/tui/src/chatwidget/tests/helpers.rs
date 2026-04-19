@@ -211,6 +211,7 @@ pub(super) async fn make_chatwidget_manual(
         stream_controller: None,
         plan_stream_controller: None,
         clipboard_lease: None,
+        copy_last_response_binding: crate::keymap::RuntimeKeymap::defaults().app.copy,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_agent_markdown: None,
