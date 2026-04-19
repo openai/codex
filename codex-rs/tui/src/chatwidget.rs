@@ -111,6 +111,7 @@ use codex_chatgpt::connectors;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
+use codex_config::types::TuiKeymap;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::FEATURES;
@@ -367,6 +368,7 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::ChatKeymap;
 use crate::keymap::RuntimeKeymap;
+use crate::keymap_setup;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -7820,6 +7822,97 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(params);
     }
 
+    fn open_keymap_picker(&mut self) {
+        match RuntimeKeymap::from_config(&self.config.tui_keymap) {
+            Ok(runtime_keymap) => {
+                let params = keymap_setup::build_keymap_picker_params(
+                    &runtime_keymap,
+                    &self.config.tui_keymap,
+                );
+                self.bottom_pane.show_selection_view(params);
+            }
+            Err(err) => {
+                self.add_error_message(format!("Invalid `tui.keymap` configuration: {err}"));
+            }
+        }
+    }
+
+    pub(crate) fn open_keymap_action_menu(
+        &mut self,
+        context: String,
+        action: String,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params = keymap_setup::build_keymap_action_menu_params(
+            context,
+            action,
+            runtime_keymap,
+            &self.config.tui_keymap,
+        );
+        self.bottom_pane.show_selection_view(params);
+    }
+
+    pub(crate) fn open_keymap_capture(
+        &mut self,
+        context: String,
+        action: String,
+        intent: crate::app_event::KeymapEditIntent,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let view = keymap_setup::build_keymap_capture_view(
+            context,
+            action,
+            intent,
+            runtime_keymap,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_keymap_replace_binding_menu(
+        &mut self,
+        context: String,
+        action: String,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params =
+            keymap_setup::build_keymap_replace_binding_menu_params(context, action, runtime_keymap);
+        self.bottom_pane.show_selection_view(params);
+    }
+
+    pub(crate) fn return_to_keymap_picker(
+        &mut self,
+        context: &str,
+        action: &str,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params = keymap_setup::build_keymap_picker_params_for_selected_action(
+            runtime_keymap,
+            &self.config.tui_keymap,
+            context,
+            action,
+        );
+        let replaced = self.bottom_pane.replace_active_views_with_selection_view(
+            &[
+                keymap_setup::KEYMAP_PICKER_VIEW_ID,
+                keymap_setup::KEYMAP_ACTION_MENU_VIEW_ID,
+                keymap_setup::KEYMAP_REPLACE_BINDING_MENU_VIEW_ID,
+            ],
+            params,
+        );
+        if !replaced {
+            let params = keymap_setup::build_keymap_picker_params_for_selected_action(
+                runtime_keymap,
+                &self.config.tui_keymap,
+                context,
+                action,
+            );
+            self.bottom_pane.show_selection_view(params);
+        }
+        self.request_redraw();
+    }
+
     fn status_line_context_window_size(&self) -> Option<i64> {
         self.token_info
             .as_ref()
@@ -11377,10 +11470,9 @@ impl ChatWidget {
         &self.config
     }
 
-    #[cfg(test)]
     pub(crate) fn apply_keymap_update(
         &mut self,
-        keymap_config: codex_config::types::TuiKeymap,
+        keymap_config: TuiKeymap,
         runtime_keymap: &RuntimeKeymap,
     ) {
         self.config.tui_keymap = keymap_config;
