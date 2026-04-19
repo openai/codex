@@ -863,6 +863,7 @@ impl ChatWidget {
             | SlashCommand::Goal
             | SlashCommand::Collab
             | SlashCommand::Side
+            | SlashCommand::Keymap
             | SlashCommand::Agent
             | SlashCommand::MultiAgents
             | SlashCommand::Approvals
