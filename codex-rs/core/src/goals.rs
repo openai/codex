@@ -206,7 +206,7 @@ impl Session {
         let goal = self
             .account_thread_goal_wall_clock_usage(
                 &state_db,
-                codex_state::ThreadGoalAccountingMode::ActiveOnly,
+                codex_state::ThreadGoalAccountingMode::ActiveStatusOnly,
             )
             .await?
             .or(state_db
@@ -636,7 +636,7 @@ impl Session {
         };
         self.account_thread_goal_wall_clock_usage(
             &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveOnly,
+            codex_state::ThreadGoalAccountingMode::ActiveStatusOnly,
         )
         .await?;
         Ok(())
