@@ -6,7 +6,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_login::BackgroundAgentTaskAuthMode;
 use codex_login::CodexAuth;
+use codex_login::cached_background_agent_task_authorization_header_value;
 use codex_login::default_client::build_reqwest_client;
 
 const REMOTE_SKILLS_API_TIMEOUT: Duration = Duration::from_secs(30);
@@ -112,10 +114,9 @@ pub async fn list_remote_skills(
         .get(&url)
         .timeout(REMOTE_SKILLS_API_TIMEOUT)
         .query(&query_params);
-    let token = auth
-        .get_token()
+    let authorization_header_value = authorization_header_value_for_auth(auth)
         .context("Failed to read auth token for remote skills")?;
-    request = request.bearer_auth(token);
+    request = request.header("authorization", authorization_header_value);
     if let Some(account_id) = auth.get_account_id() {
         request = request.header("chatgpt-account-id", account_id);
     }
@@ -157,10 +158,9 @@ pub async fn export_remote_skill(
     let url = format!("{base_url}/hazelnuts/{skill_id}/export");
     let mut request = client.get(&url).timeout(REMOTE_SKILLS_API_TIMEOUT);
 
-    let token = auth
-        .get_token()
+    let authorization_header_value = authorization_header_value_for_auth(auth)
         .context("Failed to read auth token for remote skills")?;
-    request = request.bearer_auth(token);
+    request = request.header("authorization", authorization_header_value);
     if let Some(account_id) = auth.get_account_id() {
         request = request.header("chatgpt-account-id", account_id);
     }
@@ -199,6 +199,19 @@ pub async fn export_remote_skill(
         id: skill_id.to_string(),
         path: output_dir,
     })
+}
+
+fn authorization_header_value_for_auth(auth: &CodexAuth) -> std::io::Result<String> {
+    if let Ok(Some(authorization_header_value)) =
+        cached_background_agent_task_authorization_header_value(
+            auth,
+            BackgroundAgentTaskAuthMode::Disabled,
+        )
+    {
+        Ok(authorization_header_value)
+    } else {
+        auth.get_token().map(|token| format!("Bearer {token}"))
+    }
 }
 
 fn safe_join(base: &Path, name: &str) -> Result<PathBuf> {

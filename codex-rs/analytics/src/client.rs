@@ -297,7 +297,7 @@ impl AnalyticsEventsClient {
 }
 
 async fn send_track_events(
-    auth_manager: &AuthManager,
+    auth_manager: &Arc<AuthManager>,
     base_url: &str,
     events: Vec<TrackEventRequest>,
 ) {
@@ -310,9 +310,11 @@ async fn send_track_events(
     if !auth.is_chatgpt_auth() {
         return;
     }
-    let access_token = match auth.get_token() {
-        Ok(token) => token,
-        Err(_) => return,
+    let Some(authorization_header_value) = auth_manager
+        .chatgpt_authorization_header_for_auth(&auth)
+        .await
+    else {
+        return;
     };
     let Some(account_id) = auth.get_account_id() else {
         return;
@@ -325,7 +327,7 @@ async fn send_track_events(
     let response = create_client()
         .post(&url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
-        .bearer_auth(&access_token)
+        .header("authorization", authorization_header_value)
         .header("chatgpt-account-id", &account_id)
         .header("Content-Type", "application/json")
         .json(&payload)

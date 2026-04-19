@@ -408,6 +408,7 @@ impl StoredAgentIdentity {
             agent_runtime_id: self.agent_runtime_id.clone(),
             agent_private_key: self.private_key_pkcs8_base64.clone(),
             registered_at: self.registered_at.clone(),
+            background_task_id: None,
         }
     }
 
@@ -668,6 +669,7 @@ mod tests {
             agent_runtime_id: "agent_invalid".to_string(),
             agent_private_key: "not-valid-base64".to_string(),
             registered_at: "2026-01-01T00:00:00Z".to_string(),
+            background_task_id: None,
         })
         .expect("seed invalid identity");
 
@@ -707,6 +709,7 @@ mod tests {
             agent_runtime_id: "agent_old".to_string(),
             agent_private_key: stale_key.private_key_pkcs8_base64,
             registered_at: "2026-01-01T00:00:00Z".to_string(),
+            background_task_id: None,
         })
         .expect("seed stale identity");
 
