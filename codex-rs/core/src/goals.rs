@@ -492,7 +492,7 @@ impl Session {
             .mark_turn_started(token_usage)
             .await;
 
-        if !self.enabled(Feature::GoalMode) {
+        if !self.enabled(Feature::Goals) {
             return;
         }
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
@@ -553,7 +553,7 @@ impl Session {
         turn_context: &TurnContext,
         boundary: GoalAccountingBoundary,
     ) -> anyhow::Result<()> {
-        if !self.enabled(Feature::GoalMode) {
+        if !self.enabled(Feature::Goals) {
             return Ok(());
         }
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
@@ -845,7 +845,7 @@ impl Session {
     }
 
     async fn pause_active_thread_goal_with_event_id(&self, event_id: String) -> anyhow::Result<()> {
-        if !self.enabled(Feature::GoalMode) {
+        if !self.enabled(Feature::Goals) {
             return Ok(());
         }
 
@@ -894,7 +894,7 @@ impl Session {
     pub(crate) async fn goal_continuation_items_if_active(
         self: &Arc<Self>,
     ) -> Option<Vec<ResponseInputItem>> {
-        if !self.enabled(Feature::GoalMode) {
+        if !self.enabled(Feature::Goals) {
             return None;
         }
         if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {

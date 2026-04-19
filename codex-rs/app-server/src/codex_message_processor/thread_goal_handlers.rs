@@ -200,7 +200,7 @@ impl CodexMessageProcessor {
         self.emit_thread_goal_updated_ordered(thread_id, goal, thread_state.listener_command_tx())
             .await;
         drop(thread_state);
-        if self.config.features.enabled(Feature::GoalMode)
+        if self.config.features.enabled(Feature::Goals)
             && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
         {
             let goal_was_active = previous_status == Some(codex_state::ThreadGoalStatus::Active);

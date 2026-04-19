@@ -3948,7 +3948,7 @@ async fn make_goal_session_and_context_with_rx() -> (
         make_session_and_context_with_dynamic_tools_config_and_rx(Vec::new(), |config| {
             config
                 .features
-                .enable(Feature::GoalMode)
+                .enable(Feature::Goals)
                 .expect("goal mode should be enableable in tests");
         })
         .await;
@@ -6383,7 +6383,7 @@ async fn active_goal_continuation_runs_to_completion_after_turn() -> anyhow::Res
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::GoalMode)
+            .enable(Feature::Goals)
             .expect("goal mode should be enableable in tests");
     });
     let test = builder.build(&server).await?;
@@ -7417,7 +7417,7 @@ async fn completed_goal_accounts_current_turn_uncached_tokens_before_tool_respon
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::GoalMode)
+            .enable(Feature::Goals)
             .expect("goal mode should be enableable in tests");
     });
     let test = builder.build(&server).await?;
@@ -7511,7 +7511,7 @@ async fn rejected_pause_goal_accounts_current_turn_without_pausing_goal() -> any
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::GoalMode)
+            .enable(Feature::Goals)
             .expect("goal mode should be enableable in tests");
     });
     let test = builder.build(&server).await?;
