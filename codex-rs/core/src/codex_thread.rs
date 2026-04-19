@@ -20,6 +20,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -88,28 +89,55 @@ impl CodexThread {
             .await;
     }
 
-    pub async fn clear_queued_goal_continuations(&self) {
-        self.codex
-            .session
-            .clear_queued_goal_continuations_for_next_turn()
-            .await;
+    pub async fn apply_goal_set_runtime_effects(
+        &self,
+        goal_status: ThreadGoalStatus,
+        goal_was_active: bool,
+        should_continue_active_goal: bool,
+    ) {
+        match goal_status {
+            ThreadGoalStatus::Active if should_continue_active_goal => {
+                self.codex
+                    .session
+                    .clear_queued_goal_continuations_for_next_turn()
+                    .await;
+                self.codex
+                    .session
+                    .maybe_start_turn_for_active_goal_continuation()
+                    .await;
+            }
+            ThreadGoalStatus::Active => {}
+            ThreadGoalStatus::BudgetLimited if goal_was_active => {
+                self.codex
+                    .session
+                    .clear_queued_goal_continuations_for_next_turn()
+                    .await;
+                self.codex
+                    .session
+                    .abort_all_tasks_without_restart(TurnAbortReason::BudgetLimited)
+                    .await;
+            }
+            ThreadGoalStatus::Paused | ThreadGoalStatus::Complete if goal_was_active => {
+                self.codex
+                    .session
+                    .clear_queued_goal_continuations_for_next_turn()
+                    .await;
+                self.codex
+                    .session
+                    .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+                    .await;
+            }
+            ThreadGoalStatus::BudgetLimited
+            | ThreadGoalStatus::Paused
+            | ThreadGoalStatus::Complete => {}
+        }
     }
 
-    pub async fn clear_cached_thread_goal_after_delete(&self) {
+    pub async fn apply_goal_clear_runtime_effects(&self) {
         self.codex
             .session
             .clear_cached_thread_goal_after_delete()
             .await;
-    }
-
-    pub async fn abort_for_goal_budget_limited(&self) {
-        self.codex
-            .session
-            .abort_all_tasks_without_restart(TurnAbortReason::BudgetLimited)
-            .await;
-    }
-
-    pub async fn abort_for_goal_stopped(&self) {
         self.codex
             .session
             .abort_all_tasks_without_restart(TurnAbortReason::Replaced)

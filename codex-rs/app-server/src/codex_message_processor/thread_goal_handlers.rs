@@ -207,29 +207,16 @@ impl CodexMessageProcessor {
             && let Ok(thread) = self.thread_manager.get_thread(thread_id).await
         {
             let goal_was_active = previous_status == Some(codex_state::ThreadGoalStatus::Active);
-            match goal_status {
-                ThreadGoalStatus::Active
-                    if replacing_goal
-                        || previous_status.is_some_and(|status| {
-                            status != codex_state::ThreadGoalStatus::Active
-                        }) =>
-                {
-                    thread.clear_queued_goal_continuations().await;
-                    thread.continue_active_goal_if_idle().await;
-                }
-                ThreadGoalStatus::Active => {}
-                ThreadGoalStatus::BudgetLimited if goal_was_active => {
-                    thread.clear_queued_goal_continuations().await;
-                    thread.abort_for_goal_budget_limited().await;
-                }
-                ThreadGoalStatus::Paused | ThreadGoalStatus::Complete if goal_was_active => {
-                    thread.clear_queued_goal_continuations().await;
-                    thread.abort_for_goal_stopped().await;
-                }
-                ThreadGoalStatus::BudgetLimited
-                | ThreadGoalStatus::Paused
-                | ThreadGoalStatus::Complete => {}
-            }
+            let should_continue_active_goal = replacing_goal
+                || previous_status
+                    .is_some_and(|status| status != codex_state::ThreadGoalStatus::Active);
+            thread
+                .apply_goal_set_runtime_effects(
+                    goal_status.to_core(),
+                    goal_was_active,
+                    should_continue_active_goal,
+                )
+                .await;
         }
     }
 
@@ -370,8 +357,7 @@ impl CodexMessageProcessor {
         };
 
         if cleared && let Some(thread) = running_thread.as_ref() {
-            thread.clear_cached_thread_goal_after_delete().await;
-            thread.abort_for_goal_stopped().await;
+            thread.apply_goal_clear_runtime_effects().await;
         }
 
         self.outgoing

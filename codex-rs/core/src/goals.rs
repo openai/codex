@@ -343,10 +343,7 @@ impl Session {
                     .mark_active_goal(goal_created_at_ms)
                     .await;
             } else {
-                self.thread_goal_wall_clock_accounting
-                    .clear_active_goal()
-                    .await;
-                turn_context.goal_accounting.clear_active_goal().await;
+                self.clear_active_goal_accounting(turn_context).await;
             }
         }
         if goal.status == ThreadGoalStatus::Complete {
@@ -395,6 +392,13 @@ impl Session {
         }
     }
 
+    async fn clear_active_goal_accounting(&self, turn_context: &TurnContext) {
+        self.thread_goal_wall_clock_accounting
+            .clear_active_goal()
+            .await;
+        turn_context.goal_accounting.clear_active_goal().await;
+    }
+
     pub(crate) async fn mark_thread_goal_turn_started(
         &self,
         turn_context: &TurnContext,
@@ -409,10 +413,7 @@ impl Session {
             return;
         }
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
-            self.thread_goal_wall_clock_accounting
-                .clear_active_goal()
-                .await;
-            turn_context.goal_accounting.clear_active_goal().await;
+            self.clear_active_goal_accounting(turn_context).await;
             return;
         }
         let state_db = match self.state_db_for_thread_goals().await {
@@ -514,10 +515,7 @@ impl Session {
                         | codex_state::ThreadGoalStatus::BudgetLimited
                         | codex_state::ThreadGoalStatus::Complete
                 ) {
-                    self.thread_goal_wall_clock_accounting
-                        .clear_active_goal()
-                        .await;
-                    turn_context.goal_accounting.clear_active_goal().await;
+                    self.clear_active_goal_accounting(turn_context).await;
                     turn_context.goal_accounting.clear_completed_this_turn();
                     turn_context.goal_accounting.clear_stopped_this_turn();
                 }
@@ -590,10 +588,7 @@ impl Session {
                     .mark_accounted(time_delta_seconds)
                     .await;
                 if clear_active_goal {
-                    self.thread_goal_wall_clock_accounting
-                        .clear_active_goal()
-                        .await;
-                    turn_context.goal_accounting.clear_active_goal().await;
+                    self.clear_active_goal_accounting(turn_context).await;
                 }
                 goal
             }
@@ -750,10 +745,7 @@ impl Session {
                 .goal_accounting
                 .reset_baseline(current_token_usage)
                 .await;
-            self.thread_goal_wall_clock_accounting
-                .clear_active_goal()
-                .await;
-            turn_context.goal_accounting.clear_active_goal().await;
+            self.clear_active_goal_accounting(turn_context).await;
             return Ok(true);
         }
 
