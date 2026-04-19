@@ -23,7 +23,12 @@ use serde::Serialize;
 use serde::de::Error as SerdeError;
 use std::collections::BTreeMap;
 
-/// Versioned keymap defaults.
+/// Versioned keymap defaults selected by `[tui.keymap].preset`.
+///
+/// Presets are compatibility contracts rather than user profiles. Existing
+/// preset variants should remain stable once shipped; new default behavior
+/// should be introduced by adding a new preset variant and then deciding
+/// whether `latest` should point at it.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TuiKeymapPreset {
@@ -36,10 +41,14 @@ pub enum TuiKeymapPreset {
     V1,
 }
 
-/// Normalized string representation of a keybinding (for example `ctrl-a`).
+/// Normalized string representation of a single key event (for example `ctrl-a`).
 ///
 /// The parser accepts a small alias set (for example `escape` -> `esc`,
 /// `pageup` -> `page-up`) and stores the canonical form.
+///
+/// This deliberately represents one terminal key event, not a sequence of
+/// events. A value like `ctrl-x ctrl-s` is not a chord in this schema; adding
+/// multi-step chords would require a separate runtime state machine.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(transparent)]
 pub struct KeybindingSpec(#[schemars(with = "String")] pub String);
@@ -69,7 +78,9 @@ impl<'de> Deserialize<'de> for KeybindingSpec {
 /// 1. A single key spec string (`"ctrl-a"`).
 /// 2. A list of key spec strings (`["ctrl-a", "alt-a"]`).
 ///
-/// An empty list explicitly unbinds the action in that scope.
+/// An empty list explicitly unbinds the action in that scope. Because an
+/// explicit empty list is still a configured value, runtime resolution must not
+/// fall through to global or preset defaults for that action.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(untagged)]
 pub enum KeybindingsSpec {
@@ -265,6 +276,11 @@ pub struct TuiOnboardingKeymap {
 /// Each context contains action-level overrides. Missing actions inherit from
 /// runtime preset defaults, and selected chat/composer actions can fall back
 /// through `global` during runtime resolution.
+///
+/// This type is intentionally a persistence shape, not the structure used by
+/// input handlers. Runtime consumers should resolve it into
+/// `RuntimeKeymap` first so precedence, empty-list unbinding, and duplicate-key
+/// validation are applied consistently.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
@@ -294,6 +310,11 @@ pub struct TuiKeymap {
 /// The output always orders modifiers as `ctrl-alt-shift-<key>` when present
 /// and applies accepted aliases (`escape` -> `esc`, `pageup` -> `page-up`).
 /// Inputs that cannot be represented unambiguously are rejected.
+///
+/// Normalization happens at config-deserialization time so downstream runtime
+/// code only has to parse one spelling for each key. Callers should not bypass
+/// this function when accepting user-authored key specs, or otherwise equivalent
+/// keys can fail to compare equal in tests, UI hints, and duplicate detection.
 fn normalize_keybinding_spec(raw: &str) -> Result<String, String> {
     let lower = raw.trim().to_ascii_lowercase();
     if lower.is_empty() {

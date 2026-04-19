@@ -124,6 +124,12 @@ impl TextArea {
         }
     }
 
+    /// Replace the editor keymap used by subsequent text-editing input.
+    ///
+    /// This method intentionally swaps only the keymap cache. It does not
+    /// reinterpret pending input, move the cursor, or mutate the kill buffer, so
+    /// callers can safely apply a live config update while preserving the
+    /// current draft exactly as typed.
     pub fn set_keymap_bindings(&mut self, keymap: &EditorKeymap) {
         self.editor_keymap = keymap.clone();
     }

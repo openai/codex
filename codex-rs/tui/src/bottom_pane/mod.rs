@@ -302,6 +302,13 @@ impl BottomPane {
         self.composer.record_pending_slash_command_history();
     }
 
+    /// Replace all bottom-pane keymap caches from one resolved runtime keymap.
+    ///
+    /// The bottom pane owns several input surfaces: composer, overlays, and
+    /// selection views. Applying one snapshot through this method keeps those
+    /// surfaces synchronized after config reloads or interactive remaps. Callers
+    /// should not update the composer directly unless they deliberately want
+    /// overlays and selection views to continue using the previous bindings.
     pub fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
         self.keymap = keymap.clone();
         self.composer.set_keymap_bindings(keymap);
