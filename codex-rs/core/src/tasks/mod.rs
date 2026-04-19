@@ -505,6 +505,7 @@ impl Session {
             })
         };
 
+        let mut deferred_aborts = Vec::new();
         if let Some((tasks, turn_state)) = active_turn {
             let mut current_task = None;
             for task in tasks {
@@ -515,13 +516,18 @@ impl Session {
                 }
             }
             if let Some(task) = current_task {
-                self.handle_current_task_abort(task, reason.clone()).await;
+                let handle = self.handle_current_task_abort(task, reason.clone()).await;
+                deferred_aborts.push(handle);
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             let mut active = self.active_turn.lock().await;
             turn_state.lock().await.clear_pending();
             *active = None;
+        }
+
+        for handle in deferred_aborts {
+            handle.abort();
         }
 
         if reason == TurnAbortReason::Interrupted
@@ -770,7 +776,7 @@ impl Session {
         self: &Arc<Self>,
         task: RunningTask,
         reason: TurnAbortReason,
-    ) {
+    ) -> Arc<RunningTaskHandle> {
         let sub_id = task.turn_context.sub_id.clone();
 
         trace!(task_kind = ?task.kind, sub_id, "aborting current running task");
@@ -796,7 +802,7 @@ impl Session {
             duration_ms,
         });
         self.send_event(task.turn_context.as_ref(), event).await;
-        task.handle.abort();
+        task.handle
     }
 }
 
