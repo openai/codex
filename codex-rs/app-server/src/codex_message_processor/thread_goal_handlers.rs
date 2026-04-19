@@ -211,6 +211,7 @@ impl CodexMessageProcessor {
                 .apply_goal_set_runtime_effects(
                     goal_status.to_core(),
                     goal_was_active,
+                    replacing_goal,
                     should_continue_active_goal,
                 )
                 .await;

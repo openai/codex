@@ -93,6 +93,7 @@ impl CodexThread {
         &self,
         goal_status: ThreadGoalStatus,
         goal_was_active: bool,
+        goal_was_replaced: bool,
         should_continue_active_goal: bool,
     ) {
         match goal_status {
@@ -101,6 +102,12 @@ impl CodexThread {
                     .session
                     .clear_queued_goal_continuations_for_next_turn()
                     .await;
+                if goal_was_active && goal_was_replaced {
+                    self.codex
+                        .session
+                        .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+                        .await;
+                }
                 self.codex
                     .session
                     .maybe_start_turn_for_active_goal_continuation()
