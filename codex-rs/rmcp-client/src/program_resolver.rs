@@ -157,7 +157,7 @@ mod tests {
             #[cfg(windows)]
             extra_env.insert(OsString::from("PATHEXT"), Self::ensure_cmd_extension());
 
-            let mcp_env = create_env_for_mcp_server(Some(extra_env), &[]);
+            let mcp_env = create_env_for_mcp_server(Some(extra_env), &[])?;
 
             Ok(Self {
                 _temp_dir: temp_dir,
