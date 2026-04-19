@@ -24,6 +24,7 @@ use super::has_custom_binding;
 
 const KEYMAP_PICKER_VIEW_ID: &str = "keymap-picker";
 pub(super) const KEYMAP_ALL_TAB_ID: &str = "all-shortcuts";
+pub(super) const KEYMAP_COMMON_TAB_ID: &str = "common-shortcuts";
 pub(super) const KEYMAP_CUSTOM_TAB_ID: &str = "custom-shortcuts";
 pub(super) const KEYMAP_UNBOUND_TAB_ID: &str = "unbound-shortcuts";
 const KEYMAP_CONTEXT_LABEL_WIDTH: usize = 12;
@@ -52,6 +53,28 @@ struct KeymapContextTab {
     description: &'static str,
     contexts: &'static [&'static str],
 }
+
+const KEYMAP_COMMON_ACTIONS: &[(&str, &str)] = &[
+    ("composer", "submit"),
+    ("editor", "insert_newline"),
+    ("composer", "queue"),
+    ("global", "open_external_editor"),
+    ("global", "copy"),
+    ("global", "toggle_vim_mode"),
+    ("editor", "delete_backward_word"),
+    ("editor", "delete_forward_word"),
+    ("editor", "move_word_left"),
+    ("editor", "move_word_right"),
+    ("global", "open_transcript"),
+    ("pager", "close"),
+    ("pager", "page_up"),
+    ("pager", "page_down"),
+    ("approval", "open_fullscreen"),
+    ("approval", "approve"),
+    ("approval", "approve_for_session"),
+    ("approval", "decline"),
+    ("approval", "cancel"),
+];
 
 const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
     KeymapContextTab {
@@ -90,12 +113,6 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
         description: "Approval prompt shortcuts.",
         contexts: &["approval"],
     },
-    KeymapContextTab {
-        id: "onboarding-shortcuts",
-        label: "Onboarding",
-        description: "Onboarding flow shortcuts.",
-        contexts: &["onboarding"],
-    },
 ];
 
 pub(crate) fn build_keymap_picker_params(
@@ -123,6 +140,22 @@ pub(crate) fn build_keymap_picker_params(
             rows.iter(),
             "No shortcuts available",
             "No configurable shortcuts are available.",
+        ),
+    });
+
+    let common_rows = keymap_common_rows(&rows);
+    let common_count = common_rows.len();
+    tabs.push(SelectionTab {
+        id: KEYMAP_COMMON_TAB_ID.to_string(),
+        label: "Common".to_string(),
+        header: keymap_header(
+            "Frequently customized shortcuts.".to_string(),
+            action_count_line(common_count),
+        ),
+        items: keymap_selection_items(
+            common_rows,
+            "No common shortcuts",
+            "No common shortcut actions are available.",
         ),
     });
 
@@ -219,6 +252,16 @@ fn build_keymap_rows(
                 )
                 .unwrap_or(false),
             }
+        })
+        .collect()
+}
+
+fn keymap_common_rows(rows: &[KeymapActionRow]) -> Vec<&KeymapActionRow> {
+    KEYMAP_COMMON_ACTIONS
+        .iter()
+        .filter_map(|(context, action)| {
+            rows.iter()
+                .find(|row| row.context == *context && row.action == *action)
         })
         .collect()
 }

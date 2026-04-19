@@ -717,6 +717,7 @@ fn key_parts_to_config_key_spec(
 #[cfg(test)]
 mod tests {
     use super::picker::KEYMAP_ALL_TAB_ID;
+    use super::picker::KEYMAP_COMMON_TAB_ID;
     use super::picker::KEYMAP_CUSTOM_TAB_ID;
     use super::picker::KEYMAP_UNBOUND_TAB_ID;
     use super::*;
@@ -846,6 +847,65 @@ mod tests {
         }));
         assert!(KEYMAP_ACTIONS.iter().all(|descriptor| {
             bindings_for_action(&runtime, descriptor.context, descriptor.action).is_some()
+        }));
+    }
+
+    #[test]
+    fn picker_common_tab_lists_curated_actions() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let common_tab = selection_tab(&params, KEYMAP_COMMON_TAB_ID);
+        let actions = common_tab
+            .items
+            .iter()
+            .map(|item| {
+                item.search_value
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actions,
+            vec![
+                "Composer.submit",
+                "Editor.insert_newline",
+                "Composer.queue",
+                "Global.open_external_editor",
+                "Global.copy",
+                "Global.toggle_vim_mode",
+                "Editor.delete_backward_word",
+                "Editor.delete_forward_word",
+                "Editor.move_word_left",
+                "Editor.move_word_right",
+                "Global.open_transcript",
+                "Pager.close",
+                "Pager.page_up",
+                "Pager.page_down",
+                "Approval.open_fullscreen",
+                "Approval.approve",
+                "Approval.approve_for_session",
+                "Approval.decline",
+                "Approval.cancel",
+            ]
+        );
+    }
+
+    #[test]
+    fn picker_keeps_onboarding_actions_searchable_without_dedicated_tab() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
+
+        assert!(params.tabs.iter().all(|tab| tab.label != "Onboarding"));
+        assert!(all_tab.items.iter().any(|item| {
+            item.search_value
+                .as_deref()
+                .is_some_and(|search_value| search_value.contains("Onboarding quit"))
         }));
     }
 
