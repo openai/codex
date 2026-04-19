@@ -178,7 +178,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         models_manager,
         parent_session,
         parent_ctx,
-        None,
+        /*parent_trace*/ None,
         child_cancel.clone(),
         subagent_source,
         initial_history,

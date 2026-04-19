@@ -588,9 +588,10 @@ async fn guardian_review_span_uses_parent_turn_trace_context() {
     let parent_trace = test_trace_context("00000000000000000000000000000011", "0000000000000022");
     turn.trace_id = Some("00000000000000000000000000000011".to_string());
     turn.trace_context = Some(parent_trace.clone());
-    let trace = crate::guardian::guardian_review_trace_for_test(Arc::new(turn), None)
-        .await
-        .expect("guardian review trace");
+    let trace =
+        crate::guardian::guardian_review_trace_for_test(Arc::new(turn), /*parent_trace*/ None)
+            .await
+            .expect("guardian review trace");
     let actual =
         codex_otel::context_from_w3c_trace_context(&trace).expect("actual guardian review trace");
     let expected =
