@@ -2118,7 +2118,16 @@ async fn responses_requests(server: &MockServer) -> Result<Vec<Value>> {
 }
 
 fn response_request_contains_text(request: &Value, text: &str) -> bool {
-    request.to_string().contains(text)
+    match request {
+        Value::String(value) => value.contains(text),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| response_request_contains_text(value, text)),
+        Value::Object(map) => map
+            .values()
+            .any(|value| response_request_contains_text(value, text)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }
 
 fn realtime_tool_ok_command() -> Vec<String> {
