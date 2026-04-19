@@ -1096,11 +1096,9 @@ mod tests {
 
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
-            Some(RealtimeEvent::OutputTranscriptDone(
-                RealtimeTranscriptDone {
-                    text: "hello world".to_string(),
-                }
-            ))
+            Some(RealtimeEvent::ConversationItemDone {
+                item_id: "item_output_1".to_string(),
+            })
         );
     }
 
@@ -1219,11 +1217,9 @@ mod tests {
 
         assert_eq!(
             parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
-            Some(RealtimeEvent::OutputTranscriptDone(
-                RealtimeTranscriptDone {
-                    text: "hello world".to_string(),
-                }
-            ))
+            Some(RealtimeEvent::ConversationItemDone {
+                item_id: "item_output_1".to_string(),
+            })
         );
     }
 
