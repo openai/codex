@@ -1222,6 +1222,7 @@ mod tests {
             "IdentityFile ~/.keys/id_ed25519\nInclude ~/.included/config\n",
         )
         .expect("write ssh config");
+        fs::write(key_dir.join("id_ed25519"), "").expect("write key");
         fs::write(include_dir.join("config"), "User git\n").expect("write included config");
 
         let dependency_paths = super::ssh_config_dependency_paths(&user_profile);
