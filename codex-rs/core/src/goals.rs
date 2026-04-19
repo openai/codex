@@ -13,6 +13,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
+use codex_rollout::state_db::reconcile_rollout;
 
 pub(crate) struct SetGoalRequest {
     pub(crate) objective: Option<String>,
@@ -110,13 +111,27 @@ impl Session {
             return Ok(Some(state_db));
         }
 
-        codex_state::StateRuntime::init(
+        let state_db = codex_state::StateRuntime::init(
             config.sqlite_home.clone(),
             config.model_provider_id.clone(),
         )
         .await
-        .map(Some)
-        .context("failed to initialize sqlite state db for thread goals")
+        .context("failed to initialize sqlite state db for thread goals")?;
+
+        if let Some(rollout_path) = self.current_rollout_path().await {
+            reconcile_rollout(
+                Some(&state_db),
+                rollout_path.as_path(),
+                config.model_provider_id.as_str(),
+                /*builder*/ None,
+                &[],
+                /*archived_only*/ None,
+                /*new_thread_memory_mode*/ None,
+            )
+            .await;
+        }
+
+        Ok(Some(state_db))
     }
 
     async fn require_state_db_for_thread_goals(&self) -> anyhow::Result<StateDbHandle> {
