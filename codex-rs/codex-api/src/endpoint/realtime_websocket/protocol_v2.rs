@@ -38,6 +38,13 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
         "response.output_text.delta" | "response.output_audio_transcript.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::OutputTranscriptDelta)
         }
+        "response.output_text.done" => {
+            parse_transcript_done_event(&parsed, "text").map(RealtimeEvent::OutputTranscriptDone)
+        }
+        "response.output_audio_transcript.done" => {
+            parse_transcript_done_event(&parsed, "transcript")
+                .map(RealtimeEvent::OutputTranscriptDone)
+        }
         "input_audio_buffer.speech_started" => Some(RealtimeEvent::InputAudioSpeechStarted(
             RealtimeInputAudioSpeechStarted {
                 item_id: parsed
@@ -46,7 +53,7 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
                     .map(str::to_string),
             },
         )),
-        "conversation.item.added" => parsed
+        "conversation.item.added" | "conversation.item.created" => parsed
             .get("item")
             .cloned()
             .map(RealtimeEvent::ConversationItemAdded),
