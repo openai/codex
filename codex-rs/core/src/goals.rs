@@ -381,6 +381,10 @@ impl Session {
     }
 
     pub(crate) async fn clear_stale_goal_continuations_for_next_turn(&self) {
+        if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
+            self.clear_queued_goal_continuations_for_next_turn().await;
+            return;
+        }
         let active_goal = match self.get_thread_goal().await {
             Ok(Some(goal)) => goal.status == ThreadGoalStatus::Active,
             Ok(None) => false,
