@@ -1,8 +1,8 @@
 //! Built-in model tool handlers for persisted thread goals.
 //!
-//! The public tool contract mirrors the app-server `thread/goal/set` overload:
-//! providing an objective replaces the goal and resets accounting, while
-//! omitting the objective updates the existing goal and preserves usage.
+//! The public tool contract intentionally splits goal creation from updates:
+//! `set_goal` starts an active objective, while `update_goal` changes status
+//! on the existing goal and preserves usage accounting.
 
 use crate::function_tool::FunctionCallError;
 use crate::goals::SetGoalRequest;
@@ -20,7 +20,6 @@ use codex_tools::GET_GOAL_TOOL_NAME;
 use codex_tools::SET_GOAL_TOOL_NAME;
 use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use serde::Deserialize;
-use serde::Deserializer;
 use serde::Serialize;
 use std::fmt::Write as _;
 
@@ -29,10 +28,8 @@ pub struct GoalHandler;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct SetGoalArgs {
-    objective: Option<String>,
-    status: Option<ToolGoalStatus>,
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    token_budget: Option<Option<i64>>,
+    objective: String,
+    token_budget: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,9 +140,9 @@ async fn handle_set_goal(
         .set_thread_goal(
             turn_context,
             SetGoalRequest {
-                objective: args.objective,
-                status: args.status.map(Into::into),
-                token_budget: args.token_budget,
+                objective: Some(args.objective),
+                status: Some(ThreadGoalStatus::Active),
+                token_budget: args.token_budget.map(Some),
             },
         )
         .await
@@ -203,14 +200,6 @@ fn completion_budget_report(goal: &ThreadGoal) -> Option<String> {
             parts.join("; ")
         ))
     }
-}
-
-fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[cfg(test)]
