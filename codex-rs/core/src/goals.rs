@@ -21,6 +21,11 @@ pub(crate) struct SetGoalRequest {
     pub(crate) token_budget: Option<Option<i64>>,
 }
 
+pub(crate) struct CreateGoalRequest {
+    pub(crate) objective: String,
+    pub(crate) token_budget: Option<i64>,
+}
+
 impl Session {
     pub(crate) async fn get_thread_goal(&self) -> anyhow::Result<Option<ThreadGoal>> {
         if !self.enabled(Feature::GoalMode) {
@@ -81,6 +86,54 @@ impl Session {
                     )
                 })?
         };
+
+        let goal = protocol_goal_from_state(goal);
+        self.send_event(
+            turn_context,
+            EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                thread_id: self.conversation_id,
+                turn_id: Some(turn_context.sub_id.clone()),
+                goal: goal.clone(),
+            }),
+        )
+        .await;
+        Ok(goal)
+    }
+
+    pub(crate) async fn create_thread_goal(
+        &self,
+        turn_context: &TurnContext,
+        request: CreateGoalRequest,
+    ) -> anyhow::Result<ThreadGoal> {
+        if !self.enabled(Feature::GoalMode) {
+            anyhow::bail!("goals feature is disabled");
+        }
+
+        let CreateGoalRequest {
+            objective,
+            token_budget,
+        } = request;
+        validate_goal_budget(token_budget)?;
+        let objective = objective.trim();
+        if objective.is_empty() {
+            anyhow::bail!("goal objective must not be empty");
+        }
+
+        let state_db = self.require_state_db_for_thread_goals().await?;
+        let goal = state_db
+            .insert_thread_goal(
+                self.conversation_id,
+                objective,
+                codex_state::ThreadGoalStatus::Active,
+                token_budget,
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "cannot set a new goal because thread {} already has a goal",
+                    self.conversation_id
+                )
+            })?;
 
         let goal = protocol_goal_from_state(goal);
         self.send_event(

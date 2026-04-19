@@ -88,6 +88,45 @@ ON CONFLICT(thread_id) DO UPDATE SET
             .ok_or_else(|| anyhow::anyhow!("thread goal disappeared after replacement"))
     }
 
+    pub async fn insert_thread_goal(
+        &self,
+        thread_id: ThreadId,
+        objective: &str,
+        status: crate::ThreadGoalStatus,
+        token_budget: Option<i64>,
+    ) -> anyhow::Result<Option<crate::ThreadGoal>> {
+        let now_ms = datetime_to_epoch_millis(Utc::now());
+        let result = sqlx::query(
+            r#"
+INSERT INTO thread_goals (
+    thread_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
+) VALUES (?, ?, ?, ?, 0, 0, ?, ?)
+ON CONFLICT(thread_id) DO NOTHING
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .bind(objective)
+        .bind(status.as_str())
+        .bind(token_budget)
+        .bind(now_ms)
+        .bind(now_ms)
+        .execute(self.pool.as_ref())
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        self.get_thread_goal(thread_id).await
+    }
+
     pub async fn update_thread_goal(
         &self,
         thread_id: ThreadId,
@@ -337,6 +376,40 @@ mod tests {
         assert!(runtime.delete_thread_goal(thread_id).await.unwrap());
         assert_eq!(None, runtime.get_thread_goal(thread_id).await.unwrap());
         assert!(!runtime.delete_thread_goal(thread_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn insert_thread_goal_does_not_replace_existing_goal() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+
+        let inserted = runtime
+            .insert_thread_goal(
+                thread_id,
+                "optimize the benchmark",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(100_000),
+            )
+            .await
+            .expect("goal insertion should succeed")
+            .expect("goal should be inserted");
+
+        let duplicate = runtime
+            .insert_thread_goal(
+                thread_id,
+                "replace the benchmark",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ Some(200_000),
+            )
+            .await
+            .expect("duplicate insert should not fail");
+
+        assert_eq!(None, duplicate);
+        assert_eq!(
+            Some(inserted),
+            runtime.get_thread_goal(thread_id).await.unwrap()
+        );
     }
 
     #[tokio::test]
