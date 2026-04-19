@@ -10100,6 +10100,11 @@ impl ChatWidget {
     }
 
     fn on_thread_goal_updated(&mut self, goal: AppThreadGoal, turn_id: Option<String>) {
+        if let Some(active_thread_id) = self.thread_id
+            && active_thread_id.to_string() != goal.thread_id
+        {
+            return;
+        }
         if !self.config.features.enabled(Feature::GoalMode) {
             self.current_goal_status_indicator = None;
             self.current_goal_status = None;

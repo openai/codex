@@ -1354,6 +1354,35 @@ async fn session_configured_clears_goal_status_footer() {
     assert!(chat.budget_limited_turn_ids.is_empty());
 }
 
+#[tokio::test]
+async fn thread_goal_update_for_other_thread_is_ignored() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::GoalMode, /*enabled*/ true);
+    chat.thread_id = Some(ThreadId::new());
+    let other_thread_id = ThreadId::new().to_string();
+    let mut goal = test_thread_goal(
+        codex_app_server_protocol::ThreadGoalStatus::BudgetLimited,
+        /*token_budget*/ Some(50_000),
+        /*tokens_used*/ 50_000,
+    );
+    goal.thread_id = other_thread_id.clone();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadGoalUpdated(
+            codex_app_server_protocol::ThreadGoalUpdatedNotification {
+                thread_id: other_thread_id,
+                turn_id: Some("turn-other".to_string()),
+                goal,
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.current_goal_status_indicator, None);
+    assert!(chat.current_goal_status.is_none());
+    assert!(chat.budget_limited_turn_ids.is_empty());
+}
+
 #[test]
 fn goal_status_indicator_formats_statuses_and_budgets() {
     assert_eq!(
