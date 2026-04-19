@@ -5790,6 +5790,59 @@ async fn interrupt_clears_only_queued_goal_continuations_for_next_turn() -> anyh
 }
 
 #[tokio::test]
+async fn plan_mode_clears_queued_goal_continuations_even_with_active_goal() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    let queued_goal_continuation = ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "Continue working toward the active thread goal.".to_string(),
+        }],
+    };
+    let queued_user_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued user input".to_string(),
+        }],
+    };
+
+    sess.queue_response_items_for_next_turn(vec![
+        queued_goal_continuation,
+        queued_user_item.clone(),
+    ])
+    .await;
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.collaboration_mode.mode = ModeKind::Plan;
+    }
+
+    sess.clear_stale_goal_continuations_for_next_turn().await;
+
+    assert_eq!(
+        vec![queued_user_item],
+        sess.take_queued_response_items_for_next_turn().await
+    );
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should remain persisted in plan mode");
+    assert_eq!(
+        codex_protocol::protocol::ThreadGoalStatus::Active,
+        goal.status
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn interrupt_without_active_turn_preserves_queued_response_items_without_active_goal() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let queued_item = ResponseInputItem::Message {
