@@ -1,10 +1,8 @@
-//! Explicit get/set support for persisted thread goals.
+//! Core support for persisted thread goals.
 //!
-//! The model-facing goal tools need a small bridge from core sessions to the
-//! state-db goal table. Automatic continuation and token accounting are layered
-//! on top in a later change; this module only validates requests, persists
-//! user-controlled fields, converts between state and protocol shapes, and
-//! emits goal-update events.
+//! This module bridges core sessions and the state-db goal table. It validates
+//! goal mutations, converts between state and protocol shapes, emits goal-update
+//! events, and owns helper hooks used by goal lifecycle behavior.
 
 use crate::StateDbHandle;
 use crate::session::session::Session;
