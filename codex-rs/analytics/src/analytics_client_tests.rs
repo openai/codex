@@ -46,6 +46,7 @@ use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
 use crate::facts::TurnTokenUsageFact;
+use crate::observation_reducer::AnalyticsObservationReducer;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
 use crate::reducer::skill_id_for_local_skill;
@@ -1551,6 +1552,51 @@ async fn reducer_ingests_app_and_plugin_facts() {
     assert_eq!(payload[0]["event_type"], "codex_app_mentioned");
     assert_eq!(payload[1]["event_type"], "codex_app_used");
     assert_eq!(payload[2]["event_type"], "codex_plugin_used");
+}
+
+#[tokio::test]
+async fn app_used_observation_matches_legacy_analytics_fact() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(AppUsedInput {
+                tracking: TrackEventsContext {
+                    model_slug: "gpt-5".to_string(),
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                },
+                app: AppInvocation {
+                    connector_id: Some("drive".to_string()),
+                    app_name: Some("Drive".to_string()),
+                    invocation_type: Some(InvocationType::Implicit),
+                },
+            })),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_app_used(
+            codex_observability::events::AppUsed {
+                model_slug: "gpt-5",
+                thread_id: "thread-1",
+                turn_id: "turn-1",
+                connector_id: Some("drive"),
+                app_name: Some("Drive"),
+                invocation_type: Some(codex_observability::events::InvocationType::Implicit),
+            },
+            &mut observation_events,
+        )
+        .await;
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
 }
 
 #[tokio::test]

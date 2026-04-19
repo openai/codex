@@ -1,6 +1,7 @@
 mod client;
 mod events;
 mod facts;
+mod observation_reducer;
 mod reducer;
 
 use std::time::SystemTime;

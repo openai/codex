@@ -48,6 +48,8 @@ members = [
     "models-manager",
     "network-proxy",
     "ollama",
+    "observability",
+    "observability-derive",
     "process-hardening",
     "protocol",
     "realtime-webrtc",
@@ -153,6 +155,8 @@ codex-model-provider-info = { path = "model-provider-info" }
 codex-models-manager = { path = "models-manager" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
+codex-observability = { path = "observability" }
+codex-observability-derive = { path = "observability-derive" }
 codex-otel = { path = "otel" }
 codex-plugin = { path = "plugin" }
 codex-model-provider = { path = "model-provider" }

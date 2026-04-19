@@ -16,6 +16,7 @@ workspace = true
 codex-app-server-protocol = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
+codex-observability = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 os_info = { workspace = true }
