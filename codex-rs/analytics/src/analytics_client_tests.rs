@@ -1715,6 +1715,131 @@ async fn feature_observations_match_legacy_analytics_facts() {
 }
 
 #[tokio::test]
+async fn turn_lifecycle_observations_match_legacy_sources() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    ingest_turn_prerequisites(
+        &mut legacy_reducer,
+        &mut legacy_events,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ true,
+    )
+    .await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Initialize {
+                connection_id: 7,
+                params: InitializeParams {
+                    client_info: ClientInfo {
+                        name: "codex-tui".to_string(),
+                        title: None,
+                        version: "1.0.0".to_string(),
+                    },
+                    capabilities: None,
+                },
+                product_client_id: "codex-tui".to_string(),
+                runtime: sample_runtime_metadata(),
+                rpc_transport: AppServerRpcTransport::Stdio,
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-2", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_events.clear();
+
+    // Keep not-yet-migrated lifecycle context identical on both sides. This
+    // test swaps terminal turn lifecycle and token accounting to observations.
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Request {
+                connection_id: 7,
+                request_id: RequestId::Integer(3),
+                request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                sample_turn_resolved_config("turn-2"),
+            ))),
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_turn_started(
+            codex_observability::events::TurnStarted {
+                thread_id: "thread-2",
+                turn_id: "turn-2",
+                started_at: 455,
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_reducer
+        .ingest_turn_ended(
+            codex_observability::events::TurnEnded {
+                thread_id: "thread-2",
+                turn_id: "turn-2",
+                status: codex_observability::events::TurnStatus::Completed,
+                token_usage: Some(codex_observability::events::TurnTokenUsage {
+                    input_tokens: 123,
+                    cached_input_tokens: 45,
+                    output_tokens: 140,
+                    reasoning_output_tokens: 13,
+                    total_tokens: 321,
+                }),
+                ended_at: 456,
+                duration_ms: 1234,
+            },
+            &mut observation_events,
+        )
+        .await;
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
 async fn reducer_ingests_plugin_state_changed_fact() {
     let mut reducer = AnalyticsReducer::default();
     let mut events = Vec::new();

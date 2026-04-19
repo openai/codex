@@ -17,9 +17,16 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnTokenUsageFact;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnStartedNotification;
+use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_login::default_client::originator;
 use codex_observability::events;
 use codex_protocol::protocol::HookRunStatus as ProtocolHookRunStatus;
+use codex_protocol::protocol::TokenUsage;
 
 pub(crate) fn app_mentioned_input(observation: events::AppMentioned<'_>) -> AppMentionedInput {
     AppMentionedInput {
@@ -117,6 +124,62 @@ pub(crate) fn plugin_state_changed_event(
         events::PluginState::Enabled => TrackEventRequest::PluginEnabled(event),
         events::PluginState::Disabled => TrackEventRequest::PluginDisabled(event),
     }
+}
+
+pub(crate) fn turn_started_notification(
+    observation: events::TurnStarted<'_>,
+) -> ServerNotification {
+    ServerNotification::TurnStarted(TurnStartedNotification {
+        thread_id: observation.thread_id.to_string(),
+        turn: Turn {
+            id: observation.turn_id.to_string(),
+            items: vec![],
+            status: AppServerTurnStatus::InProgress,
+            error: None,
+            started_at: Some(observation.started_at),
+            completed_at: None,
+            duration_ms: None,
+        },
+    })
+}
+
+pub(crate) fn turn_token_usage_fact(
+    observation: &events::TurnEnded<'_>,
+) -> Option<TurnTokenUsageFact> {
+    let token_usage = observation.token_usage?;
+    Some(TurnTokenUsageFact {
+        turn_id: observation.turn_id.to_string(),
+        thread_id: observation.thread_id.to_string(),
+        token_usage: TokenUsage {
+            input_tokens: token_usage.input_tokens,
+            cached_input_tokens: token_usage.cached_input_tokens,
+            output_tokens: token_usage.output_tokens,
+            reasoning_output_tokens: token_usage.reasoning_output_tokens,
+            total_tokens: token_usage.total_tokens,
+        },
+    })
+}
+
+pub(crate) fn turn_ended_notification(observation: events::TurnEnded<'_>) -> ServerNotification {
+    ServerNotification::TurnCompleted(TurnCompletedNotification {
+        thread_id: observation.thread_id.to_string(),
+        turn: Turn {
+            id: observation.turn_id.to_string(),
+            items: vec![],
+            status: match observation.status {
+                events::TurnStatus::Completed => AppServerTurnStatus::Completed,
+                events::TurnStatus::Failed => AppServerTurnStatus::Failed,
+                events::TurnStatus::Interrupted => AppServerTurnStatus::Interrupted,
+            },
+            // Error taxonomy needs a separate design pass. Keeping it out of
+            // the first terminal-turn observation avoids baking app-server
+            // transport categories into the shared event model.
+            error: None,
+            started_at: None,
+            completed_at: Some(observation.ended_at),
+            duration_ms: Some(observation.duration_ms),
+        },
+    })
 }
 
 fn tracking_from_fields(model_slug: &str, thread_id: &str, turn_id: &str) -> TrackEventsContext {

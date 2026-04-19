@@ -20,6 +20,20 @@ pub(crate) struct AnalyticsObservationReducer {
 }
 
 impl AnalyticsObservationReducer {
+    /// Feeds an existing analytics fact into the wrapped reducer for conformance tests.
+    ///
+    /// The observation stream is being introduced incrementally, so tests need
+    /// to hold the not-yet-migrated lifecycle context constant while swapping a
+    /// specific source from legacy facts to observations.
+    #[cfg(test)]
+    pub(crate) async fn ingest_existing_fact_for_test(
+        &mut self,
+        fact: AnalyticsFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.legacy.ingest(fact, out).await;
+    }
+
     /// Ingests an app.mentioned observation and emits the current analytics event.
     pub(crate) async fn ingest_app_mentioned(
         &mut self,
@@ -46,6 +60,49 @@ impl AnalyticsObservationReducer {
             .ingest(
                 AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(
                     observation_projection::app_used_input(observation),
+                )),
+                out,
+            )
+            .await;
+    }
+
+    /// Ingests a turn.started observation into the current turn-event reducer state.
+    pub(crate) async fn ingest_turn_started(
+        &mut self,
+        observation: events::TurnStarted<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.legacy
+            .ingest(
+                AnalyticsFact::Notification(Box::new(
+                    observation_projection::turn_started_notification(observation),
+                )),
+                out,
+            )
+            .await;
+    }
+
+    /// Ingests a turn.ended observation into the current turn-event reducer state.
+    pub(crate) async fn ingest_turn_ended(
+        &mut self,
+        observation: events::TurnEnded<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        if let Some(token_usage) = observation_projection::turn_token_usage_fact(&observation) {
+            self.legacy
+                .ingest(
+                    AnalyticsFact::Custom(CustomAnalyticsFact::TurnTokenUsage(Box::new(
+                        token_usage,
+                    ))),
+                    out,
+                )
+                .await;
+        }
+
+        self.legacy
+            .ingest(
+                AnalyticsFact::Notification(Box::new(
+                    observation_projection::turn_ended_notification(observation),
                 )),
                 out,
             )

@@ -270,7 +270,7 @@ Initial workflow coverage should be chosen by conformance need:
 | Workflow | Canonical examples | Primary consumers |
 | --- | --- | --- |
 | Session/thread | `session.config_resolved`, `thread.started`, `thread.ended` | analytics, OTEL, rollout |
-| Turn lifecycle | `turn.requested`, `turn.started`, `turn.ended`, `turn.token_usage_observed` | analytics, OTEL, rollout |
+| Turn lifecycle | `turn.requested`, `turn.started`, `turn.ended` | analytics, OTEL, rollout |
 | Turn timing | `turn.first_token_observed`, `turn.first_message_observed` | OTEL metrics, rollout |
 | Model I/O | `inference.started`, `inference.sse_event_observed`, `inference.completed`, `inference.failed` | OTEL, rollout |
 | Tools | `tool_call.started`, `tool_call.approval_resolved`, `tool_call.ended` | OTEL, rollout |
@@ -292,7 +292,7 @@ output schemas.
 | Observations | Analytics output |
 | --- | --- |
 | `thread.started` | `codex_thread_initialized` |
-| turn config/lifecycle/token observations | `codex_turn_event` |
+| `turn.started`, `turn.ended` with token usage, and future config observations | `codex_turn_event` |
 | `turn.steer_resolved` | `codex_turn_steer_event` |
 | compaction lifecycle observations | `codex_compaction_event` |
 | skill/app/plugin/guardian observations | existing feature events |
