@@ -2423,28 +2423,30 @@ impl Session {
                 developer_sections.push(apps_section);
             }
         }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        let rendered_skills = render_skills_section(
-            &implicit_skills,
-            default_skill_metadata_budget(turn_context.model_info.context_window),
-            SkillRenderSideEffects::ThreadStart {
-                session_telemetry: &self.services.session_telemetry,
-            },
-        );
-        if let Some(rendered_skills) = rendered_skills {
-            if rendered_skills.emit_warning {
-                self.send_event_raw(Event {
-                    id: String::new(),
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
-                    }),
-                })
-                .await;
+        if turn_context.config.include_skill_instructions {
+            let implicit_skills = turn_context
+                .turn_skills
+                .outcome
+                .allowed_skills_for_implicit_invocation();
+            let rendered_skills = render_skills_section(
+                &implicit_skills,
+                default_skill_metadata_budget(turn_context.model_info.context_window),
+                SkillRenderSideEffects::ThreadStart {
+                    session_telemetry: &self.services.session_telemetry,
+                },
+            );
+            if let Some(rendered_skills) = rendered_skills {
+                if rendered_skills.emit_warning {
+                    self.send_event_raw(Event {
+                        id: String::new(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
+                        }),
+                    })
+                    .await;
+                }
+                developer_sections.push(rendered_skills.text);
             }
-            developer_sections.push(rendered_skills.text);
         }
         let loaded_plugins = self
             .services

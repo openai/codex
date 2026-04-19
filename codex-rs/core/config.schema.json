@@ -1902,6 +1902,10 @@
             "$ref": "#/definitions/SkillConfig"
           },
           "type": "array"
+        },
+        "include_instructions": {
+          "description": "Whether turns receive the automatic skills instructions block.",
+          "type": "boolean"
         }
       },
       "type": "object"

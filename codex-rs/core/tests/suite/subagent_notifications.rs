@@ -19,6 +19,8 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -99,6 +101,14 @@ fn role_block(description: &str, role_name: &str) -> Option<String> {
         block.push(line);
     }
     Some(block.join("\n"))
+}
+
+fn write_home_skill(codex_home: &Path, dir: &str, name: &str, description: &str) -> Result<()> {
+    let skill_dir = codex_home.join("skills").join(dir);
+    fs::create_dir_all(&skill_dir)?;
+    let contents = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+    fs::write(skill_dir.join("SKILL.md"), contents)?;
+    Ok(())
 }
 
 async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
@@ -503,6 +513,99 @@ async fn spawned_multi_agent_v2_child_receives_xml_tagged_developer_context() ->
         SPAWNED_AGENT_DEVELOPER_INSTRUCTIONS
     ));
     assert!(body_contains(&child_request, CHILD_PROMPT));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "task_name": "worker",
+    }))?;
+    let spawn_turn = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let _child_request_log = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+
+    let _turn1_followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(err) = write_home_skill(home, "demo", "demo-skill", "demo skill") {
+                panic!("write home skill: {err}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config.include_skill_instructions = false;
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+    let parent_request = spawn_turn.single_request();
+    assert!(!parent_request.body_contains_text("<skills_instructions>"));
+    assert!(!parent_request.body_contains_text("demo-skill"));
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let child_request = loop {
+        if let Some(request) = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|request| {
+                body_contains(request, CHILD_PROMPT)
+                    && body_contains(request, "<spawned_agent_context>")
+                    && !body_contains(request, SPAWN_CALL_ID)
+            })
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for spawned child request");
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    assert!(!body_contains(&child_request, "<skills_instructions>"));
+    assert!(!body_contains(&child_request, "demo-skill"));
 
     Ok(())
 }
