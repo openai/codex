@@ -10581,8 +10581,8 @@ impl ChatWidget {
     /// Active realtime conversations take precedence over bottom-pane Ctrl+C handling so the
     /// first press always stops live voice, even when the composer contains the recording meter.
     ///
-    /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
-    /// quit.
+    /// When the double-press quit shortcut is enabled, pressing the same shortcut again before
+    /// expiry requests a shutdown-first quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
         if self.realtime_conversation.is_live() {
@@ -10608,14 +10608,10 @@ impl ChatWidget {
 
         if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
             if self.is_cancellable_work_active() {
-                if self.quit_shortcut_active_for(key) {
-                    self.quit_shortcut_expires_at = None;
-                    self.quit_shortcut_key = None;
-                    self.request_quit_without_confirmation();
-                } else {
-                    self.arm_quit_shortcut(key);
-                    self.submit_op(AppCommand::interrupt());
-                }
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.submit_op(AppCommand::interrupt());
             } else {
                 self.request_quit_without_confirmation();
             }
