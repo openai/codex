@@ -6152,7 +6152,7 @@ async fn sample_rollout(
 #[tokio::test]
 async fn create_goal_tool_rejects_existing_goal() {
     let (mut session, turn_context) = make_session_and_context().await;
-    let _ = session.features.enable(Feature::GoalMode);
+    let _ = session.features.enable(Feature::Goals);
     let session = Arc::new(session);
     attach_rollout_recorder(&session).await;
     let turn_context = Arc::new(turn_context);
@@ -6214,7 +6214,7 @@ async fn create_goal_tool_rejects_existing_goal() {
 #[tokio::test]
 async fn update_goal_tool_rejects_pausing_goal() {
     let (mut session, turn_context) = make_session_and_context().await;
-    let _ = session.features.enable(Feature::GoalMode);
+    let _ = session.features.enable(Feature::Goals);
     let session = Arc::new(session);
     attach_rollout_recorder(&session).await;
     let turn_context = Arc::new(turn_context);
@@ -6274,7 +6274,7 @@ async fn update_goal_tool_rejects_pausing_goal() {
 #[tokio::test]
 async fn update_goal_tool_marks_goal_complete() {
     let (mut session, turn_context) = make_session_and_context().await;
-    let _ = session.features.enable(Feature::GoalMode);
+    let _ = session.features.enable(Feature::Goals);
     let session = Arc::new(session);
     attach_rollout_recorder(&session).await;
     let turn_context = Arc::new(turn_context);

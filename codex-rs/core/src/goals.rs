@@ -28,7 +28,7 @@ pub(crate) struct CreateGoalRequest {
 
 impl Session {
     pub(crate) async fn get_thread_goal(&self) -> anyhow::Result<Option<ThreadGoal>> {
-        if !self.enabled(Feature::GoalMode) {
+        if !self.enabled(Feature::Goals) {
             return Ok(None);
         }
 
@@ -46,7 +46,7 @@ impl Session {
         turn_context: &TurnContext,
         request: SetGoalRequest,
     ) -> anyhow::Result<ThreadGoal> {
-        if !self.enabled(Feature::GoalMode) {
+        if !self.enabled(Feature::Goals) {
             anyhow::bail!("goals feature is disabled");
         }
 
@@ -105,7 +105,7 @@ impl Session {
         turn_context: &TurnContext,
         request: CreateGoalRequest,
     ) -> anyhow::Result<ThreadGoal> {
-        if !self.enabled(Feature::GoalMode) {
+        if !self.enabled(Feature::Goals) {
             anyhow::bail!("goals feature is disabled");
         }
 
