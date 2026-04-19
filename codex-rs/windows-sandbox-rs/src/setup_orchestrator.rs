@@ -40,7 +40,7 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
-const USERPROFILE_READ_ROOT_EXCLUSIONS: &[&str] = &[
+const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
     ".brev",
@@ -335,7 +335,7 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .map(|entry| (entry.file_name(), entry.path()))
         .filter(|(name, _)| {
             let name = name.to_string_lossy();
-            !USERPROFILE_READ_ROOT_EXCLUSIONS
+            !USERPROFILE_ROOT_EXCLUSIONS
                 .iter()
                 .any(|excluded| name.eq_ignore_ascii_case(excluded))
         })
@@ -791,7 +791,7 @@ fn build_payload_roots(
     };
     let write_roots = expand_user_profile_root(write_roots);
     let write_roots = filter_user_profile_root(write_roots);
-    let write_roots = filter_user_profile_read_exclusions(write_roots);
+    let write_roots = filter_user_profile_root_exclusions(write_roots);
     let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
     let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
         // An explicit override is the split policy's complete readable set. Keep only the
@@ -811,7 +811,7 @@ fn build_payload_roots(
     };
     read_roots = expand_user_profile_root(read_roots);
     read_roots = filter_user_profile_root(read_roots);
-    read_roots = filter_user_profile_read_exclusions(read_roots);
+    read_roots = filter_user_profile_root_exclusions(read_roots);
     let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
     read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
@@ -874,16 +874,16 @@ fn filter_user_profile_root(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
     roots
 }
 
-fn filter_user_profile_read_exclusions(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+fn filter_user_profile_root_exclusions(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
     let Ok(user_profile) = std::env::var("USERPROFILE") else {
         return roots;
     };
     let user_profile = Path::new(&user_profile);
-    roots.retain(|root| !is_user_profile_read_exclusion(root, user_profile));
+    roots.retain(|root| !is_user_profile_root_exclusion(root, user_profile));
     roots
 }
 
-fn is_user_profile_read_exclusion(root: &Path, user_profile: &Path) -> bool {
+fn is_user_profile_root_exclusion(root: &Path, user_profile: &Path) -> bool {
     let root_key = canonical_path_key(root);
     let profile_key = canonical_path_key(user_profile);
     let profile_prefix = format!("{}/", profile_key.trim_end_matches('/'));
@@ -898,7 +898,7 @@ fn is_user_profile_read_exclusion(root: &Path, user_profile: &Path) -> bool {
         return false;
     };
 
-    USERPROFILE_READ_ROOT_EXCLUSIONS
+    USERPROFILE_ROOT_EXCLUSIONS
         .iter()
         .any(|excluded| child_name.eq_ignore_ascii_case(excluded))
 }
@@ -1127,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn is_user_profile_read_exclusion_blocks_configured_children() {
+    fn is_user_profile_root_exclusion_blocks_configured_children() {
         let tmp = TempDir::new().expect("tempdir");
         let user_profile = tmp.path().join("user-profile");
         let documents = user_profile.join("Documents");
@@ -1141,23 +1141,23 @@ mod tests {
         fs::create_dir_all(&tsh_child).expect("create tsh child");
         fs::create_dir_all(&other_root).expect("create other root");
 
-        assert!(!super::is_user_profile_read_exclusion(
+        assert!(!super::is_user_profile_root_exclusion(
             &documents,
             &user_profile
         ));
-        assert!(!super::is_user_profile_read_exclusion(
+        assert!(!super::is_user_profile_root_exclusion(
             &app_data,
             &user_profile
         ));
-        assert!(super::is_user_profile_read_exclusion(
+        assert!(super::is_user_profile_root_exclusion(
             &ssh_child,
             &user_profile
         ));
-        assert!(super::is_user_profile_read_exclusion(
+        assert!(super::is_user_profile_root_exclusion(
             &tsh_child,
             &user_profile
         ));
-        assert!(!super::is_user_profile_read_exclusion(
+        assert!(!super::is_user_profile_root_exclusion(
             &other_root,
             &user_profile
         ));
@@ -1197,7 +1197,7 @@ mod tests {
             super::expand_user_profile_root_for(vec![user_profile.clone()], &user_profile);
         let user_profile_key = super::canonical_path_key(&user_profile);
         roots.retain(|root| super::canonical_path_key(root) != user_profile_key);
-        roots.retain(|root| !super::is_user_profile_read_exclusion(root, &user_profile));
+        roots.retain(|root| !super::is_user_profile_root_exclusion(root, &user_profile));
         let roots = super::filter_sensitive_write_roots(roots, &codex_home);
 
         assert_eq!(vec![documents], roots);
