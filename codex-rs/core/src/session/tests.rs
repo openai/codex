@@ -6789,64 +6789,6 @@ async fn parallel_goal_accounting_charges_delta_once() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn budget_limited_accounting_aborts_active_turn_before_returning() -> anyhow::Result<()> {
-    let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
-    let config = sess.get_config().await;
-    let state_db = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
-    )
-    .await?;
-    state_db
-        .replace_thread_goal(
-            sess.conversation_id,
-            "Keep improving the benchmark",
-            codex_state::ThreadGoalStatus::Active,
-            /*token_budget*/ Some(10),
-        )
-        .await?;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        vec![UserInput::Text {
-            text: "hello".to_string(),
-            text_elements: Vec::new(),
-        }],
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-    set_total_token_usage(&sess, post_goal_token_usage()).await;
-
-    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
-        .await?;
-
-    let mut saw_budget_limited_update = false;
-    let mut saw_budget_limited_abort = false;
-    while let Ok(event) = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await?
-    {
-        match event.msg {
-            EventMsg::ThreadGoalUpdated(event) => {
-                saw_budget_limited_update =
-                    event.goal.status == codex_protocol::protocol::ThreadGoalStatus::BudgetLimited;
-            }
-            EventMsg::TurnAborted(event) => {
-                saw_budget_limited_abort = event.reason == TurnAbortReason::BudgetLimited;
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    assert!(saw_budget_limited_update);
-    assert!(saw_budget_limited_abort);
-    assert!(!sess.has_active_turn().await);
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn zero_delta_stopped_goal_clears_accounting_before_later_turn_tokens() -> anyhow::Result<()>
 {
@@ -6895,56 +6837,62 @@ async fn zero_delta_stopped_goal_clears_accounting_before_later_turn_tokens() ->
 }
 
 #[tokio::test]
-async fn budget_only_update_that_stops_goal_keeps_accounting_current_turn() -> anyhow::Result<()> {
-    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyhow::Result<()> {
+    let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
         SetGoalRequest {
             objective: Some("Keep improving the benchmark".to_string()),
             status: None,
-            token_budget: Some(Some(1_000)),
+            token_budget: Some(Some(10)),
         },
     )
     .await?;
     sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
         .await;
-    set_total_token_usage(
-        &sess,
-        TokenUsage {
-            input_tokens: 40,
-            cached_input_tokens: 0,
-            output_tokens: 0,
-            reasoning_output_tokens: 0,
-            total_tokens: 40,
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
         },
     )
     .await;
+    while rx.try_recv().is_ok() {}
+
+    set_total_token_usage(
+        &sess,
+        TokenUsage {
+            input_tokens: 20,
+            cached_input_tokens: 0,
+            output_tokens: 5,
+            reasoning_output_tokens: 0,
+            total_tokens: 25,
+        },
+    )
+    .await;
+
     sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Tool)
         .await?;
 
-    sess.set_thread_goal(
-        tc.as_ref(),
-        SetGoalRequest {
-            objective: None,
-            status: None,
-            token_budget: Some(Some(30)),
-        },
-    )
-    .await?;
-    set_total_token_usage(
-        &sess,
-        TokenUsage {
-            input_tokens: 60,
-            cached_input_tokens: 0,
-            output_tokens: 0,
-            reasoning_output_tokens: 0,
-            total_tokens: 60,
-        },
-    )
-    .await;
-
-    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Turn)
-        .await?;
+    let pending_input = sess.get_pending_input().await;
+    let [ResponseInputItem::Message { role, content }] = pending_input.as_slice() else {
+        panic!("expected one budget-limit steering message, got {pending_input:#?}");
+    };
+    assert_eq!("developer", role);
+    let [ContentItem::InputText { text }] = content.as_slice() else {
+        panic!("expected one text span in budget-limit steering message, got {content:#?}");
+    };
+    assert!(text.contains("budget_limited"));
+    assert!(text.to_lowercase().contains("wrap up this turn soon"));
+    assert!(sess.has_active_turn().await);
+    while let Ok(event) = rx.try_recv() {
+        assert!(
+            !matches!(event.msg, EventMsg::TurnAborted(_)),
+            "budget limit should steer the active turn instead of aborting it"
+        );
+    }
 
     let config = sess.get_config().await;
     let state_db = codex_state::StateRuntime::init(
@@ -6956,8 +6904,10 @@ async fn budget_only_update_that_stops_goal_keeps_accounting_current_turn() -> a
         .get_thread_goal(sess.conversation_id)
         .await?
         .expect("goal should remain persisted after accounting");
-    assert_eq!(60, goal.tokens_used);
     assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
+    assert_eq!(25, goal.tokens_used);
+
+    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
     Ok(())
 }

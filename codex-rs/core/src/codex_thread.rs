@@ -119,10 +119,6 @@ impl CodexThread {
                     .session
                     .clear_queued_goal_continuations_for_next_turn()
                     .await;
-                self.codex
-                    .session
-                    .abort_all_tasks_without_restart(TurnAbortReason::BudgetLimited)
-                    .await;
             }
             ThreadGoalStatus::Paused | ThreadGoalStatus::Complete if goal_was_active => {
                 self.codex
