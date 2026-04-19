@@ -1407,7 +1407,7 @@ fn goal_status_indicator_formats_statuses_and_budgets() {
 }
 
 #[test]
-fn goal_status_indicator_line_formats_goal_mode_text() {
+fn goal_status_indicator_line_formats_goal_text() {
     let cases = [
         (
             GoalStatusIndicator::Active {
