@@ -627,6 +627,12 @@ impl ChatComposer {
         self.fast_command_enabled = enabled;
     }
 
+    /// Replace composer, editor, and footer-hint key bindings from one runtime snapshot.
+    ///
+    /// Submit and queue bindings are cached here because composer dispatch must
+    /// check them before generic textarea editing. The embedded textarea receives
+    /// the same snapshot's editor bindings so a live remap cannot leave submit
+    /// keys updated while cursor/editing keys still use old defaults.
     pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
         self.submit_keys = keymap.composer.submit.clone();
         self.queue_keys = keymap.composer.queue.clone();

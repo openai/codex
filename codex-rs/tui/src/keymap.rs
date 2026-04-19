@@ -27,13 +27,18 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 use std::collections::HashMap;
 
-/// Runtime keymap used by the TUI.
+/// Runtime keymap used by TUI input handlers.
 ///
 /// Resolution precedence is:
 ///
 /// 1. Context-specific binding (`tui.keymap.<context>`).
 /// 2. `tui.keymap.global` for actions that support global fallback.
 /// 3. Built-in preset defaults (`latest` currently points to `v1`).
+///
+/// This is the only shape UI code should use for dispatch. It represents a
+/// fully resolved snapshot with parsing, fallback, explicit unbinding, and
+/// duplicate-key validation already applied. If a caller keeps using an older
+/// snapshot after config changes, visible hints and active handlers can drift.
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeKeymap {
     pub(crate) app: AppKeymap,
@@ -193,6 +198,8 @@ macro_rules! resolve_local {
 /// 3. preset defaults for `<context>.<action>`
 ///
 /// Used only for actions that intentionally support global reuse.
+/// Context-local empty lists still count as configured values, so they unbind
+/// the action instead of falling back to `global`.
 macro_rules! resolve_with_global {
     ($keymap:expr, $defaults:expr, $context:ident, $action:ident) => {
         resolve_bindings_with_global_fallback(
@@ -252,6 +259,11 @@ macro_rules! default_bindings {
 
 impl RuntimeKeymap {
     /// Return built-in defaults for the active `latest` preset alias.
+    ///
+    /// This is a convenience for tests and bootstrapping UI state before user
+    /// config has been loaded. It should not be used as a fallback after
+    /// parsing `TuiKeymap`, because doing so would ignore explicit user
+    /// unbindings and conflict diagnostics.
     pub(crate) fn defaults() -> Self {
         Self::defaults_for_preset(TuiKeymapPreset::Latest)
     }
@@ -720,6 +732,10 @@ See the Codex keymap documentation for supported actions and examples."
 ///
 /// `path` should be the context-specific config path so parser errors point
 /// users at the override they attempted to set.
+///
+/// A configured empty list is authoritative: it returns an empty binding set
+/// and does not continue to the global or preset fallback. This is what makes
+/// explicit unbinding work for globally reusable actions like composer submit.
 fn resolve_bindings_with_global_fallback(
     configured: Option<&KeybindingsSpec>,
     global: Option<&KeybindingsSpec>,
@@ -736,6 +752,9 @@ fn resolve_bindings_with_global_fallback(
 }
 
 /// Resolve one action binding in a context without global fallback.
+///
+/// Missing values inherit from the preset fallback; configured values, including
+/// empty lists, replace that fallback for the action.
 fn resolve_bindings(
     configured: Option<&KeybindingsSpec>,
     fallback: &[KeyBinding],
