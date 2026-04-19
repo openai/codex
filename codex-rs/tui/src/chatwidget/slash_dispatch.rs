@@ -735,6 +735,7 @@ impl ChatWidget {
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
+            | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
             | SlashCommand::TestApproval => QueueDrain::Continue,
