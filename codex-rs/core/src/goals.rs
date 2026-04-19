@@ -204,16 +204,19 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(None);
         };
-        let goal = self
-            .account_thread_goal_wall_clock_usage(
+        let accounted_goal = if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
+            None
+        } else {
+            self.account_thread_goal_wall_clock_usage(
                 &state_db,
                 codex_state::ThreadGoalAccountingMode::ActiveStatusOnly,
             )
             .await?
-            .or(state_db
-                .get_thread_goal(self.conversation_id)
-                .await?
-                .map(protocol_goal_from_state));
+        };
+        let goal = accounted_goal.or(state_db
+            .get_thread_goal(self.conversation_id)
+            .await?
+            .map(protocol_goal_from_state));
         if goal.is_some() {
             self.thread_goal_may_exist.store(true, Ordering::SeqCst);
         }

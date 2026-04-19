@@ -6499,6 +6499,56 @@ async fn goal_accounting_charges_out_of_band_goal() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn get_thread_goal_skips_wall_clock_accounting_in_plan_mode() -> anyhow::Result<()> {
+    let (sess, _tc, _rx) = make_goal_session_and_context_with_rx().await;
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(1_000),
+        )
+        .await?;
+    sleep(Duration::from_millis(1100)).await;
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.collaboration_mode.mode = ModeKind::Plan;
+    }
+
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should be readable in plan mode");
+    assert_eq!(0, goal.time_used_seconds);
+    let persisted_goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted");
+    assert_eq!(0, persisted_goal.time_used_seconds);
+
+    {
+        let mut state = sess.state.lock().await;
+        state.session_configuration.collaboration_mode.mode = ModeKind::Default;
+    }
+    let goal = sess
+        .get_thread_goal()
+        .await?
+        .expect("goal should be readable outside plan mode");
+    assert!(
+        goal.time_used_seconds >= 1,
+        "expected wall-clock accounting after leaving plan mode, got {goal:?}"
+    );
+
+    Ok(())
+}
+
 async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
     let mut state = sess.state.lock().await;
     state.set_token_info(Some(TokenUsageInfo {
