@@ -83,6 +83,41 @@ impl FieldMeta {
     }
 }
 
+/// Decides whether a sink may read an observation field.
+///
+/// Policies are checked before serialization. This matters because denied
+/// fields may contain content, secrets, or large trace payloads that remote
+/// sinks must not materialize even transiently.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FieldPolicy {
+    max_detail: DetailLevel,
+    allowed_classes: &'static [DataClass],
+}
+
+impl FieldPolicy {
+    /// Creates a policy that permits fields at or below the configured detail
+    /// limit and whose data class is present in the allowed class list.
+    pub const fn new(max_detail: DetailLevel, allowed_classes: &'static [DataClass]) -> Self {
+        Self {
+            max_detail,
+            allowed_classes,
+        }
+    }
+
+    /// Returns true when a sink may inspect and serialize a field.
+    pub fn allows(self, meta: FieldMeta) -> bool {
+        let detail_allowed = match self.max_detail {
+            DetailLevel::Basic => matches!(meta.detail, DetailLevel::Basic),
+            DetailLevel::Detailed => {
+                matches!(meta.detail, DetailLevel::Basic | DetailLevel::Detailed)
+            }
+            DetailLevel::Trace => true,
+        };
+
+        detail_allowed && self.allowed_classes.contains(&meta.class)
+    }
+}
+
 /// Coarse detail level for a field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DetailLevel {
@@ -122,6 +157,41 @@ mod tests {
                 detail: DetailLevel::Trace,
                 class: DataClass::Content,
             }
+        );
+    }
+
+    #[test]
+    fn field_policy_requires_allowed_detail_and_class() {
+        let policy = FieldPolicy::new(
+            DetailLevel::Basic,
+            &[DataClass::Identifier, DataClass::Operational],
+        );
+        let cases = [
+            (
+                FieldMeta::new(DetailLevel::Basic, DataClass::Identifier),
+                true,
+            ),
+            (
+                FieldMeta::new(DetailLevel::Basic, DataClass::Operational),
+                true,
+            ),
+            (
+                FieldMeta::new(DetailLevel::Detailed, DataClass::Operational),
+                false,
+            ),
+            (
+                FieldMeta::new(DetailLevel::Basic, DataClass::Content),
+                false,
+            ),
+            (
+                FieldMeta::new(DetailLevel::Basic, DataClass::SecretRisk),
+                false,
+            ),
+        ];
+
+        assert_eq!(
+            cases.map(|(meta, _expected)| policy.allows(meta)),
+            cases.map(|(_meta, expected)| expected)
         );
     }
 }
