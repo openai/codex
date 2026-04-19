@@ -900,9 +900,9 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::GoalMode,
-        key: "goal_mode",
+        key: "goals",
         stage: Stage::Experimental {
-            name: "Goal mode",
+            name: "Goals",
             menu_description: "Let Codex keep working toward a persisted thread goal, including goal status, budgets, and continuation controls.",
             announcement: "",
         },
