@@ -468,6 +468,10 @@ impl Session {
         }
     }
 
+    /// Aborts the current turn from code that is already accounting goal progress for that turn.
+    ///
+    /// This avoids re-entering turn-boundary goal accounting while still applying the normal abort
+    /// cleanup and interrupt-pause behavior.
     pub(crate) async fn abort_all_tasks_without_goal_accounting_from_current_turn(
         self: &Arc<Self>,
         reason: TurnAbortReason,
@@ -481,6 +485,10 @@ impl Session {
         .await;
     }
 
+    /// Performs abort cleanup without recording goal usage for the drained tasks.
+    ///
+    /// Callers that need goal usage recorded must do that before or after this helper, depending
+    /// on whether they need the active turn to remain visible during accounting.
     async fn abort_all_tasks_without_goal_accounting_inner(
         self: &Arc<Self>,
         reason: TurnAbortReason,
@@ -754,6 +762,10 @@ impl Session {
         self.send_event(task.turn_context.as_ref(), event).await;
     }
 
+    /// Aborts the currently executing task after its task-specific abort hook has run.
+    ///
+    /// Unlike full-turn abort cleanup, this leaves the active turn in place so sibling tasks and
+    /// queued input keep their existing lifecycle.
     async fn handle_current_task_abort(
         self: &Arc<Self>,
         task: RunningTask,
@@ -788,6 +800,7 @@ impl Session {
     }
 }
 
+/// Prunes finished tasks after a turn completes, then wakes pending input or an active goal.
 fn idle_pending_work_scheduler(session: Arc<Session>) -> BoxFuture<'static, ()> {
     // Erase the future type so `on_task_finished` and `start_task` do not recursively depend on
     // each other's inferred async state machines.
