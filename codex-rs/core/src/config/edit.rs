@@ -113,8 +113,17 @@ pub fn terminal_title_items_edit(items: &[String]) -> ConfigEdit {
     }
 }
 
-/// Produces a config edit that replaces one root-level TUI keymap binding.
-pub fn keymap_binding_edit(context: &str, action: &str, key: &str) -> ConfigEdit {
+fn keymap_binding_value(keys: &[String]) -> TomlItem {
+    if let [key] = keys {
+        value(key.to_string())
+    } else {
+        let array = keys.iter().cloned().collect::<toml_edit::Array>();
+        TomlItem::Value(array.into())
+    }
+}
+
+/// Produces a config edit that replaces one root-level TUI keymap binding list.
+pub fn keymap_bindings_edit(context: &str, action: &str, keys: &[String]) -> ConfigEdit {
     ConfigEdit::SetPath {
         segments: vec![
             "tui".to_string(),
@@ -122,8 +131,13 @@ pub fn keymap_binding_edit(context: &str, action: &str, key: &str) -> ConfigEdit
             context.to_string(),
             action.to_string(),
         ],
-        value: value(key.to_string()),
+        value: keymap_binding_value(keys),
     }
+}
+
+/// Produces a config edit that replaces one root-level TUI keymap binding.
+pub fn keymap_binding_edit(context: &str, action: &str, key: &str) -> ConfigEdit {
+    keymap_bindings_edit(context, action, &[key.to_string()])
 }
 
 /// Produces a config edit that removes one root-level TUI keymap binding.

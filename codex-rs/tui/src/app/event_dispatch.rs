@@ -1649,16 +1649,25 @@ impl App {
                 self.chat_widget
                     .open_keymap_action_menu(context, action, &self.keymap);
             }
-            AppEvent::OpenKeymapCapture { context, action } => {
+            AppEvent::OpenKeymapReplaceBindingMenu { context, action } => {
                 self.chat_widget
-                    .open_keymap_capture(context, action, &self.keymap);
+                    .open_keymap_replace_binding_menu(context, action, &self.keymap);
+            }
+            AppEvent::OpenKeymapCapture {
+                context,
+                action,
+                intent,
+            } => {
+                self.chat_widget
+                    .open_keymap_capture(context, action, intent, &self.keymap);
             }
             AppEvent::KeymapCaptured {
                 context,
                 action,
                 key,
+                intent,
             } => {
-                self.apply_keymap_capture(context, action, key).await;
+                self.apply_keymap_capture(context, action, key, intent).await;
             }
             AppEvent::KeymapCleared { context, action } => {
                 self.apply_keymap_clear(context, action).await;
@@ -1667,16 +1676,35 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    async fn apply_keymap_capture(&mut self, context: String, action: String, key: String) {
-        let keymap_config = match keymap_setup::keymap_with_replacement(
+    async fn apply_keymap_capture(
+        &mut self,
+        context: String,
+        action: String,
+        key: String,
+        intent: crate::app_event::KeymapEditIntent,
+    ) {
+        let outcome = match keymap_setup::keymap_with_edit(
             &self.config.tui_keymap,
+            &self.keymap,
             &context,
             &action,
             &key,
+            &intent,
         ) {
-            Ok(keymap_config) => keymap_config,
+            Ok(outcome) => outcome,
             Err(err) => {
                 self.chat_widget.add_error_message(err);
+                return;
+            }
+        };
+        let (keymap_config, bindings, message) = match outcome {
+            keymap_setup::KeymapEditOutcome::Updated {
+                keymap_config,
+                bindings,
+                message,
+            } => (*keymap_config, bindings, message),
+            keymap_setup::KeymapEditOutcome::Unchanged { message } => {
+                self.chat_widget.add_info_message(message, /*hint*/ None);
                 return;
             }
         };
@@ -1684,13 +1712,14 @@ impl App {
         let runtime_keymap = match RuntimeKeymap::from_config(&keymap_config) {
             Ok(runtime_keymap) => runtime_keymap,
             Err(err) => {
-                let params = keymap_setup::build_keymap_conflict_params(context, action, key, err);
+                let params =
+                    keymap_setup::build_keymap_conflict_params(context, action, key, intent, err);
                 self.chat_widget.show_selection_view(params);
                 return;
             }
         };
 
-        let edit = keymap_binding_edit(&context, &action, &key);
+        let edit = keymap_bindings_edit(&context, &action, &bindings);
         match ConfigEditsBuilder::new(&self.config.codex_home)
             .with_edits([edit])
             .apply()
@@ -1703,10 +1732,7 @@ impl App {
                     .apply_keymap_update(keymap_config, &runtime_keymap);
                 self.chat_widget
                     .refresh_keymap_action_menu(&context, &action, &runtime_keymap);
-                self.chat_widget.add_info_message(
-                    format!("Remapped `{context}.{action}` to `{key}`."),
-                    /*hint*/ None,
-                );
+                self.chat_widget.add_info_message(message, /*hint*/ None);
             }
             Err(err) => {
                 tracing::error!(error = %err, "failed to persist keymap binding");

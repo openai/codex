@@ -50,7 +50,7 @@ use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::legacy_core::config::edit::keymap_binding_clear_edit;
-use crate::legacy_core::config::edit::keymap_binding_edit;
+use crate::legacy_core::config::edit::keymap_bindings_edit;
 use crate::legacy_core::lookup_message_history_entry;
 use crate::legacy_core::plugins::PluginsManager;
 #[cfg(target_os = "windows")]

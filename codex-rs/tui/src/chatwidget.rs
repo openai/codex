@@ -7813,16 +7813,29 @@ impl ChatWidget {
         &mut self,
         context: String,
         action: String,
+        intent: crate::app_event::KeymapEditIntent,
         runtime_keymap: &RuntimeKeymap,
     ) {
         let view = keymap_setup::build_keymap_capture_view(
             context,
             action,
+            intent,
             runtime_keymap,
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
+    }
+
+    pub(crate) fn open_keymap_replace_binding_menu(
+        &mut self,
+        context: String,
+        action: String,
+        runtime_keymap: &RuntimeKeymap,
+    ) {
+        let params =
+            keymap_setup::build_keymap_replace_binding_menu_params(context, action, runtime_keymap);
+        self.bottom_pane.show_selection_view(params);
     }
 
     pub(crate) fn apply_keymap_update(

@@ -66,6 +66,61 @@ submit = "ctrl-enter"
 }
 
 #[test]
+fn keymap_bindings_edit_writes_single_binding_as_string() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits([keymap_bindings_edit(
+            "composer",
+            "submit",
+            &["ctrl-enter".to_string()],
+        )])
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[tui.keymap.composer]
+submit = "ctrl-enter"
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
+fn keymap_bindings_edit_writes_multiple_bindings_as_array() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits([keymap_bindings_edit(
+            "composer",
+            "submit",
+            &["enter".to_string(), "ctrl-enter".to_string()],
+        )])
+        .apply_blocking()
+        .expect("persist");
+
+    let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let value: TomlValue = toml::from_str(&raw).expect("parse config");
+
+    assert_eq!(
+        value
+            .get("tui")
+            .and_then(|value| value.get("keymap"))
+            .and_then(|value| value.get("composer"))
+            .and_then(|value| value.get("submit"))
+            .and_then(TomlValue::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(TomlValue::as_str)
+                    .collect::<Vec<_>>()
+            }),
+        Some(vec!["enter", "ctrl-enter"])
+    );
+}
+
+#[test]
 fn keymap_binding_edit_replaces_existing_binding_without_touching_profile() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();
