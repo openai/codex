@@ -149,7 +149,7 @@ async fn take_finished_prefix_compact_task(sess: &Arc<Session>) -> Option<Prefix
     if state
         .prefix_compact_task
         .as_ref()
-        .is_some_and(|task| task.is_finished())
+        .is_some_and(tokio::task::JoinHandle::is_finished)
     {
         state.prefix_compact_task.take()
     } else {
