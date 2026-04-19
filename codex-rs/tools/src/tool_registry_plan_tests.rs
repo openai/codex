@@ -220,7 +220,7 @@ fn goal_tools_require_goals_feature() {
     assert_lacks_tool_name(&tools, "create_goal");
     assert_lacks_tool_name(&tools, "update_goal");
 
-    features.enable(Feature::GoalMode);
+    features.enable(Feature::Goals);
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
         available_models: &available_models,
