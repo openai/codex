@@ -64,12 +64,6 @@ pub(crate) use user_shell::execute_user_shell_command;
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 
-#[derive(Clone, Copy)]
-enum GoalPauseOnInterrupt {
-    Pause,
-    Defer,
-}
-
 /// Shared model-visible marker used by both the real interrupt path and
 /// interrupted fork snapshots.
 pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
@@ -445,12 +439,8 @@ impl Session {
             cancellation_token.cancel();
         }
 
-        self.abort_all_tasks_without_goal_accounting_inner(
-            reason.clone(),
-            /*current_turn_id*/ None,
-            GoalPauseOnInterrupt::Defer,
-        )
-        .await;
+        self.abort_all_tasks_without_goal_accounting(reason.clone())
+            .await;
 
         for (turn_context, _) in active_tasks {
             if let Err(err) = self
@@ -468,33 +458,8 @@ impl Session {
         }
     }
 
-    /// Aborts the current turn from code that is already accounting goal progress for that turn.
-    ///
-    /// This avoids re-entering turn-boundary goal accounting while still applying the normal abort
-    /// cleanup and interrupt-pause behavior.
-    pub(crate) async fn abort_all_tasks_without_goal_accounting_from_current_turn(
-        self: &Arc<Self>,
-        reason: TurnAbortReason,
-        current_turn_id: &str,
-    ) {
-        self.abort_all_tasks_without_goal_accounting_inner(
-            reason,
-            Some(current_turn_id.to_string()),
-            GoalPauseOnInterrupt::Pause,
-        )
-        .await;
-    }
-
     /// Performs abort cleanup without recording goal usage for the drained tasks.
-    ///
-    /// Callers that need goal usage recorded must do that before or after this helper, depending
-    /// on whether they need the active turn to remain visible during accounting.
-    async fn abort_all_tasks_without_goal_accounting_inner(
-        self: &Arc<Self>,
-        reason: TurnAbortReason,
-        current_turn_id: Option<String>,
-        goal_pause_on_interrupt: GoalPauseOnInterrupt,
-    ) {
+    async fn abort_all_tasks_without_goal_accounting(self: &Arc<Self>, reason: TurnAbortReason) {
         let active_turn = {
             let mut active = self.active_turn.lock().await;
             active.as_mut().map(|active_turn| {
@@ -505,36 +470,15 @@ impl Session {
             })
         };
 
-        let mut deferred_aborts = Vec::new();
         if let Some((tasks, turn_state)) = active_turn {
-            let mut current_task = None;
             for task in tasks {
-                if current_turn_id.as_deref() == Some(task.turn_context.sub_id.as_str()) {
-                    current_task = Some(task);
-                } else {
-                    self.handle_task_abort(task, reason.clone()).await;
-                }
-            }
-            if let Some(task) = current_task {
-                let handle = self.handle_current_task_abort(task, reason.clone()).await;
-                deferred_aborts.push(handle);
+                self.handle_task_abort(task, reason.clone()).await;
             }
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             let mut active = self.active_turn.lock().await;
             turn_state.lock().await.clear_pending();
             *active = None;
-        }
-
-        for handle in deferred_aborts {
-            handle.abort();
-        }
-
-        if reason == TurnAbortReason::Interrupted
-            && matches!(goal_pause_on_interrupt, GoalPauseOnInterrupt::Pause)
-            && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
-        {
-            warn!("failed to pause active thread goal after interrupt: {err}");
         }
     }
 
@@ -766,43 +710,6 @@ impl Session {
             duration_ms,
         });
         self.send_event(task.turn_context.as_ref(), event).await;
-    }
-
-    /// Aborts the currently executing task after its task-specific abort hook has run.
-    ///
-    /// Unlike full-turn abort cleanup, this leaves the active turn in place so sibling tasks and
-    /// queued input keep their existing lifecycle.
-    async fn handle_current_task_abort(
-        self: &Arc<Self>,
-        task: RunningTask,
-        reason: TurnAbortReason,
-    ) -> Arc<RunningTaskHandle> {
-        let sub_id = task.turn_context.sub_id.clone();
-
-        trace!(task_kind = ?task.kind, sub_id, "aborting current running task");
-        task.cancellation_token.cancel();
-        task.turn_context
-            .turn_metadata_state
-            .cancel_git_enrichment_task();
-        let session_task = Arc::clone(&task.task);
-        let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
-        session_task
-            .abort(session_ctx, Arc::clone(&task.turn_context))
-            .await;
-
-        let (completed_at, duration_ms) = task
-            .turn_context
-            .turn_timing_state
-            .completed_at_and_duration_ms()
-            .await;
-        let event = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: Some(task.turn_context.sub_id.clone()),
-            reason,
-            completed_at,
-            duration_ms,
-        });
-        self.send_event(task.turn_context.as_ref(), event).await;
-        task.handle
     }
 }
 

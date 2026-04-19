@@ -18,7 +18,6 @@ use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_utils_template::Template;
 use std::sync::Arc;
@@ -45,6 +44,14 @@ static CONTINUATION_PROMPT_TEMPLATE: LazyLock<Template> =
         || match Template::parse(include_str!("../templates/goals/continuation.md")) {
             Ok(template) => template,
             Err(err) => panic!("embedded goals/continuation.md template is invalid: {err}"),
+        },
+    );
+
+static BUDGET_LIMIT_PROMPT_TEMPLATE: LazyLock<Template> =
+    LazyLock::new(
+        || match Template::parse(include_str!("../templates/goals/budget_limit.md")) {
+            Ok(template) => template,
+            Err(err) => panic!("embedded goals/budget_limit.md template is invalid: {err}"),
         },
     );
 
@@ -606,13 +613,6 @@ impl Session {
                     turn_context.goal_accounting.clear_completed_this_turn();
                     turn_context.goal_accounting.clear_stopped_this_turn();
                 }
-                if status == codex_state::ThreadGoalStatus::BudgetLimited {
-                    self.abort_all_tasks_without_goal_accounting_from_current_turn(
-                        TurnAbortReason::BudgetLimited,
-                        &turn_context.sub_id,
-                    )
-                    .await;
-                }
             }
             return Ok(());
         }
@@ -700,7 +700,8 @@ impl Session {
                 return Ok(());
             }
         };
-        let status = goal.status;
+        let should_steer_budget_limit = matches!(boundary, GoalAccountingBoundary::Tool)
+            && goal.status == codex_state::ThreadGoalStatus::BudgetLimited;
         let goal = protocol_goal_from_state(goal);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
         self.send_event(
@@ -708,16 +709,15 @@ impl Session {
             EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
                 thread_id: self.conversation_id,
                 turn_id: Some(turn_context.sub_id.clone()),
-                goal,
+                goal: goal.clone(),
             }),
         )
         .await;
-        if status == codex_state::ThreadGoalStatus::BudgetLimited {
-            self.abort_all_tasks_without_goal_accounting_from_current_turn(
-                TurnAbortReason::BudgetLimited,
-                &turn_context.sub_id,
-            )
-            .await;
+        if should_steer_budget_limit {
+            let item = budget_limit_steering_item(&goal);
+            if self.inject_response_items(vec![item]).await.is_err() {
+                tracing::debug!("skipping budget-limit goal steering because no turn is active");
+            }
         }
         Ok(())
     }
@@ -1068,6 +1068,34 @@ fn continuation_prompt(goal: &ThreadGoal) -> String {
     }
 }
 
+fn budget_limit_prompt(goal: &ThreadGoal) -> String {
+    let token_budget = goal
+        .token_budget
+        .map(|budget| budget.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let tokens_used = goal.tokens_used.to_string();
+    let time_used_seconds = goal.time_used_seconds.to_string();
+
+    match BUDGET_LIMIT_PROMPT_TEMPLATE.render([
+        ("objective", goal.objective.as_str()),
+        ("tokens_used", tokens_used.as_str()),
+        ("time_used_seconds", time_used_seconds.as_str()),
+        ("token_budget", token_budget.as_str()),
+    ]) {
+        Ok(prompt) => prompt,
+        Err(err) => panic!("embedded goals/budget_limit.md template failed to render: {err}"),
+    }
+}
+
+fn budget_limit_steering_item(goal: &ThreadGoal) -> ResponseInputItem {
+    ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: budget_limit_prompt(goal),
+        }],
+    }
+}
+
 pub(crate) fn is_goal_continuation_item(item: &ResponseInputItem) -> bool {
     const GOAL_CONTINUATION_PROMPT_PREFIX: &str = "Continue working toward the active thread goal.";
 
@@ -1137,6 +1165,7 @@ pub(crate) fn goal_token_delta_for_usage(usage: &TokenUsage) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::GoalWallClockAccountingState;
+    use super::budget_limit_prompt;
     use super::continuation_prompt;
     use super::should_ignore_goal_for_mode;
     use codex_protocol::ThreadId;
@@ -1174,6 +1203,26 @@ mod tests {
             "leave the goal active and explain the blocker or next required input to the user"
         ));
         assert!(!prompt.contains("budgetLimited"));
+        assert!(!prompt.contains("status \"paused\""));
+    }
+
+    #[test]
+    fn budget_limit_prompt_steers_model_to_wrap_up_without_pausing() {
+        let prompt = budget_limit_prompt(&ThreadGoal {
+            thread_id: ThreadId::new(),
+            objective: "finish the stack".to_string(),
+            status: ThreadGoalStatus::BudgetLimited,
+            token_budget: Some(10_000),
+            tokens_used: 10_100,
+            time_used_seconds: 56,
+            created_at: 1,
+            updated_at: 2,
+        });
+
+        assert!(prompt.contains("finish the stack"));
+        assert!(prompt.contains("Token budget: 10000"));
+        assert!(prompt.contains("Tokens used: 10100"));
+        assert!(prompt.to_lowercase().contains("wrap up this turn soon"));
         assert!(!prompt.contains("status \"paused\""));
     }
 
