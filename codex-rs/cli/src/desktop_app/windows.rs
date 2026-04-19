@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Command;
 
@@ -15,7 +16,7 @@ pub async fn run_windows_app_open_or_install(
         open_installed_codex_app(&app_id).await?;
         eprintln!(
             "In Codex Desktop, open workspace {workspace}.",
-            workspace = workspace.display()
+            workspace = display_workspace_path(&workspace)
         );
         return Ok(());
     }
@@ -29,7 +30,7 @@ pub async fn run_windows_app_open_or_install(
     }
     eprintln!(
         "After installing Codex Desktop, open workspace {workspace}.",
-        workspace = workspace.display()
+        workspace = display_workspace_path(&workspace)
     );
     Ok(())
 }
@@ -57,27 +58,75 @@ async fn find_codex_app_id() -> anyhow::Result<Option<String>> {
 
 async fn open_installed_codex_app(app_id: &str) -> anyhow::Result<()> {
     let target = format!("shell:AppsFolder\\{app_id}");
-    let status = Command::new("explorer.exe")
-        .arg(target)
-        .status()
-        .await
-        .context("failed to invoke `explorer.exe`")?;
-
-    if status.success() {
-        return Ok(());
-    }
-    anyhow::bail!("explorer.exe failed with {status}");
+    open_shell_target(&target).await
 }
 
 async fn open_url(url: &str) -> anyhow::Result<()> {
-    let status = Command::new("explorer.exe")
+    let status = Command::new("powershell.exe")
+        .arg("-NoProfile")
+        .arg("-Command")
+        .arg("& { param($target) Start-Process -FilePath $target }")
         .arg(url)
         .status()
         .await
         .with_context(|| format!("failed to open {url}"))?;
 
     if status.success() {
-        return Ok(());
+        Ok(())
+    } else {
+        anyhow::bail!("failed to open {url} with {status}");
     }
-    anyhow::bail!("failed to open {url} with {status}");
+}
+
+async fn open_shell_target(target: &str) -> anyhow::Result<()> {
+    // Explorer can successfully hand off shell targets and still return exit code 1.
+    let _status = Command::new("explorer.exe")
+        .arg(target)
+        .status()
+        .await
+        .with_context(|| format!("failed to open {target}"))?;
+
+    Ok(())
+}
+
+fn display_workspace_path(workspace: &Path) -> String {
+    let path = workspace.display().to_string();
+    if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{path}")
+    } else if let Some(path) = path.strip_prefix(r"\\?\") {
+        path.to_string()
+    } else {
+        path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_workspace_path;
+    use pretty_assertions::assert_eq;
+    use std::path::Path;
+
+    #[test]
+    fn display_workspace_path_removes_windows_extended_prefix() {
+        assert_eq!(
+            display_workspace_path(Path::new(r"\\?\C:\Users\fcoury\code\codex")),
+            r"C:\Users\fcoury\code\codex"
+        );
+    }
+
+    #[test]
+    fn display_workspace_path_preserves_unc_prefix() {
+        assert_eq!(
+            display_workspace_path(Path::new(r"\\?\UNC\server\share\codex")),
+            r"\\server\share\codex"
+        );
+    }
+
+    #[test]
+    fn display_workspace_path_leaves_regular_paths_unchanged() {
+        assert_eq!(
+            display_workspace_path(Path::new(r"C:\Users\fcoury\code\codex")),
+            r"C:\Users\fcoury\code\codex"
+        );
+    }
 }
