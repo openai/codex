@@ -206,7 +206,11 @@ mod tests {
     fn ctrl_shift_dot_changes_animation_variant() {
         let mut widget = WelcomeWidget {
             is_logged_in: false,
-            animation: AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0),
+            animation: AsciiAnimation::with_variants(
+                FrameRequester::test_dummy(),
+                &VARIANTS,
+                /*variant_idx*/ 0,
+            ),
             animations_enabled: true,
             animations_suppressed: Cell::new(false),
             toggle_animation_keys: crate::keymap::RuntimeKeymap::defaults()

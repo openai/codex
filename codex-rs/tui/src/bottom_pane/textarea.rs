@@ -396,7 +396,7 @@ impl TextArea {
         }
 
         if keymap.delete_backward.is_pressed(event) {
-            self.delete_backward(1);
+            self.delete_backward(/*n*/ 1);
             return;
         }
         if keymap.delete_forward_word.is_pressed(event) {
@@ -404,7 +404,7 @@ impl TextArea {
             return;
         }
         if keymap.delete_forward.is_pressed(event) {
-            self.delete_forward(1);
+            self.delete_forward(/*n*/ 1);
             return;
         }
         if keymap.kill_line_start.is_pressed(event) {

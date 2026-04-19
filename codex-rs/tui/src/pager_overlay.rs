@@ -810,7 +810,7 @@ impl StaticOverlay {
         keymap: PagerKeymap,
     ) -> Self {
         Self {
-            view: PagerView::new(renderables, title, 0, keymap),
+            view: PagerView::new(renderables, title, /*scroll_offset*/ 0, keymap),
             is_done: false,
         }
     }
@@ -1396,9 +1396,12 @@ mod tests {
     #[test]
     fn pager_view_content_height_counts_renderables() {
         let pv = pager_view(
-            vec![paragraph_block("a", 2), paragraph_block("b", 3)],
+            vec![
+                paragraph_block("a", /*lines*/ 2),
+                paragraph_block("b", /*lines*/ 3),
+            ],
             "T",
-            0,
+            /*scroll_offset*/ 0,
         );
 
         assert_eq!(pv.content_height(/*width*/ 80), 5);
@@ -1413,7 +1416,7 @@ mod tests {
                 paragraph_block("c", /*lines*/ 3),
             ],
             "T",
-            0,
+            /*scroll_offset*/ 0,
         );
         let area = Rect::new(0, 0, 20, 8);
 
@@ -1448,7 +1451,7 @@ mod tests {
                 paragraph_block("c", /*lines*/ 3),
             ],
             "T",
-            0,
+            /*scroll_offset*/ 0,
         );
         let area = Rect::new(0, 0, 20, 3);
 
@@ -1460,7 +1463,11 @@ mod tests {
 
     #[test]
     fn pager_view_is_scrolled_to_bottom_accounts_for_wrapped_height() {
-        let mut pv = pager_view(vec![paragraph_block("a", 10)], "T", 0);
+        let mut pv = pager_view(
+            vec![paragraph_block("a", /*lines*/ 10)],
+            "T",
+            /*scroll_offset*/ 0,
+        );
         let area = Rect::new(0, 0, 20, 8);
         let mut buf = Buffer::empty(area);
 
