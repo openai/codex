@@ -30,7 +30,7 @@ pub fn create_set_goal_tool() -> ToolSpec {
         (
             "objective".to_string(),
             JsonSchema::string(Some(
-                "Required. The concrete objective to start pursuing. This starts a fresh active goal, replacing any existing goal and resetting usage accounting."
+                "Required. The concrete objective to start pursuing. This starts a fresh active goal only when no goal is currently defined; if a goal already exists, this tool fails."
                     .to_string(),
             )),
         ),
@@ -44,9 +44,10 @@ pub fn create_set_goal_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: SET_GOAL_TOOL_NAME.to_string(),
-        description: r#"Start a new long-running goal for this thread.
-This tool creates or replaces any existing goal with a fresh active goal and resets time/token usage accounting to zero.
-Use update_goal, not set_goal, to pause, resume, or mark an existing goal achieved while preserving usage accounting.
+        description: r#"Start a new long-running goal for this thread when no goal is already defined.
+This tool creates a fresh active goal and resets time/token usage accounting to zero.
+It fails if any goal already exists. Use update_goal, not set_goal, to pause, resume, or mark an existing goal achieved while preserving usage accounting.
+To replace the objective, the user must clear or replace the goal through goal-management UI or API.
 Set token_budget here when the goal should have a budget."#
             .to_string(),
         strict: false,
@@ -76,6 +77,7 @@ pub fn create_update_goal_tool() -> ToolSpec {
         name: UPDATE_GOAL_TOOL_NAME.to_string(),
         description: r#"Update the existing long-running goal while preserving time/token usage accounting.
 Use this tool to pause, resume, or mark the goal achieved.
+This tool cannot change the goal objective.
 Set status to `complete` only when the objective has actually been achieved and no required work remains.
 Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.
 When marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user."#
