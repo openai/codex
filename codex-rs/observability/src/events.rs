@@ -3,8 +3,10 @@
 use crate::Observation;
 use serde::Serialize;
 
+mod thread;
 mod turn;
 
+pub use thread::*;
 pub use turn::*;
 
 /// How an app/tool/plugin capability was selected by the user or system.

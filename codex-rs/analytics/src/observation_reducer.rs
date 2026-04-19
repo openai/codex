@@ -66,6 +66,17 @@ impl AnalyticsObservationReducer {
             .await;
     }
 
+    /// Ingests a thread.started observation into the current analytics reducer state.
+    pub(crate) fn ingest_thread_started(
+        &mut self,
+        connection_id: u64,
+        observation: events::ThreadStarted<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.legacy
+            .ingest_observed_thread_started(connection_id, observation, out);
+    }
+
     /// Ingests a turn.started observation into the current turn-event reducer state.
     pub(crate) async fn ingest_turn_started(
         &mut self,

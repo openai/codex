@@ -436,25 +436,24 @@ async fn ingest_rejected_turn_steer(
 }
 
 async fn ingest_initialize(reducer: &mut AnalyticsReducer, out: &mut Vec<TrackEventRequest>) {
-    reducer
-        .ingest(
-            AnalyticsFact::Initialize {
-                connection_id: 7,
-                params: InitializeParams {
-                    client_info: ClientInfo {
-                        name: "codex-tui".to_string(),
-                        title: None,
-                        version: "1.0.0".to_string(),
-                    },
-                    capabilities: None,
-                },
-                product_client_id: "codex-tui".to_string(),
-                runtime: sample_runtime_metadata(),
-                rpc_transport: AppServerRpcTransport::Stdio,
+    reducer.ingest(sample_initialize_fact(), out).await;
+}
+
+fn sample_initialize_fact() -> AnalyticsFact {
+    AnalyticsFact::Initialize {
+        connection_id: 7,
+        params: InitializeParams {
+            client_info: ClientInfo {
+                name: "codex-tui".to_string(),
+                title: None,
+                version: "1.0.0".to_string(),
             },
-            out,
-        )
-        .await;
+            capabilities: None,
+        },
+        product_client_id: "codex-tui".to_string(),
+        runtime: sample_runtime_metadata(),
+        rpc_transport: AppServerRpcTransport::Stdio,
+    }
 }
 
 async fn ingest_turn_prerequisites(
@@ -1704,6 +1703,51 @@ async fn feature_observations_match_legacy_analytics_facts() {
             mcp_server_count: Some(2),
             connector_ids: Some(connector_ids.as_slice()),
             state: codex_observability::events::PluginState::Disabled,
+        },
+        &mut observation_events,
+    );
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
+#[tokio::test]
+async fn thread_started_observation_matches_legacy_response() {
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    ingest_initialize(&mut legacy_reducer, &mut legacy_events).await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-observed",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
+        .await;
+    observation_reducer.ingest_thread_started(
+        7,
+        codex_observability::events::ThreadStarted {
+            thread_id: "thread-observed",
+            source: codex_observability::events::ThreadSource::User,
+            parent_thread_id: None,
+            initialization_mode: codex_observability::events::ThreadInitializationMode::New,
+            model: "gpt-5",
+            ephemeral: false,
+            created_at: 1,
         },
         &mut observation_events,
     );
