@@ -2946,32 +2946,7 @@ impl Session {
         }
     }
 
-    pub(crate) async fn get_pending_input_for_turn_state(
-        &self,
-        expected_turn_state: &Arc<tokio::sync::Mutex<crate::state::TurnState>>,
-    ) -> (Vec<ResponseInputItem>, Vec<InterAgentCommunication>) {
-        let (pending_input, accepts_mailbox_delivery) = {
-            let active = self.active_turn.lock().await;
-            match active.as_ref() {
-                Some(at) if Arc::ptr_eq(&at.turn_state, expected_turn_state) => {
-                    let mut ts = expected_turn_state.lock().await;
-                    (
-                        ts.take_pending_input(),
-                        ts.accepts_mailbox_delivery_for_current_turn(),
-                    )
-                }
-                Some(_) | None => (Vec::new(), false),
-            }
-        };
-        if !accepts_mailbox_delivery {
-            return (pending_input, Vec::new());
-        }
-        let mailbox_items = self.mailbox_rx.lock().await.drain();
-        (pending_input, mailbox_items)
-    }
-
     /// Queue response items to be injected into the next active turn created for this session.
-    #[cfg(test)]
     pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
         if items.is_empty() {
             return;
@@ -2983,30 +2958,6 @@ impl Session {
 
     pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
         std::mem::take(&mut *self.idle_pending_input.lock().await)
-    }
-
-    pub(crate) async fn requeue_response_items_for_next_turn_front(
-        &self,
-        mut items: Vec<ResponseInputItem>,
-    ) {
-        if items.is_empty() {
-            return;
-        }
-
-        let mut idle_pending_input = self.idle_pending_input.lock().await;
-        items.append(&mut idle_pending_input);
-        *idle_pending_input = items;
-    }
-
-    pub(crate) async fn requeue_mailbox_items_front(
-        &self,
-        mailbox_items: Vec<InterAgentCommunication>,
-    ) {
-        if mailbox_items.is_empty() {
-            return;
-        }
-
-        self.mailbox_rx.lock().await.prepend(mailbox_items);
     }
 
     pub(crate) async fn clear_queued_goal_continuations_for_next_turn(&self) {

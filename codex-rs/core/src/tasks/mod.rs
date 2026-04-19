@@ -12,10 +12,8 @@ use std::time::Instant;
 use futures::future::BoxFuture;
 use tokio::select;
 use tokio::sync::Notify;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
-use tracing::debug;
 use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
@@ -46,7 +44,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -66,11 +63,6 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
-
-enum InitialResponseItems {
-    IncludeNextTurnQueue,
-    Direct(Vec<ResponseInputItem>),
-}
 
 #[derive(Clone, Copy)]
 enum GoalPauseOnInterrupt {
@@ -258,22 +250,6 @@ impl Session {
         input: Vec<UserInput>,
         task: T,
     ) {
-        self.start_task_with_initial_response_items(
-            turn_context,
-            input,
-            task,
-            InitialResponseItems::IncludeNextTurnQueue,
-        )
-        .await;
-    }
-
-    async fn start_task_with_initial_response_items<T: SessionTask>(
-        self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
-        input: Vec<UserInput>,
-        task: T,
-        initial_response_items: InitialResponseItems,
-    ) {
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -298,79 +274,27 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let include_next_turn_queue = matches!(
-            initial_response_items,
-            InitialResponseItems::IncludeNextTurnQueue
-        );
-        let mut active = self.active_turn.lock().await;
-        let skip_reason = match active.as_mut() {
-            None => Some("skipping task start because the turn was interrupted during startup"),
-            Some(turn) if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.tasks.is_empty() => {
-                Some("skipping task start because another turn replaced the startup turn")
-            }
-            Some(_) => None,
-        };
-        if let Some(reason) = skip_reason {
-            drop(active);
-            debug!("{reason}");
-            return;
-        }
-        drop(active);
-
-        let queued_response_items = match initial_response_items {
-            InitialResponseItems::IncludeNextTurnQueue => {
-                self.take_queued_response_items_for_next_turn().await
-            }
-            InitialResponseItems::Direct(items) => items,
-        };
-        let (turn_pending_input, mailbox_items) = if include_next_turn_queue {
-            self.get_pending_input_for_turn_state(&turn_state).await
-        } else {
-            (Vec::new(), Vec::new())
-        };
-
-        let mut active = self.active_turn.lock().await;
-        let skip_reason = match active.as_mut() {
-            None => Some("skipping task start because the turn was interrupted during startup"),
-            Some(turn) if !Arc::ptr_eq(&turn.turn_state, &turn_state) || !turn.tasks.is_empty() => {
-                Some("skipping task start because another turn replaced the startup turn")
-            }
-            Some(_) => None,
-        };
-        if let Some(reason) = skip_reason {
-            drop(active);
-            self.requeue_drained_startup_input(
-                queued_response_items,
-                turn_pending_input,
-                mailbox_items,
-            )
-            .await;
-            debug!("{reason}");
-            return;
-        }
+        let queued_response_items = self.take_queued_response_items_for_next_turn().await;
+        let mailbox_items = self.get_pending_input().await;
         {
             let mut turn_state = turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
             for item in queued_response_items {
                 turn_state.push_pending_input(item);
             }
-            for item in turn_pending_input {
+            for item in mailbox_items {
                 turn_state.push_pending_input(item);
             }
-            for mail in mailbox_items {
-                turn_state.push_pending_input(mail.to_response_input_item());
-            }
         }
-        let Some(turn) = active.as_mut() else {
-            debug!("skipping task start because the turn was interrupted during startup");
-            return;
-        };
+
+        let mut active = self.active_turn.lock().await;
+        let turn = active.get_or_insert_with(ActiveTurn::default);
+        debug_assert!(turn.tasks.is_empty());
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
         let task_cancellation_token = cancellation_token.child_token();
-        let (task_start_tx, task_start_rx) = oneshot::channel();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
         let task_span = info_span!(
@@ -382,7 +306,6 @@ impl Session {
         );
         let handle = tokio::spawn(
             async move {
-                let _ = task_start_rx.await;
                 let ctx_for_finish = Arc::clone(&ctx);
                 let last_agent_message = task_for_run
                     .run(
@@ -428,27 +351,6 @@ impl Session {
             _timer: timer,
         };
         turn.add_task(running_task);
-        drop(active);
-        let _ = task_start_tx.send(());
-    }
-
-    async fn requeue_drained_startup_input(
-        &self,
-        mut queued_response_items: Vec<ResponseInputItem>,
-        turn_pending_input: Vec<ResponseInputItem>,
-        mailbox_items: Vec<codex_protocol::protocol::InterAgentCommunication>,
-    ) {
-        if queued_response_items.is_empty()
-            && turn_pending_input.is_empty()
-            && mailbox_items.is_empty()
-        {
-            return;
-        }
-
-        self.requeue_mailbox_items_front(mailbox_items).await;
-        queued_response_items.extend(turn_pending_input);
-        self.requeue_response_items_for_next_turn_front(queued_response_items)
-            .await;
     }
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
@@ -466,59 +368,14 @@ impl Session {
     pub(crate) async fn maybe_start_turn_for_pending_work_or_goal_continuation(self: &Arc<Self>) {
         self.clear_stale_goal_continuations_for_next_turn().await;
         self.maybe_start_turn_for_pending_work().await;
-        let _continuation_guard = self.goal_continuation_lock.lock().await;
-        self.maybe_start_goal_continuation_if_idle().await;
+        self.queue_goal_continuation_if_active().await;
+        self.maybe_start_turn_for_pending_work().await;
     }
 
     pub(crate) async fn maybe_start_turn_for_active_goal_continuation(self: &Arc<Self>) {
-        let _continuation_guard = self.goal_continuation_lock.lock().await;
-        let active_goal = match self.get_thread_goal().await {
-            Ok(Some(goal)) if goal.status == ThreadGoalStatus::Active => true,
-            Ok(Some(_)) | Ok(None) => false,
-            Err(err) => {
-                tracing::warn!("failed to read thread goal before pending work startup: {err}");
-                false
-            }
-        };
-        if !active_goal {
-            self.clear_queued_goal_continuations_for_next_turn().await;
-            return;
-        }
-
+        self.clear_stale_goal_continuations_for_next_turn().await;
+        self.queue_goal_continuation_if_active().await;
         self.maybe_start_turn_for_pending_work().await;
-        self.maybe_start_goal_continuation_if_idle().await;
-    }
-
-    async fn maybe_start_goal_continuation_if_idle(self: &Arc<Self>) {
-        if self.has_active_turn().await
-            || self.has_queued_response_items_for_next_turn().await
-            || self.has_trigger_turn_mailbox_items().await
-        {
-            return;
-        }
-        let Some(items) = self.goal_continuation_items_if_active().await else {
-            return;
-        };
-        {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
-                return;
-            }
-            *active_turn = Some(ActiveTurn::default());
-        }
-
-        let turn_context = self
-            .new_default_turn_with_sub_id(uuid::Uuid::new_v4().to_string())
-            .await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        self.start_task_with_initial_response_items(
-            turn_context,
-            Vec::new(),
-            RegularTask::new(),
-            InitialResponseItems::Direct(items),
-        )
-        .await;
     }
 
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
