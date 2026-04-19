@@ -180,7 +180,7 @@ async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
         &config_path,
         config.replace(
             "general_analytics = true\n",
-            "general_analytics = true\ngoal_mode = true\n",
+            "general_analytics = true\ngoals = true\n",
         ),
     )?;
 
@@ -356,7 +356,7 @@ async fn thread_resume_emits_paused_goal_update() -> Result<()> {
         &config_path,
         config.replace(
             "general_analytics = true\n",
-            "general_analytics = true\ngoal_mode = true\n",
+            "general_analytics = true\ngoals = true\n",
         ),
     )?;
 
@@ -456,7 +456,7 @@ async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()>
         &config_path,
         config.replace(
             "general_analytics = true\n",
-            "general_analytics = true\ngoal_mode = true\n",
+            "general_analytics = true\ngoals = true\n",
         ),
     )?;
 
@@ -557,7 +557,7 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
         &config_path,
         config.replace(
             "general_analytics = true\n",
-            "general_analytics = true\ngoal_mode = true\n",
+            "general_analytics = true\ngoals = true\n",
         ),
     )?;
 

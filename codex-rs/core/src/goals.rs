@@ -226,7 +226,7 @@ impl Session {
         request: SetGoalRequest,
     ) -> anyhow::Result<ThreadGoal> {
         if !self.enabled(Feature::GoalMode) {
-            anyhow::bail!("goal_mode feature is disabled");
+            anyhow::bail!("goals feature is disabled");
         }
 
         let SetGoalRequest {
