@@ -874,6 +874,7 @@ mod tests {
                 "Composer.queue",
                 "Global.open_external_editor",
                 "Global.copy",
+                "Global.toggle_vim_mode",
                 "Editor.delete_backward_word",
                 "Editor.delete_forward_word",
                 "Editor.move_word_left",
@@ -984,8 +985,9 @@ mod tests {
         let unbound_tab = selection_tab(&params, KEYMAP_UNBOUND_TAB_ID);
 
         assert_eq!(unbound_tab.items.len(), 1);
-        assert_eq!(unbound_tab.items[0].name, "No unbound shortcuts");
-        assert!(unbound_tab.items[0].is_disabled);
+        assert_eq!(unbound_tab.items[0].name, "Toggle Vim Mode");
+        assert_eq!(unbound_tab.items[0].description.as_deref(), Some("unbound"));
+        assert!(!unbound_tab.items[0].is_disabled);
     }
 
     #[test]
