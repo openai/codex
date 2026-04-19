@@ -536,8 +536,10 @@ impl Session {
                     codex_state::ThreadGoalAccountingMode::ActiveOrComplete
                 } else if turn_context.goal_accounting.stopped_this_turn() {
                     codex_state::ThreadGoalAccountingMode::ActiveOrStopped
-                } else {
+                } else if turn_context.goal_accounting.active_this_turn() {
                     codex_state::ThreadGoalAccountingMode::ActiveOnly
+                } else {
+                    codex_state::ThreadGoalAccountingMode::ActiveStatusOnly
                 }
             }
             GoalAccountingBoundary::Turn => {
@@ -561,11 +563,13 @@ impl Session {
                                 ))
                         {
                             codex_state::ThreadGoalAccountingMode::ActiveOrStopped
-                        } else {
+                        } else if turn_context.goal_accounting.active_this_turn() {
                             codex_state::ThreadGoalAccountingMode::ActiveOnly
+                        } else {
+                            codex_state::ThreadGoalAccountingMode::ActiveStatusOnly
                         }
                     }
-                    None => codex_state::ThreadGoalAccountingMode::ActiveOnly,
+                    None => codex_state::ThreadGoalAccountingMode::ActiveStatusOnly,
                 }
             }
         };
