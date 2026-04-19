@@ -12,6 +12,7 @@ pub(super) use crate::app_event::RealtimeAudioDeviceKind;
 pub(super) use crate::app_event_sender::AppEventSender;
 pub(super) use crate::bottom_pane::LocalImageAttachment;
 pub(super) use crate::bottom_pane::MentionBinding;
+pub(super) use crate::bottom_pane::QueuedInputAction;
 pub(super) use crate::chatwidget::realtime::RealtimeConversationPhase;
 pub(super) use crate::history_cell::UserHistoryCell;
 pub(super) use crate::legacy_core::config::Config;
