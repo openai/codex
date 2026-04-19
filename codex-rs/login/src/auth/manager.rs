@@ -1581,6 +1581,11 @@ impl AuthManager {
         }
     }
 
+    pub fn set_chatgpt_backend_base_url(&self, chatgpt_base_url: Option<String>) {
+        let (_, auth_mode) = self.chatgpt_backend_auth_config();
+        self.set_chatgpt_backend_auth_config(chatgpt_base_url, auth_mode);
+    }
+
     fn chatgpt_backend_auth_config(&self) -> (Option<String>, BackgroundAgentTaskAuthMode) {
         let chatgpt_base_url = self
             .chatgpt_base_url

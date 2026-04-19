@@ -2013,12 +2013,25 @@ impl CodexMessageProcessor {
             });
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+        let authorization_header_value = self
+            .auth_manager
+            .chatgpt_authorization_header_for_auth(&auth)
+            .await;
+        let mut client = BackendClient::new(self.config.chatgpt_base_url.clone())
+            .map(|client| {
+                client.with_user_agent(codex_login::default_client::get_codex_user_agent())
+            })
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to construct backend client: {err}"),
                 data: None,
             })?;
+        if let Some(authorization_header_value) = authorization_header_value {
+            client = client.with_authorization_header_value(authorization_header_value);
+        }
+        if let Some(account_id) = auth.get_account_id() {
+            client = client.with_chatgpt_account_id(account_id);
+        }
 
         let snapshots = client
             .get_rate_limits_many()

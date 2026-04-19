@@ -37,6 +37,11 @@ impl HttpClient {
         self
     }
 
+    pub fn with_authorization_header_value(mut self, value: impl Into<String>) -> Self {
+        self.backend = self.backend.clone().with_authorization_header_value(value);
+        self
+    }
+
     pub fn with_user_agent(mut self, ua: impl Into<String>) -> Self {
         self.backend = self.backend.clone().with_user_agent(ua);
         self
