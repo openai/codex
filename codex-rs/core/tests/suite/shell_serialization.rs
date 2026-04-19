@@ -107,8 +107,8 @@ fn configure_shell_model(
         (ShellModelOutput::ShellCommand, _) => builder.with_model("test-gpt-5-codex"),
         (ShellModelOutput::LocalShell, true) => builder.with_model("gpt-5.4"),
         (ShellModelOutput::Shell, true) => builder.with_model("gpt-5.4"),
-        (ShellModelOutput::LocalShell, false) => builder.with_model("codex-mini-latest"),
-        (ShellModelOutput::Shell, false) => builder.with_model("gpt-5"),
+        (ShellModelOutput::LocalShell, false) => builder.with_model("gpt-5.4-mini"),
+        (ShellModelOutput::Shell, false) => builder.with_model("gpt-5.2"),
     };
 
     builder.with_config(move |config| {
@@ -808,7 +808,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.1");
+    let mut builder = test_codex().with_model("gpt-5.4");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-command";
@@ -859,7 +859,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.1");
+    let mut builder = test_codex().with_model("gpt-5.4");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-command";

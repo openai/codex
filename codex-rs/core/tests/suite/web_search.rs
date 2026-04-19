@@ -34,7 +34,7 @@ async fn web_search_mode_cached_sets_external_web_access_false() {
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
-        .with_model("gpt-5-codex")
+        .with_model("gpt-5.4")
         .with_config(|config| {
             config
                 .web_search_mode
@@ -74,7 +74,7 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
-        .with_model("gpt-5-codex")
+        .with_model("gpt-5.4")
         .with_config(|config| {
             config
                 .features
@@ -118,7 +118,7 @@ async fn web_search_mode_defaults_to_cached_when_features_disabled() {
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
-        .with_model("gpt-5-codex")
+        .with_model("gpt-5.4")
         .with_config(|config| {
             config
                 .web_search_mode
@@ -175,7 +175,7 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
     .await;
 
     let mut builder = test_codex()
-        .with_model("gpt-5-codex")
+        .with_model("gpt-5.4")
         .with_config(|config| {
             config
                 .web_search_mode
@@ -250,7 +250,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
     )
     .expect("write config.toml");
 
-    let mut builder = test_codex().with_model("gpt-5-codex").with_home(home);
+    let mut builder = test_codex().with_model("gpt-5.4").with_home(home);
     let test = builder
         .build(&server)
         .await

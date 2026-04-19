@@ -198,7 +198,7 @@ async fn no_marker_sessions_preserves_existing_config_fields() -> io::Result<()>
 
     assert_eq!(status, PersonalityMigrationStatus::Applied);
     let persisted = read_config_toml(temp.path()).await?;
-    assert_eq!(persisted.model, Some("gpt-5-codex".to_string()));
+    assert_eq!(persisted.model, Some("gpt-5.4".to_string()));
     assert_eq!(persisted.personality, Some(Personality::Pragmatic));
     Ok(())
 }
