@@ -20,6 +20,8 @@ use toml_edit::Table as TomlTable;
 use toml_edit::value;
 
 const NOTICE_TABLE_KEY: &str = "notice";
+const AUTO_REVIEW_FEATURE_KEY: &str = "auto_review";
+const LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY: &str = "guardian_approval";
 
 /// Discrete config mutations supported by the persistence engine.
 #[derive(Clone, Debug)]
@@ -1055,15 +1057,20 @@ impl ConfigEditsBuilder {
                 vec!["features".to_string(), feature_key.to_string()]
             }
         };
-        let segments = segments_for_key(key);
-        let legacy_auto_review_segments = if key == "auto_review" {
-            Some(segments_for_key("guardian_approval"))
+        let write_key = if key == LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY {
+            AUTO_REVIEW_FEATURE_KEY
+        } else {
+            key
+        };
+        let segments = segments_for_key(write_key);
+        let legacy_auto_review_segments = if write_key == AUTO_REVIEW_FEATURE_KEY {
+            Some(segments_for_key(LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY))
         } else {
             None
         };
         let is_default_false_feature = FEATURES
             .iter()
-            .find(|spec| spec.key == key)
+            .find(|spec| spec.key == write_key)
             .is_some_and(|spec| !spec.default_enabled);
         if enabled || profile_scoped || !is_default_false_feature {
             self.edits.push(ConfigEdit::SetPath {
