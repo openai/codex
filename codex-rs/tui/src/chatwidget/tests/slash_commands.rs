@@ -312,7 +312,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
 }
 
 async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_popup_text: &str) {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
@@ -364,7 +364,7 @@ async fn queued_slash_menu_cancel_drains_next_input() {
 
 #[tokio::test]
 async fn queued_slash_menu_selection_drains_next_input() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
