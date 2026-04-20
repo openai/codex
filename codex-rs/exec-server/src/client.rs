@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
@@ -141,10 +142,9 @@ struct Inner {
     // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
     // Once the transport closes, every executor operation should fail quickly
-    // with the same message. This process/filesystem-level latch prevents
-    // callers from waiting on request-specific timeouts after the environment
-    // is gone.
-    disconnected: std::sync::RwLock<Option<String>>,
+    // with the same canonical message. This client never reconnects, so the
+    // latch only moves from unset to set once.
+    disconnected: OnceLock<String>,
     session_id: std::sync::RwLock<Option<String>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
@@ -399,7 +399,7 @@ impl ExecServerClient {
                 client: rpc_client,
                 sessions: ArcSwap::from_pointee(HashMap::new()),
                 sessions_write_lock: Mutex::new(()),
-                disconnected: std::sync::RwLock::new(None),
+                disconnected: OnceLock::new(),
                 session_id: std::sync::RwLock::new(None),
                 reader_task,
             }
@@ -629,22 +629,16 @@ impl Session {
 impl Inner {
     fn disconnected_error(&self) -> Option<ExecServerError> {
         self.disconnected
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get()
             .clone()
             .map(ExecServerError::Disconnected)
     }
 
     fn set_disconnected(&self, message: String) -> Option<String> {
-        let mut disconnected = self
-            .disconnected
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if disconnected.is_some() {
-            return None;
+        match self.disconnected.set(message.clone()) {
+            Ok(()) => Some(message),
+            Err(_) => None,
         }
-        *disconnected = Some(message.clone());
-        Some(message)
     }
 
     fn get_session(&self, process_id: &ProcessId) -> Option<Arc<SessionState>> {
@@ -723,12 +717,7 @@ async fn mark_disconnected(inner: &Arc<Inner>, message: String) -> String {
         fail_all_sessions(inner, message.clone()).await;
         message
     } else {
-        inner
-            .disconnected
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-            .unwrap_or(message)
+        inner.disconnected.get().cloned().unwrap_or(message)
     }
 }
 
