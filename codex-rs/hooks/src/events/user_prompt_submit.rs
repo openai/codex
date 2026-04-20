@@ -451,28 +451,38 @@ mod tests {
         let temp = tempfile::tempdir()?;
         let marker_path = temp.path().join("project-ran");
         let (shell_program, shell_args, stopping_command, project_command) = if cfg!(windows) {
-            let stopping_script = temp.path().join("stopping.cmd");
+            let stopping_script = temp.path().join("stopping.ps1");
             std::fs::write(
                 &stopping_script,
-                r#"@echo off
-more > nul
-echo {"decision":"block","reason":"slow down","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"trusted context"}}
+                r#"$null = [Console]::In.ReadToEnd()
+@{
+  'decision' = 'block'
+  'reason' = 'slow down'
+  'hookSpecificOutput' = @{
+    'hookEventName' = 'UserPromptSubmit'
+    'additionalContext' = 'trusted context'
+  }
+} | ConvertTo-Json -Compress -Depth 4
 "#,
             )?;
-            let project_script = temp.path().join("project.cmd");
+            let project_script = temp.path().join("project.ps1");
             std::fs::write(
                 &project_script,
-                r#"@echo off
-more > nul
-type nul > project-ran
-echo project context
+                r#"$null = [Console]::In.ReadToEnd()
+New-Item -ItemType File -Path project-ran -Force | Out-Null
+Write-Output 'project context'
 "#,
             )?;
             (
-                "cmd.exe".to_string(),
-                vec!["/D".to_string(), "/C".to_string()],
-                format!("\"{}\"", stopping_script.display()),
-                format!("\"{}\"", project_script.display()),
+                "powershell.exe".to_string(),
+                vec![
+                    "-NoProfile".to_string(),
+                    "-ExecutionPolicy".to_string(),
+                    "Bypass".to_string(),
+                    "-File".to_string(),
+                ],
+                stopping_script.display().to_string(),
+                project_script.display().to_string(),
             )
         } else {
             (
