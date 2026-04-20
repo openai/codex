@@ -8,4 +8,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.3-codex default · /tmp/project                                          "
+"  <model> default · /tmp/project                                                "

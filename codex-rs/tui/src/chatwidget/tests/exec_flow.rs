@@ -224,7 +224,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
 
 #[tokio::test]
 async fn preamble_keeps_working_status_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
 
     // Regression sequence: a preamble line is committed to history before any exec/tool event.
@@ -246,10 +246,25 @@ async fn preamble_keeps_working_status_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw preamble + status widget");
-    assert_chatwidget_snapshot!(
-        "preamble_keeps_working_status",
-        normalized_backend_snapshot(terminal.backend())
-    );
+    let model_label = format!("  {} default · /tmp/project", chat.current_model());
+    let snapshot = normalized_backend_snapshot(terminal.backend())
+        .lines()
+        .map(|line| {
+            if let Some(content) = line
+                .strip_prefix('"')
+                .and_then(|line| line.strip_suffix('"'))
+            {
+                let width = content.chars().count();
+                if let Some(trailing_spaces) = content.strip_prefix(&model_label) {
+                    let normalized = format!("  <model> default · /tmp/project{trailing_spaces}");
+                    return format!("\"{normalized:width$}\"");
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("preamble_keeps_working_status", snapshot);
 }
 
 #[tokio::test]
