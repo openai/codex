@@ -1,5 +1,6 @@
 CREATE TABLE thread_goals (
     thread_id TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    goal_id TEXT NOT NULL,
     objective TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'budget_limited', 'complete')),
     token_budget INTEGER,
