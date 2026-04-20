@@ -156,6 +156,10 @@ impl OtelProvider {
     pub fn metrics(&self) -> Option<&MetricsClient> {
         self.metrics.as_ref()
     }
+
+    pub fn replace_global_metrics(provider: Option<&Self>) {
+        crate::metrics::replace_global(provider.and_then(|provider| provider.metrics.clone()));
+    }
 }
 
 impl Drop for OtelProvider {

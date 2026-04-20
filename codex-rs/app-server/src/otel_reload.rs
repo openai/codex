@@ -116,6 +116,7 @@ impl OtelReloader {
     pub(crate) fn shutdown(&self) {
         self.logger_layer.replace_provider(/*provider*/ None);
         self.trace_layer.shutdown();
+        OtelProvider::replace_global_metrics(/*provider*/ None);
         let mut state = self
             .state
             .lock()
@@ -193,6 +194,7 @@ impl Drop for OtelReloadCommit {
             state.key = self.previous_key.clone();
             self.logger_layer.replace_provider(state.provider.as_ref());
             self.trace_layer.replace_provider(state.provider.as_ref());
+            OtelProvider::replace_global_metrics(state.provider.as_ref());
         } else if let Some(old_provider) = self.old_provider.take() {
             state.retired_providers.push(old_provider);
         }

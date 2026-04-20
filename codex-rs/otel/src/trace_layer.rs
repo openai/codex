@@ -162,7 +162,15 @@ where
             return;
         }
 
-        if let Some(layer) = self.current_layer() {
+        let span_layer = event
+            .parent()
+            .and_then(|id| self.layer_for_span(id))
+            .or_else(|| {
+                ctx.event_span(event)
+                    .and_then(|span| self.layer_for_span(&span.id()))
+            });
+
+        if let Some(layer) = span_layer.or_else(|| self.current_layer()) {
             layer.on_event(event, ctx);
         }
     }
@@ -327,5 +335,27 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[test]
+    fn span_events_use_original_layer_after_provider_replacement() {
+        let (first_provider, first_spans) = provider_with_tracer("first");
+        let (layer, handle) = OtelTraceLayer::from_provider(Some(&first_provider));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let span = trace_span!("old_span");
+        {
+            let _entered = span.enter();
+            handle.replace_provider(/*provider*/ None);
+            tracing::info!(target: "codex_otel.trace_safe.test", "old_span_event");
+        }
+        drop(span);
+
+        let spans = first_spans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].events.len(), 1);
     }
 }
