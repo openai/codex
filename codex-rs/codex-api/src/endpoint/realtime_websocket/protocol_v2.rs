@@ -7,6 +7,7 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
+use codex_protocol::protocol::RealtimeNoopRequested;
 use codex_protocol::protocol::RealtimeResponseCancelled;
 use codex_protocol::protocol::RealtimeResponseCreated;
 use codex_protocol::protocol::RealtimeResponseDone;
@@ -15,6 +16,7 @@ use serde_json::Value;
 use tracing::debug;
 
 const BACKGROUND_AGENT_TOOL_NAME: &str = "background_agent";
+const SILENCE_TOOL_NAME: &str = "remain_silent";
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const DEFAULT_AUDIO_CHANNELS: u16 = 1;
 const TOOL_ARGUMENT_KEYS: [&str; 5] = ["input_transcript", "input", "text", "prompt", "query"];
@@ -127,6 +129,9 @@ fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
     if let Some(handoff) = parse_handoff_requested_event(item) {
         return Some(handoff);
     }
+    if let Some(noop) = parse_noop_requested_event(item) {
+        return Some(noop);
+    }
 
     item.get("id")
         .and_then(Value::as_str)
@@ -157,6 +162,29 @@ fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<Realti
         item_id,
         input_transcript: extract_input_transcript(arguments),
         active_transcript: Vec::new(),
+    }))
+}
+
+fn parse_noop_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {
+    let item_type = item.get("type").and_then(Value::as_str);
+    let item_name = item.get("name").and_then(Value::as_str);
+    if item_type != Some("function_call") || item_name != Some(SILENCE_TOOL_NAME) {
+        return None;
+    }
+
+    let call_id = item
+        .get("call_id")
+        .and_then(Value::as_str)
+        .or_else(|| item.get("id").and_then(Value::as_str))?;
+    let item_id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or(call_id)
+        .to_string();
+
+    Some(RealtimeEvent::NoopRequested(RealtimeNoopRequested {
+        call_id: call_id.to_string(),
+        item_id,
     }))
 }
 

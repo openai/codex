@@ -1292,6 +1292,27 @@ async fn handle_realtime_server_event(
             }
             false
         }
+        RealtimeEvent::NoopRequested(noop) => {
+            *output_audio_state = None;
+
+            match session_kind {
+                RealtimeSessionKind::V1 => {}
+                RealtimeSessionKind::V2 => {
+                    if let Err(err) = writer
+                        .send_conversation_handoff_append(noop.call_id.clone(), String::new())
+                        .await
+                    {
+                        let mapped_error = map_api_error(err);
+                        warn!("failed to send realtime noop function output: {mapped_error}");
+                        let _ = events_tx
+                            .send(RealtimeEvent::Error(mapped_error.to_string()))
+                            .await;
+                        return Err(mapped_error.into());
+                    }
+                }
+            }
+            false
+        }
         RealtimeEvent::Error(_) => true,
         RealtimeEvent::SessionUpdated { session_id, .. } => {
             info!(realtime_session_id = %session_id, "realtime session updated");
