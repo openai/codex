@@ -107,8 +107,8 @@ fn configure_shell_model(
         (ShellModelOutput::ShellCommand, _) => builder.with_model("test-gpt-5-codex"),
         (ShellModelOutput::LocalShell, true) => builder.with_model("gpt-5.4"),
         (ShellModelOutput::Shell, true) => builder.with_model("gpt-5.4"),
-        (ShellModelOutput::LocalShell, false) => builder.with_model("gpt-5.4-mini"),
-        (ShellModelOutput::Shell, false) => builder.with_model("gpt-5.2"),
+        (ShellModelOutput::LocalShell, false) => builder.with_model("test-local-shell-json"),
+        (ShellModelOutput::Shell, false) => builder.with_model("test-shell-json"),
     };
 
     builder.with_config(move |config| {

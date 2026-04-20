@@ -21,8 +21,8 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-const REQUESTED_MODEL: &str = "gpt-5.1-codex-max";
-const SERVER_MODEL: &str = "gpt-5.2-codex";
+const REQUESTED_MODEL: &str = "gpt-5.4";
+const SERVER_MODEL: &str = "gpt-5.3-codex";
 
 #[tokio::test]
 async fn openai_model_header_mismatch_emits_model_rerouted_notification_v2() -> Result<()> {
