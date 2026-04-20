@@ -49,6 +49,7 @@ use crate::mcp_cmd::McpCli;
 use crate::responses_cmd::ResponsesCommand;
 use crate::responses_cmd::run_responses_command;
 
+use codex_core::build_models_manager;
 use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -57,6 +58,10 @@ use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use codex_features::is_known_feature_key;
+use codex_models_manager::AuthManager;
+use codex_models_manager::bundled_models_response;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
@@ -200,6 +205,9 @@ struct DebugCommand {
 
 #[derive(Debug, clap::Subcommand)]
 enum DebugSubcommand {
+    /// Render the raw model catalog as JSON.
+    Models(DebugModelsCommand),
+
     /// Tooling: helps debug the app server.
     AppServer(DebugAppServerCommand),
 
@@ -238,6 +246,13 @@ struct DebugPromptInputCommand {
     /// Optional image(s) to attach to the user prompt.
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     images: Vec<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+struct DebugModelsCommand {
+    /// Skip refresh and dump only the bundled catalog shipped with this binary.
+    #[arg(long = "bundled", default_value_t = false)]
+    bundled: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -991,6 +1006,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             }
         },
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
+            DebugSubcommand::Models(cmd) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
+                    "debug models",
+                )?;
+                run_debug_models_command(cmd, root_config_overrides).await?;
+            }
             DebugSubcommand::AppServer(cmd) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
@@ -1277,6 +1300,31 @@ async fn run_debug_prompt_input_command(
     let prompt_input = codex_core::build_prompt_input(config, input).await?;
     println!("{}", serde_json::to_string_pretty(&prompt_input)?);
 
+    Ok(())
+}
+
+async fn run_debug_models_command(
+    cmd: DebugModelsCommand,
+    root_config_overrides: CliConfigOverrides,
+) -> anyhow::Result<()> {
+    let catalog = if cmd.bundled {
+        bundled_models_response()?
+    } else {
+        let cli_overrides = root_config_overrides
+            .parse_overrides()
+            .map_err(anyhow::Error::msg)?;
+        let config = Config::load_with_cli_overrides(cli_overrides).await?;
+        let auth_manager =
+            AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true);
+        let models_manager =
+            build_models_manager(&config, auth_manager, CollaborationModesConfig::default());
+        models_manager
+            .raw_model_catalog(RefreshStrategy::OnlineIfUncached)
+            .await
+    };
+
+    serde_json::to_writer(std::io::stdout(), &catalog)?;
+    println!();
     Ok(())
 }
 
@@ -1700,6 +1748,21 @@ mod tests {
             cmd.images,
             vec![PathBuf::from("/tmp/a.png"), PathBuf::from("/tmp/b.png")]
         );
+    }
+
+    #[test]
+    fn debug_models_parses_bundled_flag() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "debug", "models", "--bundled"]).expect("parse");
+
+        let Some(Subcommand::Debug(DebugCommand {
+            subcommand: DebugSubcommand::Models(cmd),
+        })) = cli.subcommand
+        else {
+            panic!("expected debug models subcommand");
+        };
+
+        assert!(cmd.bundled);
     }
 
     #[test]
