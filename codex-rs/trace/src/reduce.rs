@@ -47,6 +47,10 @@ struct ReducedTrace {
 struct Reducer<'a> {
     bundle_dir: &'a Path,
     trace: ReducedTrace,
+    // The reduced item drops provider metadata, so keep the private raw item
+    // around only while reducing. It lets full request snapshots point back to
+    // the canonical item without writing the raw item into state.json.
+    raw_conversation_items: BTreeMap<String, Value>,
     next_conversation_item_ordinal: u64,
 }
 
@@ -92,6 +96,7 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<ReducedTrace> {
             interaction_edges: BTreeMap::new(),
             raw_payloads: BTreeMap::new(),
         },
+        raw_conversation_items: BTreeMap::new(),
         next_conversation_item_ordinal: 1,
     };
 
@@ -537,18 +542,48 @@ impl Reducer<'_> {
         let Some(payload) = self.payload_by_id(raw_payload_id)? else {
             return Ok(Vec::new());
         };
+
+        let mut ids = Vec::new();
         let items = payload
             .get("input")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let ids = self.add_conversation_items(
-            thread_id,
-            event.wall_time_unix_ms,
-            items,
-            None,
-            raw_payload_id,
-        );
+        let thread_item_ids = self
+            .trace
+            .threads
+            .get(thread_id)
+            .map(|thread| string_array_field(thread, "conversation_item_ids"))
+            .unwrap_or_default();
+
+        // Requests carry the full model-visible input in thread order. Reuse
+        // the known prefix, then create new items for the tail.
+        //
+        // Example: if state has [A, B] and the next request sends [A, B, C],
+        // this returns [A, B, new C] instead of minting fresh copies of A/B.
+        let mut next_existing_index = 0;
+        for item in items {
+            if let Some(item_id) = thread_item_ids.get(next_existing_index)
+                && self
+                    .raw_conversation_items
+                    .get(item_id)
+                    .is_some_and(|existing| existing == &item)
+            {
+                push_unique(&mut ids, item_id);
+                next_existing_index += 1;
+                continue;
+            }
+
+            let item_id = self.add_conversation_item(
+                thread_id,
+                event.wall_time_unix_ms,
+                item,
+                None,
+                raw_payload_id,
+            );
+            push_unique(&mut ids, &item_id);
+            next_existing_index = thread_item_ids.len();
+        }
         if let Some(thread) = self.trace.threads.get_mut(thread_id) {
             extend_array_unique(thread, "conversation_item_ids", ids.iter());
         }
@@ -602,23 +637,42 @@ impl Reducer<'_> {
     ) -> Vec<String> {
         let mut ids = Vec::new();
         for item in items {
-            let item_id = format!("item:{}", self.next_conversation_item_ordinal);
-            self.next_conversation_item_ordinal += 1;
-            let produced_by = producer.clone().into_iter().collect::<Vec<_>>();
-            let normalized = normalize_conversation_item(
-                &item_id,
+            let item_id = self.add_conversation_item(
                 thread_id,
                 first_seen_at_unix_ms,
-                &item,
-                produced_by,
+                item,
+                producer.clone(),
                 raw_payload_id,
             );
-            self.trace
-                .conversation_items
-                .insert(item_id.clone(), normalized);
             ids.push(item_id);
         }
         ids
+    }
+
+    fn add_conversation_item(
+        &mut self,
+        thread_id: &str,
+        first_seen_at_unix_ms: i64,
+        item: Value,
+        producer: Option<Value>,
+        raw_payload_id: &str,
+    ) -> String {
+        let item_id = format!("item:{}", self.next_conversation_item_ordinal);
+        self.next_conversation_item_ordinal += 1;
+        let produced_by = producer.into_iter().collect::<Vec<_>>();
+        let normalized = normalize_conversation_item(
+            &item_id,
+            thread_id,
+            first_seen_at_unix_ms,
+            &item,
+            produced_by,
+            raw_payload_id,
+        );
+        self.raw_conversation_items.insert(item_id.clone(), item);
+        self.trace
+            .conversation_items
+            .insert(item_id.clone(), normalized);
+        item_id
     }
 
     fn payload_by_id(&self, raw_payload_id: &str) -> Result<Option<Value>> {
@@ -1054,27 +1108,46 @@ mod tests {
             }))?,
         )?;
         std::fs::create_dir(temp.path().join("payloads"))?;
+
+        let user_message = json!({
+            "type": "message",
+            "role": "user",
+            "content": [{ "type": "input_text", "text": "hi" }]
+        });
+        let tool_call = json!({
+            "type": "function_call",
+            "name": "shell",
+            "arguments": "{}",
+            "call_id": "call-1"
+        });
+
         std::fs::write(
             temp.path().join("payloads/1.json"),
-            serde_json::to_vec(&json!({
-                "input": [{
-                    "type": "message",
-                    "role": "user",
-                    "content": [{ "type": "input_text", "text": "hi" }]
-                }]
-            }))?,
+            serde_json::to_vec(&json!({ "input": [user_message.clone()] }))?,
         )?;
         std::fs::write(
             temp.path().join("payloads/2.json"),
             serde_json::to_vec(&json!({
                 "response_id": "resp-1",
                 "token_usage": { "input_tokens": 1, "output_tokens": 2 },
-                "output_items": [{
-                    "type": "function_call",
-                    "name": "shell",
-                    "arguments": "{}",
-                    "call_id": "call-1"
-                }]
+                "output_items": [tool_call.clone()]
+            }))?,
+        )?;
+        // The next request includes the whole model-visible input again. The
+        // reducer should reuse the user message and tool call, then add only
+        // the new tool output item.
+        std::fs::write(
+            temp.path().join("payloads/3.json"),
+            serde_json::to_vec(&json!({
+                "input": [
+                    user_message,
+                    tool_call,
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call-1",
+                        "output": "ok\n"
+                    }
+                ]
             }))?,
         )?;
         let mut events = std::fs::File::create(temp.path().join("events.jsonl"))?;
@@ -1127,15 +1200,44 @@ mod tests {
                 "model_visible_call.id": "call-1"
             }),
         )?;
-
+        write_event(
+            &mut events,
+            6,
+            "codex.turn.started",
+            json!({"thread.id": "thread-1", "turn.id": "turn-2"}),
+        )?;
+        write_event(
+            &mut events,
+            7,
+            "codex.inference.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-2",
+                "inference.id": "inf-2",
+                "raw_payload.request.id": "raw_payload:3",
+                "raw_payload.request.path": "payloads/3.json",
+                "raw_payload.request.kind": "inference_request"
+            }),
+        )?;
         let trace = reduce_bundle(temp.path())?;
 
-        assert_eq!(trace.threads.len(), 1);
-        assert_eq!(trace.inference_calls.len(), 1);
-        assert_eq!(trace.conversation_items.len(), 2);
         assert_eq!(
-            trace.tool_calls["tool-1"]["model_visible_call_item_ids"],
-            json!(["item:2"])
+            json!({
+                "thread_count": trace.threads.len(),
+                "inference_count": trace.inference_calls.len(),
+                "conversation_item_count": trace.conversation_items.len(),
+                "thread_item_ids": trace.threads["thread-1"]["conversation_item_ids"].clone(),
+                "second_request_item_ids": trace.inference_calls["inf-2"]["request_item_ids"].clone(),
+                "tool_call_item_ids": trace.tool_calls["tool-1"]["model_visible_call_item_ids"].clone(),
+            }),
+            json!({
+                "thread_count": 1,
+                "inference_count": 2,
+                "conversation_item_count": 3,
+                "thread_item_ids": ["item:1", "item:2", "item:3"],
+                "second_request_item_ids": ["item:1", "item:2", "item:3"],
+                "tool_call_item_ids": ["item:2"],
+            })
         );
         Ok(())
     }
