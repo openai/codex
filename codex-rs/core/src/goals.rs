@@ -347,6 +347,8 @@ impl Session {
         let goal_status = goal.status;
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
+        self.goal_continuation_suppressed
+            .store(false, Ordering::SeqCst);
         self.thread_goal_may_exist.store(true, Ordering::SeqCst);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
         if replacing_goal
@@ -436,6 +438,8 @@ impl Session {
 
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
+        self.goal_continuation_suppressed
+            .store(false, Ordering::SeqCst);
         self.thread_goal_may_exist.store(true, Ordering::SeqCst);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
 
@@ -467,6 +471,8 @@ impl Session {
     }
 
     pub(crate) async fn clear_cached_thread_goal_after_delete(&self) {
+        self.goal_continuation_suppressed
+            .store(false, Ordering::SeqCst);
         self.thread_goal_may_exist.store(false, Ordering::SeqCst);
         *self.thread_goal_cache.lock().await = None;
         self.thread_goal_wall_clock_accounting
@@ -770,6 +776,8 @@ impl Session {
         if !self.enabled(Feature::Goals) {
             return;
         }
+        self.goal_continuation_suppressed
+            .store(false, Ordering::SeqCst);
         let turn_context = {
             let active = self.active_turn.lock().await;
             active.as_ref().and_then(|active_turn| {
@@ -1014,6 +1022,8 @@ impl Session {
         };
         let goal_id = goal.goal_id.clone();
         let goal = protocol_goal_from_state(goal);
+        self.goal_continuation_suppressed
+            .store(false, Ordering::SeqCst);
         self.thread_goal_may_exist.store(true, Ordering::SeqCst);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
         let wall_clock_guard = self
@@ -1069,6 +1079,12 @@ impl Session {
         if self.has_trigger_turn_mailbox_items().await {
             tracing::debug!(
                 "skipping active goal continuation because trigger-turn mailbox input is pending"
+            );
+            return None;
+        }
+        if self.goal_continuation_suppressed.load(Ordering::SeqCst) {
+            tracing::debug!(
+                "skipping active goal continuation because the last continuation made no tool calls"
             );
             return None;
         }
@@ -1335,7 +1351,7 @@ mod tests {
         assert!(prompt.contains("Token budget: 10000"));
         assert!(prompt.contains("call update_goal with status \"complete\""));
         assert!(prompt.contains(
-            "leave the goal active and explain the blocker or next required input to the user"
+            "explain the blocker or next required input to the user and wait for new input"
         ));
         assert!(!prompt.contains("budgetLimited"));
         assert!(!prompt.contains("status \"paused\""));
