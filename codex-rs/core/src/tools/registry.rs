@@ -446,17 +446,16 @@ impl ToolRegistry {
             }
         }
 
-        if tool_name.name != UPDATE_GOAL_TOOL_NAME {
-            if let Err(err) = invocation
+        if tool_name.name != UPDATE_GOAL_TOOL_NAME
+            && let Err(err) = invocation
                 .session
                 .account_thread_goal_progress(
                     invocation.turn.as_ref(),
                     GoalAccountingBoundary::Tool,
                 )
                 .await
-            {
-                warn!("failed to account thread goal progress after tool call: {err}");
-            }
+        {
+            warn!("failed to account thread goal progress after tool call: {err}");
         }
 
         match result {
