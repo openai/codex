@@ -229,30 +229,6 @@ pub struct TuiApprovalKeymap {
     pub cancel: Option<KeybindingsSpec>,
 }
 
-/// Onboarding keybindings.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct TuiOnboardingKeymap {
-    /// Move selection up.
-    pub move_up: Option<KeybindingsSpec>,
-    /// Move selection down.
-    pub move_down: Option<KeybindingsSpec>,
-    /// Pick first option.
-    pub select_first: Option<KeybindingsSpec>,
-    /// Pick second option.
-    pub select_second: Option<KeybindingsSpec>,
-    /// Pick third option.
-    pub select_third: Option<KeybindingsSpec>,
-    /// Confirm current selection.
-    pub confirm: Option<KeybindingsSpec>,
-    /// Cancel current screen action.
-    pub cancel: Option<KeybindingsSpec>,
-    /// Quit onboarding flow.
-    pub quit: Option<KeybindingsSpec>,
-    /// Cycle welcome animation variant.
-    pub toggle_animation: Option<KeybindingsSpec>,
-}
-
 /// Raw keymap configuration from `[tui.keymap]`.
 ///
 /// Each context contains action-level overrides. Missing actions inherit from
@@ -281,8 +257,6 @@ pub struct TuiKeymap {
     pub list: TuiListKeymap,
     #[serde(default)]
     pub approval: TuiApprovalKeymap,
-    #[serde(default)]
-    pub onboarding: TuiOnboardingKeymap,
 }
 
 /// Normalize one user-entered key spec into canonical storage format.

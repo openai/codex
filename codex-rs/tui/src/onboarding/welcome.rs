@@ -12,9 +12,8 @@ use ratatui::widgets::Wrap;
 use std::cell::Cell;
 
 use crate::ascii_animation::AsciiAnimation;
-use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
-use crate::keymap::OnboardingKeymap;
+use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::tui::FrameRequester;
@@ -29,22 +28,19 @@ pub(crate) struct WelcomeWidget {
     animation: AsciiAnimation,
     animations_enabled: bool,
     animations_suppressed: Cell<bool>,
-    toggle_animation_keys: Vec<KeyBinding>,
     layout_area: Cell<Option<Rect>>,
 }
 
 impl KeyboardHandler for WelcomeWidget {
-    /// Rotate the welcome animation when the configured toggle shortcut fires.
+    /// Rotate the welcome animation when the fixed toggle shortcut fires.
     ///
-    /// The key list comes from runtime keymap defaults/overrides and can
-    /// include compatibility variants for terminals that report modifier bits
-    /// differently.
+    /// The key list includes compatibility variants for terminals that report
+    /// modifier bits differently.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if !self.animations_enabled {
             return;
         }
-        if key_event.kind == KeyEventKind::Press && self.toggle_animation_keys.is_pressed(key_event)
-        {
+        if key_event.kind == KeyEventKind::Press && keys::TOGGLE_ANIMATION.is_pressed(key_event) {
             tracing::warn!("Welcome background to press '.'");
             let _ = self.animation.pick_random_variant();
         }
@@ -56,14 +52,12 @@ impl WelcomeWidget {
         is_logged_in: bool,
         request_frame: FrameRequester,
         animations_enabled: bool,
-        onboarding_keymap: OnboardingKeymap,
     ) -> Self {
         Self {
             is_logged_in,
             animation: AsciiAnimation::new(request_frame),
             animations_enabled,
             animations_suppressed: Cell::new(false),
-            toggle_animation_keys: onboarding_keymap.toggle_animation,
             layout_area: Cell::new(None),
         }
     }
@@ -148,7 +142,6 @@ mod tests {
             /*is_logged_in*/ false,
             FrameRequester::test_dummy(),
             /*animations_enabled*/ true,
-            crate::keymap::RuntimeKeymap::defaults().onboarding,
         );
         let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
         let mut buf = Buffer::empty(area);
@@ -165,7 +158,6 @@ mod tests {
             /*is_logged_in*/ false,
             FrameRequester::test_dummy(),
             /*animations_enabled*/ true,
-            crate::keymap::RuntimeKeymap::defaults().onboarding,
         );
         let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT - 1);
         let mut buf = Buffer::empty(area);
@@ -186,9 +178,6 @@ mod tests {
             ),
             animations_enabled: true,
             animations_suppressed: Cell::new(false),
-            toggle_animation_keys: crate::keymap::RuntimeKeymap::defaults()
-                .onboarding
-                .toggle_animation,
             layout_area: Cell::new(None),
         };
 
@@ -213,9 +202,6 @@ mod tests {
             ),
             animations_enabled: true,
             animations_suppressed: Cell::new(false),
-            toggle_animation_keys: crate::keymap::RuntimeKeymap::defaults()
-                .onboarding
-                .toggle_animation,
             layout_area: Cell::new(None),
         };
 

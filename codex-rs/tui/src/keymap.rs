@@ -47,7 +47,6 @@ pub(crate) struct RuntimeKeymap {
     pub(crate) pager: PagerKeymap,
     pub(crate) list: ListKeymap,
     pub(crate) approval: ApprovalKeymap,
-    pub(crate) onboarding: OnboardingKeymap,
 }
 
 #[derive(Clone, Debug)]
@@ -141,20 +140,6 @@ pub(crate) struct ApprovalKeymap {
     pub(crate) approve_for_prefix: Vec<KeyBinding>,
     pub(crate) decline: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
-}
-
-/// Onboarding flow keybindings (welcome/auth/trust screens).
-#[derive(Clone, Debug)]
-pub(crate) struct OnboardingKeymap {
-    pub(crate) move_up: Vec<KeyBinding>,
-    pub(crate) move_down: Vec<KeyBinding>,
-    pub(crate) select_first: Vec<KeyBinding>,
-    pub(crate) select_second: Vec<KeyBinding>,
-    pub(crate) select_third: Vec<KeyBinding>,
-    pub(crate) confirm: Vec<KeyBinding>,
-    pub(crate) cancel: Vec<KeyBinding>,
-    pub(crate) quit: Vec<KeyBinding>,
-    pub(crate) toggle_animation: Vec<KeyBinding>,
 }
 
 /// Returns the first binding, used as the primary UI hint for an action.
@@ -370,18 +355,6 @@ impl RuntimeKeymap {
             cancel: resolve_local!(keymap, defaults, approval, cancel),
         };
 
-        let onboarding = OnboardingKeymap {
-            move_up: resolve_local!(keymap, defaults, onboarding, move_up),
-            move_down: resolve_local!(keymap, defaults, onboarding, move_down),
-            select_first: resolve_local!(keymap, defaults, onboarding, select_first),
-            select_second: resolve_local!(keymap, defaults, onboarding, select_second),
-            select_third: resolve_local!(keymap, defaults, onboarding, select_third),
-            confirm: resolve_local!(keymap, defaults, onboarding, confirm),
-            cancel: resolve_local!(keymap, defaults, onboarding, cancel),
-            quit: resolve_local!(keymap, defaults, onboarding, quit),
-            toggle_animation: resolve_local!(keymap, defaults, onboarding, toggle_animation),
-        };
-
         let resolved = Self {
             app,
             chat,
@@ -390,7 +363,6 @@ impl RuntimeKeymap {
             pager,
             list,
             approval,
-            onboarding,
         };
 
         resolved.validate_conflicts()?;
@@ -512,33 +484,6 @@ impl RuntimeKeymap {
                 approve_for_prefix: default_bindings![plain(KeyCode::Char('p'))],
                 decline: default_bindings![plain(KeyCode::Esc), plain(KeyCode::Char('n'))],
                 cancel: default_bindings![plain(KeyCode::Char('c'))],
-            },
-            onboarding: OnboardingKeymap {
-                move_up: default_bindings![plain(KeyCode::Up), plain(KeyCode::Char('k'))],
-                move_down: default_bindings![plain(KeyCode::Down), plain(KeyCode::Char('j'))],
-                select_first: default_bindings![
-                    plain(KeyCode::Char('1')),
-                    plain(KeyCode::Char('y'))
-                ],
-                select_second: default_bindings![
-                    plain(KeyCode::Char('2')),
-                    plain(KeyCode::Char('n'))
-                ],
-                select_third: default_bindings![plain(KeyCode::Char('3'))],
-                confirm: default_bindings![plain(KeyCode::Enter)],
-                cancel: default_bindings![plain(KeyCode::Esc)],
-                quit: default_bindings![
-                    plain(KeyCode::Char('q')),
-                    ctrl(KeyCode::Char('c')),
-                    ctrl(KeyCode::Char('d'))
-                ],
-                toggle_animation: default_bindings![
-                    ctrl(KeyCode::Char('.')),
-                    raw(KeyBinding::new(
-                        KeyCode::Char('.'),
-                        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-                    ))
-                ],
             },
         }
     }
@@ -672,24 +617,6 @@ impl RuntimeKeymap {
                 ),
                 ("decline", self.approval.decline.as_slice()),
                 ("cancel", self.approval.cancel.as_slice()),
-            ],
-        )?;
-
-        validate_unique(
-            "onboarding",
-            [
-                ("move_up", self.onboarding.move_up.as_slice()),
-                ("move_down", self.onboarding.move_down.as_slice()),
-                ("select_first", self.onboarding.select_first.as_slice()),
-                ("select_second", self.onboarding.select_second.as_slice()),
-                ("select_third", self.onboarding.select_third.as_slice()),
-                ("confirm", self.onboarding.confirm.as_slice()),
-                ("cancel", self.onboarding.cancel.as_slice()),
-                ("quit", self.onboarding.quit.as_slice()),
-                (
-                    "toggle_animation",
-                    self.onboarding.toggle_animation.as_slice(),
-                ),
             ],
         )?;
 
@@ -1040,15 +967,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_conflicting_onboarding_bindings() {
-        let mut keymap = TuiKeymap::default();
-        keymap.onboarding.move_up = Some(one("up"));
-        keymap.onboarding.move_down = Some(one("up"));
-
-        expect_conflict(&keymap, "move_up", "move_down");
-    }
-
-    #[test]
     fn parses_function_keys_and_rejects_out_of_range_function_keys() {
         assert_eq!(
             parse_keybinding("f1").map(|binding| binding.parts()),
@@ -1127,20 +1045,6 @@ mod tests {
             KeyCode::Char('a'),
             KeyModifiers::CONTROL | KeyModifiers::SHIFT
         )));
-    }
-
-    #[test]
-    fn default_onboarding_toggle_animation_includes_ctrl_shift_dot() {
-        let runtime = RuntimeKeymap::defaults();
-        assert!(
-            runtime
-                .onboarding
-                .toggle_animation
-                .contains(&KeyBinding::new(
-                    KeyCode::Char('.'),
-                    KeyModifiers::CONTROL | KeyModifiers::SHIFT
-                ))
-        );
     }
 
     #[test]
