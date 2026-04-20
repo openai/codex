@@ -97,7 +97,7 @@ pub(crate) trait ToolArgumentDiffConsumer: Send {
     -> Option<EventMsg>;
 
     /// Flush any buffered event before the tool call completes.
-    fn flush_pending(&mut self) -> Option<EventMsg> {
+    fn flush_on_complete(&mut self) -> Option<EventMsg> {
         None
     }
 }

@@ -1926,7 +1926,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
-                    && let Some(event) = consumer.flush_pending()
+                    && let Some(event) = consumer.flush_on_complete()
                 {
                     sess.send_event(&turn_context, event).await;
                 }

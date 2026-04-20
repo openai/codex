@@ -73,8 +73,9 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
             .map(EventMsg::PatchApplyUpdated)
     }
 
-    fn flush_pending(&mut self) -> Option<EventMsg> {
-        self.flush_pending_update().map(EventMsg::PatchApplyUpdated)
+    fn flush_on_complete(&mut self) -> Option<EventMsg> {
+        self.flush_update_on_complete()
+            .map(EventMsg::PatchApplyUpdated)
     }
 }
 
@@ -109,7 +110,7 @@ impl ApplyPatchArgumentDiffConsumer {
         }
     }
 
-    fn flush_pending_update(&mut self) -> Option<PatchApplyUpdatedEvent> {
+    fn flush_update_on_complete(&mut self) -> Option<PatchApplyUpdatedEvent> {
         let event = self.pending.take();
         if event.is_some() {
             self.last_sent_at = Some(Instant::now());
