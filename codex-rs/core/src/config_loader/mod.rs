@@ -166,7 +166,7 @@ pub async fn load_config_layers_state(
 
     let thread_config_context = ThreadConfigContext {
         thread_id: None,
-        cwd: cwd.as_ref().map(AbsolutePathBuf::to_path_buf),
+        cwd: cwd.clone(),
     };
     let thread_config_layers = thread_config_loader
         .load_config_layers(thread_config_context)

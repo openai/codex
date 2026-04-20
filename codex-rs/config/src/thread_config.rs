@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use thiserror::Error;
 use toml::Value as TomlValue;
 
@@ -14,7 +14,7 @@ use crate::ConfigLayerEntry;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ThreadConfigContext {
     pub thread_id: Option<String>,
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
 }
 
 /// Config values owned by the service that starts or manages the session.
@@ -257,7 +257,10 @@ mod tests {
         ]);
         let layers = loader
             .load_config_layers(ThreadConfigContext {
-                cwd: Some(PathBuf::from("/tmp/project")),
+                cwd: Some(
+                    AbsolutePathBuf::from_absolute_path_checked("/tmp/project")
+                        .expect("absolute cwd"),
+                ),
                 ..Default::default()
             })
             .await
