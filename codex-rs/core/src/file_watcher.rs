@@ -602,7 +602,7 @@ impl FileWatcher {
     fn spawn_event_loop(&self, mut raw_rx: mpsc::UnboundedReceiver<notify::Result<Event>>) {
         if let Ok(handle) = Handle::try_current() {
             let state = Arc::clone(&self.state);
-            let inner = self.inner.clone();
+            let inner = self.inner.as_ref().map(Arc::downgrade);
             handle.spawn(async move {
                 loop {
                     match raw_rx.recv().await {
@@ -613,6 +613,7 @@ impl FileWatcher {
                             if event.paths.is_empty() {
                                 continue;
                             }
+                            let inner = inner.as_ref().and_then(std::sync::Weak::upgrade);
                             Self::notify_subscribers(&state, inner.as_ref(), &event.paths).await;
                         }
                         Some(Err(err)) => {

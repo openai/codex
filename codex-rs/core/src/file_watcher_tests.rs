@@ -525,3 +525,13 @@ async fn spawn_event_loop_filters_non_mutating_events() {
         }
     );
 }
+
+#[tokio::test]
+async fn dropping_live_watcher_releases_inner_watcher() {
+    let watcher = FileWatcher::new().expect("watcher");
+    let weak_inner = Arc::downgrade(watcher.inner.as_ref().expect("watcher inner"));
+
+    drop(watcher);
+
+    assert_eq!(weak_inner.upgrade().is_none(), true);
+}
