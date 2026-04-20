@@ -3245,7 +3245,9 @@ async fn set_model_updates_defaults() -> anyhow::Result<()> {
 #[tokio::test]
 async fn for_config_writes_selected_user_config_file() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
+    let base_config = codex_home.path().join(CONFIG_TOML_FILE);
     let selected_config = codex_home.path().join("work.config.toml");
+    tokio::fs::write(&base_config, r#"model_provider = "openai""#).await?;
     tokio::fs::write(&selected_config, r#"model = "gpt-old""#).await?;
 
     let config = ConfigBuilder::without_managed_config_for_tests()
@@ -3266,7 +3268,10 @@ async fn for_config_writes_selected_user_config_file() -> anyhow::Result<()> {
     let selected: ConfigToml = toml::from_str(&selected_serialized)?;
     assert_eq!(selected.model.as_deref(), Some("gpt-new"));
     assert_eq!(selected.model_reasoning_effort, Some(ReasoningEffort::High));
-    assert!(!codex_home.path().join(CONFIG_TOML_FILE).exists());
+    assert_eq!(
+        tokio::fs::read_to_string(&base_config).await?,
+        r#"model_provider = "openai""#
+    );
 
     Ok(())
 }

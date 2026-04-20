@@ -218,8 +218,9 @@ fn selected_user_mcp_servers(
 ) -> Result<BTreeMap<String, McpServerConfig>, String> {
     let servers: Option<HashMap<String, McpServerConfig>> = config
         .config_layer_stack
-        .get_user_layer()
-        .and_then(|layer| layer.config.get("mcp_servers"))
+        .effective_user_config()
+        .as_ref()
+        .and_then(|user_config| user_config.get("mcp_servers"))
         .cloned()
         .map(HashMap::<String, McpServerConfig>::deserialize)
         .transpose()

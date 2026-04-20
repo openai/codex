@@ -355,13 +355,19 @@ async fn returns_empty_when_all_layers_missing() {
 }
 
 #[tokio::test]
-async fn uses_selected_user_config_file() {
+async fn selected_user_config_file_layers_over_base_user_config() {
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");
     let selected_config = tmp.path().join("work.config.toml");
 
-    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), r#"model = "gpt-main""#)
-        .expect("write default user config");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"
+model = "gpt-main"
+approval_policy = "on-failure"
+"#,
+    )
+    .expect("write default user config");
     std::fs::write(&selected_config, r#"model = "gpt-work""#).expect("write selected user config");
 
     let mut overrides = LoaderOverrides::with_managed_config_path_for_tests(managed_path);
@@ -379,6 +385,18 @@ async fn uses_selected_user_config_file() {
     .await
     .expect("load layers");
 
+    let user_layers = layers.get_user_layers(
+        super::ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
+    assert_eq!(user_layers.len(), 2);
+    assert_eq!(
+        user_layers[0].name,
+        super::ConfigLayerSource::User {
+            file: AbsolutePathBuf::from_absolute_path(tmp.path().join(CONFIG_TOML_FILE))
+                .expect("base user config path")
+        }
+    );
     let user_layer = layers.get_user_layer().expect("selected user layer");
     assert_eq!(
         user_layer.name,
@@ -393,6 +411,13 @@ async fn uses_selected_user_config_file() {
             .get("model")
             .and_then(TomlValue::as_str),
         Some("gpt-work")
+    );
+    assert_eq!(
+        layers
+            .effective_config()
+            .get("approval_policy")
+            .and_then(TomlValue::as_str),
+        Some("on-failure")
     );
 }
 

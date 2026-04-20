@@ -522,8 +522,9 @@ pub enum ConfigLayerSource {
         file: AbsolutePathBuf,
     },
 
-    /// User config layer from $CODEX_HOME/config.toml. This layer is special
-    /// in that it is expected to be:
+    /// User config layer from $CODEX_HOME/config.toml or a profile override
+    /// such as $CODEX_HOME/<name>.config.toml. This layer is special in that it
+    /// is expected to be:
     /// - writable by the user
     /// - generally outside the workspace directory
     #[serde(rename_all = "camelCase")]

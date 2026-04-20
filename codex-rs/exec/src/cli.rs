@@ -47,7 +47,7 @@ pub struct Cli {
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Use $CODEX_HOME/<name>.config.toml as the user config file.
+    /// Layer $CODEX_HOME/<name>.config.toml on top of the base user config.
     #[arg(long = "profile-v2")]
     pub config_profile_v2: Option<String>,
 

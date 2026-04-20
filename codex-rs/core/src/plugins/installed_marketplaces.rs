@@ -17,10 +17,10 @@ pub(crate) fn installed_marketplace_roots_from_config(
     config: &Config,
     codex_home: &Path,
 ) -> Vec<AbsolutePathBuf> {
-    let Some(user_layer) = config.config_layer_stack.get_user_layer() else {
+    let Some(user_config) = config.config_layer_stack.effective_user_config() else {
         return Vec::new();
     };
-    let Some(marketplaces_value) = user_layer.config.get("marketplaces") else {
+    let Some(marketplaces_value) = user_config.get("marketplaces") else {
         return Vec::new();
     };
     let Some(marketplaces) = marketplaces_value.as_table() else {
