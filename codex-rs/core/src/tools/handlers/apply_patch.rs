@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::apply_patch;
 use crate::apply_patch::InternalApplyPatchInvocation;
@@ -43,11 +45,15 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_tools::ApplyPatchToolArgs;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+const APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL: Duration = Duration::from_millis(500);
+
 pub struct ApplyPatchHandler;
 
 #[derive(Default)]
 struct ApplyPatchArgumentDiffConsumer {
     parser: StreamingPatchParser,
+    last_sent_at: Option<Instant>,
+    pending: Option<PatchApplyUpdatedEvent>,
 }
 
 impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
@@ -64,13 +70,40 @@ impl ToolArgumentDiffConsumer for ApplyPatchArgumentDiffConsumer {
         self.push_delta(call_id, diff)
             .map(EventMsg::PatchApplyUpdated)
     }
+
+    fn flush_on_complete(&mut self) -> Option<EventMsg> {
+        self.flush_update_on_complete()
+            .map(EventMsg::PatchApplyUpdated)
+    }
 }
 
 impl ApplyPatchArgumentDiffConsumer {
     fn push_delta(&mut self, call_id: String, delta: &str) -> Option<PatchApplyUpdatedEvent> {
         let hunks = self.parser.push_delta(delta).ok()??;
         let changes = convert_apply_patch_hunks_to_protocol(&hunks);
-        Some(PatchApplyUpdatedEvent { call_id, changes })
+        let event = PatchApplyUpdatedEvent { call_id, changes };
+        let now = Instant::now();
+        match self.last_sent_at {
+            Some(last_sent_at)
+                if now.duration_since(last_sent_at) < APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL =>
+            {
+                self.pending = Some(event);
+                None
+            }
+            Some(_) | None => {
+                self.pending = None;
+                self.last_sent_at = Some(now);
+                Some(event)
+            }
+        }
+    }
+
+    fn flush_update_on_complete(&mut self) -> Option<PatchApplyUpdatedEvent> {
+        let event = self.pending.take();
+        if event.is_some() {
+            self.last_sent_at = Some(Instant::now());
+        }
+        event
     }
 }
 

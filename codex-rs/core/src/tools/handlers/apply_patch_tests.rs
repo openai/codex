@@ -54,9 +54,13 @@ fn diff_consumer_streams_apply_patch_changes() {
         )
     );
 
-    let event = consumer
-        .push_delta("call-1".to_string(), "\n+world")
-        .expect("progress event");
+    assert!(
+        consumer
+            .push_delta("call-1".to_string(), "\n+world")
+            .is_none()
+    );
+
+    let event = consumer.flush_update_on_complete().expect("progress event");
     assert_eq!(
         (event.call_id, event.changes),
         (
@@ -70,9 +74,9 @@ fn diff_consumer_streams_apply_patch_changes() {
         )
     );
 
-    let event = consumer
-        .push_delta("call-1".to_string(), "\n")
-        .expect("progress event");
+    assert!(consumer.push_delta("call-1".to_string(), "\n").is_none());
+
+    let event = consumer.flush_update_on_complete().expect("progress event");
     assert_eq!(
         (event.call_id, event.changes),
         (
@@ -84,6 +88,39 @@ fn diff_consumer_streams_apply_patch_changes() {
                 },
             )]),
         )
+    );
+}
+
+#[test]
+fn diff_consumer_sends_next_update_after_buffer_interval() {
+    let mut consumer = ApplyPatchArgumentDiffConsumer::default();
+    consumer.push_delta("call-1".to_string(), "*** Begin Patch\n");
+    let first = consumer
+        .push_delta("call-1".to_string(), "*** Add File: hello.txt\n+hello")
+        .expect("first progress event");
+    assert_eq!(
+        first.changes,
+        HashMap::from([(
+            PathBuf::from("hello.txt"),
+            FileChange::Add {
+                content: String::new(),
+            },
+        )])
+    );
+
+    consumer.last_sent_at =
+        Some(std::time::Instant::now() - APPLY_PATCH_ARGUMENT_DIFF_BUFFER_INTERVAL);
+    let second = consumer
+        .push_delta("call-1".to_string(), "\n+world")
+        .expect("second progress event");
+    assert_eq!(
+        second.changes,
+        HashMap::from([(
+            PathBuf::from("hello.txt"),
+            FileChange::Add {
+                content: "hello\n".to_string(),
+            },
+        )])
     );
 }
 
