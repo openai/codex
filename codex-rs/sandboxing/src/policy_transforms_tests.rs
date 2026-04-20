@@ -171,6 +171,7 @@ fn normalize_additional_permissions_rejects_glob_read_grants() {
                 },
                 access: FileSystemAccessMode::Read,
             }],
+            glob_scan_max_depth: None,
         }),
         ..Default::default()
     })
@@ -192,6 +193,7 @@ fn normalize_additional_permissions_preserves_deny_globs() {
                 },
                 access: FileSystemAccessMode::None,
             }],
+            glob_scan_max_depth: Some(2),
         }),
         ..Default::default()
     })
@@ -207,6 +209,7 @@ fn normalize_additional_permissions_preserves_deny_globs() {
                     },
                     access: FileSystemAccessMode::None,
                 }],
+                glob_scan_max_depth: Some(2),
             }),
             ..Default::default()
         }
