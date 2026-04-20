@@ -358,7 +358,7 @@ impl ToolHandler for UnifiedExecHandler {
                             environment: tool_environment.environment,
                             yield_time_ms,
                             max_output_tokens,
-                            workdir,
+                            workdir: Some(cwd.clone()),
                             network: context.turn.network.clone(),
                             tty,
                             sandbox_permissions: effective_additional_permissions
