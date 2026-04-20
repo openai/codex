@@ -1345,6 +1345,8 @@ pub(crate) enum ReplayKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SessionConfiguredDisplay {
     Normal,
+    /// Apply session state without emitting the session info cell.
+    Quiet,
     SideConversation,
 }
 
@@ -2184,6 +2186,14 @@ impl ChatWidget {
             thread_session_state_to_legacy_event(session),
             SessionConfiguredDisplay::Normal,
             fork_parent_title,
+        );
+    }
+
+    pub(crate) fn handle_thread_session_quiet(&mut self, session: ThreadSessionState) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
+        self.on_session_configured_with_display(
+            thread_session_state_to_legacy_event(session),
+            SessionConfiguredDisplay::Quiet,
         );
     }
 
