@@ -22,7 +22,7 @@ use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -42,7 +42,7 @@ pub(crate) struct AgentIdentityManager {
     chatgpt_base_url: String,
     feature_enabled: bool,
     abom: AgentBillOfMaterials,
-    ensure_lock: Arc<Mutex<()>>,
+    ensure_lock: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for AgentIdentityManager {
@@ -110,7 +110,7 @@ impl AgentIdentityManager {
             chatgpt_base_url: config.chatgpt_base_url.clone(),
             feature_enabled: config.features.enabled(Feature::UseAgentIdentity),
             abom: build_abom(session_source),
-            ensure_lock: Arc::new(Mutex::new(())),
+            ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
@@ -137,7 +137,11 @@ impl AgentIdentityManager {
         auth: &CodexAuth,
         binding: &AgentIdentityBinding,
     ) -> Result<StoredAgentIdentity> {
-        let _guard = self.ensure_lock.lock().await;
+        let _guard = self
+            .ensure_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("agent identity ensure semaphore closed"))?;
 
         if let Some(stored_identity) = self.load_stored_identity(auth, binding)? {
             info!(
@@ -346,7 +350,7 @@ impl AgentIdentityManager {
             chatgpt_base_url,
             feature_enabled,
             abom: build_abom(session_source),
-            ensure_lock: Arc::new(Mutex::new(())),
+            ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 

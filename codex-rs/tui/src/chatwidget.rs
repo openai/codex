@@ -60,7 +60,6 @@ use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
-use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
@@ -107,6 +106,7 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_chatgpt::connectors;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
@@ -471,7 +471,7 @@ fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
-const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
+const NUDGE_MODEL_SLUG: &str = "gpt-5.4-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 
 #[derive(Default)]
@@ -6573,6 +6573,7 @@ impl ChatWidget {
             | ServerNotification::ThreadUnarchived(_)
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
+            | ServerNotification::FileChangePatchUpdated(_)
             | ServerNotification::McpToolCallProgress(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)

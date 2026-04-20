@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest as _;
 use sha2::Sha512;
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -42,7 +42,7 @@ pub(crate) struct BackgroundAgentTaskManager {
     chatgpt_base_url: String,
     auth_mode: BackgroundAgentTaskAuthMode,
     abom: AgentBillOfMaterials,
-    ensure_lock: Arc<Mutex<()>>,
+    ensure_lock: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for BackgroundAgentTaskManager {
@@ -158,7 +158,7 @@ impl BackgroundAgentTaskManager {
             chatgpt_base_url: normalize_chatgpt_base_url(&chatgpt_base_url),
             auth_mode,
             abom: build_abom(session_source),
-            ensure_lock: Arc::new(Mutex::new(())),
+            ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
@@ -186,7 +186,11 @@ impl BackgroundAgentTaskManager {
             return Ok(None);
         };
 
-        let _guard = self.ensure_lock.lock().await;
+        let _guard = self
+            .ensure_lock
+            .acquire()
+            .await
+            .context("background agent task ensure semaphore closed")?;
         let mut stored_identity = self
             .ensure_registered_identity_for_binding(auth, &binding)
             .await?;
