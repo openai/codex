@@ -299,7 +299,7 @@ async fn queued_bang_shell_waits_for_user_shell_completion_before_next_input() {
 }
 
 async fn assert_cancelled_queued_menu_drains_next_input(command: &str, expected_popup_text: &str) {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
@@ -351,7 +351,7 @@ async fn queued_slash_menu_cancel_drains_next_input() {
 
 #[tokio::test]
 async fn queued_slash_menu_selection_drains_next_input() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "turn-start".into(),
@@ -1030,6 +1030,92 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
 }
 
 #[tokio::test]
+async fn slash_copy_uses_latest_surviving_response_after_rollback() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "user-1".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "foo".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "foo response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "user-2".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "bar".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-2".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "bar response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+    assert_eq!(chat.last_agent_markdown_text(), Some("bar response"));
+
+    chat.truncate_agent_copy_history_to_user_turn_count(/*user_turn_count*/ 1);
+
+    assert_eq!(chat.last_agent_markdown_text(), Some("foo response"));
+    chat.copy_last_agent_markdown_with(|markdown| {
+        assert_eq!(markdown, "foo response");
+        Ok(None)
+    });
+}
+
+#[tokio::test]
+async fn slash_copy_reports_when_rewind_exceeds_retained_copy_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "user-1".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "foo".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "foo response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.truncate_agent_copy_history_to_user_turn_count(/*user_turn_count*/ 0);
+    chat.dispatch_command(SlashCommand::Copy);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(
+            "Cannot copy that response after rewinding. Only the most recent 32 responses are available to /copy."
+        ),
+        "expected evicted-history message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_exit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1111,7 +1197,48 @@ async fn slash_mcp_requests_inventory_via_app_server() {
     chat.dispatch_command(SlashCommand::Mcp);
 
     assert!(active_blob(&chat).contains("Loading MCP inventory"));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::FetchMcpInventory));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchMcpInventory {
+            detail: McpServerStatusDetail::ToolsAndAuthOnly
+        })
+    );
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_mcp_verbose_requests_full_inventory_via_app_server() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/mcp verbose");
+
+    assert!(active_blob(&chat).contains("Loading MCP inventory"));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::FetchMcpInventory {
+            detail: McpServerStatusDetail::Full
+        })
+    );
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_mcp_invalid_args_show_usage() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/mcp full");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Usage: /mcp [verbose]"),
+        "expected usage message, got: {rendered:?}"
+    );
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/mcp full");
     assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 

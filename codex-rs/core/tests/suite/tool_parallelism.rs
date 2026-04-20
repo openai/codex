@@ -145,7 +145,7 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.1");
+    let mut builder = test_codex().with_model("gpt-5.4");
     let test = builder.build(&server).await?;
 
     let shell_args = json!({
@@ -344,7 +344,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     ])
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.1");
+    let mut builder = test_codex().with_model("gpt-5.4");
     let test = builder
         .build_with_streaming_server(&streaming_server)
         .await?;

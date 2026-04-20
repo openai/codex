@@ -2,6 +2,7 @@ use clap::Parser;
 use codex_app_server_client::legacy_core;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
+use codex_config::LoaderOverrides;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli;
 use codex_tui::ExitReason;
@@ -13,7 +14,6 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         thread_id,
-        thread_name,
         ..
     } = exit_info;
 
@@ -22,7 +22,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         lines.push(codex_protocol::protocol::FinalOutput::from(token_usage).to_string());
     }
 
-    if let Some(resume_cmd) = legacy_core::util::resume_command(thread_name.as_deref(), thread_id) {
+    if let Some(resume_cmd) =
+        legacy_core::util::resume_command(/*thread_name*/ None, thread_id)
+    {
         let command = if color_enabled {
             format!("\u{1b}[36m{resume_cmd}\u{1b}[39m")
         } else {
@@ -54,7 +56,7 @@ fn main() -> anyhow::Result<()> {
         let exit_info = run_main(
             inner,
             arg0_paths,
-            legacy_core::config_loader::LoaderOverrides::default(),
+            LoaderOverrides::default(),
             /*remote*/ None,
             /*remote_auth_token*/ None,
         )

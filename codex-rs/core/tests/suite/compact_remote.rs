@@ -791,7 +791,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
     let override_retained_call_id = "override-retained-call";
     let override_trailing_call_id = "override-trailing-call";
     let retained_command = "printf retained-shell-output";
-    let trailing_command = "printf trailing-shell-output";
+    let trailing_command = "printf '%020000d' 0";
 
     let baseline_harness = TestCodexHarness::with_builder(
         test_codex()
@@ -880,9 +880,12 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
     let baseline_input_tokens = estimate_compact_input_tokens(&baseline_compact_request);
     let baseline_payload_tokens = estimate_compact_payload_tokens(&baseline_compact_request);
 
-    let override_base_instructions =
-        format!("REMOTE_BASE_INSTRUCTIONS_OVERRIDE {}", "x".repeat(120_000));
-    let override_context_window = baseline_payload_tokens.saturating_add(1_000);
+    let override_base_instructions = format!(
+        "{}\nREMOTE_BASE_INSTRUCTIONS_OVERRIDE {}",
+        baseline_compact_request.instructions_text(),
+        "x".repeat(4_000)
+    );
+    let override_context_window = baseline_payload_tokens.saturating_add(500);
     let pretrim_override_estimate =
         baseline_input_tokens.saturating_add(approx_token_count(&override_base_instructions));
     assert!(
@@ -2127,8 +2130,8 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let previous_model = "gpt-5.1-codex-max";
-    let next_model = "gpt-5.2-codex";
+    let previous_model = "gpt-5.4";
+    let next_model = "gpt-5.3-codex";
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())

@@ -1,10 +1,10 @@
-use super::get_thread_id_from_citations;
 use super::parse_memory_citation;
+use super::thread_ids_from_memory_citation;
 use codex_protocol::ThreadId;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn get_thread_id_from_citations_extracts_thread_ids() {
+fn parse_memory_citation_supports_legacy_thread_ids() {
     let first = ThreadId::new();
     let second = ThreadId::new();
 
@@ -12,18 +12,25 @@ fn get_thread_id_from_citations_extracts_thread_ids() {
         "<memory_citation>\n<citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n<thread_ids>\n{first}\nnot-a-uuid\n{second}\n</thread_ids>\n</memory_citation>"
     )];
 
-    assert_eq!(get_thread_id_from_citations(citations), vec![first, second]);
+    let parsed = parse_memory_citation(citations).expect("memory citation should parse");
+
+    assert_eq!(
+        thread_ids_from_memory_citation(&parsed),
+        vec![first, second]
+    );
 }
 
 #[test]
-fn get_thread_id_from_citations_supports_legacy_rollout_ids() {
+fn parse_memory_citation_supports_rollout_ids() {
     let thread_id = ThreadId::new();
 
     let citations = vec![format!(
         "<memory_citation>\n<rollout_ids>\n{thread_id}\n</rollout_ids>\n</memory_citation>"
     )];
 
-    assert_eq!(get_thread_id_from_citations(citations), vec![thread_id]);
+    let parsed = parse_memory_citation(citations).expect("memory citation should parse");
+
+    assert_eq!(thread_ids_from_memory_citation(&parsed), vec![thread_id]);
 }
 
 #[test]
