@@ -38,7 +38,7 @@ pub(crate) fn build_tool_search_entries(
     }
 
     let mut dynamic_tools = dynamic_tools.iter().collect::<Vec<_>>();
-    dynamic_tools.sort_by(|a, b| a.name.cmp(&b.name));
+    dynamic_tools.sort_by(|a, b| a.namespace.cmp(&b.namespace).then(a.name.cmp(&b.name)));
     for tool in dynamic_tools {
         match dynamic_tool_search_entry(tool) {
             Ok(entry) => entries.push(entry),

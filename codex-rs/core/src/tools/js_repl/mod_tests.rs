@@ -2017,7 +2017,7 @@ async fn js_repl_can_call_hidden_dynamic_tools() -> anyhow::Result<()> {
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
     let manager = turn.js_repl.manager().await?;
     let code = r#"
-const out = await codex.tool("hidden_dynamic_tool", { city: "Paris" });
+const out = await codex.tool("codex_app_hidden_dynamic_tool", { city: "Paris" });
 console.log(JSON.stringify(out));
 "#;
 

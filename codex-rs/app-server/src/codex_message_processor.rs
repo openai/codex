@@ -9206,9 +9206,6 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
         if name == "mcp" || name.starts_with("mcp__") {
             return Err(format!("dynamic tool name is reserved: {name}"));
         }
-        if !seen.insert(name.to_string()) {
-            return Err(format!("duplicate dynamic tool name: {name}"));
-        }
         let namespace = tool.namespace.as_deref().map(str::trim);
         if let Some(namespace) = namespace {
             if namespace.is_empty() {
@@ -9226,6 +9223,14 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
                     "dynamic tool namespace is reserved for {name}: {namespace}"
                 ));
             }
+        }
+        if !seen.insert((namespace, name)) {
+            if let Some(namespace) = namespace {
+                return Err(format!(
+                    "duplicate dynamic tool name in namespace {namespace}: {name}"
+                ));
+            }
+            return Err(format!("duplicate dynamic tool name: {name}"));
         }
         if tool.defer_loading && namespace.is_none() {
             return Err(format!(
@@ -10227,37 +10232,63 @@ mod tests {
     }
 
     #[test]
-    fn validate_dynamic_tools_requires_namespace_for_deferred_tools() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: None,
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-            defer_loading: true,
-        }];
-        let err = validate_dynamic_tools(&tools).expect_err("missing namespace");
-        assert!(err.contains("my_tool"), "unexpected error: {err}");
-        assert!(err.contains("namespace"), "unexpected error: {err}");
+    fn validate_dynamic_tools_accepts_same_name_in_different_namespaces() {
+        let tools = vec![
+            ApiDynamicToolSpec {
+                namespace: Some("codex_app".to_string()),
+                name: "my_tool".to_string(),
+                description: "test".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: true,
+            },
+            ApiDynamicToolSpec {
+                namespace: Some("other_app".to_string()),
+                name: "my_tool".to_string(),
+                description: "test".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: true,
+            },
+        ];
+        validate_dynamic_tools(&tools).expect("valid schema");
     }
 
     #[test]
-    fn validate_dynamic_tools_accepts_namespace_for_deferred_tools() {
-        let tools = vec![ApiDynamicToolSpec {
-            namespace: Some("codex_app".to_string()),
-            name: "my_tool".to_string(),
-            description: "test".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-            defer_loading: true,
-        }];
-        validate_dynamic_tools(&tools).expect("valid schema");
+    fn validate_dynamic_tools_rejects_duplicate_name_in_same_namespace() {
+        let tools = vec![
+            ApiDynamicToolSpec {
+                namespace: Some("codex_app".to_string()),
+                name: "my_tool".to_string(),
+                description: "test".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: true,
+            },
+            ApiDynamicToolSpec {
+                namespace: Some("codex_app".to_string()),
+                name: "my_tool".to_string(),
+                description: "test".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                defer_loading: true,
+            },
+        ];
+        let err = validate_dynamic_tools(&tools).expect_err("duplicate name");
+        assert!(err.contains("codex_app"), "unexpected error: {err}");
+        assert!(err.contains("my_tool"), "unexpected error: {err}");
     }
 
     #[test]

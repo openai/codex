@@ -198,10 +198,51 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_start_rejects_hidden_dynamic_tools_without_namespace() -> Result<()> {
+    let server = MockServer::start().await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let dynamic_tool = DynamicToolSpec {
+        namespace: None,
+        name: "hidden_tool".to_string(),
+        description: "Hidden dynamic tool".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+        }),
+        defer_loading: true,
+    };
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            dynamic_tools: Some(vec![dynamic_tool]),
+            ..Default::default()
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("hidden_tool"));
+    assert!(error.error.message.contains("namespace"));
+
+    Ok(())
+}
+
 /// Exercises the full dynamic tool call path (server request, client response, model output).
 #[tokio::test]
 async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Result<()> {
     let call_id = "dyn-call-1";
+    let tool_namespace = "codex_app";
     let tool_name = "demo_tool";
     let tool_args = json!({ "city": "Paris" });
     let tool_call_arguments = serde_json::to_string(&tool_args)?;
@@ -210,7 +251,16 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     let responses = vec![
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
-            responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "namespace": tool_namespace,
+                    "name": tool_name,
+                    "arguments": tool_call_arguments,
+                }
+            }),
             responses::ev_completed("resp-1"),
         ]),
         create_final_assistant_message_sse_response("Done")?,
@@ -224,7 +274,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let dynamic_tool = DynamicToolSpec {
-        namespace: None,
+        namespace: Some(tool_namespace.to_string()),
         name: tool_name.to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: json!({
@@ -288,7 +338,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         panic!("expected dynamic tool call item");
     };
     assert_eq!(id, call_id);
-    assert_eq!(namespace, None);
+    assert_eq!(namespace.as_deref(), Some(tool_namespace));
     assert_eq!(tool, tool_name);
     assert_eq!(arguments, tool_args);
     assert_eq!(status, DynamicToolCallStatus::InProgress);
@@ -311,7 +361,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         thread_id: thread_id.clone(),
         turn_id: turn_id.clone(),
         call_id: call_id.to_string(),
-        namespace: None,
+        namespace: Some(tool_namespace.to_string()),
         tool: tool_name.to_string(),
         arguments: tool_args.clone(),
     };
@@ -344,7 +394,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         panic!("expected dynamic tool call item");
     };
     assert_eq!(id, call_id);
-    assert_eq!(namespace, None);
+    assert_eq!(namespace.as_deref(), Some(tool_namespace));
     assert_eq!(tool, tool_name);
     assert_eq!(arguments, tool_args);
     assert_eq!(status, DynamicToolCallStatus::Completed);
