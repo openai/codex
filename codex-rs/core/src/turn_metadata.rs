@@ -1,7 +1,5 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -17,6 +15,8 @@ use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, Default)]
 struct WorkspaceGitMetadata {
@@ -58,6 +58,8 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_source: Option<&'static str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
@@ -87,6 +89,7 @@ fn merge_responsesapi_client_metadata(
 
 fn build_turn_metadata_bag(
     session_id: Option<String>,
+    thread_source: Option<&'static str>,
     turn_id: Option<String>,
     sandbox: Option<String>,
     repo_root: Option<String>,
@@ -101,13 +104,17 @@ fn build_turn_metadata_bag(
 
     TurnMetadataBag {
         session_id,
+        thread_source,
         turn_id,
         workspaces,
         sandbox,
     }
 }
 
-pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Option<String> {
+pub async fn build_turn_metadata_header(
+    cwd: &AbsolutePathBuf,
+    sandbox: Option<&str>,
+) -> Option<String> {
     let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
 
     let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
@@ -126,6 +133,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
 
     build_turn_metadata_bag(
         /*session_id*/ None,
+        /*thread_source*/ None,
         /*turn_id*/ None,
         sandbox.map(ToString::to_string),
         repo_root,
@@ -140,7 +148,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnMetadataState {
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     repo_root: Option<String>,
     base_metadata: TurnMetadataBag,
     base_header: String,
@@ -152,8 +160,9 @@ pub(crate) struct TurnMetadataState {
 impl TurnMetadataState {
     pub(crate) fn new(
         session_id: String,
+        session_source: &SessionSource,
         turn_id: String,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
         sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
     ) -> Self {
@@ -161,6 +170,7 @@ impl TurnMetadataState {
         let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
+            session_source.thread_source_name(),
             Some(turn_id),
             sandbox,
             /*repo_root*/ None,
@@ -240,6 +250,7 @@ impl TurnMetadataState {
 
             let enriched_metadata = build_turn_metadata_bag(
                 state.base_metadata.session_id.clone(),
+                state.base_metadata.thread_source,
                 state.base_metadata.turn_id.clone(),
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),

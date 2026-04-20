@@ -17,9 +17,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -205,7 +205,7 @@ impl ToolHandler for McpResourceHandler {
 
         let arguments_value = parse_arguments(arguments.as_str())?;
 
-        match tool_name.as_str() {
+        match tool_name.name.as_str() {
             "list_mcp_resources" => {
                 handle_list_resources(
                     Arc::clone(&session),
@@ -562,6 +562,7 @@ async fn emit_tool_call_begin(
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: call_id.to_string(),
                 invocation,
+                mcp_app_resource_uri: None,
             }),
         )
         .await;
@@ -581,6 +582,7 @@ async fn emit_tool_call_end(
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: call_id.to_string(),
                 invocation,
+                mcp_app_resource_uri: None,
                 duration,
                 result,
             }),

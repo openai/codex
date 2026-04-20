@@ -1,7 +1,5 @@
 use crate::Prompt;
 use crate::RolloutRecorder;
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::contextual_user_message::is_memory_excluded_contextual_user_fragment;
 use crate::memories::metrics;
@@ -10,6 +8,8 @@ use crate::memories::phase_one::PRUNE_BATCH_SIZE;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use codex_api::ResponseEvent;
 use codex_config::types::MemoriesConfig;
 use codex_otel::SessionTelemetry;
@@ -477,9 +477,10 @@ mod job {
                 }
             })
             .collect::<Vec<_>>();
-        serde_json::to_string(&filtered).map_err(|err| {
+        let serialized = serde_json::to_string(&filtered).map_err(|err| {
             CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}"))
-        })
+        })?;
+        Ok(redact_secrets(serialized))
     }
 
     fn sanitize_response_item_for_memories(item: &ResponseItem) -> Option<ResponseItem> {

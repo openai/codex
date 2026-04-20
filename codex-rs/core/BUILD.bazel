@@ -47,12 +47,17 @@ codex_rust_crate(
         # succeeds without this workaround.
         "//:AGENTS.md",
     ],
+    test_shard_counts = {
+        "core-all-test": 8,
+        "core-unit-tests": 8,
+    },
     test_tags = ["no-sandbox"],
     unit_test_timeout = "long",
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",
         "//codex-rs/rmcp-client:test_stdio_server",
         "//codex-rs/rmcp-client:test_streamable_http_server",
+        "//codex-rs/responses-api-proxy:codex-responses-api-proxy",
         "//codex-rs/cli:codex",
     ],
 )

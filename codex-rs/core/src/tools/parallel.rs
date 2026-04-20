@@ -10,13 +10,14 @@ use tracing::Instrument;
 use tracing::instrument;
 use tracing::trace_span;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
@@ -49,8 +50,15 @@ impl ToolCallRuntime {
         }
     }
 
-    pub(crate) fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
+    pub(crate) fn find_spec(&self, tool_name: &codex_tools::ToolName) -> Option<ToolSpec> {
         self.router.find_spec(tool_name)
+    }
+
+    pub(crate) fn create_diff_consumer(
+        &self,
+        tool_name: &codex_tools::ToolName,
+    ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.router.create_diff_consumer(tool_name)
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -79,19 +87,20 @@ impl ToolCallRuntime {
         source: ToolCallSource,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
-        let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
+        let supports_parallel = self.router.tool_supports_parallel(&call);
         let router = Arc::clone(&self.router);
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
         let started = Instant::now();
+        let display_name = call.tool_name.display();
         let join_error_call = call.clone();
 
         let dispatch_span = trace_span!(
             "dispatch_tool_call_with_code_mode_result",
-            otel.name = call.tool_name.as_str(),
-            tool_name = call.tool_name.as_str(),
+            otel.name = display_name.as_str(),
+            tool_name = display_name.as_str(),
             call_id = call.call_id.as_str(),
             aborted = false,
         );
@@ -146,7 +155,7 @@ fn tool_task_join_error_to_function_call_error(
     if err.is_cancelled() {
         let secs = elapsed.as_secs_f32().max(0.1);
         tracing::warn!(
-            tool_name = call.tool_name,
+            tool_name = %call.tool_name,
             call_id = call.call_id,
             elapsed_seconds = secs,
             "tool task was cancelled before delivering a response"
@@ -198,11 +207,15 @@ impl ToolCallRuntime {
     }
 
     fn abort_message(call: &ToolCall, secs: f32) -> String {
-        match call.tool_name.as_str() {
-            "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec" => {
-                format!("Wall time: {secs:.1} seconds\naborted by user")
-            }
-            _ => format!("aborted by user after {secs:.1}s"),
+        if call.tool_name.namespace.is_none()
+            && matches!(
+                call.tool_name.name.as_str(),
+                "shell" | "container.exec" | "local_shell" | "shell_command" | "unified_exec"
+            )
+        {
+            format!("Wall time: {secs:.1} seconds\naborted by user")
+        } else {
+            format!("aborted by user after {secs:.1}s")
         }
     }
 }
@@ -216,9 +229,8 @@ mod tests {
 
     fn test_tool_call() -> ToolCall {
         ToolCall {
-            tool_name: "spawn_agents_on_csv".to_string(),
+            tool_name: "spawn_agents_on_csv".into(),
             call_id: "call-1".to_string(),
-            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: json!({"csv_path":"in.csv","instruction":"test"}).to_string(),
             },

@@ -1,11 +1,10 @@
 use crate::config::RolloutConfig;
 use crate::config::RolloutConfigView;
 use crate::list::Cursor;
+use crate::list::SortDirection;
 use crate::list::ThreadSortKey;
 use crate::metadata;
 use chrono::DateTime;
-use chrono::NaiveDateTime;
-use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -23,7 +22,6 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use tokio::sync::OnceCell;
 use tracing::warn;
-use uuid::Uuid;
 
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
@@ -165,22 +163,10 @@ async fn require_backfill_complete(
 
 fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     let cursor = cursor?;
-    let value = serde_json::to_value(cursor).ok()?;
-    let cursor_str = value.as_str()?;
-    let (ts_str, id_str) = cursor_str.split_once('|')?;
-    if id_str.contains('|') {
-        return None;
-    }
-    let id = Uuid::parse_str(id_str).ok()?;
-    let ts = if let Ok(naive) = NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S") {
-        DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
-    } else if let Ok(dt) = DateTime::parse_from_rfc3339(ts_str) {
-        dt.with_timezone(&Utc)
-    } else {
-        return None;
-    }
-    .with_nanosecond(0)?;
-    Some(codex_state::Anchor { ts, id })
+    let millis = cursor.timestamp().unix_timestamp_nanos() / 1_000_000;
+    let millis = i64::try_from(millis).ok()?;
+    let ts = chrono::DateTime::<Utc>::from_timestamp_millis(millis)?;
+    Some(codex_state::Anchor { ts })
 }
 
 pub fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
@@ -249,6 +235,7 @@ pub async fn list_threads_db(
     page_size: usize,
     cursor: Option<&Cursor>,
     sort_key: ThreadSortKey,
+    sort_direction: SortDirection,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     archived: bool,
@@ -276,15 +263,21 @@ pub async fn list_threads_db(
     match ctx
         .list_threads(
             page_size,
-            anchor.as_ref(),
-            match sort_key {
-                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+            codex_state::ThreadFilterOptions {
+                archived_only: archived,
+                allowed_sources: allowed_sources.as_slice(),
+                model_providers: model_providers.as_deref(),
+                anchor: anchor.as_ref(),
+                sort_key: match sort_key {
+                    ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
+                    ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+                },
+                sort_direction: match sort_direction {
+                    SortDirection::Asc => codex_state::SortDirection::Asc,
+                    SortDirection::Desc => codex_state::SortDirection::Desc,
+                },
+                search_term,
             },
-            allowed_sources.as_slice(),
-            model_providers.as_deref(),
-            archived,
-            search_term,
         )
         .await
     {

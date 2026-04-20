@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::logging_client_handler::LoggingClientHandler;
 use crate::rmcp_client::Elicitation;
+use crate::rmcp_client::ElicitationPauseState;
 use crate::rmcp_client::ElicitationResponse;
 use crate::rmcp_client::SendElicitation;
 
@@ -26,10 +27,15 @@ const MCP_PROGRESS_TOKEN_META_KEY: &str = "progressToken";
 pub(crate) struct ElicitationClientService {
     handler: LoggingClientHandler,
     send_elicitation: Arc<SendElicitation>,
+    pause_state: ElicitationPauseState,
 }
 
 impl ElicitationClientService {
-    pub(crate) fn new(client_info: ClientInfo, send_elicitation: SendElicitation) -> Self {
+    pub(crate) fn new(
+        client_info: ClientInfo,
+        send_elicitation: SendElicitation,
+        pause_state: ElicitationPauseState,
+    ) -> Self {
         let send_elicitation = Arc::new(send_elicitation);
         Self {
             handler: LoggingClientHandler::new(
@@ -37,6 +43,7 @@ impl ElicitationClientService {
                 clone_send_elicitation(Arc::clone(&send_elicitation)),
             ),
             send_elicitation,
+            pause_state,
         }
     }
 
@@ -47,6 +54,7 @@ impl ElicitationClientService {
     ) -> Result<ElicitationResponse, rmcp::ErrorData> {
         let RequestContext { id, meta, .. } = context;
         let request = restore_context_meta(request, meta);
+        let _pause = self.pause_state.enter();
         (self.send_elicitation)(id, request)
             .await
             .map_err(|err| rmcp::ErrorData::internal_error(err.to_string(), None))

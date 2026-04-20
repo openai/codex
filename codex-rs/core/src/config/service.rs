@@ -29,6 +29,7 @@ use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
+use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
@@ -424,6 +425,7 @@ impl ConfigService {
     async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
         let cwd: Option<AbsolutePathBuf> = None;
         load_config_layers_state(
+            LOCAL_FS.as_ref(),
             &self.codex_home,
             cwd,
             &self.cli_overrides,
@@ -629,14 +631,7 @@ fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
 }
 
 fn paths_match(expected: impl AsRef<Path>, provided: impl AsRef<Path>) -> bool {
-    if let (Ok(expanded_expected), Ok(expanded_provided)) = (
-        path_utils::normalize_for_path_comparison(&expected),
-        path_utils::normalize_for_path_comparison(&provided),
-    ) {
-        expanded_expected == expanded_provided
-    } else {
-        expected.as_ref() == provided.as_ref()
-    }
+    path_utils::paths_match_after_normalization(expected, provided)
 }
 
 fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a TomlValue> {

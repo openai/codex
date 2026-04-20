@@ -28,6 +28,7 @@
         "go",
         "plus",
         "pro",
+        "prolite",
         "team",
         "self_serve_business_usage_based",
         "business",
@@ -35,6 +36,16 @@
         "enterprise",
         "edu",
         "unknown"
+      ],
+      "type": "string"
+    },
+    "RateLimitReachedType": {
+      "enum": [
+        "rate_limit_reached",
+        "workspace_owner_credits_depleted",
+        "workspace_member_credits_depleted",
+        "workspace_owner_usage_limit_reached",
+        "workspace_member_usage_limit_reached"
       ],
       "type": "string"
     },
@@ -82,20 +93,20 @@
             }
           ]
         },
-        "secondary": {
+        "rateLimitReachedType": {
           "anyOf": [
             {
-              "$ref": "#/definitions/RateLimitWindow"
+              "$ref": "#/definitions/RateLimitReachedType"
             },
             {
               "type": "null"
             }
           ]
         },
-        "spendControl": {
+        "secondary": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SpendControlSnapshot"
+              "$ref": "#/definitions/RateLimitWindow"
             },
             {
               "type": "null"
@@ -128,17 +139,6 @@
       },
       "required": [
         "usedPercent"
-      ],
-      "type": "object"
-    },
-    "SpendControlSnapshot": {
-      "properties": {
-        "reached": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "reached"
       ],
       "type": "object"
     }

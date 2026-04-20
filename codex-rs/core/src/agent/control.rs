@@ -4,11 +4,11 @@ use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
-use crate::codex::emit_subagent_session_started;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
 use crate::rollout::RolloutRecorder;
+use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
@@ -116,6 +116,7 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::Compaction { .. }
             | ResponseItem::Other,
         ) => false,
+        RolloutItem::SessionState(_) => false,
         RolloutItem::Compacted(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::SessionMeta(_)
@@ -143,6 +144,15 @@ impl AgentControl {
     pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
         Self {
             manager,
+            ..Default::default()
+        }
+    }
+
+    /// Create a control-plane handle over the same thread manager with an independent live-agent
+    /// registry.
+    pub(crate) fn detached_registry(&self) -> Self {
+        Self {
+            manager: self.manager.clone(),
             ..Default::default()
         }
     }
@@ -244,6 +254,7 @@ impl AgentControl {
             (None, _) => state.spawn_new_thread(config, self.clone()).await?,
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
+        let spawn_cleanup = SpawnAgentCancellationCleanup::new(self.clone(), new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
 
         if let Some(SessionSource::SubAgent(
@@ -267,7 +278,7 @@ impl AgentControl {
                         parent_thread_id = %parent_thread_id,
                         "skipping subagent thread analytics: failed to load parent thread metadata"
                     );
-                    crate::codex::AppServerClientMetadata {
+                    crate::session::session::AppServerClientMetadata {
                         client_name: None,
                         client_version: None,
                     }
@@ -317,6 +328,7 @@ impl AgentControl {
             );
         }
 
+        spawn_cleanup.disarm();
         Ok(LiveAgent {
             thread_id: new_thread.thread_id,
             metadata: agent_metadata,
@@ -1187,6 +1199,58 @@ impl AgentControl {
         }
 
         Ok(descendants)
+    }
+}
+
+struct SpawnAgentCancellationCleanup {
+    control: AgentControl,
+    thread_id: ThreadId,
+    armed: bool,
+}
+
+impl SpawnAgentCancellationCleanup {
+    fn new(control: AgentControl, thread_id: ThreadId) -> Self {
+        Self {
+            control,
+            thread_id,
+            armed: true,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SpawnAgentCancellationCleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        let control = self.control.clone();
+        let thread_id = self.thread_id;
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(
+                thread_id = %thread_id,
+                "spawn_agent was cancelled without a Tokio runtime available for cleanup"
+            );
+            return;
+        };
+        handle.spawn(async move {
+            if let Err(err) = control
+                .request_live_agent_shutdown_preserving_thread(thread_id)
+                .await
+                && let Ok(state) = control.upgrade()
+            {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to shut down thread from cancelled spawn_agent; removing tracking entry"
+                );
+                let _ = state.remove_thread(&thread_id).await;
+            }
+        });
     }
 }
 

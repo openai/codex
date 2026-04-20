@@ -3,6 +3,15 @@
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
+use crate::legacy_core::check_execpolicy_for_warnings;
+use crate::legacy_core::config::Config;
+use crate::legacy_core::config::ConfigBuilder;
+use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::find_codex_home;
+use crate::legacy_core::config::load_config_as_toml_with_cli_overrides;
+use crate::legacy_core::config::resolve_oss_provider;
+use crate::legacy_core::format_exec_policy_error_with_source;
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
@@ -22,23 +31,12 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
-use codex_core::check_execpolicy_for_warnings;
-use codex_core::config::Config;
-use codex_core::config::ConfigBuilder;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::find_codex_home;
-use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::config::resolve_oss_provider;
-use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::config_loader::ConfigLoadError;
-use codex_core::config_loader::LoaderOverrides;
-use codex_core::config_loader::format_config_error_with_source;
-use codex_core::find_thread_meta_by_name_str;
-use codex_core::format_exec_policy_error_with_source;
-use codex_core::path_utils;
-use codex_core::read_session_meta_line;
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigLoadError;
+use codex_config::LoaderOverrides;
+use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::enforce_login_restrictions;
@@ -50,12 +48,15 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TurnContextItem;
+use codex_rollout::read_session_meta_line;
 use codex_rollout::state_db::get_state_db;
 use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
+use codex_utils_path as path_utils;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdPromptOutcome;
@@ -65,13 +66,17 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::Level;
 use tracing::error;
 use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
+
+pub(crate) use codex_app_server_client::legacy_core;
 
 mod additional_dirs;
 mod app;
@@ -112,6 +117,8 @@ mod debug_config;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
+mod external_agent_config_migration;
+mod external_agent_config_migration_startup;
 mod external_editor;
 mod file_search;
 mod frames;
@@ -165,7 +172,7 @@ mod voice;
 #[allow(dead_code)]
 mod voice {
     use crate::app_event_sender::AppEventSender;
-    use codex_core::config::Config;
+    use crate::legacy_core::config::Config;
     use codex_protocol::protocol::RealtimeAudioFrame;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -233,6 +240,7 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+#[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
     config: Config,
@@ -240,6 +248,7 @@ async fn start_embedded_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
@@ -249,6 +258,7 @@ async fn start_embedded_app_server(
         loader_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         environment_manager,
         InProcessAppServerClient::start,
     )
@@ -365,6 +375,7 @@ async fn start_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerClient> {
     match target {
@@ -375,6 +386,7 @@ async fn start_app_server(
             loader_overrides,
             cloud_requirements,
             feedback,
+            log_db,
             environment_manager,
         )
         .await
@@ -399,6 +411,7 @@ pub(crate) async fn start_app_server_for_picker(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
+        /*log_db*/ None,
         environment_manager,
     )
     .await?;
@@ -425,6 +438,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
     start_client: F,
 ) -> color_eyre::Result<InProcessAppServerClient>
@@ -449,6 +463,7 @@ where
         loader_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         environment_manager,
         config_warnings,
         session_source: codex_protocol::protocol::SessionSource::Cli,
@@ -493,7 +508,6 @@ fn session_target_from_app_server_thread(
 
 async fn lookup_session_target_by_name_with_app_server(
     app_server: &mut AppServerSession,
-    codex_home: &Path,
     name: &str,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let mut cursor = None;
@@ -503,6 +517,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 cursor: cursor.clone(),
                 limit: Some(100),
                 sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+                sort_direction: None,
                 model_providers: None,
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
@@ -518,15 +533,7 @@ async fn lookup_session_target_by_name_with_app_server(
             return Ok(session_target_from_app_server_thread(thread));
         }
         if response.next_cursor.is_none() {
-            if app_server.is_remote() {
-                return Ok(None);
-            }
-            return Ok(find_thread_meta_by_name_str(codex_home, name).await?.map(
-                |(path, session_meta)| resume_picker::SessionTarget {
-                    path: Some(path),
-                    thread_id: session_meta.meta.id,
-                },
-            ));
+            return Ok(None);
         }
         cursor = response.next_cursor;
     }
@@ -534,7 +541,6 @@ async fn lookup_session_target_by_name_with_app_server(
 
 async fn lookup_session_target_with_app_server(
     app_server: &mut AppServerSession,
-    codex_home: &Path,
     id_or_name: &str,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     if Uuid::parse_str(id_or_name).is_ok() {
@@ -565,7 +571,7 @@ async fn lookup_session_target_with_app_server(
         };
     }
 
-    lookup_session_target_by_name_with_app_server(app_server, codex_home, id_or_name).await
+    lookup_session_target_by_name_with_app_server(app_server, id_or_name).await
 }
 
 async fn lookup_latest_session_target_with_app_server(
@@ -598,6 +604,7 @@ fn latest_session_lookup_params(
         cursor: None,
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+        sort_direction: None,
         model_providers: if is_remote {
             None
         } else {
@@ -623,7 +630,9 @@ fn config_cwd_for_app_server_target(
     }
 
     let cwd = match cwd {
-        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?),
+        Some(path) => {
+            AbsolutePathBuf::from_absolute_path(canonicalize_existing_preserving_symlinks(path)?)
+        }
         None => AbsolutePathBuf::current_dir(),
     }?;
     Ok(Some(cwd))
@@ -717,7 +726,12 @@ pub async fn run_main(
         }
     };
 
-    let environment_manager = Arc::new(EnvironmentManager::from_env());
+    let environment_manager = Arc::new(EnvironmentManager::from_env_with_runtime_paths(Some(
+        ExecServerRuntimePaths::from_optional_paths(
+            arg0_paths.codex_self_exe.clone(),
+            arg0_paths.codex_linux_sandbox_exe.clone(),
+        )?,
+    )));
     let cwd = cli.cwd.clone();
     let config_cwd =
         config_cwd_for_app_server_target(cwd.as_deref(), &app_server_target, &environment_manager)?;
@@ -748,9 +762,11 @@ pub async fn run_main(
         }
     };
 
-    if let Err(err) =
-        codex_core::personality_migration::maybe_migrate_personality(&codex_home, &config_toml)
-            .await
+    if let Err(err) = crate::legacy_core::personality_migration::maybe_migrate_personality(
+        &codex_home,
+        &config_toml,
+    )
+    .await
     {
         tracing::warn!(error = %err, "failed to run personality migration");
     }
@@ -857,7 +873,7 @@ pub async fn run_main(
     if matches!(app_server_target, AppServerTarget::Embedded) {
         #[allow(clippy::print_stderr)]
         if let Err(err) = enforce_login_restrictions(&AuthConfig {
-            codex_home: config.codex_home.clone(),
+            codex_home: config.codex_home.to_path_buf(),
             auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
             forced_login_method: config.forced_login_method,
             forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
@@ -867,7 +883,7 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = codex_core::config::log_dir(&config)?;
+    let log_dir = crate::legacy_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
@@ -891,9 +907,7 @@ pub async fn run_main(
     // use RUST_LOG env var, default to info for codex crates.
     let env_filter = || {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new(
-                "codex_core=info,codex_tui=info,codex_rmcp_client=info,codex_app_server=info",
-            )
+            EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
         })
     };
 
@@ -930,7 +944,7 @@ pub async fn run_main(
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(
+        crate::legacy_core::otel_init::build_provider(
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
@@ -958,9 +972,10 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = get_state_db(&config)
-        .await
-        .map(|db| log_db::start(db).with_filter(env_filter()));
+    let log_db = get_state_db(&config).await.map(log_db::start);
+    let log_db_layer = log_db
+        .clone()
+        .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
 
     let _ = tracing_subscriber::registry()
         .with(file_layer)
@@ -982,6 +997,7 @@ pub async fn run_main(
         cli_kv_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         remote_url,
         remote_auth_token,
         environment_manager,
@@ -1002,6 +1018,7 @@ async fn run_ratatui_app(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     remote_url: Option<String>,
     remote_auth_token: Option<String>,
     environment_manager: Arc<EnvironmentManager>,
@@ -1060,6 +1077,7 @@ async fn run_ratatui_app(
             loader_overrides.clone(),
             cloud_requirements.clone(),
             feedback.clone(),
+            log_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1126,7 +1144,7 @@ async fn run_ratatui_app(
         // status detection edge cases.
         if show_login_screen && !remote_mode {
             cloud_requirements = cloud_requirements_loader_for_storage(
-                initial_config.codex_home.clone(),
+                initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
@@ -1173,13 +1191,7 @@ async fn run_ratatui_app(
             let Some(startup_app_server) = app_server.as_mut() else {
                 unreachable!("app server should be initialized for --fork <id>");
             };
-            match lookup_session_target_with_app_server(
-                startup_app_server,
-                config.codex_home.as_path(),
-                id_str,
-            )
-            .await?
-            {
+            match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => {
                     shutdown_app_server_if_present(app_server.take()).await;
@@ -1240,13 +1252,7 @@ async fn run_ratatui_app(
         let Some(startup_app_server) = app_server.as_mut() else {
             unreachable!("app server should be initialized for --resume <id>");
         };
-        match lookup_session_target_with_app_server(
-            startup_app_server,
-            config.codex_home.as_path(),
-            id_str,
-        )
-        .await?
-        {
+        match lookup_session_target_with_app_server(startup_app_server, id_str).await? {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => {
                 shutdown_app_server_if_present(app_server.take()).await;
@@ -1367,7 +1373,7 @@ async fn run_ratatui_app(
     // this must happen after the last possible reload.
     if let Some(w) = crate::render::highlight::set_theme_override(
         config.tui_theme.clone(),
-        find_codex_home().ok(),
+        find_codex_home().ok().map(AbsolutePathBuf::into_path_buf),
     ) {
         config.startup_warnings.push(w);
     }
@@ -1398,6 +1404,7 @@ async fn run_ratatui_app(
             loader_overrides,
             cloud_requirements.clone(),
             feedback.clone(),
+            log_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1424,6 +1431,7 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,
@@ -1519,13 +1527,7 @@ async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
-    match (
-        path_utils::normalize_for_path_comparison(current_cwd),
-        path_utils::normalize_for_path_comparison(session_cwd),
-    ) {
-        (Ok(current), Ok(session)) => current != session,
-        _ => current_cwd != session_cwd,
-    }
+    !path_utils::paths_match_after_normalization(current_cwd, session_cwd)
 }
 
 pub(crate) enum ResolveCwdOutcome {
@@ -1731,13 +1733,13 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::legacy_core::config::ConfigBuilder;
+    use crate::legacy_core::config::ConfigOverrides;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_config::config_toml::ProjectConfig;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::ConfigOverrides;
     use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
@@ -1767,6 +1769,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
+            /*log_db*/ None,
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         )
         .await
@@ -1946,10 +1949,25 @@ mod tests {
 
         assert_eq!(
             config_cwd,
-            Some(AbsolutePathBuf::from_absolute_path(
-                temp_dir.path().canonicalize()?
-            )?)
+            Some(AbsolutePathBuf::from_absolute_path(dunce::canonicalize(
+                temp_dir.path()
+            )?)?)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn config_cwd_for_app_server_target_errors_for_missing_embedded_cli_cwd() -> std::io::Result<()>
+    {
+        let temp_dir = TempDir::new()?;
+        let missing = temp_dir.path().join("missing");
+        let target = AppServerTarget::Embedded;
+        let environment_manager = EnvironmentManager::new(/*exec_server_url*/ None);
+
+        let err = config_cwd_for_app_server_target(Some(&missing), &target, &environment_manager)
+            .expect_err("missing embedded cwd should fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         Ok(())
     }
 
@@ -2032,7 +2050,7 @@ mod tests {
         std::fs::write(&rollout_path, "")?;
 
         let state_runtime = codex_state::StateRuntime::init(
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             config.model_provider_id.clone(),
         )
         .await
@@ -2066,65 +2084,9 @@ mod tests {
             AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
                 start_test_embedded_app_server(config).await?,
             ));
-        let target = lookup_session_target_by_name_with_app_server(
-            &mut app_server,
-            temp_dir.path(),
-            "saved-session",
-        )
-        .await?;
+        let target =
+            lookup_session_target_by_name_with_app_server(&mut app_server, "saved-session").await?;
         let target = target.expect("name lookup should find the saved thread");
-        assert_eq!(target.path, Some(rollout_path));
-        assert_eq!(target.thread_id, thread_id);
-
-        app_server.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn lookup_session_target_by_name_falls_back_to_legacy_index() -> color_eyre::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
-        let thread_id = ThreadId::new();
-        let rollout_path = temp_dir
-            .path()
-            .join("sessions/2025/02/01")
-            .join(format!("rollout-2025-02-01T10-00-00-{thread_id}.jsonl"));
-        std::fs::create_dir_all(rollout_path.parent().expect("rollout parent"))?;
-        let session_meta = SessionMeta {
-            id: thread_id,
-            timestamp: "2025-02-01T10:00:00Z".to_string(),
-            model_provider: Some(config.model_provider_id.clone()),
-            ..SessionMeta::default()
-        };
-        let line = RolloutLine {
-            timestamp: session_meta.timestamp.clone(),
-            item: RolloutItem::SessionMeta(SessionMetaLine {
-                meta: session_meta,
-                git: None,
-            }),
-        };
-        std::fs::write(
-            &rollout_path,
-            format!("{}\n", serde_json::to_string(&line)?),
-        )?;
-        std::fs::write(
-            temp_dir.path().join("session_index.jsonl"),
-            format!(
-                "{{\"id\":\"{thread_id}\",\"thread_name\":\"hello\",\"updated_at\":\"2025-02-02T10:00:00Z\"}}\n"
-            ),
-        )?;
-
-        let mut app_server =
-            AppServerSession::new(codex_app_server_client::AppServerClient::InProcess(
-                start_test_embedded_app_server(config).await?,
-            ));
-        let target = lookup_session_target_by_name_with_app_server(
-            &mut app_server,
-            temp_dir.path(),
-            "hello",
-        )
-        .await?;
-        let target = target.expect("legacy name lookup should find the saved thread");
         assert_eq!(target.path, Some(rollout_path));
         assert_eq!(target.thread_id, thread_id);
 
@@ -2143,6 +2105,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
+            /*log_db*/ None,
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
@@ -2212,6 +2175,7 @@ mod tests {
             approval_policy: config.permissions.approval_policy.value(),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             network: None,
+            file_system_sandbox_policy: None,
             model,
             personality: None,
             collaboration_mode: None,
@@ -2461,7 +2425,7 @@ trust_level = "untrusted"
         )?;
 
         let runtime = codex_state::StateRuntime::init(
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             config.model_provider_id.clone(),
         )
         .await

@@ -1,16 +1,16 @@
 use crate::history_cell::PlainHistoryCell;
+use crate::legacy_core::config::Config;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_core::config::Config;
-use codex_core::config_loader::ConfigLayerEntry;
-use codex_core::config_loader::ConfigLayerStack;
-use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::config_loader::NetworkConstraints;
-use codex_core::config_loader::NetworkDomainPermissionToml;
-use codex_core::config_loader::NetworkUnixSocketPermissionToml;
-use codex_core::config_loader::RequirementSource;
-use codex_core::config_loader::ResidencyRequirement;
-use codex_core::config_loader::SandboxModeRequirement;
-use codex_core::config_loader::WebSearchModeRequirement;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::NetworkConstraints;
+use codex_config::NetworkDomainPermissionToml;
+use codex_config::NetworkUnixSocketPermissionToml;
+use codex_config::RequirementSource;
+use codex_config::ResidencyRequirement;
+use codex_config::SandboxModeRequirement;
+use codex_config::WebSearchModeRequirement;
 use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -37,7 +37,7 @@ pub(crate) fn new_debug_config_output(
                 .permissions
                 .network
                 .as_ref()
-                .is_some_and(codex_core::config::NetworkProxySpec::socks_enabled),
+                .is_some_and(crate::legacy_core::config::NetworkProxySpec::socks_enabled),
         );
         lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
         lines.push(format!("    - ALL_PROXY   = {all_proxy}").into());
@@ -194,6 +194,22 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
             "experimental_network",
             format_network_constraints(&network.value),
             Some(&network.source),
+        ));
+    }
+
+    if let Some(filesystem) = requirements.filesystem.as_ref() {
+        let deny_read = join_or_empty(
+            filesystem
+                .value
+                .deny_read
+                .iter()
+                .map(|pattern| pattern.as_str().to_string())
+                .collect::<Vec<_>>(),
+        );
+        requirement_lines.push(requirement_line(
+            "permissions.filesystem.deny_read",
+            deny_read,
+            Some(&filesystem.source),
         ));
     }
 
@@ -367,7 +383,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         dangerously_allow_all_unix_sockets,
         domains,
         managed_allowed_domains_only,
-        danger_full_access_denylist_only,
         unix_sockets,
         allow_local_binding,
     } = network;
@@ -403,11 +418,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(managed_allowed_domains_only) = managed_allowed_domains_only {
         parts.push(format!(
             "managed_allowed_domains_only={managed_allowed_domains_only}"
-        ));
-    }
-    if let Some(danger_full_access_denylist_only) = danger_full_access_denylist_only {
-        parts.push(format!(
-            "danger_full_access_denylist_only={danger_full_access_denylist_only}"
         ));
     }
     if let Some(unix_sockets) = unix_sockets {
@@ -457,26 +467,27 @@ fn format_network_unix_socket_permission(
 mod tests {
     use super::render_debug_config_lines;
     use super::session_all_proxy_url;
+    use crate::legacy_core::config::Constrained;
     use codex_app_server_protocol::ConfigLayerSource;
-    use codex_core::config::Constrained;
-    use codex_core::config_loader::ConfigLayerEntry;
-    use codex_core::config_loader::ConfigLayerStack;
-    use codex_core::config_loader::ConfigRequirements;
-    use codex_core::config_loader::ConfigRequirementsToml;
-    use codex_core::config_loader::ConstrainedWithSource;
-    use codex_core::config_loader::FeatureRequirementsToml;
-    use codex_core::config_loader::McpServerIdentity;
-    use codex_core::config_loader::McpServerRequirement;
-    use codex_core::config_loader::NetworkConstraints;
-    use codex_core::config_loader::NetworkDomainPermissionToml;
-    use codex_core::config_loader::NetworkDomainPermissionsToml;
-    use codex_core::config_loader::NetworkUnixSocketPermissionToml;
-    use codex_core::config_loader::NetworkUnixSocketPermissionsToml;
-    use codex_core::config_loader::RequirementSource;
-    use codex_core::config_loader::ResidencyRequirement;
-    use codex_core::config_loader::SandboxModeRequirement;
-    use codex_core::config_loader::Sourced;
-    use codex_core::config_loader::WebSearchModeRequirement;
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerStack;
+    use codex_config::ConfigRequirements;
+    use codex_config::ConfigRequirementsToml;
+    use codex_config::ConstrainedWithSource;
+    use codex_config::FeatureRequirementsToml;
+    use codex_config::FilesystemConstraints;
+    use codex_config::McpServerIdentity;
+    use codex_config::McpServerRequirement;
+    use codex_config::NetworkConstraints;
+    use codex_config::NetworkDomainPermissionToml;
+    use codex_config::NetworkDomainPermissionsToml;
+    use codex_config::NetworkUnixSocketPermissionToml;
+    use codex_config::NetworkUnixSocketPermissionsToml;
+    use codex_config::RequirementSource;
+    use codex_config::ResidencyRequirement;
+    use codex_config::SandboxModeRequirement;
+    use codex_config::Sourced;
+    use codex_config::WebSearchModeRequirement;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::protocol::AskForApproval;
@@ -555,6 +566,11 @@ mod tests {
         } else {
             absolute_path("/etc/codex/requirements.toml")
         };
+        let denied_path = if cfg!(windows) {
+            absolute_path("C:\\Users\\alice\\.gitconfig")
+        } else {
+            absolute_path("/home/alice/.gitconfig")
+        };
 
         let requirements = ConfigRequirements {
             approval_policy: ConstrainedWithSource::new(
@@ -605,10 +621,17 @@ mod tests {
                             NetworkDomainPermissionToml::Allow,
                         )]),
                     }),
-                    danger_full_access_denylist_only: Some(true),
                     ..Default::default()
                 },
                 RequirementSource::CloudRequirements,
+            )),
+            filesystem: Some(Sourced::new(
+                FilesystemConstraints {
+                    deny_read: vec![denied_path.clone().into()],
+                },
+                RequirementSource::SystemRequirementsToml {
+                    file: requirements_file.clone(),
+                },
             )),
             ..ConfigRequirements::default()
         };
@@ -634,6 +657,7 @@ mod tests {
             rules: None,
             enforce_residency: Some(ResidencyRequirement::Us),
             network: None,
+            permissions: None,
         };
 
         let user_file = if cfg!(windows) {
@@ -676,8 +700,17 @@ mod tests {
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
-            "experimental_network: enabled=true, domains={example.com=allow}, danger_full_access_denylist_only=true (source: cloud requirements)"
+            "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
         ));
+        assert!(
+            rendered.contains(
+                format!(
+                    "permissions.filesystem.deny_read: {}",
+                    denied_path.as_path().display()
+                )
+                .as_str()
+            )
+        );
         assert!(!rendered.contains("  - rules:"));
     }
 
@@ -818,6 +851,7 @@ approval_policy = "never"
             rules: None,
             enforce_residency: None,
             network: None,
+            permissions: None,
         };
 
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)

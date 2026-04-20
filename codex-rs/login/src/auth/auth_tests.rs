@@ -16,6 +16,8 @@ use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tempfile::tempdir;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 #[tokio::test]
 async fn refresh_without_id_token() {
@@ -128,7 +130,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                     chatgpt_plan_type: Some(InternalPlanType::Known(InternalKnownPlan::Pro)),
                     chatgpt_user_id: Some("user-12345".to_string()),
                     chatgpt_account_id: None,
-                    is_org_owner: None,
+                    chatgpt_account_is_fedramp: false,
                     raw_jwt: fake_jwt,
                 },
                 access_token: "test-access-token".to_string(),
@@ -136,6 +138,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
                 account_id: None,
             }),
             last_refresh: Some(last_refresh),
+            agent_identity: None,
         },
         auth_dot_json
     );
@@ -173,6 +176,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         openai_api_key: Some("sk-test-key".to_string()),
         tokens: None,
         last_refresh: None,
+        agent_identity: None,
     };
     super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
     let auth_file = get_auth_file(dir.path());
@@ -180,6 +184,78 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     assert!(logout(dir.path(), AuthCredentialsStoreMode::File)?);
     assert!(!auth_file.exists());
     Ok(())
+}
+
+#[test]
+fn chatgpt_auth_persists_agent_identity_for_workspace() {
+    let codex_home = tempdir().unwrap();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("account-123".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+    let auth = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("load auth")
+    .expect("auth available");
+    let record = AgentIdentityAuthRecord {
+        workspace_id: "account-123".to_string(),
+        chatgpt_user_id: Some("user-123".to_string()),
+        agent_runtime_id: "agent_123".to_string(),
+        agent_private_key: "pkcs8-base64".to_string(),
+        registered_at: "2026-04-13T12:00:00Z".to_string(),
+        background_task_id: None,
+    };
+
+    auth.set_agent_identity(record.clone())
+        .expect("set agent identity");
+
+    assert_eq!(auth.get_agent_identity("account-123"), Some(record.clone()));
+    assert_eq!(auth.get_agent_identity("other-account"), None);
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let persisted = storage
+        .load()
+        .expect("load auth")
+        .expect("auth should exist");
+    assert_eq!(persisted.agent_identity, Some(record));
+
+    assert!(auth.remove_agent_identity().expect("remove agent identity"));
+    assert_eq!(auth.get_agent_identity("account-123"), None);
+}
+
+#[test]
+fn dummy_chatgpt_auth_does_not_create_cwd_auth_json_when_identity_is_set() {
+    let cwd_auth = std::env::current_dir()
+        .expect("current dir")
+        .join("auth.json");
+    let had_auth_json_before_test = cwd_auth.exists();
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let record = AgentIdentityAuthRecord {
+        workspace_id: "account_id".to_string(),
+        chatgpt_user_id: None,
+        agent_runtime_id: "agent_123".to_string(),
+        agent_private_key: "pkcs8-base64".to_string(),
+        registered_at: "2026-04-13T12:00:00Z".to_string(),
+        background_task_id: None,
+    };
+
+    auth.set_agent_identity(record.clone())
+        .expect("set agent identity");
+
+    assert_eq!(auth.get_agent_identity("account_id"), Some(record));
+    if !had_auth_json_before_test {
+        assert!(
+            !cwd_auth.exists(),
+            "dummy ChatGPT auth must not write auth.json in the test process cwd"
+        );
+    }
 }
 
 #[test]
@@ -473,6 +549,67 @@ exit 1
         }))
         .expect("provider auth config should deserialize")
     }
+}
+
+#[tokio::test]
+async fn auth_manager_notifies_when_auth_state_changes() {
+    let dir = tempdir().unwrap();
+    let manager = AuthManager::shared(
+        dir.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+    );
+    let mut auth_state_rx = manager.subscribe_auth_state();
+
+    save_auth(
+        dir.path(),
+        &AuthDotJson {
+            auth_mode: Some(ApiAuthMode::ApiKey),
+            openai_api_key: Some("sk-test-key".to_string()),
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+        },
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("save auth");
+
+    assert!(
+        manager.reload(),
+        "reload should report a changed auth state"
+    );
+    timeout(Duration::from_secs(1), auth_state_rx.changed())
+        .await
+        .expect("auth change notification should arrive")
+        .expect("auth state watch should remain open");
+
+    save_auth(
+        dir.path(),
+        &AuthDotJson {
+            auth_mode: Some(ApiAuthMode::ApiKey),
+            openai_api_key: Some("sk-updated-key".to_string()),
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+        },
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("save updated auth");
+
+    assert!(
+        !manager.reload(),
+        "reload remains mode-stable even when the underlying credentials change"
+    );
+    timeout(Duration::from_secs(1), auth_state_rx.changed())
+        .await
+        .expect("auth reload notification should still arrive")
+        .expect("auth state watch should remain open");
+
+    manager.set_forced_chatgpt_workspace_id(Some("workspace-123".to_string()));
+    timeout(Duration::from_secs(1), auth_state_rx.changed())
+        .await
+        .expect("workspace change notification should arrive")
+        .expect("auth state watch should remain open");
 }
 
 struct AuthFileParams {

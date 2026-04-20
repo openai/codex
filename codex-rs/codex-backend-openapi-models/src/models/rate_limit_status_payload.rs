@@ -37,6 +37,13 @@ pub struct RateLimitStatusPayload {
         skip_serializing_if = "Option::is_none"
     )]
     pub additional_rate_limits: Option<Option<Vec<models::AdditionalRateLimitDetails>>>,
+    #[serde(
+        rename = "rate_limit_reached_type",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rate_limit_reached_type: Option<Option<RateLimitReachedType>>,
 }
 
 impl RateLimitStatusPayload {
@@ -46,8 +53,34 @@ impl RateLimitStatusPayload {
             rate_limit: None,
             credits: None,
             additional_rate_limits: None,
+            rate_limit_reached_type: None,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitReachedType {
+    #[serde(rename = "type")]
+    pub kind: RateLimitReachedKind,
+}
+
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default,
+)]
+pub enum RateLimitReachedKind {
+    #[serde(rename = "rate_limit_reached")]
+    RateLimitReached,
+    #[serde(rename = "workspace_owner_credits_depleted")]
+    WorkspaceOwnerCreditsDepleted,
+    #[serde(rename = "workspace_member_credits_depleted")]
+    WorkspaceMemberCreditsDepleted,
+    #[serde(rename = "workspace_owner_usage_limit_reached")]
+    WorkspaceOwnerUsageLimitReached,
+    #[serde(rename = "workspace_member_usage_limit_reached")]
+    WorkspaceMemberUsageLimitReached,
+    #[serde(rename = "unknown", other)]
+    #[default]
+    Unknown,
 }
 
 #[derive(
@@ -65,6 +98,8 @@ pub enum PlanType {
     Plus,
     #[serde(rename = "pro")]
     Pro,
+    #[serde(rename = "prolite")]
+    ProLite,
     #[serde(rename = "free_workspace")]
     FreeWorkspace,
     #[serde(rename = "team")]
@@ -85,4 +120,6 @@ pub enum PlanType {
     Enterprise,
     #[serde(rename = "edu")]
     Edu,
+    #[serde(rename = "unknown", other)]
+    Unknown,
 }

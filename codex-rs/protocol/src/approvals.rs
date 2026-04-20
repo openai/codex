@@ -6,6 +6,7 @@ use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -99,13 +100,28 @@ pub enum GuardianUserAuthorization {
     High,
 }
 
+/// Final allow/deny outcome returned by the guardian reviewer.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianAssessmentOutcome {
+    Allow,
+    Deny,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianAssessmentStatus {
     InProgress,
     Approved,
     Denied,
+    TimedOut,
     Aborted,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianAssessmentDecisionSource {
+    Agent,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -122,17 +138,17 @@ pub enum GuardianAssessmentAction {
     Command {
         source: GuardianCommandSource,
         command: String,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
     },
     Execve {
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
-        cwd: PathBuf,
+        cwd: AbsolutePathBuf,
     },
     ApplyPatch {
-        cwd: PathBuf,
-        files: Vec<PathBuf>,
+        cwd: AbsolutePathBuf,
+        files: Vec<AbsolutePathBuf>,
     },
     NetworkAccess {
         target: String,
@@ -159,6 +175,10 @@ pub struct NetworkPolicyAmendment {
 pub struct GuardianAssessmentEvent {
     /// Stable identifier for this guardian review lifecycle.
     pub id: String,
+    /// Thread item being reviewed, when the review maps to a concrete item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target_item_id: Option<String>,
     /// Turn ID that this assessment belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
@@ -176,6 +196,10 @@ pub struct GuardianAssessmentEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rationale: Option<String>,
+    /// Source that produced the terminal assessment decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub decision_source: Option<GuardianAssessmentDecisionSource>,
     /// Canonical action payload that was reviewed.
     pub action: GuardianAssessmentAction,
 }
@@ -198,7 +222,7 @@ pub struct ExecApprovalRequestEvent {
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory.
-    pub cwd: PathBuf,
+    pub cwd: AbsolutePathBuf,
     /// Optional human-readable reason for the approval (e.g. retry without sandbox).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -354,6 +378,8 @@ pub struct ApplyPatchApprovalRequestEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -362,7 +388,7 @@ mod tests {
             "type": "command",
             "source": "shell",
             "command": "rm -rf /tmp/guardian",
-            "cwd": "/tmp",
+            "cwd": test_path_buf("/tmp"),
         }))
         .expect("guardian action");
 
@@ -371,7 +397,7 @@ mod tests {
             GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,
                 command: "rm -rf /tmp/guardian".to_string(),
-                cwd: PathBuf::from("/tmp"),
+                cwd: test_path_buf("/tmp").abs(),
             }
         );
     }
@@ -404,7 +430,7 @@ mod tests {
                     "-f".to_string(),
                     "/tmp/file.sqlite".to_string(),
                 ],
-                cwd: PathBuf::from("/tmp"),
+                cwd: test_path_buf("/tmp").abs(),
             }
         );
     }

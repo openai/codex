@@ -12,7 +12,6 @@ use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
-use std::path::Path;
 
 pub(crate) mod apply_patch;
 pub(crate) mod shell;
@@ -60,7 +59,7 @@ pub(crate) fn build_sandbox_command(
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
-    cwd: &Path,
+    cwd: &AbsolutePathBuf,
     explicit_env_overrides: &HashMap<String, String>,
     env: &HashMap<String, String>,
 ) -> Vec<String> {
@@ -76,14 +75,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    if if let (Ok(snapshot_cwd), Ok(command_cwd)) = (
-        path_utils::normalize_for_path_comparison(snapshot.cwd.as_path()),
-        path_utils::normalize_for_path_comparison(cwd),
-    ) {
-        snapshot_cwd != command_cwd
-    } else {
-        snapshot.cwd != cwd
-    } {
+    if !path_utils::paths_match_after_normalization(snapshot.cwd.as_path(), cwd) {
         return command.to_vec();
     }
 

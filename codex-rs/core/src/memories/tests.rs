@@ -1,6 +1,6 @@
+use super::control::clear_memory_root_contents;
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
-use crate::memories::clear_memory_root_contents;
 use crate::memories::ensure_layout;
 use crate::memories::memory_root;
 use crate::memories::raw_memories_file;
@@ -10,6 +10,7 @@ use chrono::Utc;
 use codex_config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION;
 use codex_protocol::ThreadId;
 use codex_state::Stage1Output;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -17,8 +18,7 @@ use tempfile::tempdir;
 
 #[test]
 fn memory_root_uses_shared_global_path() {
-    let dir = tempdir().expect("tempdir");
-    let codex_home = dir.path().join("codex");
+    let codex_home = AbsolutePathBuf::current_dir().expect("cwd").join("codex");
     assert_eq!(memory_root(&codex_home), codex_home.join("memories"));
 }
 
@@ -416,18 +416,23 @@ task_outcome: success
 mod phase2 {
     use crate::ThreadManager;
     use crate::agent::AgentControl;
-    use crate::codex::Session;
-    use crate::codex::make_session_and_context;
     use crate::config::Config;
     use crate::config::test_config;
     use crate::memories::memory_root;
     use crate::memories::phase2;
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
+    use crate::session::session::Session;
+    use crate::session::tests::make_session_and_context;
+    use chrono::Duration as ChronoDuration;
     use chrono::Utc;
     use codex_config::Constrained;
+    use codex_features::Feature;
     use codex_login::CodexAuth;
+    use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SandboxPolicy;
@@ -435,10 +440,8 @@ mod phase2 {
     use codex_state::Phase2JobClaimOutcome;
     use codex_state::Stage1Output;
     use codex_state::ThreadMetadataBuilder;
-    use core_test_support::PathBufExt;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::time::Duration;
     use tempfile::TempDir;
 
     fn stage1_output_with_source_updated_at(source_updated_at: i64) -> Stage1Output {
@@ -468,13 +471,17 @@ mod phase2 {
     impl DispatchHarness {
         async fn new() -> Self {
             let codex_home = tempfile::tempdir().expect("create temp codex home");
-            let mut config = test_config();
-            config.codex_home = codex_home.path().to_path_buf();
-            config.cwd = config.codex_home.abs();
+            let mut config = test_config().await;
+            config.codex_home =
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(codex_home.path())
+                    .expect("codex home is absolute");
+            config.cwd = config.codex_home.clone();
+            config.permissions.file_system_sandbox_policy = FileSystemSandboxPolicy::unrestricted();
+            config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Enabled;
             let config = Arc::new(config);
 
             let state_db = codex_state::StateRuntime::init(
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 config.model_provider_id.clone(),
             )
             .await
@@ -483,7 +490,7 @@ mod phase2 {
             let manager = ThreadManager::with_models_provider_and_home_for_tests(
                 CodexAuth::from_api_key("dummy"),
                 config.model_provider.clone(),
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 std::sync::Arc::new(codex_exec_server::EnvironmentManager::new(
                     /*exec_server_url*/ None,
                 )),
@@ -507,7 +514,8 @@ mod phase2 {
                 thread_id,
                 self.config
                     .codex_home
-                    .join(format!("rollout-{thread_id}.jsonl")),
+                    .join(format!("rollout-{thread_id}.jsonl"))
+                    .to_path_buf(),
                 Utc::now(),
                 SessionSource::Cli,
             );
@@ -676,51 +684,93 @@ mod phase2 {
             .expect("get consolidation thread");
         let config_snapshot = subagent.config_snapshot().await;
         pretty_assertions::assert_eq!(config_snapshot.approval_policy, AskForApproval::Never);
-        pretty_assertions::assert_eq!(config_snapshot.cwd, memory_root(&harness.config.codex_home));
-        match config_snapshot.sandbox_policy {
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                assert!(
-                    writable_roots
-                        .iter()
-                        .any(|root| root.as_path() == harness.config.codex_home.as_path()),
-                    "consolidation subagent should have codex_home as writable root"
+        assert!(config_snapshot.ephemeral);
+        pretty_assertions::assert_eq!(
+            config_snapshot.cwd.as_path(),
+            memory_root(&harness.config.codex_home).as_path()
+        );
+        match &config_snapshot.sandbox_policy {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                ..
+            } => {
+                assert!(!*network_access);
+                pretty_assertions::assert_eq!(
+                    writable_roots.as_slice(),
+                    [memory_root(&harness.config.codex_home)],
+                    "consolidation subagent should only be able to write the memory root"
                 );
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
-        subagent.codex.session.ensure_rollout_materialized().await;
-        subagent
-            .codex
-            .session
-            .flush_rollout()
+        pretty_assertions::assert_eq!(
+            config_snapshot.session_source.get_agent_path(),
+            Some(AgentPath::morpheus())
+        );
+        assert!(
+            harness
+                .session
+                .services
+                .agent_control
+                .get_agent_metadata(thread_id)
+                .is_none(),
+            "memory consolidation should not be registered in the root collab agent registry"
+        );
+        let turn_context = subagent.codex.session.new_default_turn().await;
+        pretty_assertions::assert_eq!(
+            turn_context.file_system_sandbox_policy,
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                &config_snapshot.sandbox_policy,
+                config_snapshot.cwd.as_path(),
+            ),
+            "consolidation subagent split filesystem policy should match the memory-root legacy policy"
+        );
+        assert!(
+            turn_context
+                .file_system_sandbox_policy
+                .can_write_path_with_cwd(
+                    memory_root(&harness.config.codex_home).as_path(),
+                    config_snapshot.cwd.as_path(),
+                ),
+            "consolidation subagent should be able to write the memory root"
+        );
+        assert!(
+            !turn_context
+                .file_system_sandbox_policy
+                .can_write_path_with_cwd(
+                    harness.config.codex_home.join("config.toml").as_path(),
+                    config_snapshot.cwd.as_path(),
+                ),
+            "consolidation subagent should not inherit codex_home write access"
+        );
+        pretty_assertions::assert_eq!(
+            turn_context.network_sandbox_policy,
+            NetworkSandboxPolicy::Restricted,
+            "consolidation subagent split network policy should preserve no-network sandboxing"
+        );
+        assert!(
+            !turn_context.features.enabled(Feature::MemoryTool),
+            "consolidation subagent should have the memories feature disabled"
+        );
+        assert!(
+            !turn_context.config.memories.generate_memories,
+            "consolidation subagent should not generate memories"
+        );
+        assert!(
+            !turn_context.config.memories.use_memories,
+            "consolidation subagent should not read memories"
+        );
+        assert!(
+            subagent.rollout_path().is_none(),
+            "ephemeral consolidation thread should not materialize a rollout"
+        );
+        let memory_mode = harness
+            .state_db
+            .get_thread_memory_mode(thread_id)
             .await
-            .expect("subagent rollout should flush");
-        let rollout_path = subagent
-            .rollout_path()
-            .expect("consolidation thread should have a rollout path");
-        codex_rollout::state_db::read_repair_rollout_path(
-            Some(harness.state_db.as_ref()),
-            Some(thread_id),
-            Some(/*archived_only*/ false),
-            rollout_path.as_path(),
-        )
-        .await;
-        let memory_mode = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let memory_mode = harness
-                    .state_db
-                    .get_thread_memory_mode(thread_id)
-                    .await
-                    .expect("read consolidation thread memory mode");
-                if memory_mode.is_some() {
-                    break memory_mode;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("timed out waiting for consolidation thread memory mode to persist");
-        pretty_assertions::assert_eq!(memory_mode.as_deref(), Some("disabled"));
+            .expect("read consolidation thread memory mode");
+        pretty_assertions::assert_eq!(memory_mode, None);
 
         harness.shutdown_threads().await;
     }
@@ -889,13 +939,15 @@ mod phase2 {
     #[tokio::test]
     async fn dispatch_marks_job_for_retry_when_spawn_agent_fails() {
         let codex_home = tempfile::tempdir().expect("create temp codex home");
-        let mut config = test_config();
-        config.codex_home = codex_home.path().to_path_buf();
-        config.cwd = config.codex_home.abs();
+        let mut config = test_config().await;
+        config.codex_home =
+            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(codex_home.path())
+                .expect("codex home is absolute");
+        config.cwd = config.codex_home.clone();
         let config = Arc::new(config);
 
         let state_db = codex_state::StateRuntime::init(
-            config.codex_home.clone(),
+            config.codex_home.to_path_buf(),
             config.model_provider_id.clone(),
         )
         .await
@@ -909,7 +961,10 @@ mod phase2 {
         let thread_id = ThreadId::new();
         let mut metadata_builder = ThreadMetadataBuilder::new(
             thread_id,
-            config.codex_home.join(format!("rollout-{thread_id}.jsonl")),
+            config
+                .codex_home
+                .join(format!("rollout-{thread_id}.jsonl"))
+                .to_path_buf(),
             Utc::now(),
             SessionSource::Cli,
         );
@@ -950,6 +1005,28 @@ mod phase2 {
             "stage-1 success should enqueue global consolidation"
         );
 
+        let chronicle_resources = config
+            .codex_home
+            .join("memories_extensions/chronicle/resources");
+        tokio::fs::create_dir_all(&chronicle_resources)
+            .await
+            .expect("create chronicle resources");
+        tokio::fs::write(
+            config
+                .codex_home
+                .join("memories_extensions/chronicle/instructions.md"),
+            "instructions",
+        )
+        .await
+        .expect("write chronicle instructions");
+        let old_file = chronicle_resources.join(format!(
+            "{}-abcd-10min-old.md",
+            (Utc::now() - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
+        ));
+        tokio::fs::write(&old_file, "old resource")
+            .await
+            .expect("write old extension resource");
+
         phase2::run(&session, Arc::clone(&config)).await;
 
         let retry_claim = state_db
@@ -960,6 +1037,12 @@ mod phase2 {
             retry_claim,
             Phase2JobClaimOutcome::SkippedNotDirty,
             "spawn failures should leave the job in retry backoff instead of running"
+        );
+        assert!(
+            tokio::fs::try_exists(&old_file)
+                .await
+                .expect("check old extension resource"),
+            "spawn failures should not prune extension resources before retry"
         );
     }
 }

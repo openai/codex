@@ -12,6 +12,7 @@ use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
 use crate::types::FeedbackConfigToml;
 use crate::types::History;
+use crate::types::MarketplaceConfig;
 use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
 use crate::types::Notice;
@@ -28,7 +29,6 @@ use crate::types::WindowsToml;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::FeaturesToml;
-use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -50,6 +50,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path::normalize_for_path_comparison;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -325,6 +326,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
 
+    /// User-level marketplace entries keyed by marketplace name.
+    #[serde(default)]
+    pub marketplaces: HashMap<String, MarketplaceConfig>,
+
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
     // Injects known feature keys into the schema and forbids unknown keys.
@@ -591,12 +596,12 @@ pub struct GhostSnapshotToml {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    pub fn derive_sandbox_policy(
+    pub async fn derive_sandbox_policy(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
-        resolved_cwd: &Path,
+        active_project: Option<&ProjectConfig>,
         sandbox_policy_constraint: Option<&crate::Constrained<SandboxPolicy>>,
     ) -> SandboxPolicy {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
@@ -605,11 +610,13 @@ impl ConfigToml {
         let resolved_sandbox_mode = sandbox_mode_override
             .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
-            .or_else(|| {
+            .or(if sandbox_mode_was_explicit {
+                None
+            } else {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                self.get_active_project(resolved_cwd).and_then(|p| {
+                active_project.and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
@@ -670,30 +677,28 @@ impl ConfigToml {
     }
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
-    /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
-        let projects = self.projects.clone().unwrap_or_default();
+    /// does not contain a project corresponding to cwd or the resolved git repo
+    /// root for cwd.
+    pub fn get_active_project(
+        &self,
+        resolved_cwd: &Path,
+        repo_root: Option<&Path>,
+    ) -> Option<ProjectConfig> {
+        let projects = self.projects.as_ref()?;
 
-        let resolved_cwd_key = project_trust_key(resolved_cwd);
-        let resolved_cwd_raw_key = resolved_cwd.to_string_lossy().to_string();
-        if let Some(project_config) = projects
-            .get(&resolved_cwd_key)
-            .or_else(|| projects.get(&resolved_cwd_raw_key))
-        {
-            return Some(project_config.clone());
+        for normalized_cwd in normalized_project_lookup_keys(resolved_cwd) {
+            if let Some(project_config) = project_config_for_lookup_key(projects, &normalized_cwd) {
+                return Some(project_config);
+            }
         }
 
-        // If cwd lives inside a git repo/worktree, check whether the root git project
-        // (the primary repository working directory) is trusted. This lets
-        // worktrees inherit trust from the main project.
-        if let Some(repo_root) = resolve_root_git_project_for_trust(resolved_cwd) {
-            let repo_root_key = project_trust_key(repo_root.as_path());
-            let repo_root_raw_key = repo_root.to_string_lossy().to_string();
-            if let Some(project_config_for_root) = projects
-                .get(&repo_root_key)
-                .or_else(|| projects.get(&repo_root_raw_key))
-            {
-                return Some(project_config_for_root.clone());
+        if let Some(repo_root) = repo_root {
+            for normalized_repo_root in normalized_project_lookup_keys(repo_root) {
+                if let Some(project_config_for_root) =
+                    project_config_for_lookup_key(projects, &normalized_repo_root)
+                {
+                    return Some(project_config_for_root);
+                }
             }
         }
 
@@ -725,11 +730,45 @@ impl ConfigToml {
 /// Canonicalize the path and convert it to a string to be used as a key in the
 /// projects trust map. On Windows, strips UNC, when possible, to try to ensure
 /// that different paths that point to the same location have the same key.
-fn project_trust_key(project_path: &Path) -> String {
-    dunce::canonicalize(project_path)
-        .unwrap_or_else(|_| project_path.to_path_buf())
-        .to_string_lossy()
-        .to_string()
+fn normalized_project_lookup_keys(path: &Path) -> Vec<String> {
+    let normalized_path = normalize_project_lookup_key(path.to_string_lossy().to_string());
+    let normalized_canonical_path = normalize_project_lookup_key(
+        normalize_for_path_comparison(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string(),
+    );
+    if normalized_path == normalized_canonical_path {
+        vec![normalized_canonical_path]
+    } else {
+        vec![normalized_canonical_path, normalized_path]
+    }
+}
+
+fn normalize_project_lookup_key(key: String) -> String {
+    if cfg!(windows) {
+        key.to_ascii_lowercase()
+    } else {
+        key
+    }
+}
+
+fn project_config_for_lookup_key(
+    projects: &HashMap<String, ProjectConfig>,
+    lookup_key: &str,
+) -> Option<ProjectConfig> {
+    if let Some(project_config) = projects.get(lookup_key) {
+        return Some(project_config.clone());
+    }
+
+    let mut normalized_matches: Vec<_> = projects
+        .iter()
+        .filter(|(key, _)| normalize_project_lookup_key((*key).clone()) == lookup_key)
+        .collect();
+    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches
+        .first()
+        .map(|(_, project_config)| (**project_config).clone())
 }
 
 pub fn validate_reserved_model_provider_ids(

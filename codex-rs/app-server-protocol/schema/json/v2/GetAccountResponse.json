@@ -51,6 +51,7 @@
         "go",
         "plus",
         "pro",
+        "prolite",
         "team",
         "self_serve_business_usage_based",
         "business",
@@ -58,14 +59,6 @@
         "enterprise",
         "edu",
         "unknown"
-      ],
-      "type": "string"
-    },
-    "WorkspaceRole": {
-      "enum": [
-        "account-owner",
-        "account-admin",
-        "standard-user"
       ],
       "type": "string"
     }
@@ -81,24 +74,8 @@
         }
       ]
     },
-    "isWorkspaceOwner": {
-      "type": [
-        "boolean",
-        "null"
-      ]
-    },
     "requiresOpenaiAuth": {
       "type": "boolean"
-    },
-    "workspaceRole": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/WorkspaceRole"
-        },
-        {
-          "type": "null"
-        }
-      ]
     }
   },
   "required": [

@@ -5,26 +5,26 @@ import type { ThreadItem } from "./ThreadItem";
 import type { TurnError } from "./TurnError";
 import type { TurnStatus } from "./TurnStatus";
 
-export type Turn = { id: string, 
+export type Turn = { id: string,
 /**
  * Populated on history-bearing responses such as `thread/resume` and `thread/fork`.
  * The `turn/completed` notification also includes the terminal turn items when they are
  * still available from the live thread listener. Other responses and notifications may
  * still return an empty list to keep payloads small.
  */
-items: Array<ThreadItem>, status: TurnStatus, 
+items: Array<ThreadItem>, status: TurnStatus,
 /**
  * Only populated when the Turn's status is failed.
  */
-error: TurnError | null, 
+error: TurnError | null,
 /**
  * Unix timestamp (in seconds) when the turn started.
  */
-startedAt: number | null, 
+startedAt: number | null,
 /**
  * Unix timestamp (in seconds) when the turn completed.
  */
-completedAt: number | null, 
+completedAt: number | null,
 /**
  * Duration between turn start and completion in milliseconds, if known.
  */

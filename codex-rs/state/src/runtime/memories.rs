@@ -1,6 +1,8 @@
+use super::threads::ThreadFilterOptions;
 use super::threads::push_thread_filters;
 use super::threads::push_thread_order_and_limit;
 use super::*;
+use crate::SortDirection;
 use crate::model::Phase2InputSelection;
 use crate::model::Phase2JobClaimOutcome;
 use crate::model::Stage1JobClaim;
@@ -30,21 +32,6 @@ impl StateRuntime {
     /// stage-1 (`memory_stage1`) and phase-2 (`memory_consolidate_global`)
     /// memory pipelines.
     pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
-        self.clear_memory_data_inner(/*disable_existing_threads*/ false)
-            .await
-    }
-
-    /// Resets persisted memory state for a clean-slate local start.
-    ///
-    /// In addition to clearing persisted stage-1 outputs and memory pipeline
-    /// jobs, this disables memory generation for all existing threads so
-    /// historical rollouts are not immediately picked up again.
-    pub async fn reset_memory_data_for_fresh_start(&self) -> anyhow::Result<()> {
-        self.clear_memory_data_inner(/*disable_existing_threads*/ true)
-            .await
-    }
-
-    async fn clear_memory_data_inner(&self, disable_existing_threads: bool) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
@@ -65,18 +52,6 @@ WHERE kind = ? OR kind = ?
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
         .execute(&mut *tx)
         .await?;
-
-        if disable_existing_threads {
-            sqlx::query(
-                r#"
-UPDATE threads
-SET memory_mode = 'disabled'
-WHERE memory_mode = 'enabled'
-                "#,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
 
         tx.commit().await?;
         Ok(())
@@ -126,12 +101,9 @@ WHERE thread_id = ?
     ///   (`push_thread_filters`)
     /// - excludes threads with `memory_mode != 'enabled'`
     /// - excludes the current thread id
-    /// - keeps only threads in the age window:
-    ///   `updated_at >= now - max_age_days` and `updated_at <= now - min_rollout_idle_hours`
-    /// - keeps only threads whose memory is stale:
-    ///   `COALESCE(stage1_outputs.source_updated_at, -1) < threads.updated_at` and
-    ///   `COALESCE(jobs.last_success_watermark, -1) < threads.updated_at`
-    /// - orders by `updated_at DESC, id DESC` and applies `scan_limit`
+    /// - keeps only threads whose millisecond `updated_at` is in the age window
+    /// - keeps only threads whose memory is stale compared to millisecond `updated_at`
+    /// - orders by `updated_at_ms DESC` and applies `scan_limit`
     ///
     /// For each selected thread, this function calls [`Self::try_claim_stage1_job`]
     /// with `source_updated_at = thread.updated_at.timestamp()` and returns up to
@@ -155,34 +127,35 @@ WHERE thread_id = ?
 
         let worker_id = current_thread_id;
         let current_thread_id = worker_id.to_string();
-        let max_age_cutoff = (Utc::now() - Duration::days(max_age_days.max(0))).timestamp();
-        let idle_cutoff = (Utc::now() - Duration::hours(min_rollout_idle_hours.max(0))).timestamp();
+        let max_age_cutoff = (Utc::now() - Duration::days(max_age_days.max(0))).timestamp_millis();
+        let idle_cutoff =
+            (Utc::now() - Duration::hours(min_rollout_idle_hours.max(0))).timestamp_millis();
 
         let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 SELECT
-    id,
-    rollout_path,
-    created_at,
-    updated_at,
-    source,
-    agent_path,
-    agent_nickname,
-    agent_role,
-    model_provider,
-    model,
-    reasoning_effort,
-    cwd,
-    cli_version,
-    title,
-    sandbox_policy,
-    approval_mode,
-    tokens_used,
-    first_user_message,
-    archived_at,
-    git_sha,
-    git_branch,
-    git_origin_url
+    threads.id,
+    threads.rollout_path,
+    threads.created_at_ms AS created_at,
+    threads.updated_at_ms AS updated_at,
+    threads.source,
+    threads.agent_path,
+    threads.agent_nickname,
+    threads.agent_role,
+    threads.model_provider,
+    threads.model,
+    threads.reasoning_effort,
+    threads.cwd,
+    threads.cli_version,
+    threads.title,
+    threads.sandbox_policy,
+    threads.approval_mode,
+    threads.tokens_used,
+    threads.first_user_message,
+    threads.archived_at,
+    threads.git_sha,
+    threads.git_branch,
+    threads.git_origin_url
 FROM threads
 LEFT JOIN stage1_outputs
     ON stage1_outputs.thread_id = threads.id
@@ -198,24 +171,41 @@ LEFT JOIN jobs
         );
         push_thread_filters(
             &mut builder,
-            /*archived_only*/ false,
-            allowed_sources,
-            /*model_providers*/ None,
-            /*anchor*/ None,
-            SortKey::UpdatedAt,
-            /*search_term*/ None,
+            ThreadFilterOptions {
+                archived_only: false,
+                allowed_sources,
+                model_providers: None,
+                anchor: None,
+                sort_key: SortKey::UpdatedAt,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
         builder
-            .push(" AND id != ")
+            .push(" AND threads.id != ")
             .push_bind(current_thread_id.as_str());
         builder
-            .push(" AND updated_at >= ")
+            .push(" AND ")
+            .push("threads.updated_at_ms")
+            .push(" >= ")
             .push_bind(max_age_cutoff);
-        builder.push(" AND updated_at <= ").push_bind(idle_cutoff);
-        builder.push(" AND COALESCE(stage1_outputs.source_updated_at, -1) < updated_at");
-        builder.push(" AND COALESCE(jobs.last_success_watermark, -1) < updated_at");
-        push_thread_order_and_limit(&mut builder, SortKey::UpdatedAt, scan_limit);
+        builder
+            .push(" AND ")
+            .push("threads.updated_at_ms")
+            .push(" <= ")
+            .push_bind(idle_cutoff);
+        let updated_at = "threads.updated_at_ms";
+        builder.push(" AND ((COALESCE(stage1_outputs.source_updated_at, -1) + 1) * 1000) <= ");
+        builder.push(updated_at);
+        builder.push(" AND ((COALESCE(jobs.last_success_watermark, -1) + 1) * 1000) <= ");
+        builder.push(updated_at);
+        push_thread_order_and_limit(
+            &mut builder,
+            SortKey::UpdatedAt,
+            SortDirection::Desc,
+            scan_limit,
+        );
 
         let items = builder
             .build()
@@ -1816,7 +1806,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reset_memory_data_for_fresh_start_clears_rows_and_disables_threads() {
+    async fn clear_memory_data_clears_rows_and_preserves_thread_memory_modes() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -1886,9 +1876,9 @@ mod tests {
             .expect("disable existing thread");
 
         runtime
-            .reset_memory_data_for_fresh_start()
+            .clear_memory_data()
             .await
-            .expect("reset memory data");
+            .expect("clear memory data");
 
         let stage1_outputs_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
             .fetch_one(runtime.pool.as_ref())
@@ -1911,7 +1901,7 @@ mod tests {
                 .fetch_one(runtime.pool.as_ref())
                 .await
                 .expect("read enabled thread memory mode");
-        assert_eq!(enabled_memory_mode, "disabled");
+        assert_eq!(enabled_memory_mode, "enabled");
 
         let disabled_memory_mode: String =
             sqlx::query_scalar("SELECT memory_mode FROM threads WHERE id = ?")

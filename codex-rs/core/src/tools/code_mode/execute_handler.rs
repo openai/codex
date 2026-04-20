@@ -15,8 +15,8 @@ pub struct CodeModeExecuteHandler;
 impl CodeModeExecuteHandler {
     async fn execute(
         &self,
-        session: std::sync::Arc<crate::codex::Session>,
-        turn: std::sync::Arc<crate::codex::TurnContext>,
+        session: std::sync::Arc<crate::session::session::Session>,
+        turn: std::sync::Arc<crate::session::turn_context::TurnContext>,
         call_id: String,
         code: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
@@ -73,7 +73,9 @@ impl ToolHandler for CodeModeExecuteHandler {
         } = invocation;
 
         match payload {
-            ToolPayload::Custom { input } if tool_name == PUBLIC_TOOL_NAME => {
+            ToolPayload::Custom { input }
+                if tool_name.namespace.is_none() && tool_name.name.as_str() == PUBLIC_TOOL_NAME =>
+            {
                 self.execute(session, turn, call_id, input).await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(

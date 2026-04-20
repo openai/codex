@@ -132,6 +132,14 @@ pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
     parse_patch_text(patch, mode)
 }
 
+/// Parses streamed patch text that may not have reached `*** End Patch` yet.
+///
+/// This entry point is for progress reporting only; callers must not use its
+/// output to apply a patch.
+pub fn parse_patch_streaming(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
+    parse_patch_text(patch, ParseMode::Streaming)
+}
+
 enum ParseMode {
     /// Parse the patch text argument as is.
     Strict,
@@ -169,32 +177,33 @@ enum ParseMode {
     /// `<<'EOF'` and ends with `EOF\n`. If so, we strip off these markers,
     /// trim() the result, and treat what is left as the patch text.
     Lenient,
+
+    /// Parse partial patch text for progress reporting while the model is
+    /// still streaming tool input. This mode requires a begin marker but does
+    /// not require an end marker, and its output must not be used to apply a
+    /// patch.
+    Streaming,
 }
 
 fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
     let lines: Vec<&str> = patch.trim().lines().collect();
-    let lines: &[&str] = match check_patch_boundaries_strict(&lines) {
-        Ok(()) => &lines,
-        Err(e) => match mode {
-            ParseMode::Strict => {
-                return Err(e);
-            }
-            ParseMode::Lenient => check_patch_boundaries_lenient(&lines, e)?,
-        },
+    let (patch_lines, hunk_lines) = match mode {
+        ParseMode::Strict => check_patch_boundaries_strict(&lines)?,
+        ParseMode::Lenient => check_patch_boundaries_lenient(&lines)?,
+        ParseMode::Streaming => check_patch_boundaries_streaming(&lines)?,
     };
 
     let mut hunks: Vec<Hunk> = Vec::new();
-    // The above checks ensure that lines.len() >= 2.
-    let last_line_index = lines.len().saturating_sub(1);
-    let mut remaining_lines = &lines[1..last_line_index];
+    let mut remaining_lines = hunk_lines;
     let mut line_number = 2;
+    let allow_incomplete = matches!(mode, ParseMode::Streaming);
     while !remaining_lines.is_empty() {
-        let (hunk, hunk_lines) = parse_one_hunk(remaining_lines, line_number)?;
+        let (hunk, hunk_lines) = parse_one_hunk(remaining_lines, line_number, allow_incomplete)?;
         hunks.push(hunk);
         line_number += hunk_lines;
         remaining_lines = &remaining_lines[hunk_lines..]
     }
-    let patch = lines.join("\n");
+    let patch = patch_lines.join("\n");
     Ok(ApplyPatchArgs {
         hunks,
         patch,
@@ -202,15 +211,37 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, Pars
     })
 }
 
+fn check_patch_boundaries_streaming<'a>(
+    original_lines: &'a [&'a str],
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
+    match original_lines {
+        [first, ..] if first.trim() == BEGIN_PATCH_MARKER => {
+            let body_lines = if original_lines
+                .last()
+                .is_some_and(|line| line.trim() == END_PATCH_MARKER)
+            {
+                &original_lines[1..original_lines.len() - 1]
+            } else {
+                &original_lines[1..]
+            };
+            Ok((original_lines, body_lines))
+        }
+        _ => check_patch_boundaries_strict(original_lines),
+    }
+}
+
 /// Checks the start and end lines of the patch text for `apply_patch`,
 /// returning an error if they do not match the expected markers.
-fn check_patch_boundaries_strict(lines: &[&str]) -> Result<(), ParseError> {
+fn check_patch_boundaries_strict<'a>(
+    lines: &'a [&'a str],
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
     let (first_line, last_line) = match lines {
         [] => (None, None),
         [first] => (Some(first), Some(first)),
         [first, .., last] => (Some(first), Some(last)),
     };
-    check_start_and_end_lines_strict(first_line, last_line)
+    check_start_and_end_lines_strict(first_line, last_line)?;
+    Ok((lines, &lines[1..lines.len() - 1]))
 }
 
 /// If we are in lenient mode, we check if the first line starts with `<<EOF`
@@ -222,8 +253,12 @@ fn check_patch_boundaries_strict(lines: &[&str]) -> Result<(), ParseError> {
 /// contents, excluding the heredoc markers.
 fn check_patch_boundaries_lenient<'a>(
     original_lines: &'a [&'a str],
-    original_parse_error: ParseError,
-) -> Result<&'a [&'a str], ParseError> {
+) -> Result<(&'a [&'a str], &'a [&'a str]), ParseError> {
+    let original_parse_error = match check_patch_boundaries_strict(original_lines) {
+        Ok(lines) => return Ok(lines),
+        Err(e) => e,
+    };
+
     match original_lines {
         [first, .., last] => {
             if (first == &"<<EOF" || first == &"<<'EOF'" || first == &"<<\"EOF\"")
@@ -231,10 +266,7 @@ fn check_patch_boundaries_lenient<'a>(
                 && original_lines.len() >= 4
             {
                 let inner_lines = &original_lines[1..original_lines.len() - 1];
-                match check_patch_boundaries_strict(inner_lines) {
-                    Ok(()) => Ok(inner_lines),
-                    Err(e) => Err(e),
-                }
+                check_patch_boundaries_strict(inner_lines)
             } else {
                 Err(original_parse_error)
             }
@@ -265,7 +297,11 @@ fn check_start_and_end_lines_strict(
 
 /// Attempts to parse a single hunk from the start of lines.
 /// Returns the parsed hunk and the number of lines parsed (or a ParseError).
-fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), ParseError> {
+fn parse_one_hunk(
+    lines: &[&str],
+    line_number: usize,
+    allow_incomplete: bool,
+) -> Result<(Hunk, usize), ParseError> {
     // Be tolerant of case mismatches and extra padding around marker strings.
     let first_line = lines[0].trim();
     if let Some(path) = first_line.strip_prefix(ADD_FILE_MARKER) {
@@ -321,15 +357,26 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
                 continue;
             }
 
-            if remaining_lines[0].starts_with("***") {
+            if remaining_lines[0].starts_with('*') {
                 break;
             }
 
-            let (chunk, chunk_lines) = parse_update_file_chunk(
+            if allow_incomplete && remaining_lines[0] == "@" {
+                break;
+            }
+
+            let parsed_chunk = parse_update_file_chunk(
                 remaining_lines,
                 line_number + parsed_lines,
                 chunks.is_empty(),
-            )?;
+            );
+            let (chunk, chunk_lines) = match parsed_chunk {
+                Ok(parsed) => parsed,
+                Err(InvalidHunkError { .. }) if allow_incomplete && !chunks.is_empty() => {
+                    break;
+                }
+                Err(err) => return Err(err),
+            };
             chunks.push(chunk);
             parsed_lines += chunk_lines;
             remaining_lines = &remaining_lines[chunk_lines..]
@@ -451,6 +498,166 @@ fn parse_update_file_chunk(
     }
 
     Ok((chunk, parsed_lines + start_index))
+}
+
+#[test]
+fn test_parse_patch_streaming() {
+    assert_eq!(
+        parse_patch_streaming("*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor"),
+        Ok(ApplyPatchArgs {
+            hunks: vec![AddFile {
+                path: PathBuf::from("src/hello.txt"),
+                contents: "hello\nwor\n".to_string(),
+            }],
+            patch: "*** Begin Patch\n*** Add File: src/hello.txt\n+hello\n+wor".to_string(),
+            workdir: None,
+        })
+    );
+
+    assert_eq!(
+        parse_patch_streaming(
+            "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new",
+        ),
+        Ok(ApplyPatchArgs {
+            hunks: vec![UpdateFile {
+                path: PathBuf::from("src/old.rs"),
+                move_path: Some(PathBuf::from("src/new.rs")),
+                chunks: vec![UpdateFileChunk {
+                    change_context: None,
+                    old_lines: vec!["old".to_string()],
+                    new_lines: vec!["new".to_string()],
+                    is_end_of_file: false,
+                }],
+            }],
+            patch: "*** Begin Patch\n*** Update File: src/old.rs\n*** Move to: src/new.rs\n@@\n-old\n+new".to_string(),
+            workdir: None,
+        })
+    );
+
+    assert!(
+        parse_patch_text(
+            "*** Begin Patch\n*** Delete File: gone.txt",
+            ParseMode::Streaming
+        )
+        .is_ok()
+    );
+    assert!(
+        parse_patch_text(
+            "*** Begin Patch\n*** Delete File: gone.txt",
+            ParseMode::Strict
+        )
+        .is_err()
+    );
+
+    assert_eq!(
+        parse_patch_streaming(
+            "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt\n",
+        ),
+        Ok(ApplyPatchArgs {
+            hunks: vec![
+                AddFile {
+                    path: PathBuf::from("src/one.txt"),
+                    contents: "one\n".to_string(),
+                },
+                DeleteFile {
+                    path: PathBuf::from("src/two.txt"),
+                },
+            ],
+            patch: "*** Begin Patch\n*** Add File: src/one.txt\n+one\n*** Delete File: src/two.txt"
+                .to_string(),
+            workdir: None,
+        })
+    );
+}
+
+#[test]
+fn test_parse_patch_streaming_large_patch_by_character() {
+    let patch = "\
+*** Begin Patch
+*** Add File: docs/release-notes.md
++# Release notes
++
++## CLI
++- Surface apply_patch progress while arguments stream.
++- Keep final patch application gated on the completed tool call.
++- Include file summaries in the progress event payload.
+*** Update File: src/config.rs
+@@ impl Config
+-    pub apply_patch_progress: bool,
++    pub stream_apply_patch_progress: bool,
+     pub include_diagnostics: bool,
+@@ fn default_progress_interval()
+-    Duration::from_millis(500)
++    Duration::from_millis(250)
+*** Delete File: src/legacy_patch_progress.rs
+*** Update File: crates/cli/src/main.rs
+*** Move to: crates/cli/src/bin/codex.rs
+@@ fn run()
+-    let args = Args::parse();
+-    dispatch(args)
++    let cli = Cli::parse();
++    dispatch(cli)
+*** Add File: tests/fixtures/apply_patch_progress.json
++{
++  \"type\": \"apply_patch_progress\",
++  \"hunks\": [
++    { \"operation\": \"add\", \"path\": \"docs/release-notes.md\" },
++    { \"operation\": \"update\", \"path\": \"src/config.rs\" }
++  ]
++}
+*** Update File: README.md
+@@ Development workflow
+ Build the Rust workspace before opening a pull request.
++When touching streamed tool calls, include parser coverage for partial input.
++Prefer tests that exercise the exact event payload shape.
+*** Delete File: docs/old-apply-patch-progress.md
+*** End Patch";
+
+    let mut max_hunk_count = 0;
+    let mut saw_hunk_counts = Vec::new();
+    for i in 1..=patch.len() {
+        let partial = &patch[..i];
+        if let Ok(parsed) = parse_patch_streaming(partial) {
+            let hunk_count = parsed.hunks.len();
+            assert!(
+                hunk_count >= max_hunk_count,
+                "hunk count should never decrease while streaming: {hunk_count} < {max_hunk_count} for {partial:?}",
+            );
+            if hunk_count > max_hunk_count {
+                saw_hunk_counts.push(hunk_count);
+                max_hunk_count = hunk_count;
+            }
+        }
+    }
+
+    assert_eq!(saw_hunk_counts, vec![1, 2, 3, 4, 5, 6, 7]);
+    let parsed = parse_patch_streaming(patch).unwrap();
+    assert_eq!(parsed.hunks.len(), 7);
+    assert_eq!(
+        parsed
+            .hunks
+            .iter()
+            .map(|hunk| match hunk {
+                AddFile { .. } => "add",
+                DeleteFile { .. } => "delete",
+                UpdateFile {
+                    move_path: Some(_), ..
+                } => "move-update",
+                UpdateFile {
+                    move_path: None, ..
+                } => "update",
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "add",
+            "update",
+            "delete",
+            "move-update",
+            "add",
+            "update",
+            "delete"
+        ]
+    );
 }
 
 #[test]
@@ -794,7 +1001,7 @@ fn test_parse_patch_lenient() {
 #[test]
 fn test_parse_one_hunk() {
     assert_eq!(
-        parse_one_hunk(&["bad"], /*line_number*/ 234),
+        parse_one_hunk(&["bad"], /*line_number*/ 234, /*allow_incomplete*/ false),
         Err(InvalidHunkError {
             message: "'bad' is not a valid hunk header. \
             Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'".to_string(),

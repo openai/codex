@@ -5,6 +5,7 @@ use app_test_support::create_fake_rollout_with_source;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::rollout_path;
+use app_test_support::test_absolute_path;
 use app_test_support::to_response;
 use chrono::DateTime;
 use chrono::Utc;
@@ -13,6 +14,7 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
@@ -37,7 +39,6 @@ use std::fs;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -84,6 +85,7 @@ async fn list_threads_with_sort(
             cursor,
             limit,
             sort_key,
+            sort_direction: None,
             model_providers: providers,
             source_kinds,
             archived,
@@ -357,6 +359,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     let ThreadListResponse {
         data: data1,
         next_cursor: cursor1,
+        ..
     } = list_threads(
         &mut mcp,
         /*cursor*/ None,
@@ -372,7 +375,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
         assert_eq!(thread.updated_at, thread.created_at);
-        assert_eq!(thread.cwd, PathBuf::from("/"));
+        assert_eq!(thread.cwd, test_absolute_path("/"));
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
@@ -384,6 +387,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     let ThreadListResponse {
         data: data2,
         next_cursor: cursor2,
+        ..
     } = list_threads(
         &mut mcp,
         Some(cursor1),
@@ -399,7 +403,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
         assert_eq!(thread.updated_at, thread.created_at);
-        assert_eq!(thread.cwd, PathBuf::from("/"));
+        assert_eq!(thread.cwd, test_absolute_path("/"));
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
@@ -455,7 +459,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     let expected_ts = chrono::DateTime::parse_from_rfc3339("2025-01-02T11:00:00Z")?.timestamp();
     assert_eq!(thread.created_at, expected_ts);
     assert_eq!(thread.updated_at, expected_ts);
-    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cwd, test_absolute_path("/"));
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
@@ -498,6 +502,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
             cursor: None,
             limit: Some(10),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
@@ -518,7 +523,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, filtered_id);
     assert_ne!(data[0].id, unfiltered_id);
-    assert_eq!(data[0].cwd, target_cwd);
+    assert_eq!(data[0].cwd.as_path(), target_cwd.as_path());
 
     Ok(())
 }
@@ -563,15 +568,35 @@ sqlite = true
         /*git_info*/ None,
     )?;
 
-    // `thread/list` only applies `search_term` on the sqlite path. In this test we
-    // create rollouts manually, so we must also create the sqlite DB and mark backfill
-    // complete; otherwise app-server will permanently use filesystem fallback.
+    // `thread/list` applies `search_term` on the sqlite fast path. This test creates
+    // rollouts manually, so mark the DB backfill complete and then run an unsearched
+    // list large enough to repair every rollout the searched list should find.
     let state_db =
         codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
             .await?;
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
+    let rollout_config = codex_rollout::RolloutConfig {
+        codex_home: codex_home.path().to_path_buf(),
+        sqlite_home: codex_home.path().to_path_buf(),
+        cwd: codex_home.path().to_path_buf(),
+        model_provider_id: "mock_provider".to_string(),
+        generate_memories: false,
+    };
+    let repaired_page = codex_core::RolloutRecorder::list_threads(
+        &rollout_config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        codex_core::ThreadSortKey::CreatedAt,
+        codex_core::SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        "mock_provider",
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(repaired_page.items.len(), 3);
 
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
@@ -579,6 +604,7 @@ sqlite = true
             cursor: None,
             limit: Some(10),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
@@ -1032,7 +1058,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
     };
     assert_eq!(thread.git_info, Some(expected_git));
     assert_eq!(thread.source, SessionSource::Cli);
-    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cwd, test_absolute_path("/"));
     assert_eq!(thread.cli_version, "0.0.0");
 
     Ok(())
@@ -1229,6 +1255,111 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
     let ids_page2: Vec<_> = page2.iter().map(|thread| thread.id.as_str()).collect();
     assert_eq!(ids_page2, vec![id_c.as_str()]);
     assert_eq!(cursor2, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let id_old = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let id_watermark = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T10-00-00", &id_old).as_path(),
+        "2025-02-02T00:00:00Z",
+    )?;
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T11-00-00", &id_watermark).as_path(),
+        "2025-02-03T00:00:00Z",
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let ThreadListResponse {
+        data: page1,
+        backwards_cursor,
+        ..
+    } = {
+        let request_id = mcp
+            .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                cursor: None,
+                limit: Some(1),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
+                sort_direction: Some(SortDirection::Desc),
+                model_providers: Some(vec!["mock_provider".to_string()]),
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                search_term: None,
+            })
+            .await?;
+        let resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        to_response::<ThreadListResponse>(resp)?
+    };
+    let ids_page1: Vec<_> = page1.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids_page1, vec![id_watermark.as_str()]);
+    let backwards_cursor = backwards_cursor.expect("expected backwardsCursor on first page");
+    assert_eq!(backwards_cursor, "2025-02-02T23:59:59.999Z");
+
+    let id_new = create_fake_rollout(
+        codex_home.path(),
+        "2025-02-01T12-00-00",
+        "2025-02-01T12:00:00Z",
+        "Hello",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    set_rollout_mtime(
+        rollout_path(codex_home.path(), "2025-02-01T12-00-00", &id_new).as_path(),
+        "2025-02-04T00:00:00Z",
+    )?;
+
+    let ThreadListResponse {
+        data: delta_page, ..
+    } = {
+        let request_id = mcp
+            .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+                cursor: Some(backwards_cursor),
+                limit: Some(10),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
+                sort_direction: Some(SortDirection::Asc),
+                model_providers: Some(vec!["mock_provider".to_string()]),
+                source_kinds: None,
+                archived: None,
+                cwd: None,
+                search_term: None,
+            })
+            .await?;
+        let resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        to_response::<ThreadListResponse>(resp)?
+    };
+    let ids_delta: Vec<_> = delta_page.iter().map(|thread| thread.id.as_str()).collect();
+    assert_eq!(ids_delta, vec![id_watermark.as_str(), id_new.as_str()]);
 
     Ok(())
 }
@@ -1449,6 +1580,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             cursor: Some("not-a-cursor".to_string()),
             limit: Some(2),
             sort_key: None,
+            sort_direction: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,

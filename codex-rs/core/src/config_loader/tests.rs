@@ -10,12 +10,14 @@ use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::ConfigRequirementsWithSources;
+use crate::config_loader::FilesystemDenyReadPattern;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
@@ -92,6 +94,7 @@ async fn returns_config_error_for_invalid_user_config_toml() {
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let err = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -109,6 +112,63 @@ async fn returns_config_error_for_invalid_user_config_toml() {
 }
 
 #[tokio::test]
+async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "model = \"from-user-config\"\ninvalid = [",
+    )
+    .expect("write config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            ignore_user_config: true,
+            ..Default::default()
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let user_layer = layers
+        .get_user_layer()
+        .expect("expected a user layer even when CODEX_HOME/config.toml is ignored");
+    assert_eq!(
+        user_layer.config,
+        TomlValue::Table(toml::map::Map::new()),
+        "expected ignored user config to preserve only layer metadata"
+    );
+    assert_eq!(layers.effective_config().get("model"), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            ignore_user_and_project_exec_policy_rules: true,
+            ..Default::default()
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    assert!(layers.ignore_user_and_project_exec_policy_rules());
+    Ok(())
+}
+
+#[tokio::test]
 async fn returns_config_error_for_invalid_managed_config_toml() {
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");
@@ -119,6 +179,7 @@ async fn returns_config_error_for_invalid_managed_config_toml() {
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let err = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -203,6 +264,7 @@ extra = true
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -235,6 +297,7 @@ async fn returns_empty_when_all_layers_missing() {
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -327,6 +390,7 @@ flag = false
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -428,6 +492,7 @@ allowed_sandbox_modes = ["read-only"]
     );
 
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(AbsolutePathBuf::try_from(tmp.path())?),
         &[] as &[(String, TomlValue)],
@@ -489,6 +554,7 @@ allowed_approval_policies = ["never"]
     );
 
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(AbsolutePathBuf::try_from(tmp.path())?),
         &[] as &[(String, TomlValue)],
@@ -529,8 +595,14 @@ personality = true
     )
     .await?;
 
+    let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
-    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &requirements_file,
+    )
+    .await?;
 
     assert_eq!(
         config_requirements_toml
@@ -620,6 +692,7 @@ allowed_approval_policies = ["on-request"]
         ),
     );
     let state = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         tmp.path(),
         Some(AbsolutePathBuf::try_from(tmp.path())?),
         &[] as &[(String, TomlValue)],
@@ -636,6 +709,7 @@ allowed_approval_policies = ["on-request"]
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
                 guardian_policy_config: None,
             }))
         }),
@@ -688,10 +762,16 @@ allowed_approval_policies = ["on-request"]
             rules: None,
             enforce_residency: None,
             network: None,
+            permissions: None,
             guardian_policy_config: None,
         },
     );
-    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &AbsolutePathBuf::try_from(requirements_file)?,
+    )
+    .await?;
 
     assert_eq!(
         config_requirements_toml
@@ -706,6 +786,115 @@ allowed_approval_policies = ["on-request"]
             .as_ref()
             .map(|sourced| sourced.source.clone()),
         Some(RequirementSource::CloudRequirements)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_resolves_deny_read_against_parent() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_dir = tmp.path().join("managed");
+    tokio::fs::create_dir_all(&requirements_dir).await?;
+    let requirements_file = requirements_dir.join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[permissions.filesystem]
+deny_read = ["./sensitive", "../shared/secret.txt"]
+"#,
+    )
+    .await?;
+
+    let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &requirements_file,
+    )
+    .await?;
+
+    let permissions = config_requirements_toml
+        .permissions
+        .expect("permissions requirements should load");
+    let filesystem = permissions
+        .value
+        .filesystem
+        .expect("filesystem requirements should load");
+    let deny_read = filesystem.deny_read.expect("deny_read paths should load");
+
+    assert_eq!(
+        deny_read,
+        vec![
+            FilesystemDenyReadPattern::from(AbsolutePathBuf::try_from(
+                requirements_dir.join("sensitive")
+            )?,),
+            FilesystemDenyReadPattern::from(AbsolutePathBuf::try_from(
+                tmp.path().join("shared").join("secret.txt"),
+            )?),
+        ]
+    );
+    assert_eq!(
+        permissions.source,
+        RequirementSource::SystemRequirementsToml {
+            file: requirements_file,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_resolves_deny_read_glob_against_parent() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_dir = tmp.path().join("managed");
+    tokio::fs::create_dir_all(&requirements_dir).await?;
+    let requirements_file = requirements_dir.join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[permissions.filesystem]
+deny_read = ["./sensitive/**/*.txt"]
+"#,
+    )
+    .await?;
+
+    let requirements_file = AbsolutePathBuf::try_from(requirements_file)?;
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    load_requirements_toml(
+        LOCAL_FS.as_ref(),
+        &mut config_requirements_toml,
+        &requirements_file,
+    )
+    .await?;
+
+    let permissions = config_requirements_toml
+        .permissions
+        .expect("permissions requirements should load");
+    let filesystem = permissions
+        .value
+        .filesystem
+        .expect("filesystem requirements should load");
+    let deny_read = filesystem
+        .deny_read
+        .expect("deny_read patterns should load");
+
+    assert_eq!(
+        deny_read,
+        vec![
+            FilesystemDenyReadPattern::from_input(&format!(
+                "{}/sensitive/**/*.txt",
+                requirements_dir.display()
+            ))
+            .expect("normalize glob pattern")
+        ]
+    );
+    assert_eq!(
+        permissions.source,
+        RequirementSource::SystemRequirementsToml {
+            file: requirements_file,
+        }
     );
 
     Ok(())
@@ -729,12 +918,14 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         rules: None,
         enforce_residency: None,
         network: None,
+        permissions: None,
         guardian_policy_config: None,
     };
     let expected = requirements.clone();
     let cloud_requirements = CloudRequirementsLoader::new(async move { Ok(Some(requirements)) });
 
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -771,6 +962,7 @@ async fn load_config_layers_fails_when_cloud_requirements_loader_fails() -> anyh
     let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
 
     let err = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -823,6 +1015,7 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
     .await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -967,6 +1160,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
     .await?;
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -1006,6 +1200,7 @@ async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::R
 
     let cwd = AbsolutePathBuf::from_absolute_path(&home_dir)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -1062,6 +1257,7 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &project_dot_codex,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -1132,6 +1328,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     .await?;
 
     let layers_untrusted = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home_untrusted,
         Some(cwd.clone()),
         &[] as &[(String, TomlValue)],
@@ -1170,6 +1367,7 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
     .await?;
 
     let layers_unknown = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home_unknown,
         Some(cwd),
         &[] as &[(String, TomlValue)],
@@ -1198,6 +1396,66 @@ async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<
         layers_unknown.effective_config().get("foo"),
         Some(&TomlValue::String("user".to_string()))
     );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn project_trust_does_not_match_configured_alias_for_canonical_cwd() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let alias_root = tmp.path().join("project_alias");
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"project\"\n",
+    )
+    .await?;
+    std::os::unix::fs::symlink(&project_root, &alias_root)?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        toml::to_string(&ConfigToml {
+            projects: Some(HashMap::from([(
+                alias_root.to_string_lossy().to_string(),
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Trusted),
+                },
+            )])),
+            ..Default::default()
+        })
+        .expect("serialize config"),
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&project_root)?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(project_layers.len(), 1);
+    assert!(
+        project_layers[0].disabled_reason.is_some(),
+        "configured aliases must not collapse into the canonical project key"
+    );
+    assert_eq!(layers.effective_config().get("foo"), None);
 
     Ok(())
 }
@@ -1328,6 +1586,7 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
         }
 
         let layers = load_config_layers_state(
+            LOCAL_FS.as_ref(),
             &codex_home,
             Some(cwd.clone()),
             &[] as &[(String, TomlValue)],
@@ -1366,6 +1625,71 @@ async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::
 }
 
 #[tokio::test]
+async fn project_layer_without_config_toml_is_disabled_when_untrusted_or_unknown()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let cases = [
+        ("untrusted", Some(TrustLevel::Untrusted), true),
+        ("unknown", None, true),
+        ("trusted", Some(TrustLevel::Trusted), false),
+    ];
+
+    for (name, trust_level, expect_disabled) in cases {
+        let codex_home = tmp.path().join(format!("home_no_config_{name}"));
+        tokio::fs::create_dir_all(&codex_home).await?;
+        if let Some(trust_level) = trust_level {
+            make_config_for_test(
+                &codex_home,
+                &project_root,
+                trust_level,
+                /*project_root_markers*/ None,
+            )
+            .await?;
+        }
+
+        let layers = load_config_layers_state(
+            LOCAL_FS.as_ref(),
+            &codex_home,
+            Some(cwd.clone()),
+            &[] as &[(String, TomlValue)],
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+        )
+        .await?;
+        let project_layers: Vec<_> = layers
+            .get_layers(
+                super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .into_iter()
+            .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+            .collect();
+        assert_eq!(
+            project_layers.len(),
+            1,
+            "expected one project layer for {name}"
+        );
+        assert_eq!(
+            project_layers[0].disabled_reason.is_some(),
+            expect_disabled,
+            "unexpected disabled state for {name}",
+        );
+        assert_eq!(
+            project_layers[0].config,
+            TomlValue::Table(toml::map::Map::new())
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
@@ -1390,6 +1714,7 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
     )];
 
     load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &cli_overrides,
@@ -1432,6 +1757,7 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],

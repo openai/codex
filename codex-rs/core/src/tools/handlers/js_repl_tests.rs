@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use super::parse_freeform_args;
-use crate::codex::make_session_and_context_with_rx;
+use crate::session::tests::make_session_and_context_with_rx;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
 use pretty_assertions::assert_eq;
@@ -77,7 +77,7 @@ async fn emit_js_repl_exec_end_sends_event() {
     assert_eq!(event.call_id, "call-1");
     assert_eq!(event.turn_id, turn.sub_id);
     assert_eq!(event.command, vec!["js_repl".to_string()]);
-    assert_eq!(event.cwd, turn.cwd.to_path_buf());
+    assert_eq!(event.cwd, turn.cwd);
     assert_eq!(event.source, ExecCommandSource::Agent);
     assert_eq!(event.interaction_input, None);
     assert_eq!(event.stdout, "hello");

@@ -36,8 +36,8 @@ pub struct IdTokenInfo {
     pub chatgpt_user_id: Option<String>,
     /// Organization/workspace identifier associated with the token, if present.
     pub chatgpt_account_id: Option<String>,
-    /// Whether the current user owns the workspace, when present in the token.
-    pub is_org_owner: Option<bool>,
+    /// Whether the selected ChatGPT workspace must route through the FedRAMP edge.
+    pub chatgpt_account_is_fedramp: bool,
     pub raw_jwt: String,
 }
 
@@ -61,6 +61,10 @@ impl IdTokenInfo {
             self.chatgpt_plan_type,
             Some(PlanType::Known(plan)) if plan.is_workspace_account()
         )
+    }
+
+    pub fn is_fedramp_account(&self) -> bool {
+        self.chatgpt_account_is_fedramp
     }
 }
 
@@ -91,7 +95,7 @@ struct AuthClaims {
     #[serde(default)]
     chatgpt_account_id: Option<String>,
     #[serde(default)]
-    is_org_owner: Option<bool>,
+    chatgpt_account_is_fedramp: bool,
 }
 
 #[derive(Deserialize)]
@@ -143,7 +147,7 @@ pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoErr
             chatgpt_plan_type: auth.chatgpt_plan_type,
             chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
             chatgpt_account_id: auth.chatgpt_account_id,
-            is_org_owner: auth.is_org_owner,
+            chatgpt_account_is_fedramp: auth.chatgpt_account_is_fedramp,
         }),
         None => Ok(IdTokenInfo {
             email,
@@ -151,7 +155,7 @@ pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoErr
             chatgpt_plan_type: None,
             chatgpt_user_id: None,
             chatgpt_account_id: None,
-            is_org_owner: None,
+            chatgpt_account_is_fedramp: false,
         }),
     }
 }

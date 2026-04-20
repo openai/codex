@@ -4,9 +4,9 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
-use crate::codex::Session;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::session::session::Session;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
@@ -158,6 +158,10 @@ pub(crate) async fn build_guardian_prompt_items(
         push_text(format!("{prefix}{entry}\n"));
     }
     push_text(headings.transcript_end.to_string());
+    push_text(format!(
+        "Reviewed Codex session id: {}\n",
+        session.conversation_id
+    ));
     if let Some(note) = omission_note {
         push_text(format!("\n{note}\n"));
     }

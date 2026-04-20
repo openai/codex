@@ -130,10 +130,10 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                     network: Some(NetworkPermissions {
                         enabled: Some(true),
                     }),
-                    file_system: Some(FileSystemPermissions {
-                        read: Some(vec![path]),
-                        write: Some(Vec::new()),
-                    }),
+                    file_system: Some(FileSystemPermissions::from_read_write_roots(
+                        Some(vec![path]),
+                        Some(Vec::new()),
+                    )),
                 }),
             },
             policy: &SandboxPolicy::ExternalSandbox {
@@ -183,10 +183,10 @@ fn transform_additional_permissions_preserves_denied_entries() {
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 additional_permissions: Some(PermissionProfile {
-                    file_system: Some(FileSystemPermissions {
-                        read: None,
-                        write: Some(vec![allowed_path.clone()]),
-                    }),
+                    file_system: Some(FileSystemPermissions::from_read_write_roots(
+                        /*read*/ None,
+                        Some(vec![allowed_path.clone()]),
+                    )),
                     ..Default::default()
                 }),
             },
@@ -273,6 +273,66 @@ fn transform_linux_seccomp_request(
             windows_sandbox_private_desktop: false,
         })
         .expect("transform")
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wsl1_rejects_linux_bubblewrap_path() {
+    let restricted_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Read,
+    }]);
+
+    assert!(matches!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &restricted_policy,
+            /*use_legacy_landlock*/ false,
+            /*allow_network_for_proxy*/ false,
+            /*is_wsl1*/ true,
+        ),
+        Err(super::SandboxTransformError::Wsl1UnsupportedForBubblewrap)
+    ));
+    assert!(matches!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &FileSystemSandboxPolicy::unrestricted(),
+            /*use_legacy_landlock*/ false,
+            /*allow_network_for_proxy*/ true,
+            /*is_wsl1*/ true,
+        ),
+        Err(super::SandboxTransformError::Wsl1UnsupportedForBubblewrap)
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn wsl1_allows_non_bubblewrap_linux_paths() {
+    assert!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &FileSystemSandboxPolicy::unrestricted(),
+            /*use_legacy_landlock*/ false,
+            /*allow_network_for_proxy*/ false,
+            /*is_wsl1*/ true,
+        )
+        .is_ok()
+    );
+
+    let restricted_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Read,
+    }]);
+    assert!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &restricted_policy,
+            /*use_legacy_landlock*/ true,
+            /*allow_network_for_proxy*/ false,
+            /*is_wsl1*/ true,
+        )
+        .is_ok()
+    );
 }
 
 #[cfg(target_os = "linux")]

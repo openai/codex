@@ -31,7 +31,8 @@ use codex_app_server_protocol::ThreadRealtimeStartTransport;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
-use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -39,6 +40,7 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use core_test_support::responses;
@@ -70,9 +72,12 @@ use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const DELEGATED_SHELL_TOOL_TIMEOUT_MS: u64 = 30_000;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const V2_STEERING_ACKNOWLEDGEMENT: &str =
     "This was sent to steer the previous background agent task.";
+const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
+    "Background agent finished. Use the preceding [BACKEND] messages as the result.";
 
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
@@ -110,6 +115,11 @@ impl Match for RealtimeCallRequestCapture {
             .push(request.clone());
         true
     }
+}
+
+fn normalized_json_string(raw: &str) -> Result<String> {
+    let value: Value = serde_json::from_str(raw).context("expected JSON fixture to parse")?;
+    serde_json::to_string(&value).context("expected JSON fixture to serialize")
 }
 
 struct GatedSseResponse {
@@ -301,6 +311,7 @@ impl RealtimeE2eHarness {
             .mcp
             .send_thread_realtime_start_request(ThreadRealtimeStartParams {
                 thread_id: self.thread_id.clone(),
+                output_modality: RealtimeOutputModality::Audio,
                 prompt: Some(Some("backend prompt".to_string())),
                 session_id: None,
                 transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -447,7 +458,10 @@ fn v2_background_agent_tool_call(call_id: &str, prompt: &str) -> Value {
 async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let responses_server = create_mock_responses_server_sequence_unchecked(vec![
+        create_final_assistant_message_sse_response("delegated")?,
+    ])
+    .await;
     let realtime_server = start_websocket_server(vec![vec![
         vec![json!({
             "type": "session.updated",
@@ -477,6 +491,19 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             json!({
                 "type": "response.output_text.delta",
                 "delta": "working"
+            }),
+            json!({
+                "type": "response.output_text.done",
+                "text": "working on it"
+            }),
+            json!({
+                "type": "conversation.item.done",
+                "item": {
+                    "id": "item_assistant_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{ "type": "output_text", "text": "working on it" }]
+                }
             }),
             json!({
                 "type": "conversation.item.done",
@@ -523,6 +550,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
+            output_modality: RealtimeOutputModality::Audio,
             prompt: None,
             session_id: None,
             transport: None,
@@ -553,6 +581,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(
         startup_context_request.body_json()["session"]["audio"]["output"]["voice"],
         "cedar"
+    );
+    assert_eq!(
+        startup_context_request.body_json()["session"]["output_modalities"],
+        json!(["audio"])
     );
     let startup_context_instructions =
         startup_context_request.body_json()["session"]["instructions"]
@@ -612,24 +644,32 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(item_added.thread_id, output_audio.thread_id);
     assert_eq!(item_added.item["type"], json!("message"));
 
-    let first_transcript_update = read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+    let first_transcript_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
         &mut mcp,
-        "thread/realtime/transcriptUpdated",
+        "thread/realtime/transcript/delta",
     )
     .await?;
-    assert_eq!(first_transcript_update.thread_id, output_audio.thread_id);
-    assert_eq!(first_transcript_update.role, "user");
-    assert_eq!(first_transcript_update.text, "delegate now");
+    assert_eq!(first_transcript_delta.thread_id, output_audio.thread_id);
+    assert_eq!(first_transcript_delta.role, "user");
+    assert_eq!(first_transcript_delta.delta, "delegate now");
 
-    let second_transcript_update =
-        read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
-            &mut mcp,
-            "thread/realtime/transcriptUpdated",
-        )
-        .await?;
-    assert_eq!(second_transcript_update.thread_id, output_audio.thread_id);
-    assert_eq!(second_transcript_update.role, "assistant");
-    assert_eq!(second_transcript_update.text, "working");
+    let second_transcript_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
+        &mut mcp,
+        "thread/realtime/transcript/delta",
+    )
+    .await?;
+    assert_eq!(second_transcript_delta.thread_id, output_audio.thread_id);
+    assert_eq!(second_transcript_delta.role, "assistant");
+    assert_eq!(second_transcript_delta.delta, "working");
+
+    let final_transcript_done = read_notification::<ThreadRealtimeTranscriptDoneNotification>(
+        &mut mcp,
+        "thread/realtime/transcript/done",
+    )
+    .await?;
+    assert_eq!(final_transcript_done.thread_id, output_audio.thread_id);
+    assert_eq!(final_transcript_done.role, "assistant");
+    assert_eq!(final_transcript_done.text, "working on it");
 
     let handoff_item_added = read_notification::<ThreadRealtimeItemAddedNotification>(
         &mut mcp,
@@ -644,7 +684,13 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         handoff_item_added.item["input_transcript"],
         json!("delegate now")
     );
-    assert_eq!(handoff_item_added.item["active_transcript"], json!([]));
+    assert_eq!(
+        handoff_item_added.item["active_transcript"],
+        json!([
+            {"role": "user", "text": "delegate now"},
+            {"role": "assistant", "text": "working on it"}
+        ])
+    );
 
     let realtime_error =
         read_notification::<ThreadRealtimeErrorNotification>(&mut mcp, "thread/realtime/error")
@@ -661,7 +707,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let connections = realtime_server.connections();
     assert_eq!(connections.len(), 1);
     let connection = &connections[0];
-    assert_eq!(connection.len(), 4);
+    assert_eq!(connection.len(), 3);
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
@@ -679,10 +725,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .as_str()
             .context("expected websocket request type")?
             .to_string(),
-        connection[3].body_json()["type"]
-            .as_str()
-            .context("expected websocket request type")?
-            .to_string(),
     ];
     request_types.sort();
     assert_eq!(
@@ -690,8 +732,141 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         [
             "conversation.item.create".to_string(),
             "input_audio_buffer.append".to_string(),
-            "response.create".to_string(),
         ]
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_text_output_modality_requests_text_output_and_final_transcript() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![
+        json!({
+            "type": "session.updated",
+            "session": { "id": "sess_text", "instructions": "backend prompt" }
+        }),
+        json!({
+            "type": "response.output_text.delta",
+            "delta": "hello "
+        }),
+        json!({
+            "type": "response.output_text.delta",
+            "delta": "world"
+        }),
+        json!({
+            "type": "response.output_audio_transcript.done",
+            "transcript": "hello world"
+        }),
+        json!({
+            "type": "conversation.item.done",
+            "item": {
+                "id": "item_output_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hello world"}]
+            }
+        }),
+    ]]])
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &responses_server.uri(),
+        realtime_server.uri(),
+        /*realtime_enabled*/ true,
+        StartupContextConfig::Generated,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    mcp.initialize().await?;
+    login_with_api_key(&mut mcp, "sk-test-key").await?;
+
+    let thread_start_request_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_start_request_id)),
+    )
+    .await??;
+    let thread_start: ThreadStartResponse = to_response(thread_start_response)?;
+
+    let start_request_id = mcp
+        .send_thread_realtime_start_request(ThreadRealtimeStartParams {
+            thread_id: thread_start.thread.id.clone(),
+            output_modality: RealtimeOutputModality::Text,
+            prompt: None,
+            session_id: None,
+            transport: None,
+            voice: None,
+        })
+        .await?;
+    let start_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_request_id)),
+    )
+    .await??;
+    let _: ThreadRealtimeStartResponse = to_response(start_response)?;
+
+    let session_update = realtime_server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(
+        session_update.body_json()["session"]["output_modalities"],
+        json!(["text"])
+    );
+
+    let first_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
+        &mut mcp,
+        "thread/realtime/transcript/delta",
+    )
+    .await?;
+    let second_delta = read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
+        &mut mcp,
+        "thread/realtime/transcript/delta",
+    )
+    .await?;
+    let done = read_notification::<ThreadRealtimeTranscriptDoneNotification>(
+        &mut mcp,
+        "thread/realtime/transcript/done",
+    )
+    .await?;
+    assert_eq!(
+        vec![first_delta, second_delta],
+        vec![
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_start.thread.id.clone(),
+                role: "assistant".to_string(),
+                delta: "hello ".to_string(),
+            },
+            ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: thread_start.thread.id.clone(),
+                role: "assistant".to_string(),
+                delta: "world".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        done,
+        ThreadRealtimeTranscriptDoneNotification {
+            thread_id: thread_start.thread.id,
+            role: "assistant".to_string(),
+            text: "hello world".to_string(),
+        }
+    );
+    assert!(
+        timeout(
+            Duration::from_millis(200),
+            mcp.read_stream_until_notification_message("thread/realtime/transcript/done"),
+        )
+        .await
+        .is_err(),
+        "should not emit duplicate transcript done from audio transcript done"
     );
 
     realtime_server.shutdown().await;
@@ -798,6 +973,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -894,6 +1070,7 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_id.clone(),
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -978,7 +1155,8 @@ async fn realtime_webrtc_start_emits_sdp_notification() -> Result<()> {
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
-    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = r#"{"tool_choice":"auto","type":"realtime","model":"gpt-realtime-1.5","instructions":"backend prompt\n\nstartup context","output_modalities":["audio"],"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"noise_reduction":{"type":"near_field"},"transcription":{"model":"gpt-4o-mini-transcribe"},"turn_detection":{"type":"server_vad","interrupt_response":true,"create_response":true,"silence_duration_ms":500}},"output":{"format":{"type":"audio/pcm","rate":24000},"voice":"marin"}},"tools":[{"type":"function","name":"background_agent","description":"Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.","parameters":{"type":"object","properties":{"prompt":{"type":"string","description":"The user request to delegate to the background agent."}},"required":["prompt"],"additionalProperties":false}}]}"#;
+    let session = normalized_json_string(session)?;
     assert_eq!(
         body,
         format!(
@@ -1076,8 +1254,16 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
             vec![
                 session_updated("sess_v1_handoff"),
                 json!({
-                    "type": "conversation.input_transcript.delta",
-                    "delta": "delegate from v1"
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "delegate from v1"
+                }),
+                json!({
+                    "type": "response.output_audio_transcript.delta",
+                    "delta": "the secret word is "
+                }),
+                json!({
+                    "type": "response.output_audio_transcript.delta",
+                    "delta": "kumquat"
                 }),
                 json!({
                     "type": "conversation.handoff.requested",
@@ -1093,6 +1279,12 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
 
     let started = harness.start_webrtc_realtime("v=offer\r\n").await?;
     assert_eq!(started.started.version, RealtimeConversationVersion::V1);
+    assert_call_create_multipart(
+        harness.call_capture.single_request(),
+        "v=offer\r\n",
+        v1_session_create_json(),
+    )?;
+    assert_v1_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
 
     // Phase 2: wait for the delegated background agent turn that is launched by the handoff request.
     let turn_started = harness
@@ -1109,11 +1301,13 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
-        response_request_contains_text(&requests[0], "user: delegate from v1"),
-        "delegated Responses request should contain realtime text: {}",
+        response_request_contains_text(
+            &requests[0],
+            "<realtime_delegation>\n  <input>delegate from v1</input>\n  <transcript_delta>user: delegate from v1\nassistant: the secret word is kumquat</transcript_delta>\n</realtime_delegation>",
+        ),
+        "delegated Responses request should contain realtime delegation envelope: {}",
         requests[0]
     );
-
     let handoff_append = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_eq!(
         handoff_append,
@@ -1153,7 +1347,6 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
                     "samples_per_channel": 512
                 }),
             ],
-            vec![],
         ])]),
     )
     .await?;
@@ -1169,11 +1362,11 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     harness.append_text(thread_id, "hello").await?;
 
     let transcript = harness
-        .read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
-            "thread/realtime/transcriptUpdated",
+        .read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
+            "thread/realtime/transcript/delta",
         )
         .await?;
-    assert_eq!(transcript.text, "transcribed audio");
+    assert_eq!(transcript.delta, "transcribed audio");
     let output_audio = harness
         .read_notification::<ThreadRealtimeOutputAudioDeltaNotification>(
             "thread/realtime/outputAudio/delta",
@@ -1185,7 +1378,6 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     let requests = [
         harness.sideband_outbound_request(/*request_index*/ 1).await,
         harness.sideband_outbound_request(/*request_index*/ 2).await,
-        harness.sideband_outbound_request(/*request_index*/ 3).await,
     ];
     assert!(
         requests
@@ -1199,7 +1391,8 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
             request["type"] == "conversation.item.create"
                 && request["item"]["type"] == "message"
                 && request["item"]["role"] == "user"
-                && request["item"]["content"][0]["text"] == "hello"
+                && request["item"]["content"][0]["type"] == "input_text"
+                && request["item"]["content"][0]["text"] == "[USER] hello"
         }),
         "sideband requests should include user text item: {requests:?}"
     );
@@ -1208,13 +1401,12 @@ async fn webrtc_v2_forwards_audio_and_text_between_client_and_sideband() -> Resu
     Ok(())
 }
 
-/// Regression coverage for Realtime V2's single-active-response rule.
+/// Regression coverage for Realtime V2 text input while a response is active.
 ///
-/// The Realtime API rejects a new `response.create` while a default response is
-/// still active, so the input task should queue the second create and flush it
-/// only after the server sends `response.done` for the active response.
+/// Text input is append-only, so app-server should send the user message without
+/// requesting a new realtime response.
 #[tokio::test]
-async fn webrtc_v2_queues_text_response_create_while_response_is_active() -> Result<()> {
+async fn webrtc_v2_text_input_is_append_only_while_response_is_active() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     // Phase 1: script a server-side response that becomes active after the first
@@ -1224,7 +1416,6 @@ async fn webrtc_v2_queues_text_response_create_while_response_is_active() -> Res
         no_main_loop_responses(),
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![session_updated("sess_v2_response_queue")],
-            vec![],
             vec![
                 json!({
                     "type": "response.created",
@@ -1240,7 +1431,6 @@ async fn webrtc_v2_queues_text_response_create_while_response_is_active() -> Res
                 "type": "response.done",
                 "response": { "id": "resp_active" }
             })],
-            vec![],
         ])]),
     )
     .await?;
@@ -1253,56 +1443,44 @@ async fn webrtc_v2_queues_text_response_create_while_response_is_active() -> Res
     // notifications; they are the protocol frames app-server sends upstream.
     assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
 
-    // Phase 2: send the first text turn. It is safe to emit `response.create`
-    // immediately because no default response is active yet.
+    // Phase 2: send the first text turn. Text input is append-only, so this
+    // sends only the user text item.
     let thread_id = started.started.thread_id.clone();
     harness.append_text(thread_id.clone(), "first").await?;
     assert_v2_user_text_item(
         &harness.sideband_outbound_request(/*request_index*/ 1).await,
         "first",
     );
-    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 2).await);
     let transcript = harness
-        .read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
-            "thread/realtime/transcriptUpdated",
+        .read_notification::<ThreadRealtimeTranscriptDeltaNotification>(
+            "thread/realtime/transcript/delta",
         )
         .await?;
-    assert_eq!(transcript.text, "active response started");
+    assert_eq!(transcript.delta, "active response started");
 
     // Phase 3: send a second text turn while `resp_active` is still open. The
-    // user message must reach realtime, but `response.create` must not be sent
-    // yet or the Realtime API rejects it as an active-response conflict.
+    // user message must reach realtime without requesting another response.
     harness.append_text(thread_id.clone(), "second").await?;
     assert_v2_user_text_item(
-        &harness.sideband_outbound_request(/*request_index*/ 3).await,
+        &harness.sideband_outbound_request(/*request_index*/ 2).await,
         "second",
     );
 
-    // Phase 4: the audio input causes the scripted sideband stream to send
-    // `response.done`, which clears the active response and flushes the queued
-    // `response.create` for the second text turn.
+    // Phase 4: audio still forwards normally after text input.
     harness.append_audio(thread_id).await?;
 
-    // This is the negative check: if the second text turn had emitted
-    // `response.create` immediately, request 4 would be that create instead of
-    // the audio append.
-    let audio = harness.sideband_outbound_request(/*request_index*/ 4).await;
+    let audio = harness.sideband_outbound_request(/*request_index*/ 3).await;
     assert_eq!(audio["type"], "input_audio_buffer.append");
     assert_eq!(audio["audio"], "BQYH");
-    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 5).await);
 
     harness.shutdown().await;
     Ok(())
 }
 
-/// Regression coverage for the same queued `response.create` path when the
-/// active Realtime V2 response is cancelled instead of completed.
-///
-/// `response.cancelled` should clear the active-response guard exactly like
-/// `response.done`, so a text turn queued during the active response still gets
-/// one deferred `response.create`.
+/// Regression coverage for append-only Realtime V2 text input when the active
+/// response is cancelled instead of completed.
 #[tokio::test]
-async fn webrtc_v2_flushes_queued_text_response_create_when_response_is_cancelled() -> Result<()> {
+async fn webrtc_v2_text_input_is_append_only_when_response_is_cancelled() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     // Phase 1: script a server-side response that becomes active after the first
@@ -1312,7 +1490,6 @@ async fn webrtc_v2_flushes_queued_text_response_create_when_response_is_cancelle
         no_main_loop_responses(),
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![session_updated("sess_v2_response_cancel_queue")],
-            vec![],
             vec![json!({
                 "type": "response.created",
                 "response": { "id": "resp_cancelled" }
@@ -1322,7 +1499,6 @@ async fn webrtc_v2_flushes_queued_text_response_create_when_response_is_cancelle
                 "type": "response.cancelled",
                 "response": { "id": "resp_cancelled" }
             })],
-            vec![],
         ])]),
     )
     .await?;
@@ -1331,36 +1507,29 @@ async fn webrtc_v2_flushes_queued_text_response_create_when_response_is_cancelle
     assert_eq!(started.started.version, RealtimeConversationVersion::V2);
     assert_v2_session_update(&harness.sideband_outbound_request(/*request_index*/ 0).await)?;
 
-    // Phase 2: send the first text turn. It is safe to emit `response.create`
-    // immediately because no default response is active yet.
+    // Phase 2: send the first text turn. Text input is append-only, so this
+    // sends only the user text item.
     let thread_id = started.started.thread_id.clone();
     harness.append_text(thread_id.clone(), "first").await?;
     assert_v2_user_text_item(
         &harness.sideband_outbound_request(/*request_index*/ 1).await,
         "first",
     );
-    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 2).await);
 
     // Phase 3: send a second text turn while `resp_cancelled` is still open.
-    // The user message must reach realtime, but `response.create` stays queued.
+    // The user message must reach realtime without requesting another response.
     harness.append_text(thread_id.clone(), "second").await?;
     assert_v2_user_text_item(
-        &harness.sideband_outbound_request(/*request_index*/ 3).await,
+        &harness.sideband_outbound_request(/*request_index*/ 2).await,
         "second",
     );
 
-    // Phase 4: the audio input causes the scripted sideband stream to send
-    // `response.cancelled`, which clears the active response and flushes the
-    // queued `response.create` for the second text turn.
+    // Phase 4: audio still forwards normally after text input.
     harness.append_audio(thread_id).await?;
 
-    // This is the negative check: if the second text turn had emitted
-    // `response.create` immediately, request 4 would be that create instead of
-    // the audio append.
-    let audio = harness.sideband_outbound_request(/*request_index*/ 4).await;
+    let audio = harness.sideband_outbound_request(/*request_index*/ 3).await;
     assert_eq!(audio["type"], "input_audio_buffer.append");
     assert_eq!(audio["audio"], "BQYH");
-    assert_v2_response_create(&harness.sideband_outbound_request(/*request_index*/ 5).await);
 
     harness.shutdown().await;
     Ok(())
@@ -1386,7 +1555,34 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
         realtime_sideband(vec![realtime_sideband_connection(vec![
             vec![
                 session_updated("sess_v2_tool"),
-                v2_background_agent_tool_call("call_v2", "delegate from v2"),
+                json!({
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "Hi how are you"
+                }),
+                json!({
+                    "type": "response.output_audio_transcript.done",
+                    "transcript": "Doing well, what can I help you with?"
+                }),
+                json!({
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "transcript": "The secret word is strawberry"
+                }),
+                json!({
+                    "type": "conversation.item.created",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "<realtime_collaboration_update><voice_policy>silent_delegate</voice_policy></realtime_collaboration_update>"
+                        }]
+                    }
+                }),
+                json!({
+                    "type": "response.output_audio_transcript.delta",
+                    "delta": "Got it-strawberry. What's next on the menu?"
+                }),
+                v2_background_agent_tool_call("call_v2", "run ls"),
             ],
             vec![],
             vec![],
@@ -1413,8 +1609,16 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
     let requests = harness.main_loop_responses_requests().await?;
     assert_eq!(requests.len(), 1);
     assert!(
-        response_request_contains_text(&requests[0], "delegate from v2"),
-        "delegated Responses request should contain tool prompt: {}",
+        response_request_contains_text(
+            &requests[0],
+            "<realtime_delegation>\n  <input>run ls</input>\n  <transcript_delta>user: Hi how are you\nassistant: Doing well, what can I help you with?\nuser: The secret word is strawberry\nassistant: Got it-strawberry. What's next on the menu?\nuser: run ls</transcript_delta>\n</realtime_delegation>",
+        ),
+        "delegated Responses request should contain realtime delegation envelope: {}",
+        requests[0]
+    );
+    assert!(
+        !response_request_contains_text(&requests[0], "<realtime_collaboration_update>"),
+        "delegated Responses request should not include realtime control injects: {}",
         requests[0]
     );
 
@@ -1422,7 +1626,7 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
     assert_v2_progress_update(&progress, "delegated from v2");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_v2", "delegated from v2");
+    assert_v2_function_call_output(&tool_output, "call_v2", V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT);
     assert_eq!(
         function_call_output_sideband_requests(&harness.realtime_server).len(),
         1
@@ -1557,7 +1761,11 @@ async fn webrtc_v2_background_agent_progress_is_sent_before_function_output() ->
     assert_v2_progress_update(&progress, "progress before final");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_progress_order", "progress before final");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_progress_order",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -1574,7 +1782,9 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
         create_shell_command_sse_response(
             realtime_tool_ok_command(),
             /*workdir*/ None,
-            Some(5000),
+            // Windows CI can spend several seconds starting the nested PowerShell command. This
+            // test verifies delegated shell-tool plumbing, not timeout enforcement.
+            Some(DELEGATED_SHELL_TOOL_TIMEOUT_MS),
             "shell_call",
         )?,
         create_final_assistant_message_sse_response("shell tool finished")?,
@@ -1641,7 +1851,11 @@ async fn webrtc_v2_tool_call_delegated_turn_can_execute_shell_tool() -> Result<(
     assert_v2_progress_update(&progress, "shell tool finished");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_shell", "shell tool finished");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_shell",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
     assert_eq!(
         function_call_output_sideband_requests(&harness.realtime_server).len(),
         1
@@ -1721,7 +1935,11 @@ async fn webrtc_v2_tool_call_does_not_block_sideband_audio() -> Result<()> {
     assert_v2_progress_update(&progress, "late delegated result");
 
     let tool_output = harness.sideband_outbound_request(/*request_index*/ 2).await;
-    assert_v2_function_call_output(&tool_output, "call_audio", "late delegated result");
+    assert_v2_function_call_output(
+        &tool_output,
+        "call_audio",
+        V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT,
+    );
 
     harness.shutdown().await;
     Ok(())
@@ -1767,6 +1985,7 @@ async fn realtime_webrtc_start_surfaces_backend_error() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id,
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: Some(ThreadRealtimeStartTransport::Webrtc {
@@ -1825,6 +2044,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
     let start_request_id = mcp
         .send_thread_realtime_start_request(ThreadRealtimeStartParams {
             thread_id: thread_start.thread.id.clone(),
+            output_modality: RealtimeOutputModality::Audio,
             prompt: Some(Some("backend prompt".to_string())),
             session_id: None,
             transport: None,
@@ -1912,7 +2132,16 @@ async fn responses_requests(server: &MockServer) -> Result<Vec<Value>> {
 }
 
 fn response_request_contains_text(request: &Value, text: &str) -> bool {
-    request.to_string().contains(text)
+    match request {
+        Value::String(value) => value.contains(text),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| response_request_contains_text(value, text)),
+        Value::Object(map) => map
+            .values()
+            .any(|value| response_request_contains_text(value, text)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }
 
 fn realtime_tool_ok_command() -> Vec<String> {
@@ -1952,7 +2181,7 @@ fn assert_v2_function_call_output(request: &Value, call_id: &str, expected_outpu
             "item": {
                 "type": "function_call_output",
                 "call_id": call_id,
-                "output": format!("\"Agent Final Message\":\n\n{expected_output}"),
+                "output": expected_output,
             }
         })
     );
@@ -1968,7 +2197,7 @@ fn assert_v2_progress_update(request: &Value, expected_text: &str) {
                 "role": "user",
                 "content": [{
                     "type": "input_text",
-                    "text": format!("{expected_text}\n\nUpdate from background agent (task hasn't finished yet):")
+                    "text": format!("[BACKEND] {expected_text}")
                 }]
             }
         })
@@ -1985,7 +2214,7 @@ fn assert_v2_user_text_item(request: &Value, expected_text: &str) {
                 "role": "user",
                 "content": [{
                     "type": "input_text",
-                    "text": expected_text
+                    "text": format!("[USER] {expected_text}")
                 }]
             }
         })
@@ -2031,6 +2260,10 @@ fn assert_v2_session_update(request: &Value) -> Result<()> {
         request["session"]["tools"][0]["name"].as_str(),
         Some("background_agent")
     );
+    assert_eq!(
+        request["session"]["audio"]["input"]["transcription"]["model"].as_str(),
+        Some("gpt-4o-mini-transcribe")
+    );
     Ok(())
 }
 
@@ -2049,6 +2282,7 @@ fn assert_call_create_multipart(
         Some("multipart/form-data; boundary=codex-realtime-call-boundary")
     );
     let body = String::from_utf8(request.body).context("multipart body should be utf-8")?;
+    let session = normalized_json_string(session)?;
     assert_eq!(
         body,
         format!(

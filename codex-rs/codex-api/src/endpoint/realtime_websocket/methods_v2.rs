@@ -9,6 +9,7 @@ use crate::endpoint::realtime_websocket::protocol::ConversationMessageItem;
 use crate::endpoint::realtime_websocket::protocol::ConversationRole;
 use crate::endpoint::realtime_websocket::protocol::NoiseReductionType;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
+use crate::endpoint::realtime_websocket::protocol::RealtimeOutputModality;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeVoice;
 use crate::endpoint::realtime_websocket::protocol::SessionAudio;
@@ -17,6 +18,7 @@ use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutputFormat;
 use crate::endpoint::realtime_websocket::protocol::SessionFunctionTool;
+use crate::endpoint::realtime_websocket::protocol::SessionInputAudioTranscription;
 use crate::endpoint::realtime_websocket::protocol::SessionNoiseReduction;
 use crate::endpoint::realtime_websocket::protocol::SessionToolType;
 use crate::endpoint::realtime_websocket::protocol::SessionTurnDetection;
@@ -26,9 +28,11 @@ use crate::endpoint::realtime_websocket::protocol::TurnDetectionType;
 use serde_json::json;
 
 const REALTIME_V2_OUTPUT_MODALITY_AUDIO: &str = "audio";
+const REALTIME_V2_OUTPUT_MODALITY_TEXT: &str = "text";
 const REALTIME_V2_TOOL_CHOICE: &str = "auto";
 const REALTIME_V2_BACKGROUND_AGENT_TOOL_NAME: &str = "background_agent";
-const REALTIME_V2_BACKGROUND_AGENT_TOOL_DESCRIPTION: &str = "Send a user request to the background agent. Use this as the default action. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.";
+const REALTIME_V2_BACKGROUND_AGENT_TOOL_DESCRIPTION: &str = "Send a user request to the background agent. Use this as the default action. Do not rephrase the user's ask or rewrite it in your own words; pass along the user's own words. If the background agent is idle, this starts a new task and returns the final result to the user. If the background agent is already working on a task, this sends the request as guidance to steer that previous task. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.";
+const REALTIME_V2_INPUT_TRANSCRIPTION_MODEL: &str = "gpt-4o-mini-transcribe";
 
 pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationItemCreate {
@@ -59,6 +63,7 @@ pub(super) fn conversation_handoff_append_message(
 pub(super) fn session_update_session(
     instructions: String,
     session_mode: RealtimeSessionMode,
+    output_modality: RealtimeOutputModality,
     voice: RealtimeVoice,
 ) -> SessionUpdateSession {
     match session_mode {
@@ -67,7 +72,7 @@ pub(super) fn session_update_session(
             r#type: SessionType::Realtime,
             model: None,
             instructions: Some(instructions),
-            output_modalities: Some(vec![REALTIME_V2_OUTPUT_MODALITY_AUDIO.to_string()]),
+            output_modalities: Some(vec![output_modality_value(output_modality).to_string()]),
             audio: SessionAudio {
                 input: SessionAudioInput {
                     format: SessionAudioFormat {
@@ -77,10 +82,14 @@ pub(super) fn session_update_session(
                     noise_reduction: Some(SessionNoiseReduction {
                         r#type: NoiseReductionType::NearField,
                     }),
+                    transcription: Some(SessionInputAudioTranscription {
+                        model: REALTIME_V2_INPUT_TRANSCRIPTION_MODEL.to_string(),
+                    }),
                     turn_detection: Some(SessionTurnDetection {
                         r#type: TurnDetectionType::ServerVad,
                         interrupt_response: true,
                         create_response: true,
+                        silence_duration_ms: 500,
                     }),
                 },
                 output: Some(SessionAudioOutput {
@@ -122,6 +131,9 @@ pub(super) fn session_update_session(
                         rate: REALTIME_AUDIO_SAMPLE_RATE,
                     },
                     noise_reduction: None,
+                    transcription: Some(SessionInputAudioTranscription {
+                        model: REALTIME_V2_INPUT_TRANSCRIPTION_MODEL.to_string(),
+                    }),
                     turn_detection: None,
                 },
                 output: None,
@@ -129,6 +141,13 @@ pub(super) fn session_update_session(
             tools: None,
             tool_choice: None,
         },
+    }
+}
+
+fn output_modality_value(output_modality: RealtimeOutputModality) -> &'static str {
+    match output_modality {
+        RealtimeOutputModality::Text => REALTIME_V2_OUTPUT_MODALITY_TEXT,
+        RealtimeOutputModality::Audio => REALTIME_V2_OUTPUT_MODALITY_AUDIO,
     }
 }
 

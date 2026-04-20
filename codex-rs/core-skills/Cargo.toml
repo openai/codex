@@ -17,12 +17,14 @@ anyhow = { workspace = true }
 codex-analytics = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-config = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-instructions = { workspace = true }
 codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-skills = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
 codex-utils-plugins = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }

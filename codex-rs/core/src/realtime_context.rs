@@ -1,11 +1,16 @@
-use crate::codex::Session;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::session::session::Session;
 use chrono::Utc;
+use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
-use codex_state::SortKey;
-use codex_state::ThreadMetadata;
+use codex_thread_store::ListThreadsParams;
+use codex_thread_store::SortDirection;
+use codex_thread_store::StoredThread;
+use codex_thread_store::ThreadSortKey;
+use codex_thread_store::ThreadStore;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use dirs::home_dir;
@@ -15,6 +20,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::DirEntry;
 use std::io;
+use std::mem::take;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
@@ -22,11 +28,13 @@ use tracing::info;
 use tracing::warn;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.\nThis is background context about recent work and machine/workspace layout. It may be incomplete or stale. Use it to inform responses, and do not repeat it back unless relevant.";
+const STARTUP_CONTEXT_OPEN_TAG: &str = "<startup_context>";
+const STARTUP_CONTEXT_CLOSE_TAG: &str = "</startup_context>";
 const CURRENT_THREAD_SECTION_TOKEN_BUDGET: usize = 1_200;
 const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 2_200;
 const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
 const NOTES_SECTION_TOKEN_BUDGET: usize = 300;
-const MAX_CURRENT_THREAD_TURNS: usize = 2;
+pub(crate) const REALTIME_TURN_TOKEN_BUDGET: usize = 300;
 const MAX_RECENT_THREADS: usize = 40;
 const MAX_RECENT_WORK_GROUPS: usize = 8;
 const MAX_CURRENT_CWD_ASKS: usize = 8;
@@ -57,8 +65,8 @@ pub(crate) async fn build_realtime_startup_context(
     let history = sess.clone_history().await;
     let current_thread_section = build_current_thread_section(history.raw_items());
     let recent_threads = load_recent_threads(sess).await;
-    let recent_work_section = build_recent_work_section(&cwd, &recent_threads);
-    let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir());
+    let recent_work_section = build_recent_work_section(&cwd, &recent_threads).await;
+    let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir()).await;
 
     if current_thread_section.is_none()
         && recent_work_section.is_none()
@@ -97,15 +105,16 @@ pub(crate) async fn build_realtime_startup_context(
     }
     if let Some(section) = format_section(
         "Notes",
-        Some("Built at realtime startup from the current thread history, persisted thread metadata in the state DB, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
+        Some("Built at realtime startup from the current thread history, local thread metadata, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
         NOTES_SECTION_TOKEN_BUDGET,
     ) {
         parts.push(section);
     }
 
-    let context = truncate_text(&parts.join("\n\n"), TruncationPolicy::Tokens(budget_tokens));
+    let context = format_startup_context_blob(&parts.join("\n\n"));
     debug!(
         approx_tokens = approx_token_count(&context),
+        requested_budget_tokens = budget_tokens,
         bytes = context.len(),
         has_current_thread_section,
         has_recent_work_section,
@@ -116,41 +125,50 @@ pub(crate) async fn build_realtime_startup_context(
     Some(context)
 }
 
-async fn load_recent_threads(sess: &Session) -> Vec<ThreadMetadata> {
-    let Some(state_db) = sess.services.state_db.as_ref() else {
-        return Vec::new();
-    };
-
-    match state_db
-        .list_threads(
-            MAX_RECENT_THREADS,
-            /*anchor*/ None,
-            SortKey::UpdatedAt,
-            &[],
-            /*model_providers*/ None,
-            /*archived_only*/ false,
-            /*search_term*/ None,
-        )
+async fn load_recent_threads(sess: &Session) -> Vec<StoredThread> {
+    match sess
+        .services
+        .thread_store
+        .list_threads(ListThreadsParams {
+            page_size: MAX_RECENT_THREADS,
+            cursor: None,
+            sort_key: ThreadSortKey::UpdatedAt,
+            sort_direction: SortDirection::Desc,
+            allowed_sources: Vec::new(),
+            model_providers: None,
+            archived: false,
+            search_term: None,
+        })
         .await
     {
         Ok(page) => page.items,
         Err(err) => {
-            warn!("failed to load realtime startup threads from state db: {err}");
+            warn!("failed to load realtime startup threads from thread store: {err}");
             Vec::new()
         }
     }
 }
 
-fn build_recent_work_section(cwd: &Path, recent_threads: &[ThreadMetadata]) -> Option<String> {
-    let mut groups: HashMap<PathBuf, Vec<&ThreadMetadata>> = HashMap::new();
+async fn build_recent_work_section(
+    cwd: &AbsolutePathBuf,
+    recent_threads: &[StoredThread],
+) -> Option<String> {
+    let mut groups: HashMap<PathBuf, Vec<&StoredThread>> = HashMap::new();
     for entry in recent_threads {
-        let group =
-            resolve_root_git_project_for_trust(&entry.cwd).unwrap_or_else(|| entry.cwd.clone());
+        let group = match AbsolutePathBuf::from_absolute_path(entry.cwd.as_path()) {
+            Ok(entry_cwd) => resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &entry_cwd)
+                .await
+                .map(AbsolutePathBuf::into_path_buf)
+                .unwrap_or_else(|| entry.cwd.clone()),
+            Err(_) => entry.cwd.clone(),
+        };
         groups.entry(group).or_default().push(entry);
     }
 
-    let current_group =
-        resolve_root_git_project_for_trust(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let current_group = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd)
+        .await
+        .map(AbsolutePathBuf::into_path_buf)
+        .unwrap_or_else(|| cwd.clone().into_path_buf());
     let mut groups = groups.into_iter().collect::<Vec<_>>();
     groups.sort_by(|(left_group, left_entries), (right_group, right_entries)| {
         let left_latest = left_entries
@@ -175,14 +193,13 @@ fn build_recent_work_section(cwd: &Path, recent_threads: &[ThreadMetadata]) -> O
             ))
     });
 
-    let sections = groups
-        .into_iter()
-        .take(MAX_RECENT_WORK_GROUPS)
-        .filter_map(|(group, mut entries)| {
-            entries.sort_by_key(|entry| Reverse(entry.updated_at));
-            format_thread_group(&current_group, &group, entries)
-        })
-        .collect::<Vec<_>>();
+    let mut sections = Vec::new();
+    for (group, mut entries) in groups.into_iter().take(MAX_RECENT_WORK_GROUPS) {
+        entries.sort_by_key(|entry| Reverse(entry.updated_at));
+        if let Some(section) = format_thread_group(&current_group, &group, entries).await {
+            sections.push(section);
+        }
+    }
     (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
@@ -204,10 +221,7 @@ fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
                     continue;
                 };
                 if !current_user.is_empty() || !current_assistant.is_empty() {
-                    turns.push((
-                        std::mem::take(&mut current_user),
-                        std::mem::take(&mut current_assistant),
-                    ));
+                    turns.push((take(&mut current_user), take(&mut current_assistant)));
                 }
                 current_user.push(text);
             }
@@ -231,58 +245,95 @@ fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
         turns.push((current_user, current_assistant));
     }
 
-    let retained_turns = turns
-        .into_iter()
-        .rev()
-        .take(MAX_CURRENT_THREAD_TURNS)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    if retained_turns.is_empty() {
+    if turns.is_empty() {
         return None;
     }
 
     let mut lines = vec![
         "Most recent user/assistant turns from this exact thread. Use them for continuity when responding.".to_string(),
     ];
+    let mut remaining_budget =
+        CURRENT_THREAD_SECTION_TOKEN_BUDGET.saturating_sub(approx_token_count(&lines.join("\n")));
+    let mut retained_turn_count = 0;
 
-    let retained_turn_count = retained_turns.len();
-    for (index, (user_messages, assistant_messages)) in retained_turns.into_iter().enumerate() {
-        lines.push(String::new());
-        if retained_turn_count == 1 || index + 1 == retained_turn_count {
-            lines.push("### Latest turn".to_string());
+    for (index, (user_messages, assistant_messages)) in turns.into_iter().rev().enumerate() {
+        if remaining_budget == 0 {
+            break;
+        }
+
+        let mut turn_lines = Vec::new();
+        if index == 0 {
+            turn_lines.push("### Latest turn".to_string());
         } else {
-            lines.push(format!("### Prior turn {}", index + 1));
+            turn_lines.push(format!("### Previous turn {index}"));
         }
 
         if !user_messages.is_empty() {
-            lines.push("User:".to_string());
-            lines.push(user_messages.join("\n\n"));
+            turn_lines.push("User:".to_string());
+            turn_lines.push(user_messages.join("\n\n"));
         }
         if !assistant_messages.is_empty() {
-            lines.push(String::new());
-            lines.push("Assistant:".to_string());
-            lines.push(assistant_messages.join("\n\n"));
+            turn_lines.push(String::new());
+            turn_lines.push("Assistant:".to_string());
+            turn_lines.push(assistant_messages.join("\n\n"));
         }
+
+        let turn_budget = REALTIME_TURN_TOKEN_BUDGET.min(remaining_budget);
+        let turn_text = turn_lines.join("\n");
+        let turn_text = truncate_realtime_text_to_token_budget(&turn_text, turn_budget);
+        let turn_tokens = approx_token_count(&turn_text);
+        if turn_tokens == 0 {
+            continue;
+        }
+
+        lines.push(String::new());
+        lines.push(turn_text);
+        remaining_budget = remaining_budget.saturating_sub(turn_tokens);
+        retained_turn_count += 1;
     }
 
-    Some(lines.join("\n"))
+    (retained_turn_count > 0).then(|| lines.join("\n"))
 }
 
-fn build_workspace_section_with_user_root(
-    cwd: &Path,
+pub(crate) fn truncate_realtime_text_to_token_budget(text: &str, budget_tokens: usize) -> String {
+    let mut truncation_budget = budget_tokens;
+    loop {
+        let candidate = truncate_text(text, TruncationPolicy::Tokens(truncation_budget));
+        let candidate_tokens = approx_token_count(&candidate);
+        if candidate_tokens <= budget_tokens {
+            break candidate;
+        }
+
+        // The shared truncator adds its marker after choosing preserved
+        // content, so tighten the content budget until the rendered turn
+        // itself fits the per-turn cap.
+        let excess_tokens = candidate_tokens.saturating_sub(budget_tokens);
+        let next_budget = truncation_budget.saturating_sub(excess_tokens.max(1));
+        if next_budget == 0 {
+            let candidate = truncate_text(text, TruncationPolicy::Tokens(0));
+            if approx_token_count(&candidate) <= budget_tokens {
+                break candidate;
+            }
+            break String::new();
+        }
+        truncation_budget = next_budget;
+    }
+}
+
+async fn build_workspace_section_with_user_root(
+    cwd: &AbsolutePathBuf,
     user_root: Option<PathBuf>,
 ) -> Option<String> {
-    let git_root = resolve_root_git_project_for_trust(cwd);
-    let cwd_tree = render_tree(cwd);
+    let cwd_path = cwd.as_path();
+    let git_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), cwd).await;
+    let cwd_tree = render_tree(cwd_path);
     let git_root_tree = git_root
         .as_ref()
-        .filter(|git_root| git_root.as_path() != cwd)
-        .and_then(|git_root| render_tree(git_root));
+        .filter(|git_root| git_root.as_path() != cwd_path)
+        .and_then(|git_root| render_tree(git_root.as_path()));
     let user_root_tree = user_root
         .as_ref()
-        .filter(|user_root| user_root.as_path() != cwd)
+        .filter(|user_root| user_root.as_path() != cwd_path)
         .filter(|user_root| {
             git_root
                 .as_ref()
@@ -295,8 +346,8 @@ fn build_workspace_section_with_user_root(
     }
 
     let mut lines = vec![
-        format!("Current working directory: {}", cwd.display()),
-        format!("Working directory name: {}", file_name_string(cwd)),
+        format!("Current working directory: {}", cwd_path.display()),
+        format!("Working directory name: {}", file_name_string(cwd_path)),
     ];
 
     if let Some(git_root) = &git_root {
@@ -403,23 +454,43 @@ fn format_section(title: &str, body: Option<String>, budget_tokens: usize) -> Op
         return None;
     }
 
-    Some(format!(
-        "## {title}\n{}",
-        truncate_text(body, TruncationPolicy::Tokens(budget_tokens))
-    ))
+    let heading = format!("## {title}\n");
+    let body_budget = budget_tokens.saturating_sub(approx_token_count(&heading));
+    if body_budget == 0 {
+        return None;
+    }
+
+    let body = truncate_realtime_text_to_token_budget(body, body_budget);
+    if body.is_empty() {
+        return None;
+    }
+
+    Some(format!("{heading}{body}"))
 }
 
-fn format_thread_group(
+fn format_startup_context_blob(body: &str) -> String {
+    format!("{STARTUP_CONTEXT_OPEN_TAG}\n{body}\n{STARTUP_CONTEXT_CLOSE_TAG}")
+}
+
+async fn format_thread_group(
     current_group: &Path,
     group: &Path,
-    entries: Vec<&ThreadMetadata>,
+    entries: Vec<&StoredThread>,
 ) -> Option<String> {
     let latest = entries.first()?;
-    let group_label = if resolve_root_git_project_for_trust(latest.cwd.as_path()).is_some() {
-        format!("### Git repo: {}", group.display())
-    } else {
-        format!("### Directory: {}", group.display())
-    };
+    let group_label =
+        if let Ok(latest_cwd) = AbsolutePathBuf::from_absolute_path(latest.cwd.as_path()) {
+            if resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &latest_cwd)
+                .await
+                .is_some()
+            {
+                format!("### Git repo: {}", group.display())
+            } else {
+                format!("### Directory: {}", group.display())
+            }
+        } else {
+            format!("### Directory: {}", group.display())
+        };
     let mut lines = vec![
         group_label,
         format!("Recent sessions: {}", entries.len()),
@@ -427,8 +498,9 @@ fn format_thread_group(
     ];
 
     if let Some(git_branch) = latest
-        .git_branch
-        .as_deref()
+        .git_info
+        .as_ref()
+        .and_then(|git| git.branch.as_deref())
         .filter(|git_branch| !git_branch.is_empty())
     {
         lines.push(format!("Latest branch: {git_branch}"));

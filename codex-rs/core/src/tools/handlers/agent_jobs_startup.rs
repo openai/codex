@@ -534,15 +534,17 @@ mod tests {
         let manager = ThreadManager::with_models_provider_and_home_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
-            config.codex_home.clone(),
+            config.codex_home.clone().to_path_buf(),
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         );
         let root = manager.start_thread(config.clone()).await?;
         let session = root.thread.codex.session.clone();
 
-        let db =
-            codex_state::StateRuntime::init(config.codex_home.clone(), "test-provider".to_string())
-                .await?;
+        let db = codex_state::StateRuntime::init(
+            config.codex_home.clone().to_path_buf(),
+            "test-provider".to_string(),
+        )
+        .await?;
         let job_id = "job-1".to_string();
         let item_id = "item-1".to_string();
         db.create_agent_job(

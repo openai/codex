@@ -12,9 +12,8 @@ use crate::thread_state::TurnSummary;
 use crate::thread_state::resolve_server_request_on_thread_listener;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
-use codex_app_server_protocol::AddCreditsNudgeEmailNotification;
-use codex_app_server_protocol::AddCreditsNudgeEmailResult;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
@@ -41,6 +40,7 @@ use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
+use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
@@ -84,7 +84,8 @@ use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
-use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -101,6 +102,7 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_command_execution_end_item;
 use codex_app_server_protocol::build_file_change_approval_request_item;
 use codex_app_server_protocol::build_file_change_begin_item;
@@ -119,7 +121,6 @@ use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynam
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::plan_tool::UpdatePlanArgs;
-use codex_protocol::protocol::AddCreditsNudgeEmailStatus as CoreAddCreditsNudgeEmailStatus;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -141,9 +142,9 @@ use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUse
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
@@ -160,7 +161,7 @@ enum CommandExecutionApprovalPresentation {
 #[derive(Debug, PartialEq)]
 struct CommandExecutionCompletionItem {
     command: String,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     command_actions: Vec<V2ParsedCommand>,
 }
 
@@ -170,6 +171,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation_id: ThreadId,
     conversation: Arc<CodexThread>,
     thread_manager: Arc<ThreadManager>,
+    analytics_events_client: Option<AnalyticsEventsClient>,
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
@@ -205,6 +207,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn,
                 };
+                if let Some(analytics_events_client) = analytics_events_client.as_ref() {
+                    analytics_events_client
+                        .track_notification(ServerNotification::TurnStarted(notification.clone()));
+                }
                 outgoing
                     .send_server_notification(ServerNotification::TurnStarted(notification))
                     .await;
@@ -221,30 +227,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 conversation_id,
                 event_turn_id,
                 turn_complete_event,
+                analytics_events_client.as_ref(),
                 &outgoing,
                 &thread_state,
             )
             .await;
-        }
-        EventMsg::AddCreditsNudgeEmailResponse(event) => {
-            if let ApiVersion::V2 = api_version {
-                let result = match event.result {
-                    Ok(CoreAddCreditsNudgeEmailStatus::Sent) => AddCreditsNudgeEmailResult::Sent,
-                    Ok(CoreAddCreditsNudgeEmailStatus::CooldownActive) => {
-                        AddCreditsNudgeEmailResult::CooldownActive
-                    }
-                    Err(message) => AddCreditsNudgeEmailResult::Failed { message },
-                };
-                let notification = AddCreditsNudgeEmailNotification {
-                    thread_id: conversation_id.to_string(),
-                    result,
-                };
-                outgoing
-                    .send_server_notification(ServerNotification::AddCreditsNudgeEmailCompleted(
-                        notification,
-                    ))
-                    .await;
-            }
         }
         EventMsg::SkillsUpdateAvailable => {
             if let ApiVersion::V2 = api_version {
@@ -283,7 +270,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
-        EventMsg::Warning(_warning_event) => {}
+        EventMsg::Warning(warning_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = WarningNotification {
+                    thread_id: Some(conversation_id.to_string()),
+                    message: warning_event.message,
+                };
+                if let Some(analytics_events_client) = analytics_events_client.as_ref() {
+                    analytics_events_client
+                        .track_notification(ServerNotification::Warning(notification.clone()));
+                }
+                outgoing
+                    .send_server_notification(ServerNotification::Warning(notification))
+                    .await;
+            }
+        }
         EventMsg::GuardianAssessment(assessment) => {
             if let ApiVersion::V2 = api_version {
                 let pending_command_execution = match build_item_from_guardian_event(
@@ -291,15 +292,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                     CommandExecutionStatus::InProgress,
                 ) {
                     Some(ThreadItem::CommandExecution {
+                        id,
                         command,
                         cwd,
                         command_actions,
                         ..
-                    }) => Some(CommandExecutionCompletionItem {
-                        command,
-                        cwd,
-                        command_actions,
-                    }),
+                    }) => Some((
+                        id,
+                        CommandExecutionCompletionItem {
+                            command,
+                            cwd,
+                            command_actions,
+                        },
+                    )),
                     Some(_) | None => None,
                 };
                 let assessment_turn_id = if assessment.turn_id.is_empty() {
@@ -309,12 +314,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 if assessment.status
                     == codex_protocol::protocol::GuardianAssessmentStatus::InProgress
-                    && let Some(completion_item) = pending_command_execution.as_ref()
+                    && let Some((target_item_id, completion_item)) =
+                        pending_command_execution.as_ref()
                 {
                     start_command_execution_item(
                         &conversation_id,
                         assessment_turn_id.clone(),
-                        assessment.id.clone(),
+                        target_item_id.clone(),
                         completion_item.command.clone(),
                         completion_item.cwd.clone(),
                         completion_item.command_actions.clone(),
@@ -330,22 +336,30 @@ pub(crate) async fn apply_bespoke_event_handling(
                     &assessment,
                 );
                 outgoing.send_server_notification(notification).await;
-                if matches!(
-                    assessment.status,
+                let completion_status = match assessment.status {
                     codex_protocol::protocol::GuardianAssessmentStatus::Denied
-                        | codex_protocol::protocol::GuardianAssessmentStatus::Aborted
-                ) && let Some(completion_item) = pending_command_execution
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
+                        Some(CommandExecutionStatus::Declined)
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                        Some(CommandExecutionStatus::Failed)
+                    }
+                    codex_protocol::protocol::GuardianAssessmentStatus::InProgress
+                    | codex_protocol::protocol::GuardianAssessmentStatus::Approved => None,
+                };
+                if let Some(completion_status) = completion_status
+                    && let Some((target_item_id, completion_item)) = pending_command_execution
                 {
                     complete_command_execution_item(
                         &conversation_id,
                         assessment_turn_id,
-                        assessment.id.clone(),
+                        target_item_id,
                         completion_item.command,
                         completion_item.cwd,
                         /*process_id*/ None,
                         CommandExecutionSource::Agent,
                         completion_item.command_actions,
-                        CommandExecutionStatus::Declined,
+                        completion_status,
                         &outgoing,
                         &thread_state,
                     )
@@ -411,26 +425,50 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .await;
                     }
                     RealtimeEvent::InputTranscriptDelta(event) => {
-                        let notification = ThreadRealtimeTranscriptUpdatedNotification {
+                        let notification = ThreadRealtimeTranscriptDeltaNotification {
                             thread_id: conversation_id.to_string(),
                             role: "user".to_string(),
-                            text: event.delta,
+                            delta: event.delta,
                         };
                         outgoing
                             .send_server_notification(
-                                ServerNotification::ThreadRealtimeTranscriptUpdated(notification),
+                                ServerNotification::ThreadRealtimeTranscriptDelta(notification),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::InputTranscriptDone(event) => {
+                        let notification = ThreadRealtimeTranscriptDoneNotification {
+                            thread_id: conversation_id.to_string(),
+                            role: "user".to_string(),
+                            text: event.text,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptDone(notification),
                             )
                             .await;
                     }
                     RealtimeEvent::OutputTranscriptDelta(event) => {
-                        let notification = ThreadRealtimeTranscriptUpdatedNotification {
+                        let notification = ThreadRealtimeTranscriptDeltaNotification {
                             thread_id: conversation_id.to_string(),
                             role: "assistant".to_string(),
-                            text: event.delta,
+                            delta: event.delta,
                         };
                         outgoing
                             .send_server_notification(
-                                ServerNotification::ThreadRealtimeTranscriptUpdated(notification),
+                                ServerNotification::ThreadRealtimeTranscriptDelta(notification),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::OutputTranscriptDone(event) => {
+                        let notification = ThreadRealtimeTranscriptDoneNotification {
+                            thread_id: conversation_id.to_string(),
+                            role: "assistant".to_string(),
+                            text: event.text,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptDone(notification),
                             )
                             .await;
                     }
@@ -622,7 +660,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         call_id: call_id.clone(),
                         approval_id,
                         command,
-                        cwd,
+                        cwd: cwd.to_path_buf(),
                         reason,
                         parsed_cmd,
                     };
@@ -644,7 +682,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     let command_actions = parsed_cmd
                         .iter()
                         .cloned()
-                        .map(V2ParsedCommand::from)
+                        .map(|parsed| V2ParsedCommand::from_core_with_cwd(parsed, &cwd))
                         .collect::<Vec<_>>();
                     let presentation = if let Some(network_approval_context) =
                         network_approval_context.map(V2NetworkApprovalContext::from)
@@ -1313,6 +1351,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ContextCompacted(..) => {
+            // Core still fans out this deprecated event for legacy clients;
+            // v2 clients receive the canonical ContextCompaction item instead.
+            if matches!(api_version, ApiVersion::V2) {
+                return;
+            }
             let notification = ContextCompactedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
@@ -1436,7 +1479,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::ViewImageToolCall(view_image_event) => {
             let item = ThreadItem::ImageView {
                 id: view_image_event.call_id.clone(),
-                path: view_image_event.path.to_string_lossy().into_owned(),
+                path: view_image_event.path.clone(),
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1594,6 +1637,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
+        EventMsg::PatchApplyUpdated(event) => {
+            let notification = FileChangePatchUpdatedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id: event.call_id,
+                changes: convert_patch_changes(&event.changes),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::FileChangePatchUpdated(notification))
+                .await;
+        }
         EventMsg::PatchApplyEnd(patch_end_event) => {
             // Until we migrate the core to be aware of a first class FileChangeItem
             // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
@@ -1609,14 +1663,25 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
+            if matches!(api_version, ApiVersion::V2)
+                && matches!(
+                    exec_command_begin_event.source,
+                    codex_protocol::protocol::ExecCommandSource::UnifiedExecInteraction
+                )
+            {
+                // TerminalInteraction is the v2 surface for unified exec
+                // stdin/poll events. Suppress the legacy CommandExecution
+                // item so clients do not render the same wait twice.
+                return;
+            }
             let item_id = exec_command_begin_event.call_id.clone();
+            let cwd = exec_command_begin_event.cwd.clone();
             let command_actions = exec_command_begin_event
                 .parsed_cmd
                 .into_iter()
-                .map(V2ParsedCommand::from)
+                .map(|parsed| V2ParsedCommand::from_core_with_cwd(parsed, &cwd))
                 .collect::<Vec<_>>();
             let command = shlex_join(&exec_command_begin_event.command);
-            let cwd = exec_command_begin_event.cwd;
             let process_id = exec_command_begin_event.process_id;
             let first_start = {
                 let mut state = thread_state.lock().await;
@@ -1712,6 +1777,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .command_execution_started
                     .remove(&call_id);
             }
+            if matches!(api_version, ApiVersion::V2)
+                && matches!(
+                    exec_command_end_event.source,
+                    codex_protocol::protocol::ExecCommandSource::UnifiedExecInteraction
+                )
+            {
+                // The paired begin event is suppressed above; keep the
+                // completion out of v2 as well so no orphan legacy item is
+                // emitted for unified exec interactions.
+                return;
+            }
 
             let item = build_command_execution_end_item(&exec_command_end_event);
 
@@ -1756,6 +1832,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 conversation_id,
                 event_turn_id,
                 turn_aborted_event,
+                analytics_events_client.as_ref(),
                 &outgoing,
                 &thread_state,
             )
@@ -1784,7 +1861,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await
                 {
                     Ok(summary) => {
-                        let mut thread = summary_to_thread(summary);
+                        let fallback_cwd = conversation.config_snapshot().await.cwd;
+                        let mut thread = summary_to_thread(summary, &fallback_cwd);
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);
@@ -1934,6 +2012,7 @@ async fn emit_turn_completed_with_status(
     event_turn_id: String,
     turn_snapshot: Option<Turn>,
     turn_completion_metadata: TurnCompletionMetadata,
+    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let turn = turn_snapshot.unwrap_or_else(|| Turn {
@@ -1945,6 +2024,7 @@ async fn emit_turn_completed_with_status(
         completed_at: None,
         duration_ms: None,
     });
+    let turn = compact_turn_completed_turn(turn);
     let notification = TurnCompletedNotification {
         thread_id: conversation_id.to_string(),
         turn: Turn {
@@ -1957,9 +2037,101 @@ async fn emit_turn_completed_with_status(
             duration_ms: turn_completion_metadata.duration_ms.or(turn.duration_ms),
         },
     };
+    if let Some(analytics_events_client) = analytics_events_client {
+        analytics_events_client
+            .track_notification(ServerNotification::TurnCompleted(notification.clone()));
+    }
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
         .await;
+}
+
+fn compact_turn_completed_turn(turn: Turn) -> Turn {
+    let Turn {
+        id,
+        items,
+        status,
+        error,
+        started_at,
+        completed_at,
+        duration_ms,
+    } = turn;
+    Turn {
+        id,
+        items: items.into_iter().map(compact_turn_completed_item).collect(),
+        status,
+        error,
+        started_at,
+        completed_at,
+        duration_ms,
+    }
+}
+
+fn compact_turn_completed_item(item: ThreadItem) -> ThreadItem {
+    match item {
+        ThreadItem::CommandExecution {
+            id,
+            command,
+            cwd,
+            process_id,
+            source,
+            status,
+            command_actions,
+            aggregated_output: _,
+            exit_code,
+            duration_ms,
+        } => ThreadItem::CommandExecution {
+            id,
+            command,
+            cwd,
+            process_id,
+            source,
+            status,
+            command_actions,
+            aggregated_output: None,
+            exit_code,
+            duration_ms,
+        },
+        ThreadItem::McpToolCall {
+            id,
+            server,
+            tool,
+            status,
+            arguments,
+            mcp_app_resource_uri,
+            result: _,
+            error,
+            duration_ms,
+        } => ThreadItem::McpToolCall {
+            id,
+            server,
+            tool,
+            status,
+            arguments,
+            mcp_app_resource_uri,
+            result: None,
+            error,
+            duration_ms,
+        },
+        ThreadItem::DynamicToolCall {
+            id,
+            tool,
+            arguments,
+            status,
+            content_items: _,
+            success,
+            duration_ms,
+        } => ThreadItem::DynamicToolCall {
+            id,
+            tool,
+            arguments,
+            status,
+            content_items: None,
+            success,
+            duration_ms,
+        },
+        other => other,
+    }
 }
 
 async fn complete_file_change_item(
@@ -1970,9 +2142,12 @@ async fn complete_file_change_item(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let mut state = thread_state.lock().await;
-    state.turn_summary.file_change_started.remove(&item_id);
-    drop(state);
+    thread_state
+        .lock()
+        .await
+        .turn_summary
+        .file_change_started
+        .remove(&item_id);
 
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -1990,7 +2165,7 @@ async fn start_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     command_actions: Vec<V2ParsedCommand>,
     source: CommandExecutionSource,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -2033,7 +2208,7 @@ async fn complete_command_execution_item(
     turn_id: String,
     item_id: String,
     command: String,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: Option<String>,
     source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
@@ -2041,12 +2216,12 @@ async fn complete_command_execution_item(
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
-    let mut state = thread_state.lock().await;
-    let should_emit = state
+    let should_emit = thread_state
+        .lock()
+        .await
         .turn_summary
         .command_execution_started
         .remove(&item_id);
-    drop(state);
     if !should_emit {
         return;
     }
@@ -2160,6 +2335,7 @@ async fn handle_turn_complete(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_complete_event: TurnCompleteEvent,
+    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
@@ -2182,6 +2358,7 @@ async fn handle_turn_complete(
             completed_at: turn_complete_event.completed_at,
             duration_ms: turn_complete_event.duration_ms,
         },
+        analytics_events_client,
         outgoing,
     )
     .await;
@@ -2191,6 +2368,7 @@ async fn handle_turn_interrupted(
     conversation_id: ThreadId,
     event_turn_id: String,
     turn_aborted_event: TurnAbortedEvent,
+    analytics_events_client: Option<&AnalyticsEventsClient>,
     outgoing: &ThreadScopedOutgoingMessageSender,
     thread_state: &Arc<Mutex<ThreadState>>,
 ) {
@@ -2208,6 +2386,7 @@ async fn handle_turn_interrupted(
             completed_at: turn_aborted_event.completed_at,
             duration_ms: turn_aborted_event.duration_ms,
         },
+        analytics_events_client,
         outgoing,
     )
     .await;
@@ -2875,6 +3054,7 @@ async fn construct_mcp_tool_call_notification(
         tool: begin_event.invocation.tool,
         status: McpToolCallStatus::InProgress,
         arguments: begin_event.invocation.arguments.unwrap_or(JsonValue::Null),
+        mcp_app_resource_uri: begin_event.mcp_app_resource_uri,
         result: None,
         error: None,
         duration_ms: None,
@@ -2901,11 +3081,11 @@ async fn construct_mcp_tool_call_end_notification(
 
     let (result, error) = match &end_event.result {
         Ok(value) => (
-            Some(McpToolCallResult {
+            Some(Box::new(McpToolCallResult {
                 content: value.content.clone(),
                 structured_content: value.structured_content.clone(),
                 meta: value.meta.clone(),
-            }),
+            })),
             None,
         ),
         Err(message) => (
@@ -2922,6 +3102,7 @@ async fn construct_mcp_tool_call_end_notification(
         tool: end_event.invocation.tool,
         status,
         arguments: end_event.invocation.arguments.unwrap_or(JsonValue::Null),
+        mcp_app_resource_uri: end_event.mcp_app_resource_uri,
         result,
         error,
         duration_ms,
@@ -2944,9 +3125,11 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
+    use codex_app_server_protocol::AutoReviewDecisionSource;
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
+    use codex_login::AuthManager;
     use codex_login::CodexAuth;
     use codex_protocol::items::HookPromptFragment;
     use codex_protocol::items::build_hook_prompt_message;
@@ -2967,6 +3150,8 @@ mod tests {
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
     use core_test_support::load_default_config_for_test;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
@@ -3019,7 +3204,7 @@ mod tests {
     fn command_execution_completion_item(command: &str) -> CommandExecutionCompletionItem {
         CommandExecutionCompletionItem {
             command: command.to_string(),
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             command_actions: vec![V2ParsedCommand::Unknown {
                 command: command.to_string(),
             }],
@@ -3043,20 +3228,29 @@ mod tests {
                 Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 Some("too risky".to_string()),
             ),
+            GuardianAssessmentStatus::TimedOut => {
+                (None, None, Some("review timed out".to_string()))
+            }
             GuardianAssessmentStatus::Aborted => (None, None, None),
         };
         GuardianAssessmentEvent {
-            id: id.to_string(),
+            id: format!("review-{id}"),
+            target_item_id: Some(id.to_string()),
             turn_id: turn_id.to_string(),
             status,
             risk_level,
             user_authorization,
             rationale,
+            decision_source: if matches!(status, GuardianAssessmentStatus::InProgress) {
+                None
+            } else {
+                Some(codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent)
+            },
             action: serde_json::from_value(json!({
                 "type": "command",
                 "source": "shell",
                 "command": format!("rm -f /tmp/{id}.sqlite"),
-                "cwd": "/tmp",
+                "cwd": test_path_buf("/tmp"),
             }))
             .expect("guardian action"),
         }
@@ -3069,6 +3263,7 @@ mod tests {
         outgoing: ThreadScopedOutgoingMessageSender,
         thread_state: Arc<Mutex<ThreadState>>,
         thread_watch_manager: ThreadWatchManager,
+        analytics_events_client: AnalyticsEventsClient,
         codex_home: PathBuf,
     }
 
@@ -3083,6 +3278,7 @@ mod tests {
                 self.conversation_id,
                 self.conversation.clone(),
                 self.thread_manager.clone(),
+                Some(self.analytics_events_client.clone()),
                 self.outgoing.clone(),
                 self.thread_state.clone(),
                 self.thread_watch_manager.clone(),
@@ -3100,18 +3296,20 @@ mod tests {
         let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
             source: codex_protocol::protocol::GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: "/tmp".into(),
+            cwd: test_path_buf("/tmp").abs(),
         };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-1".to_string(),
+                id: "review-1".to_string(),
+                target_item_id: Some("item-1".to_string()),
                 turn_id: String::new(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: None,
                 action: action.clone(),
             },
         );
@@ -3120,7 +3318,8 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
-                assert_eq!(payload.target_item_id, "item-1");
+                assert_eq!(payload.review_id, "review-1");
+                assert_eq!(payload.target_item_id.as_deref(), Some("item-1"));
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3140,18 +3339,22 @@ mod tests {
         let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
             source: codex_protocol::protocol::GuardianCommandSource::Shell,
             command: "rm -rf /tmp/example.sqlite".to_string(),
-            cwd: "/tmp".into(),
+            cwd: test_path_buf("/tmp").abs(),
         };
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-2".to_string(),
+                id: "review-2".to_string(),
+                target_item_id: Some("item-2".to_string()),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
                 action: action.clone(),
             },
         );
@@ -3160,7 +3363,9 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "item-2");
+                assert_eq!(payload.review_id, "review-2");
+                assert_eq!(payload.target_item_id.as_deref(), Some("item-2"));
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(
                     payload.review.risk_level,
@@ -3190,12 +3395,16 @@ mod tests {
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-3".to_string(),
+                id: "review-3".to_string(),
+                target_item_id: None,
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                decision_source: Some(
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
+                ),
                 action: action.clone(),
             },
         );
@@ -3204,7 +3413,9 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "item-3");
+                assert_eq!(payload.review_id, "review-3");
+                assert_eq!(payload.target_item_id, None);
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.user_authorization, None);
@@ -3367,7 +3578,7 @@ mod tests {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 CodexAuth::create_dummy_chatgpt_auth_for_testing(),
                 config.model_provider.clone(),
-                config.codex_home.clone(),
+                config.codex_home.to_path_buf(),
                 Arc::new(codex_exec_server::EnvironmentManager::new(
                     /*exec_server_url*/ None,
                 )),
@@ -3394,6 +3605,13 @@ mod tests {
             outgoing: outgoing.clone(),
             thread_state: thread_state.clone(),
             thread_watch_manager: thread_watch_manager.clone(),
+            analytics_events_client: AnalyticsEventsClient::new(
+                AuthManager::from_auth_for_testing(
+                    CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                ),
+                "http://localhost".to_string(),
+                Some(false),
+            ),
             codex_home: codex_home.path().to_path_buf(),
         };
 
@@ -3421,7 +3639,11 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewStarted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-approved");
+                assert_eq!(payload.review_id, "review-cmd-guardian-approved");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-approved")
+                );
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3442,7 +3664,12 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewCompleted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-approved");
+                assert_eq!(payload.review_id, "review-cmd-guardian-approved");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-approved")
+                );
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::Approved
@@ -3479,7 +3706,11 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewStarted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-denied");
+                assert_eq!(payload.review_id, "review-cmd-guardian-denied");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-denied")
+                );
                 assert_eq!(
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
@@ -3500,7 +3731,12 @@ mod tests {
             OutgoingMessage::AppServerNotification(
                 ServerNotification::ItemGuardianApprovalReviewCompleted(payload),
             ) => {
-                assert_eq!(payload.target_item_id, "cmd-guardian-denied");
+                assert_eq!(payload.review_id, "review-cmd-guardian-denied");
+                assert_eq!(
+                    payload.target_item_id.as_deref(),
+                    Some("cmd-guardian-denied")
+                );
+                assert_eq!(payload.decision_source, AutoReviewDecisionSource::Agent);
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
             }
             other => bail!("unexpected message: {other:?}"),
@@ -3513,6 +3749,30 @@ mod tests {
                 };
                 assert_eq!(id, "cmd-guardian-denied");
                 assert_eq!(status, CommandExecutionStatus::Declined);
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+
+        let mut missing_target = guardian_command_assessment(
+            "cmd-guardian-missing-target",
+            "turn-guardian-missing-target",
+            GuardianAssessmentStatus::InProgress,
+        );
+        missing_target.target_item_id = None;
+        guardian_context
+            .apply_guardian_assessment_event(missing_target)
+            .await;
+        let eighth = recv_broadcast_message(&mut rx).await?;
+        match eighth {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::ItemGuardianApprovalReviewStarted(payload),
+            ) => {
+                assert_eq!(payload.review_id, "review-cmd-guardian-missing-target");
+                assert_eq!(payload.target_item_id, None);
+                assert_eq!(
+                    payload.review.status,
+                    GuardianApprovalReviewStatus::InProgress
+                );
             }
             other => bail!("unexpected message: {other:?}"),
         }
@@ -3590,10 +3850,10 @@ mod tests {
             network: Some(CoreNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(CoreFileSystemPermissions {
-                read: Some(vec![absolute_path(input_path)]),
-                write: Some(vec![absolute_path(output_path)]),
-            }),
+            file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                Some(vec![absolute_path(input_path)]),
+                Some(vec![absolute_path(output_path)]),
+            )),
         };
         let cases = vec![
             (
@@ -3620,10 +3880,10 @@ mod tests {
                     },
                 }),
                 CoreRequestPermissionProfile {
-                    file_system: Some(CoreFileSystemPermissions {
-                        read: None,
-                        write: Some(vec![absolute_path(output_path)]),
-                    }),
+                    file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                        /*read*/ None,
+                        Some(vec![absolute_path(output_path)]),
+                    )),
                     ..CoreRequestPermissionProfile::default()
                 },
             ),
@@ -3638,10 +3898,10 @@ mod tests {
                     },
                 }),
                 CoreRequestPermissionProfile {
-                    file_system: Some(CoreFileSystemPermissions {
-                        read: Some(vec![absolute_path(input_path)]),
-                        write: Some(vec![absolute_path(output_path)]),
-                    }),
+                    file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                        Some(vec![absolute_path(input_path)]),
+                        Some(vec![absolute_path(output_path)]),
+                    )),
                     ..CoreRequestPermissionProfile::default()
                 },
             ),
@@ -3809,6 +4069,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_complete_event(&event_turn_id),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3841,6 +4102,114 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn compact_turn_completed_turn_elides_bulky_command_and_tool_outputs() {
+        let turn = Turn {
+            id: "turn-1".to_string(),
+            items: vec![
+                ThreadItem::CommandExecution {
+                    id: "cmd-1".to_string(),
+                    command: "printf hi".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                    process_id: Some("1".to_string()),
+                    source: CommandExecutionSource::Agent,
+                    status: CommandExecutionStatus::Completed,
+                    command_actions: vec![V2ParsedCommand::Unknown {
+                        command: "printf hi".to_string(),
+                    }],
+                    aggregated_output: Some("large output".to_string()),
+                    exit_code: Some(0),
+                    duration_ms: Some(1),
+                },
+                ThreadItem::McpToolCall {
+                    id: "mcp-1".to_string(),
+                    server: "example".to_string(),
+                    tool: "search".to_string(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: json!({"q":"hi"}),
+                    mcp_app_resource_uri: None,
+                    result: Some(Box::new(McpToolCallResult {
+                        content: vec![json!({"text":"large tool output"})],
+                        structured_content: Some(json!({"rows":[{"value":"large"}]})),
+                        meta: None,
+                    })),
+                    error: None,
+                    duration_ms: Some(2),
+                },
+                ThreadItem::DynamicToolCall {
+                    id: "tool-1".to_string(),
+                    tool: "custom".to_string(),
+                    arguments: json!({"q":"hi"}),
+                    status: DynamicToolCallStatus::Completed,
+                    content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "large tool output".to_string(),
+                    }]),
+                    success: Some(true),
+                    duration_ms: Some(3),
+                },
+                ThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "final answer".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ],
+            status: TurnStatus::Completed,
+            error: None,
+            started_at: Some(1),
+            completed_at: Some(2),
+            duration_ms: Some(3),
+        };
+
+        let compact = compact_turn_completed_turn(turn);
+
+        assert_eq!(
+            compact.items,
+            vec![
+                ThreadItem::CommandExecution {
+                    id: "cmd-1".to_string(),
+                    command: "printf hi".to_string(),
+                    cwd: test_path_buf("/tmp").abs(),
+                    process_id: Some("1".to_string()),
+                    source: CommandExecutionSource::Agent,
+                    status: CommandExecutionStatus::Completed,
+                    command_actions: vec![V2ParsedCommand::Unknown {
+                        command: "printf hi".to_string(),
+                    }],
+                    aggregated_output: None,
+                    exit_code: Some(0),
+                    duration_ms: Some(1),
+                },
+                ThreadItem::McpToolCall {
+                    id: "mcp-1".to_string(),
+                    server: "example".to_string(),
+                    tool: "search".to_string(),
+                    status: McpToolCallStatus::Completed,
+                    arguments: json!({"q":"hi"}),
+                    mcp_app_resource_uri: None,
+                    result: None,
+                    error: None,
+                    duration_ms: Some(2),
+                },
+                ThreadItem::DynamicToolCall {
+                    id: "tool-1".to_string(),
+                    tool: "custom".to_string(),
+                    arguments: json!({"q":"hi"}),
+                    status: DynamicToolCallStatus::Completed,
+                    content_items: None,
+                    success: Some(true),
+                    duration_ms: Some(3),
+                },
+                ThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "final answer".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                },
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn test_handle_turn_interrupted_emits_interrupted_with_error() -> Result<()> {
         let conversation_id = ThreadId::new();
@@ -3868,6 +4237,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_aborted_event(&event_turn_id),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -3915,6 +4285,7 @@ mod tests {
             conversation_id,
             event_turn_id.clone(),
             turn_complete_event(&event_turn_id),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -4037,8 +4408,8 @@ mod tests {
                 unlimited: false,
                 balance: Some("5".to_string()),
             }),
-            spend_control: None,
             plan_type: None,
+            rate_limit_reached_type: None,
         };
 
         handle_token_count_event(
@@ -4122,6 +4493,7 @@ mod tests {
                 tool: "list_mcp_resources".to_string(),
                 arguments: Some(serde_json::json!({"server": ""})),
             },
+            mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
         };
 
         let thread_id = ThreadId::new().to_string();
@@ -4142,6 +4514,7 @@ mod tests {
                 tool: begin_event.invocation.tool,
                 status: McpToolCallStatus::InProgress,
                 arguments: serde_json::json!({"server": ""}),
+                mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -4182,6 +4555,7 @@ mod tests {
             conversation_a,
             a_turn1.clone(),
             turn_complete_event(&a_turn1),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -4203,6 +4577,7 @@ mod tests {
             conversation_b,
             b_turn1.clone(),
             turn_complete_event(&b_turn1),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -4214,6 +4589,7 @@ mod tests {
             conversation_a,
             a_turn2.clone(),
             turn_complete_event(&a_turn2),
+            /*analytics_events_client*/ None,
             &outgoing,
             &thread_state,
         )
@@ -4279,6 +4655,7 @@ mod tests {
                 tool: "list_mcp_resources".to_string(),
                 arguments: None,
             },
+            mcp_app_resource_uri: None,
         };
 
         let thread_id = ThreadId::new().to_string();
@@ -4299,6 +4676,7 @@ mod tests {
                 tool: begin_event.invocation.tool,
                 status: McpToolCallStatus::InProgress,
                 arguments: JsonValue::Null,
+                mcp_app_resource_uri: None,
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -4330,6 +4708,7 @@ mod tests {
                 tool: "list_mcp_resources".to_string(),
                 arguments: Some(serde_json::json!({"server": ""})),
             },
+            mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
             duration: Duration::from_nanos(92708),
             result: Ok(result),
         };
@@ -4352,13 +4731,14 @@ mod tests {
                 tool: end_event.invocation.tool,
                 status: McpToolCallStatus::Completed,
                 arguments: serde_json::json!({"server": ""}),
-                result: Some(McpToolCallResult {
+                mcp_app_resource_uri: Some("ui://widget/list-resources.html".to_string()),
+                result: Some(Box::new(McpToolCallResult {
                     content,
                     structured_content: None,
                     meta: Some(serde_json::json!({
                         "ui/resourceUri": "ui://widget/list-resources.html"
                     })),
-                }),
+                })),
                 error: None,
                 duration_ms: Some(0),
             },
@@ -4376,6 +4756,7 @@ mod tests {
                 tool: "list_mcp_resources".to_string(),
                 arguments: None,
             },
+            mcp_app_resource_uri: None,
             duration: Duration::from_millis(1),
             result: Err("boom".to_string()),
         };
@@ -4398,6 +4779,7 @@ mod tests {
                 tool: end_event.invocation.tool,
                 status: McpToolCallStatus::Failed,
                 arguments: JsonValue::Null,
+                mcp_app_resource_uri: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: "boom".to_string(),

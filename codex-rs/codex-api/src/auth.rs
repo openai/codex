@@ -1,33 +1,32 @@
-use codex_client::Request;
 use http::HeaderMap;
-use http::HeaderValue;
+use std::sync::Arc;
 
-/// Provides bearer and account identity information for API requests.
+/// Adds authentication headers to API requests.
 ///
 /// Implementations should be cheap and non-blocking; any asynchronous
 /// refresh or I/O should be handled by higher layers before requests
 /// reach this interface.
 pub trait AuthProvider: Send + Sync {
-    fn bearer_token(&self) -> Option<String>;
-    fn account_id(&self) -> Option<String> {
-        None
-    }
+    fn add_auth_headers(&self, headers: &mut HeaderMap);
 }
 
-pub(crate) fn add_auth_headers_to_header_map<A: AuthProvider>(auth: &A, headers: &mut HeaderMap) {
-    if let Some(token) = auth.bearer_token()
-        && let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}"))
-    {
-        let _ = headers.insert(http::header::AUTHORIZATION, header);
-    }
-    if let Some(account_id) = auth.account_id()
-        && let Ok(header) = HeaderValue::from_str(&account_id)
-    {
-        let _ = headers.insert("ChatGPT-Account-ID", header);
-    }
+/// Shared auth handle passed through API clients.
+pub type SharedAuthProvider = Arc<dyn AuthProvider>;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthHeaderTelemetry {
+    pub attached: bool,
+    pub name: Option<&'static str>,
 }
 
-pub(crate) fn add_auth_headers<A: AuthProvider>(auth: &A, mut req: Request) -> Request {
-    add_auth_headers_to_header_map(auth, &mut req.headers);
-    req
+pub fn auth_header_telemetry(auth: &dyn AuthProvider) -> AuthHeaderTelemetry {
+    let mut headers = HeaderMap::new();
+    auth.add_auth_headers(&mut headers);
+    let name = headers
+        .contains_key(http::header::AUTHORIZATION)
+        .then_some("authorization");
+    AuthHeaderTelemetry {
+        attached: name.is_some(),
+        name,
+    }
 }

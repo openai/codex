@@ -5,11 +5,25 @@ import type { GuardianApprovalReview } from "./GuardianApprovalReview";
 import type { GuardianApprovalReviewAction } from "./GuardianApprovalReviewAction";
 
 /**
- * [UNSTABLE] Temporary notification payload for guardian automatic approval
- * review. This shape is expected to change soon.
- *
- * TODO(ccunningham): Attach guardian review state to the reviewed tool item's
- * lifecycle instead of sending separate standalone review notifications so the
- * app-server API can persist and replay review state via `thread/read`.
+ * [UNSTABLE] Temporary notification payload for approval auto-review. This
+ * shape is expected to change soon.
  */
-export type ItemGuardianApprovalReviewStartedNotification = { threadId: string, turnId: string, targetItemId: string, review: GuardianApprovalReview, action: GuardianApprovalReviewAction, };
+export type ItemGuardianApprovalReviewStartedNotification = { threadId: string, turnId: string,
+/**
+ * Stable identifier for this review.
+ */
+reviewId: string,
+/**
+ * Identifier for the reviewed item or tool call when one exists.
+ *
+ * In most cases, one review maps to one target item. The exceptions are
+ * - execve reviews, where a single command may contain multiple execve
+ *   calls to review (only possible when using the shell_zsh_fork feature)
+ * - network policy reviews, where there is no target item
+ *
+ * A network call is triggered by a CommandExecution item, so having a
+ * target_item_id set to the CommandExecution item would be misleading
+ * because the review is about the network call, not the command execution.
+ * Therefore, target_item_id is set to None for network policy reviews.
+ */
+targetItemId: string | null, review: GuardianApprovalReview, action: GuardianApprovalReviewAction, };
