@@ -6628,6 +6628,28 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
 }
 
 #[tokio::test]
+async fn feature_requirements_accept_guardian_approval_legacy_alias() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                    entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
+                }),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::GuardianApproval));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn feature_requirements_reject_collab_legacy_alias() {
     let codex_home = TempDir::new().expect("tempdir");
 

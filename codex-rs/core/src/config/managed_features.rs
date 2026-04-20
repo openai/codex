@@ -17,6 +17,9 @@ use codex_features::Features;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 
+const AUTO_REVIEW_FEATURE_KEY: &str = "auto_review";
+const LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY: &str = "guardian_approval";
+
 /// Wrapper around [`Features`] which enforces constraints defined in
 /// `FeatureRequirementsToml` and provides normalization to ensure constraints
 /// are satisfied. Constraints are enforced on construction and mutation of
@@ -173,9 +176,19 @@ fn parse_feature_requirements(
     source: &RequirementSource,
 ) -> std::io::Result<BTreeMap<Feature, bool>> {
     let mut pinned_features = BTreeMap::new();
+    let auto_review_requirement_present = feature_requirements
+        .entries
+        .contains_key(AUTO_REVIEW_FEATURE_KEY);
     for (key, enabled) in feature_requirements.entries {
         if let Some(feature) = canonical_feature_for_key(&key) {
             pinned_features.insert(feature, enabled);
+            continue;
+        }
+
+        if key == LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY {
+            if !auto_review_requirement_present {
+                pinned_features.insert(Feature::GuardianApproval, enabled);
+            }
             continue;
         }
 
