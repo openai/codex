@@ -311,6 +311,17 @@ impl CodexAuth {
             .is_some_and(|t| t.id_token.is_fedramp_account())
     }
 
+    pub fn is_agent_identity_only(&self) -> bool {
+        self.get_current_auth_json().is_some_and(|auth| {
+            auth.tokens.is_none() && auth.agent_identity.is_some() && self.is_chatgpt_auth()
+        })
+    }
+
+    pub fn agent_identity_record(&self) -> Option<AgentIdentityAuthRecord> {
+        self.get_current_auth_json()
+            .and_then(|auth| auth.agent_identity)
+    }
+
     /// Returns `None` if `is_chatgpt_auth()` is false.
     pub fn get_account_email(&self) -> Option<String> {
         self.get_current_token_data().and_then(|t| t.id_token.email)
@@ -622,6 +633,23 @@ pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
 
     if let Some(expected_account_id) = config.forced_chatgpt_workspace_id.as_deref() {
         if !auth.is_chatgpt_auth() {
+            return Ok(());
+        }
+
+        if auth.is_agent_identity_only() {
+            let actual_account_id = auth
+                .agent_identity_record()
+                .map(|identity| identity.workspace_id);
+            if actual_account_id.as_deref() != Some(expected_account_id) {
+                return logout_with_message(
+                    &config.codex_home,
+                    format!(
+                        "Login is restricted to workspace {expected_account_id}, but current agent identity belongs to {actual_account_id:?}. Logging out."
+                    ),
+                    config.auth_credentials_store_mode,
+                );
+            }
+
             return Ok(());
         }
 
@@ -1545,6 +1573,10 @@ impl AuthManager {
     ) -> anyhow::Result<Option<AgentIdentityAuthRecord>> {
         if !auth.is_chatgpt_auth() {
             return Ok(None);
+        }
+
+        if auth.is_agent_identity_only() {
+            return Ok(auth.agent_identity_record());
         }
 
         let token_data = auth

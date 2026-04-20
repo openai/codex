@@ -74,6 +74,10 @@ impl BackgroundAgentTaskAuthMode {
     fn is_enabled(self) -> bool {
         matches!(self, Self::Enabled)
     }
+
+    fn is_enabled_for_auth(self, auth: &CodexAuth) -> bool {
+        self.is_enabled() || auth.is_agent_identity_only()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,7 +128,7 @@ struct AgentIdentityBinding {
     binding_id: String,
     chatgpt_account_id: String,
     chatgpt_user_id: Option<String>,
-    access_token: String,
+    access_token: Option<String>,
 }
 
 struct GeneratedAgentKeyMaterial {
@@ -166,7 +170,7 @@ impl BackgroundAgentTaskManager {
         &self,
         auth: &CodexAuth,
     ) -> Result<Option<String>> {
-        if !self.auth_mode.is_enabled() {
+        if !self.auth_mode.is_enabled_for_auth(auth) {
             debug!("skipping background agent task auth because agent identity is disabled");
             return Ok(None);
         }
@@ -314,12 +318,15 @@ impl BackgroundAgentTaskManager {
         let client = create_client();
         let url =
             agent_task_registration_url(&self.chatgpt_base_url, &stored_identity.agent_runtime_id);
-        let human_biscuit = self.mint_human_biscuit(binding, "POST", &url).await?;
-        let response = client
+        let mut request = client
             .post(&url)
-            .header("X-OpenAI-Authorization", human_biscuit)
             .json(&request_body)
-            .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
+            .timeout(AGENT_TASK_REGISTRATION_TIMEOUT);
+        if binding.access_token.is_some() {
+            let human_biscuit = self.mint_human_biscuit(binding, "POST", &url).await?;
+            request = request.header("X-OpenAI-Authorization", human_biscuit);
+        }
+        let response = request
             .send()
             .await
             .with_context(|| format!("failed to send background agent task request to {url}"))?;
@@ -353,11 +360,15 @@ impl BackgroundAgentTaskManager {
         target_url: &str,
     ) -> Result<String> {
         let url = agent_identity_biscuit_url(&self.chatgpt_base_url);
+        let access_token = binding
+            .access_token
+            .as_deref()
+            .context("ChatGPT access token is unavailable")?;
         let request_id = agent_identity_request_id()?;
         let client = create_client();
         let response = client
             .get(&url)
-            .bearer_auth(&binding.access_token)
+            .bearer_auth(access_token)
             .header("X-Request-Id", request_id.clone())
             .header("X-Original-Method", target_method)
             .header("X-Original-Url", target_url)
@@ -448,7 +459,7 @@ pub fn cached_background_agent_task_authorization_header_value(
     auth: &CodexAuth,
     auth_mode: BackgroundAgentTaskAuthMode,
 ) -> Result<Option<String>> {
-    if !auth_mode.is_enabled() {
+    if !auth_mode.is_enabled_for_auth(auth) {
         return Ok(None);
     }
 
@@ -551,6 +562,16 @@ impl AgentIdentityBinding {
             return None;
         }
 
+        if auth.is_agent_identity_only() {
+            let record = auth.agent_identity_record()?;
+            return Some(Self {
+                binding_id: format!("chatgpt-account-{}", record.workspace_id),
+                chatgpt_account_id: record.workspace_id,
+                chatgpt_user_id: record.chatgpt_user_id,
+                access_token: None,
+            });
+        }
+
         let token_data = auth.get_token_data().ok()?;
         let resolved_account_id =
             forced_workspace_id
@@ -567,7 +588,7 @@ impl AgentIdentityBinding {
                 .id_token
                 .chatgpt_user_id
                 .filter(|value| !value.is_empty()),
-            access_token: token_data.access_token,
+            access_token: Some(token_data.access_token),
         })
     }
 }
@@ -797,6 +818,31 @@ mod tests {
         assert_eq!(None, authorization_header_value);
     }
 
+    #[tokio::test]
+    async fn disabled_background_agent_task_auth_uses_agent_identity_only_auth() {
+        let auth = make_agent_identity_only_auth(
+            "account_id",
+            /*user_id*/ None,
+            "agent_123",
+            Some("task_123"),
+        );
+        let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
+        let manager = BackgroundAgentTaskManager::new_with_auth_mode(
+            auth_manager,
+            "https://chatgpt.com/backend-api".to_string(),
+            SessionSource::Cli,
+            BackgroundAgentTaskAuthMode::Disabled,
+        );
+
+        let authorization_header_value = manager
+            .authorization_header_value_for_auth(&auth)
+            .await
+            .expect("identity-only auth should not fail")
+            .expect("identity-only auth should return an agent assertion");
+
+        assert!(authorization_header_value.starts_with("AgentAssertion "));
+    }
+
     #[test]
     fn cached_background_agent_task_auth_honors_disabled_mode() {
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
@@ -826,5 +872,37 @@ mod tests {
 
         assert_eq!(None, disabled_authorization_header_value);
         assert!(enabled_authorization_header_value.is_some());
+    }
+
+    fn make_agent_identity_only_auth(
+        account_id: &str,
+        user_id: Option<&str>,
+        agent_runtime_id: &str,
+        background_task_id: Option<&str>,
+    ) -> CodexAuth {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let key_material = generate_agent_key_material().expect("generate key material");
+        crate::save_auth(
+            tempdir.path(),
+            &crate::AuthDotJson {
+                auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
+                openai_api_key: None,
+                tokens: None,
+                last_refresh: None,
+                agent_identity: Some(AgentIdentityAuthRecord {
+                    workspace_id: account_id.to_string(),
+                    chatgpt_user_id: user_id.map(ToOwned::to_owned),
+                    agent_runtime_id: agent_runtime_id.to_string(),
+                    agent_private_key: key_material.private_key_pkcs8_base64,
+                    registered_at: "2026-04-13T12:00:00Z".to_string(),
+                    background_task_id: background_task_id.map(ToOwned::to_owned),
+                }),
+            },
+            crate::AuthCredentialsStoreMode::File,
+        )
+        .expect("save auth");
+        CodexAuth::from_auth_storage(tempdir.path(), crate::AuthCredentialsStoreMode::File)
+            .expect("load auth")
+            .expect("auth")
     }
 }
