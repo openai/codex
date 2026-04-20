@@ -415,7 +415,7 @@ async fn ingest_rejected_turn_steer(
     .await;
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 request: Box::new(sample_turn_steer_request(
@@ -475,7 +475,7 @@ async fn ingest_turn_prerequisites(
         ingest_initialize(reducer, out).await;
         reducer
             .ingest(
-                AnalyticsFact::Response {
+                AnalyticsFact::ClientResponse {
                     connection_id: 7,
                     response: Box::new(sample_thread_start_response(
                         "thread-2", /*ephemeral*/ false, "gpt-5",
@@ -489,7 +489,7 @@ async fn ingest_turn_prerequisites(
 
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
@@ -499,7 +499,7 @@ async fn ingest_turn_prerequisites(
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
             },
@@ -851,7 +851,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_start_response(
                     "thread-no-client",
@@ -895,7 +895,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
 
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_resume_response(
                     "thread-1", /*ephemeral*/ true, "gpt-5",
@@ -975,7 +975,7 @@ async fn compaction_event_ingests_custom_fact() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_thread_resume_response_with_source(
                     "thread-1",
@@ -1856,7 +1856,7 @@ async fn accepted_turn_steer_emits_expected_event() {
     .await;
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 request: Box::new(sample_turn_steer_request(
@@ -1868,7 +1868,7 @@ async fn accepted_turn_steer_emits_expected_event() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 4)),
             },
@@ -2010,7 +2010,7 @@ async fn turn_start_error_response_discards_pending_start_request() {
     ingest_initialize(&mut reducer, &mut out).await;
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 request: Box::new(sample_turn_start_request("thread-2", /*request_id*/ 3)),
@@ -2034,7 +2034,7 @@ async fn turn_start_error_response_discards_pending_start_request() {
     // failed turn/start request and attach request-scoped connection metadata.
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_start_response("turn-2", /*request_id*/ 3)),
             },
@@ -2151,7 +2151,7 @@ async fn accepted_steers_increment_turn_steer_count() {
 
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 request: Box::new(sample_turn_steer_request(
@@ -2163,7 +2163,7 @@ async fn accepted_steers_increment_turn_steer_count() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 4)),
             },
@@ -2173,7 +2173,7 @@ async fn accepted_steers_increment_turn_steer_count() {
 
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(5),
                 request: Box::new(sample_turn_steer_request(
@@ -2197,7 +2197,7 @@ async fn accepted_steers_increment_turn_steer_count() {
 
     reducer
         .ingest(
-            AnalyticsFact::Request {
+            AnalyticsFact::ClientRequest {
                 connection_id: 7,
                 request_id: RequestId::Integer(6),
                 request: Box::new(sample_turn_steer_request(
@@ -2209,7 +2209,7 @@ async fn accepted_steers_increment_turn_steer_count() {
         .await;
     reducer
         .ingest(
-            AnalyticsFact::Response {
+            AnalyticsFact::ClientResponse {
                 connection_id: 7,
                 response: Box::new(sample_turn_steer_response("turn-2", /*request_id*/ 6)),
             },
