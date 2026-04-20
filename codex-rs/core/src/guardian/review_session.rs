@@ -592,6 +592,7 @@ async fn run_review_on_session(
                     approval_policy: AskForApproval::Never,
                     approvals_reviewer: None,
                     sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                    permission_profile: None,
                     model: params.model.clone(),
                     effort: params.reasoning_effort,
                     summary: Some(params.reasoning_summary),
