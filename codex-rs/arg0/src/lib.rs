@@ -481,6 +481,13 @@ mod tests {
     }
 
     #[test]
+    fn records_arg0_test_marker() {
+        unsafe { std::env::set_var("CODEX_ARG0_TEST_MARKER", "1") };
+        assert_eq!(std::env::var("CODEX_ARG0_TEST_MARKER").as_deref(), Ok("1"));
+        unsafe { std::env::remove_var("CODEX_ARG0_TEST_MARKER") };
+    }
+
+    #[test]
     fn janitor_skips_dirs_without_lock_file() -> std::io::Result<()> {
         let root = tempfile::tempdir()?;
         let dir = root.path().join("no-lock");
