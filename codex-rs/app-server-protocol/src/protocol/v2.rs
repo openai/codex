@@ -9753,27 +9753,13 @@ mod tests {
 
     #[test]
     fn turn_start_params_preserve_explicit_null_service_tier() {
-        let cwd = test_absolute_path();
         let params: TurnStartParams = serde_json::from_value(json!({
             "threadId": "thread_123",
             "input": [],
-            "environments": [
-                {
-                    "environmentId": "local",
-                    "cwd": cwd
-                }
-            ],
             "serviceTier": null
         }))
         .expect("params should deserialize");
         assert_eq!(params.service_tier, Some(None));
-        assert_eq!(
-            params.environments,
-            Some(vec![TurnEnvironmentParams {
-                environment_id: "local".to_string(),
-                cwd,
-            }])
-        );
 
         let serialized = serde_json::to_value(&params).expect("params should serialize");
         assert_eq!(
@@ -9801,6 +9787,90 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn turn_start_params_round_trip_environments() {
+        let cwd = test_absolute_path();
+        let params: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "environments": [
+                {
+                    "environmentId": "local",
+                    "cwd": cwd
+                }
+            ],
+        }))
+        .expect("params should deserialize");
+
+        assert_eq!(
+            params.environments,
+            Some(vec![TurnEnvironmentParams {
+                environment_id: "local".to_string(),
+                cwd: cwd.clone(),
+            }])
+        );
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+            Some("turn/start.environments")
+        );
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("environments"),
+            Some(&json!([
+                {
+                    "environmentId": "local",
+                    "cwd": cwd
+                }
+            ]))
+        );
+    }
+
+    #[test]
+    fn turn_start_params_preserve_empty_environments() {
+        let params: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "environments": [],
+        }))
+        .expect("params should deserialize");
+
+        assert_eq!(params.environments, Some(Vec::new()));
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&params),
+            Some("turn/start.environments")
+        );
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(serialized.get("environments"), Some(&json!([])));
+    }
+
+    #[test]
+    fn turn_start_params_treat_null_or_omitted_environments_as_default() {
+        let null_environments: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+            "environments": null,
+        }))
+        .expect("params should deserialize");
+        let omitted_environments: TurnStartParams = serde_json::from_value(json!({
+            "threadId": "thread_123",
+            "input": [],
+        }))
+        .expect("params should deserialize");
+
+        assert_eq!(null_environments.environments, None);
+        assert_eq!(omitted_environments.environments, None);
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&null_environments),
+            None
+        );
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&omitted_environments),
+            None
+        );
     }
 
     #[test]
