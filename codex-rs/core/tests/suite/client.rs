@@ -1940,7 +1940,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
     )
     .await;
     let TestCodex { codex, .. } = test_codex()
-        .with_model("gpt-5.4")
+        .with_model("test-no-verbosity")
         .with_config(|config| {
             config.model_verbosity = Some(Verbosity::High);
         })

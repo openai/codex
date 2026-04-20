@@ -859,7 +859,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.4");
+    let mut builder = test_codex().with_model("gpt-5.2");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-command";
