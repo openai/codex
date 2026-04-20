@@ -1030,6 +1030,92 @@ async fn agent_turn_complete_notification_does_not_reuse_stale_copy_source() {
 }
 
 #[tokio::test]
+async fn slash_copy_uses_latest_surviving_response_after_rollback() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "user-1".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "foo".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "foo response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "user-2".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "bar".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-2".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "bar response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+    assert_eq!(chat.last_agent_markdown_text(), Some("bar response"));
+
+    chat.truncate_agent_copy_history_to_user_turn_count(/*user_turn_count*/ 1);
+
+    assert_eq!(chat.last_agent_markdown_text(), Some("foo response"));
+    chat.copy_last_agent_markdown_with(|markdown| {
+        assert_eq!(markdown, "foo response");
+        Ok(None)
+    });
+}
+
+#[tokio::test]
+async fn slash_copy_reports_when_rewind_exceeds_retained_copy_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "user-1".into(),
+        msg: EventMsg::UserMessage(UserMessageEvent {
+            message: "foo".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "agent-1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "foo response".to_string(),
+            phase: None,
+            memory_citation: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.truncate_agent_copy_history_to_user_turn_count(/*user_turn_count*/ 0);
+    chat.dispatch_command(SlashCommand::Copy);
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(
+            "Cannot copy that response after rewinding. Only the most recent 32 responses are available to /copy."
+        ),
+        "expected evicted-history message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_exit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
