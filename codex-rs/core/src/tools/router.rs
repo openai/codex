@@ -298,7 +298,10 @@ impl ToolRouter {
             payload,
         };
 
-        if let Some(result) = crate::tool_interceptors::maybe_intercept(&invocation).await? {
+        let tool_schema = self.find_spec(&invocation.tool_name);
+        if let Some(result) =
+            crate::tool_interceptors::maybe_intercept(&invocation, tool_schema.as_ref()).await?
+        {
             return Ok(result);
         }
 

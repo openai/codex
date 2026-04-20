@@ -2857,6 +2857,10 @@
       "description": "Suppress warnings about unstable (under development) features.",
       "type": "boolean"
     },
+    "tool_interceptor": {
+      "description": "Local HTTP server that can replace tool call outputs before real dispatch.",
+      "type": "string"
+    },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",
       "format": "uint",

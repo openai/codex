@@ -4857,6 +4857,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
+            tool_interceptor: None,
             tool_suggest: ToolSuggestConfig::default(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
@@ -5007,6 +5008,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
+        tool_interceptor: None,
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
@@ -5155,6 +5157,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
+        tool_interceptor: None,
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
@@ -5288,6 +5291,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
+        tool_interceptor: None,
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
@@ -6671,6 +6675,30 @@ discoverables = [
             ],
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_interceptor_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+tool_interceptor = "http://127.0.0.1:8765"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    let expected = "http://127.0.0.1:8765".to_string();
+    assert_eq!(cfg.tool_interceptor, Some(expected.clone()));
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(config.tool_interceptor, Some(expected));
     Ok(())
 }
 

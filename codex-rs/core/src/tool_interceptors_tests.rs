@@ -1,13 +1,15 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use codex_config::types::ToolInterceptorHandlerToml;
-use codex_config::types::ToolInterceptorRuleToml;
-use codex_config::types::ToolInterceptorsToml;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_tools::ToolName;
 use pretty_assertions::assert_eq;
+use serde_json::json;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 use super::maybe_intercept;
 use crate::session::tests::make_session_and_context;
@@ -16,59 +18,41 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
 
-fn python() -> Option<std::path::PathBuf> {
-    which::which("python3")
-        .or_else(|_| which::which("python"))
-        .ok()
-}
-
 fn tracker() -> SharedTurnDiffTracker {
     Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()))
 }
 
-#[tokio::test]
-async fn function_tool_call_uses_interceptor_output() -> anyhow::Result<()> {
-    let Some(python) = python() else {
-        return Ok(());
-    };
-
-    let temp_dir = tempfile::tempdir()?;
-    let handler_path = temp_dir.path().join("handler.py");
-    std::fs::write(
-        &handler_path,
-        r#"
-import json
-import sys
-
-request = json.load(sys.stdin)
-arguments = request["payload"]["arguments_json"]
-print(json.dumps({
-    "output": f"{request['operation']}:{request['tool_name']}:{arguments['cmd']}",
-    "success": True,
-}))
-"#,
-    )?;
-
+async fn turn_with_interceptor(
+    interceptor_url: String,
+) -> (
+    crate::session::session::Session,
+    crate::session::turn_context::TurnContext,
+) {
     let (session, mut turn) = make_session_and_context().await;
     let mut config = (*turn.config).clone();
-    config.tool_interceptors = Some(ToolInterceptorsToml {
-        handlers: HashMap::from([(
-            "python".to_string(),
-            ToolInterceptorHandlerToml {
-                command: python.to_string_lossy().to_string(),
-                args: vec![handler_path.to_string_lossy().to_string()],
-                cwd: None,
-                env: HashMap::new(),
-            },
-        )]),
-        rules: vec![ToolInterceptorRuleToml {
-            tool: "exec_command".to_string(),
-            handler: "python".to_string(),
-            operation: Some("exec".to_string()),
-        }],
-    });
+    config.tool_interceptor = Some(interceptor_url);
     turn.config = Arc::new(config);
+    (session, turn)
+}
 
+#[tokio::test]
+async fn function_tool_call_uses_interceptor_output() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/tool-call"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "protocol_version": 1,
+            "action": "replace",
+            "result": {
+                "type": "text",
+                "text": "synthetic exec output",
+                "success": true,
+            },
+        })))
+        .mount(&server)
+        .await;
+
+    let (session, turn) = turn_with_interceptor(server.uri()).await;
     let invocation = ToolInvocation {
         session: Arc::new(session),
         turn: Arc::new(turn),
@@ -80,9 +64,9 @@ print(json.dumps({
         },
     };
 
-    let result = maybe_intercept(&invocation)
+    let result = maybe_intercept(&invocation, None)
         .await?
-        .expect("interceptor should match");
+        .expect("interceptor should replace");
     let response = result.into_response();
 
     let ResponseInputItem::FunctionCallOutput { call_id, output } = response else {
@@ -92,60 +76,64 @@ print(json.dumps({
     assert_eq!(output.success, Some(true));
     assert_eq!(
         output.body,
-        FunctionCallOutputBody::Text("exec:exec_command:date".to_string())
+        FunctionCallOutputBody::Text("synthetic exec output".to_string())
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn mcp_tool_call_uses_interceptor_mcp_result() -> anyhow::Result<()> {
-    let Some(python) = python() else {
-        return Ok(());
+async fn tool_call_passes_through_when_interceptor_passes() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/tool-call"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "protocol_version": 1,
+            "action": "continue",
+        })))
+        .mount(&server)
+        .await;
+
+    let (session, turn) = turn_with_interceptor(server.uri()).await;
+    let invocation = ToolInvocation {
+        session: Arc::new(session),
+        turn: Arc::new(turn),
+        tracker: tracker(),
+        call_id: "call-pass".to_string(),
+        tool_name: ToolName::plain("exec_command"),
+        payload: ToolPayload::Function {
+            arguments: serde_json::json!({"cmd": "date"}).to_string(),
+        },
     };
 
-    let temp_dir = tempfile::tempdir()?;
-    let handler_path = temp_dir.path().join("handler.py");
-    std::fs::write(
-        &handler_path,
-        r#"
-import json
-import sys
+    assert!(maybe_intercept(&invocation, None).await?.is_none());
+    Ok(())
+}
 
-request = json.load(sys.stdin)
-print(json.dumps({
-    "mcp_result": {
-        "content": [{
-            "type": "text",
-            "text": f"fake gmail {request['payload']['arguments_json']['query']}",
-        }],
-        "isError": False,
-    }
-}))
-"#,
-    )?;
+#[tokio::test]
+async fn mcp_tool_call_uses_interceptor_mcp_result() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/tool-call"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "protocol_version": 1,
+            "action": "replace",
+            "result": {
+                "type": "mcp",
+                "value": {
+                    "content": [{
+                        "type": "text",
+                        "text": "fake gmail in:inbox",
+                    }],
+                    "isError": false,
+                },
+            },
+        })))
+        .mount(&server)
+        .await;
 
     let tool_name = ToolName::namespaced("mcp__codex_apps__gmail", "_search_emails");
-    let (session, mut turn) = make_session_and_context().await;
-    let mut config = (*turn.config).clone();
-    config.tool_interceptors = Some(ToolInterceptorsToml {
-        handlers: HashMap::from([(
-            "python".to_string(),
-            ToolInterceptorHandlerToml {
-                command: python.to_string_lossy().to_string(),
-                args: vec![handler_path.to_string_lossy().to_string()],
-                cwd: None,
-                env: HashMap::new(),
-            },
-        )]),
-        rules: vec![ToolInterceptorRuleToml {
-            tool: tool_name.display(),
-            handler: "python".to_string(),
-            operation: None,
-        }],
-    });
-    turn.config = Arc::new(config);
-
+    let (session, turn) = turn_with_interceptor(server.uri()).await;
     let invocation = ToolInvocation {
         session: Arc::new(session),
         turn: Arc::new(turn),
@@ -159,9 +147,9 @@ print(json.dumps({
         },
     };
 
-    let result = maybe_intercept(&invocation)
+    let result = maybe_intercept(&invocation, None)
         .await?
-        .expect("interceptor should match");
+        .expect("interceptor should replace");
     let response = result.into_response();
 
     let ResponseInputItem::FunctionCallOutput { call_id, output } = response else {
