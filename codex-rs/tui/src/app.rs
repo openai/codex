@@ -1,3 +1,8 @@
+//! Top-level TUI application state and runtime wiring.
+//!
+//! This module owns the `App` struct, shared imports, and the high-level run loop that coordinates
+//! the focused app submodules.
+
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
