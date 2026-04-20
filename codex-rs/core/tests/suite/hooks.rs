@@ -3,7 +3,10 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_app_server_protocol::ConfigLayerSource;
+use codex_core::config::Config;
 use codex_core::config::Constrained;
+use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::NetworkConstraints;
@@ -20,7 +23,9 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -575,6 +580,147 @@ fn ev_message_item_done(id: &str, text: &str) -> Value {
 
 fn sse_event(event: Value) -> String {
     sse(vec![event])
+}
+
+fn enable_managed_hooks_only(config: &mut Config) -> Result<()> {
+    let system_dir = config.codex_home.join("managed");
+    let system_config_file =
+        AbsolutePathBuf::from_absolute_path(system_dir.join(codex_config::CONFIG_TOML_FILE))
+            .context("absolute managed config path")?;
+    let mut layers = config
+        .config_layer_stack
+        .get_layers(
+            codex_config::ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    layers.insert(
+        0,
+        ConfigLayerEntry::new(
+            ConfigLayerSource::System {
+                file: system_config_file,
+            },
+            toml::Value::Table(Default::default()),
+        ),
+    );
+
+    let mut requirements = config.config_layer_stack.requirements().clone();
+    requirements.allow_managed_hooks_only = Some(Sourced::new(
+        /*value*/ true,
+        RequirementSource::CloudRequirements,
+    ));
+    let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
+    requirements_toml.allow_managed_hooks_only = Some(true);
+    config.config_layer_stack = ConfigLayerStack::new(layers, requirements, requirements_toml)
+        .context("rebuild config layer stack with managed hooks requirement")?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_hooks_emit_startup_warning() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_session_start_hook_recording_transcript(home) {
+                panic!("failed to write session start hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    let warning = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(WarningEvent { message })
+                if message.contains("Hooks run arbitrary shell commands outside the sandbox")
+        )
+    })
+    .await;
+    let EventMsg::Warning(WarningEvent { message }) = warning else {
+        panic!("expected warning event");
+    };
+    assert!(message.contains("hooks.json"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_hooks_only_skips_user_hooks() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello from managed hook test"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            let system_dir = home.join("managed");
+            fs::create_dir_all(&system_dir).expect("create managed hooks dir");
+            write_session_start_hook_recording_transcript(&system_dir)
+                .expect("write managed session start hook");
+            write_session_start_hook_recording_transcript(home)
+                .expect("write user session start hook");
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            if let Err(error) = enable_managed_hooks_only(config) {
+                panic!("failed to enable managed-hooks-only test config: {error:#}");
+            }
+        });
+    let test = builder.build(&server).await?;
+
+    let warning = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::Warning(WarningEvent { message })
+                if message.contains("skipping hooks config")
+                    && message.contains("allow_managed_hooks_only")
+        )
+    })
+    .await;
+    let EventMsg::Warning(WarningEvent { message }) = warning else {
+        panic!("expected warning event");
+    };
+    assert!(
+        message.contains(
+            test.codex_home_path()
+                .join("hooks.json")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+
+    test.submit_turn("hello").await?;
+
+    let managed_hook_inputs =
+        read_session_start_hook_inputs(&test.codex_home_path().join("managed"))?;
+    assert_eq!(managed_hook_inputs.len(), 1);
+    let user_hook_log_path = test.codex_home_path().join("session_start_hook_log.jsonl");
+    assert!(
+        !user_hook_log_path.exists(),
+        "user hook should be skipped when managed hooks only is enabled"
+    );
+
+    Ok(())
 }
 
 fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
