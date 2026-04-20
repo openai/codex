@@ -6906,7 +6906,7 @@ async fn set_thread_goal_same_objective_preserves_usage_accounting() -> anyhow::
             /*time_delta_seconds*/ 123,
             /*token_delta*/ 456,
             codex_state::ThreadGoalAccountingMode::ActiveOnly,
-            /*expected_created_at_ms*/ None,
+            /*expected_goal_id*/ None,
         )
         .await?;
     let original_goal = state_db
