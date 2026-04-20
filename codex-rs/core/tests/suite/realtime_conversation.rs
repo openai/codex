@@ -2480,7 +2480,7 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: text from realtime</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>text from realtime</input>\n  <transcript_delta>user: text from realtime</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -2562,14 +2562,14 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>assistant: assistant context\nuser: delegated query\nassistant: assist confirm</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>ignored</input>\n  <transcript_delta>assistant: assistant context\nuser: delegated query\nassistant: assist confirm\nuser: ignored</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -> Result<()> {
+async fn inbound_handoff_request_keeps_transcript_history_after_each_handoff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
@@ -2677,13 +2677,13 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
 
     let first_user_texts = requests[0].message_input_texts("user");
     assert!(first_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: first question</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>first question</input>\n  <transcript_delta>user: first question</transcript_delta>\n</realtime_delegation>"));
 
     let second_user_texts = requests[1].message_input_texts("user");
     assert!(second_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: second question</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first question\nuser: second question</transcript_delta>\n</realtime_delegation>"));
     assert!(!second_user_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: first question\nuser: second question</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>second question</input>\n  <transcript_delta>user: first questionsecond question</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     Ok(())
@@ -3207,11 +3207,11 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
         !first_texts
             .iter()
             .any(|text| text
-                == "<realtime_delegation>\n  <input>user: steer via realtime</input>\n</realtime_delegation>")
+                == "<realtime_delegation>\n  <input>steer via realtime</input>\n  <transcript_delta>user: steer via realtime</transcript_delta>\n</realtime_delegation>")
     );
     assert!(second_texts.iter().any(|text| text == "first prompt"));
     assert!(second_texts.iter().any(|text| text
-        == "<realtime_delegation>\n  <input>user: steer via realtime</input>\n</realtime_delegation>"));
+        == "<realtime_delegation>\n  <input>steer via realtime</input>\n  <transcript_delta>user: steer via realtime</transcript_delta>\n</realtime_delegation>"));
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
@@ -3327,7 +3327,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let first_texts = message_input_texts(&first_body, "user");
     let expected_text = format!(
-        "<realtime_delegation>\n  <input>user: {delegated_text}</input>\n</realtime_delegation>"
+        "<realtime_delegation>\n  <input>{delegated_text}</input>\n  <transcript_delta>user: {delegated_text}</transcript_delta>\n</realtime_delegation>"
     );
     assert!(first_texts.iter().any(|text| text == &expected_text));
 
