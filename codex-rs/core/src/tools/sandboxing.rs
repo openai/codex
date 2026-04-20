@@ -231,23 +231,25 @@ pub(crate) fn sandbox_override_for_first_attempt(
     exec_approval_requirement: &ExecApprovalRequirement,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> SandboxOverride {
-    // Approval may widen execution, but it must not silently discard explicit
-    // read-deny carveouts by running the first attempt outside the sandbox.
+    // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
+    // which supersedes `with_additional_permissions` sandboxed execution hints.
+    if matches!(
+        exec_approval_requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            ..
+        }
+    ) {
+        return SandboxOverride::BypassSandboxFirstAttempt;
+    }
+
+    // Deny-read restrictions suppress explicit escalation because that path
+    // would otherwise discard the filesystem policy entirely.
     if file_system_sandbox_policy.has_denied_read_restrictions() {
         return SandboxOverride::NoOverride;
     }
 
-    // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
-    // which supersedes `with_additional_permissions` sandboxed execution hints.
-    if sandbox_permissions.requires_escalated_permissions()
-        || matches!(
-            exec_approval_requirement,
-            ExecApprovalRequirement::Skip {
-                bypass_sandbox: true,
-                ..
-            }
-        )
-    {
+    if sandbox_permissions.requires_escalated_permissions() {
         SandboxOverride::BypassSandboxFirstAttempt
     } else {
         SandboxOverride::NoOverride
