@@ -166,6 +166,7 @@ pub(super) async fn user_input_or_turn_inner(
                     personality,
                     app_server_client_name: None,
                     app_server_client_version: None,
+                    environment_selections: None,
                 },
                 None,
                 environments,
@@ -1077,6 +1078,7 @@ pub(super) async fn submission_loop(
                     service_tier,
                     collaboration_mode,
                     personality,
+                    environments,
                 } => {
                     let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                         collab_mode
@@ -1101,6 +1103,7 @@ pub(super) async fn submission_loop(
                             reasoning_summary: summary,
                             service_tier,
                             personality,
+                            environment_selections: environments,
                             ..Default::default()
                         },
                     )
