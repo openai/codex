@@ -60,7 +60,6 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
-use crate::status::format_tokens_compact;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -102,8 +101,6 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
-use codex_app_server_protocol::ThreadGoal;
-use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryMode;
@@ -177,8 +174,6 @@ use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 
-const THREAD_UNSUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(2);
-
 mod agent_navigation;
 mod app_server_adapter;
 pub(crate) mod app_server_requests;
@@ -186,6 +181,8 @@ mod loaded_threads;
 mod pending_interactive_replay;
 mod replay_filter;
 mod side;
+mod thread_goal_actions;
+mod thread_lifecycle;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
@@ -268,33 +265,6 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
         },
         _ => None,
     }
-}
-
-fn goal_status_label(status: ThreadGoalStatus) -> &'static str {
-    match status {
-        ThreadGoalStatus::Active => "active",
-        ThreadGoalStatus::Paused => "paused",
-        ThreadGoalStatus::BudgetLimited => "limited by budget",
-        ThreadGoalStatus::Complete => "complete",
-    }
-}
-
-fn goal_usage_summary(goal: &ThreadGoal) -> String {
-    let mut parts = vec![format!("Objective: {}", goal.objective)];
-    if goal.time_used_seconds > 0 {
-        parts.push(format!(
-            "Time: {}.",
-            crate::goal_display::format_goal_elapsed_seconds(goal.time_used_seconds)
-        ));
-    }
-    if let Some(token_budget) = goal.token_budget {
-        parts.push(format!(
-            "Tokens: {}/{}.",
-            format_tokens_compact(goal.tokens_used),
-            format_tokens_compact(token_budget)
-        ));
-    }
-    parts.join(" ")
 }
 
 fn default_exec_approval_decisions(
@@ -1765,145 +1735,6 @@ impl App {
         self.has_emitted_history_lines = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
-    }
-
-    async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) -> Result<()> {
-        if let Some(thread_id) = self.chat_widget.thread_id() {
-            // Clear any in-flight rollback guard when switching threads.
-            self.backtrack.pending_rollback = None;
-            Self::unsubscribe_thread_with_timeout(app_server, thread_id).await?;
-            self.abort_thread_event_listener(thread_id);
-        }
-        Ok(())
-    }
-
-    async fn unsubscribe_thread_with_timeout(
-        app_server: &mut AppServerSession,
-        thread_id: ThreadId,
-    ) -> Result<()> {
-        match tokio::time::timeout(
-            THREAD_UNSUBSCRIBE_TIMEOUT,
-            app_server.thread_unsubscribe(thread_id),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                tracing::warn!("failed to unsubscribe thread {thread_id}: {err}");
-                return Err(err);
-            }
-            Err(_) => {
-                tracing::warn!("timed out unsubscribing thread {thread_id}");
-                return Err(color_eyre::eyre::eyre!(
-                    "timed out unsubscribing thread {thread_id}"
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
-        if let Some(handle) = self.thread_event_listener_tasks.remove(&thread_id) {
-            handle.abort();
-        }
-    }
-
-    fn abort_all_thread_event_listeners(&mut self) {
-        for handle in self
-            .thread_event_listener_tasks
-            .drain()
-            .map(|(_, handle)| handle)
-        {
-            handle.abort();
-        }
-    }
-
-    fn ensure_thread_channel(&mut self, thread_id: ThreadId) -> &mut ThreadEventChannel {
-        self.thread_event_channels
-            .entry(thread_id)
-            .or_insert_with(|| ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY))
-    }
-
-    async fn set_thread_active(&mut self, thread_id: ThreadId, active: bool) {
-        if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
-            let mut store = channel.store.lock().await;
-            store.active = active;
-        }
-    }
-
-    async fn activate_thread_channel(&mut self, thread_id: ThreadId) {
-        if self.active_thread_id.is_some() {
-            return;
-        }
-        self.set_thread_active(thread_id, /*active*/ true).await;
-        let receiver = if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
-            channel.receiver.take()
-        } else {
-            None
-        };
-        self.active_thread_id = Some(thread_id);
-        self.active_thread_rx = receiver;
-        self.refresh_pending_thread_approvals().await;
-    }
-
-    async fn store_active_thread_receiver(&mut self) {
-        let Some(active_id) = self.active_thread_id else {
-            return;
-        };
-        let input_state = self.chat_widget.capture_thread_input_state();
-        if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
-            let receiver = self.active_thread_rx.take();
-            let mut store = channel.store.lock().await;
-            store.active = false;
-            store.input_state = input_state;
-            if let Some(receiver) = receiver {
-                channel.receiver = Some(receiver);
-            }
-        }
-    }
-
-    async fn activate_thread_for_replay(
-        &mut self,
-        thread_id: ThreadId,
-    ) -> Option<(mpsc::Receiver<ThreadBufferedEvent>, ThreadEventSnapshot)> {
-        let channel = self.thread_event_channels.get_mut(&thread_id)?;
-        let receiver = channel.receiver.take()?;
-        let mut store = channel.store.lock().await;
-        store.active = true;
-        let snapshot = store.snapshot();
-        Some((receiver, snapshot))
-    }
-
-    async fn clear_active_thread(&mut self) {
-        if let Some(active_id) = self.active_thread_id.take() {
-            self.set_thread_active(active_id, /*active*/ false).await;
-        }
-        self.active_thread_rx = None;
-        self.refresh_pending_thread_approvals().await;
-    }
-
-    async fn note_thread_outbound_op(&mut self, thread_id: ThreadId, op: &AppCommand) {
-        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
-            return;
-        };
-        let mut store = channel.store.lock().await;
-        store.note_outbound_op(op);
-    }
-
-    async fn note_active_thread_outbound_op(&mut self, op: &AppCommand) {
-        if !ThreadEventStore::op_can_change_pending_replay_state(op) {
-            return;
-        }
-        let Some(thread_id) = self.active_thread_id else {
-            return;
-        };
-        self.note_thread_outbound_op(thread_id, op).await;
-    }
-
-    async fn active_turn_id_for_thread(&self, thread_id: ThreadId) -> Option<String> {
-        let channel = self.thread_event_channels.get(&thread_id)?;
-        let store = channel.store.lock().await;
-        store.active_turn_id().map(ToOwned::to_owned)
     }
 
     fn thread_label(&self, thread_id: ThreadId) -> String {
@@ -4722,75 +4553,6 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    async fn open_thread_goal_menu(
-        &mut self,
-        app_server: &mut AppServerSession,
-        thread_id: ThreadId,
-    ) {
-        let response = match app_server.thread_goal_get(thread_id).await {
-            Ok(response) => response,
-            Err(err) => {
-                self.chat_widget
-                    .add_error_message(format!("Failed to read thread goal: {err}"));
-                return;
-            }
-        };
-
-        let Some(goal) = response.goal else {
-            self.chat_widget.add_info_message(
-                "Usage: /goal <objective, optionally with a time or token budget>".to_string(),
-                Some("No goal is currently set.".to_string()),
-            );
-            return;
-        };
-
-        self.chat_widget.open_goal_menu(thread_id, goal);
-    }
-
-    async fn set_thread_goal_status(
-        &mut self,
-        app_server: &mut AppServerSession,
-        thread_id: ThreadId,
-        status: ThreadGoalStatus,
-    ) {
-        match app_server
-            .thread_goal_set(
-                thread_id,
-                /*objective*/ None,
-                Some(status),
-                /*token_budget*/ None,
-            )
-            .await
-        {
-            Ok(response) => self.chat_widget.add_info_message(
-                format!("Goal {}", goal_status_label(response.goal.status)),
-                Some(goal_usage_summary(&response.goal)),
-            ),
-            Err(err) => self
-                .chat_widget
-                .add_error_message(format!("Failed to update thread goal: {err}")),
-        }
-    }
-
-    async fn clear_thread_goal(&mut self, app_server: &mut AppServerSession, thread_id: ThreadId) {
-        match app_server.thread_goal_clear(thread_id).await {
-            Ok(response) => {
-                if response.cleared {
-                    self.chat_widget
-                        .add_info_message("Goal cleared".to_string(), /*hint*/ None);
-                } else {
-                    self.chat_widget.add_info_message(
-                        "No goal to clear".to_string(),
-                        Some("This thread does not currently have a goal.".to_string()),
-                    );
-                }
-            }
-            Err(err) => self
-                .chat_widget
-                .add_error_message(format!("Failed to clear thread goal: {err}")),
-        }
-    }
-
     async fn handle_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -7313,31 +7075,6 @@ mod tests {
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
-    }
-
-    fn test_thread_goal(token_budget: Option<i64>, tokens_used: i64) -> ThreadGoal {
-        ThreadGoal {
-            thread_id: "thread-1".to_string(),
-            objective: "Complete the task described in ../gameboy-long-running-prompt5.txt"
-                .to_string(),
-            status: ThreadGoalStatus::BudgetLimited,
-            token_budget,
-            tokens_used,
-            time_used_seconds: 120,
-            created_at: 0,
-            updated_at: 0,
-        }
-    }
-
-    #[test]
-    fn goal_usage_summary_formats_time_and_budgeted_tokens() {
-        assert_eq!(
-            goal_usage_summary(&test_thread_goal(
-                /*token_budget*/ Some(50_000),
-                /*tokens_used*/ 63_876,
-            )),
-            "Objective: Complete the task described in ../gameboy-long-running-prompt5.txt Time: 2m. Tokens: 63.9K/50K."
-        );
     }
 
     #[test]
