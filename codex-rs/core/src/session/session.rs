@@ -26,7 +26,6 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     pub(super) js_repl: Arc<JsReplHandle>,
     pub(super) next_internal_sub_id: AtomicU64,
-    pub(super) agent_task_registration_lock: Semaphore,
 }
 
 #[derive(Clone)]
@@ -709,7 +708,6 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
-            agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -750,6 +748,7 @@ impl Session {
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
         sess.start_skills_watcher_listener();
+        sess.start_agent_identity_registration();
         let mut required_mcp_servers: Vec<String> = mcp_servers
             .iter()
             .filter(|(_, server)| server.enabled && server.required)
@@ -836,7 +835,6 @@ impl Session {
 
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
-        sess.start_agent_identity_registration();
         {
             let mut state = sess.state.lock().await;
             state.set_pending_session_start_source(Some(session_start_source));
