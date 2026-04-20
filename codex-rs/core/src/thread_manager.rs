@@ -512,6 +512,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
         ))
         .await
     }
@@ -524,6 +525,7 @@ impl ThreadManager {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
+        environment_selections: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
     ) -> CodexResult<NewThread> {
         let thread_store = configured_thread_store(&config);
         Box::pin(self.state.spawn_thread(
@@ -536,6 +538,7 @@ impl ThreadManager {
             persist_extended_history,
             metrics_service_name,
             parent_trace,
+            environment_selections,
             /*user_shell_override*/ None,
         ))
         .await
@@ -578,6 +581,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -599,6 +603,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -623,6 +628,7 @@ impl ThreadManager {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
@@ -733,6 +739,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -836,6 +843,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -865,6 +873,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -895,6 +904,7 @@ impl ThreadManagerState {
             inherited_shell_snapshot,
             inherited_exec_policy,
             /*parent_trace*/ None,
+            /*environment_selections*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -913,6 +923,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
+        environment_selections: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
@@ -928,6 +939,7 @@ impl ThreadManagerState {
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             parent_trace,
+            environment_selections,
             user_shell_override,
         ))
         .await
@@ -948,6 +960,7 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
+        environment_selections: Option<Vec<codex_protocol::protocol::TurnEnvironmentSelection>>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let environment = self.environment_manager.default_environment();
@@ -986,6 +999,7 @@ impl ThreadManagerState {
             inherited_rollout_trace: codex_rollout_trace::RolloutTraceRecorder::disabled(),
             user_shell_override,
             parent_trace,
+            environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store,
         })
