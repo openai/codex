@@ -126,6 +126,14 @@ impl ExecProcessEventLog {
         ExecProcessEventReceiver { replay, live_rx }
     }
 
+    /// Builds a polling-style read response from locally retained pushed
+    /// events.
+    ///
+    /// Remote process reads normally go back to the executor. After the
+    /// executor transport closes, the client may still have ordered output,
+    /// exit, and closed notifications queued locally. This lets the polling
+    /// read path surface those retained events before reporting the synthesized
+    /// transport failure.
     pub(crate) fn read_retained(
         &self,
         after_seq: Option<u64>,

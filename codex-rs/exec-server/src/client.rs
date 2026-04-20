@@ -597,10 +597,18 @@ impl Session {
         {
             Ok(response) => Ok(response),
             Err(err) if is_transport_closed_error(&err) => {
+                // Transport close and queued process notifications share the
+                // same connection reader. Subscribe before inspecting local
+                // state so a concurrent drain cannot publish the final failure
+                // between our check and our wait.
                 let mut wake_rx = self.state.subscribe();
                 if let Some(response) = self.state.failed_response(after_seq, max_bytes).await {
                     return Ok(response);
                 }
+                // The executor can no longer answer read requests, but the
+                // reader task may already have delivered tail output locally.
+                // Return that first instead of synthesizing an early terminal
+                // failure that would make polling clients stop before seeing it.
                 let mut response = self.state.events.read_retained(after_seq, max_bytes, None);
                 if !response.chunks.is_empty()
                     || response.exited
