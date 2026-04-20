@@ -1070,7 +1070,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
 
 #[tokio::test]
 async fn interrupt_drops_stream_deltas_until_turn_aborted() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -1141,7 +1141,7 @@ async fn interrupt_drops_stream_deltas_until_turn_aborted() {
 
 #[tokio::test]
 async fn app_event_interrupt_prepares_local_stream_cleanup() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.to_path_buf();
     let mut controller =
         crate::streaming::controller::StreamController::new(Some(80), cwd.as_path());

@@ -290,14 +290,17 @@ impl PlanStreamController {
         }
 
         let source = std::mem::take(&mut self.core.raw_source);
-        let out = self.emit(remaining, true);
+        let out = self.emit(remaining, /*include_bottom_padding*/ true);
         self.core.reset();
         (out, Some(source))
     }
 
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.core.tick();
-        (self.emit(step, false), self.core.is_idle())
+        (
+            self.emit(step, /*include_bottom_padding*/ false),
+            self.core.is_idle(),
+        )
     }
 
     pub(crate) fn on_commit_tick_batch(
@@ -305,7 +308,10 @@ impl PlanStreamController {
         max_lines: usize,
     ) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.core.tick_batch(max_lines);
-        (self.emit(step, false), self.core.is_idle())
+        (
+            self.emit(step, /*include_bottom_padding*/ false),
+            self.core.is_idle(),
+        )
     }
 
     pub(crate) fn queued_lines(&self) -> usize {
@@ -480,7 +486,7 @@ mod tests {
         assert!(ctrl.push("line one\n"));
         assert_eq!(ctrl.queued_lines(), 1);
 
-        let (cell, idle) = ctrl.on_commit_tick_batch(0);
+        let (cell, idle) = ctrl.on_commit_tick_batch(/*max_lines*/ 0);
         assert!(cell.is_none(), "batch size 0 should not emit lines");
         assert!(!idle, "batch size 0 should not drain queued lines");
         assert_eq!(

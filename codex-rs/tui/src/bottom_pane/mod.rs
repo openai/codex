@@ -1829,7 +1829,7 @@ mod tests {
             skills: Some(Vec::new()),
         });
 
-        pane.set_task_running(true);
+        pane.set_task_running(/*running*/ true);
         pane.hide_status_indicator();
         assert!(
             !pane.status_indicator_visible(),

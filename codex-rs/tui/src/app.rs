@@ -11171,7 +11171,8 @@ guardian_approval = true
         let frame_requester = crate::tui::FrameRequester::test_dummy();
         let size = Size::new(120, 40);
 
-        app.transcript_reflow.set_last_render_width_for_test(100);
+        app.transcript_reflow
+            .set_last_render_width_for_test(/*width*/ 100);
         app.handle_draw_size_change(size, size, &frame_requester);
 
         app.transcript_reflow.set_due_for_test();
@@ -11192,7 +11193,8 @@ guardian_approval = true
 
         assert!(!app.terminal_resize_reflow_enabled());
 
-        app.transcript_reflow.set_last_render_width_for_test(100);
+        app.transcript_reflow
+            .set_last_render_width_for_test(/*width*/ 100);
         let width_changed = app.handle_draw_size_change(size, size, &frame_requester);
 
         assert_eq!(width_changed, true);
@@ -11207,7 +11209,7 @@ guardian_approval = true
         let mut app = make_test_app().await;
         app.transcript_cells.push(Arc::new(AgentMessageCell::new(
             vec![Line::from("| Key | Value |")],
-            false,
+            /*is_first_line*/ false,
         )));
 
         assert!(

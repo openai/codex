@@ -2369,7 +2369,7 @@ impl ChatWidget {
 
         if self.plan_stream_controller.is_none() {
             self.plan_stream_controller = Some(PlanStreamController::new(
-                self.current_stream_width(4),
+                self.current_stream_width(/*reserved_cols*/ 4),
                 &self.config.cwd,
             ));
         }
@@ -4635,7 +4635,7 @@ impl ChatWidget {
                 self.needs_final_message_separator = false;
             }
             self.stream_controller = Some(StreamController::new(
-                self.current_stream_width(2),
+                self.current_stream_width(/*reserved_cols*/ 2),
                 &self.config.cwd,
             ));
         }
@@ -4663,8 +4663,8 @@ impl ChatWidget {
     pub(crate) fn on_terminal_resize(&mut self, width: u16) {
         let had_rendered_width = self.last_rendered_width.get().is_some();
         self.last_rendered_width.set(Some(width as usize));
-        let stream_width = self.current_stream_width(2);
-        let plan_stream_width = self.current_stream_width(4);
+        let stream_width = self.current_stream_width(/*reserved_cols*/ 2);
+        let plan_stream_width = self.current_stream_width(/*reserved_cols*/ 4);
         if let Some(controller) = self.stream_controller.as_mut() {
             controller.set_width(stream_width);
         }

@@ -417,7 +417,7 @@ impl ReasoningSummaryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         append_markdown(
             &self.content,
-            crate::width::usable_content_width_u16(width, 2),
+            crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2),
             Some(self.cwd.as_path()),
             &mut lines,
         );
@@ -515,7 +515,9 @@ impl AgentMarkdownCell {
 
 impl HistoryCell for AgentMarkdownCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let Some(wrap_width) = crate::width::usable_content_width_u16(width, 2) else {
+        let Some(wrap_width) =
+            crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
+        else {
             return prefix_lines(vec![Line::default()], "• ".dim(), "  ".into());
         };
 
@@ -4920,14 +4922,14 @@ mod tests {
             "A long agent message that should wrap differently when the terminal width changes.\n";
         let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
 
-        let lines_80 = render_lines(&cell.display_lines(80));
+        let lines_80 = render_lines(&cell.display_lines(/*width*/ 80));
         assert!(
             lines_80.first().is_some_and(|line| line.starts_with("• ")),
             "first line should start with bullet prefix: {:?}",
             lines_80[0]
         );
 
-        let lines_32 = render_lines(&cell.display_lines(32));
+        let lines_32 = render_lines(&cell.display_lines(/*width*/ 32));
         assert!(
             lines_32.len() > lines_80.len(),
             "narrower width should produce more wrapped lines: {lines_32:?}",
@@ -4939,7 +4941,7 @@ mod tests {
         let source = "narrow width coverage\n";
         let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
 
-        let lines = render_lines(&cell.display_lines(2));
+        let lines = render_lines(&cell.display_lines(/*width*/ 2));
         assert_eq!(lines, vec!["• ".to_string()]);
     }
 
@@ -4951,12 +4953,15 @@ mod tests {
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
         };
-        let agent_message_cell = AgentMessageCell::new(vec!["tiny width agent line".into()], true);
+        let agent_message_cell = AgentMessageCell::new(
+            vec!["tiny width agent line".into()],
+            /*is_first_line*/ true,
+        );
         let reasoning_cell = ReasoningSummaryCell::new(
             "Plan".to_string(),
             "Reasoning summary content for tiny widths.".to_string(),
             &test_cwd(),
-            false,
+            /*transcript_only*/ false,
         );
         let agent_markdown_cell =
             AgentMarkdownCell::new("tiny width agent markdown line\n".to_string(), &test_cwd());
@@ -5055,12 +5060,18 @@ mod tests {
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
         }) as Arc<dyn HistoryCell>;
-        let head = Arc::new(AgentMessageCell::new(vec![Line::from("line 1")], true))
-            as Arc<dyn HistoryCell>;
-        let cont1 = Arc::new(AgentMessageCell::new(vec![Line::from("line 2")], false))
-            as Arc<dyn HistoryCell>;
-        let cont2 = Arc::new(AgentMessageCell::new(vec![Line::from("line 3")], false))
-            as Arc<dyn HistoryCell>;
+        let head = Arc::new(AgentMessageCell::new(
+            vec![Line::from("line 1")],
+            /*is_first_line*/ true,
+        )) as Arc<dyn HistoryCell>;
+        let cont1 = Arc::new(AgentMessageCell::new(
+            vec![Line::from("line 2")],
+            /*is_first_line*/ false,
+        )) as Arc<dyn HistoryCell>;
+        let cont2 = Arc::new(AgentMessageCell::new(
+            vec![Line::from("line 3")],
+            /*is_first_line*/ false,
+        )) as Arc<dyn HistoryCell>;
 
         let mut transcript_cells: Vec<Arc<dyn HistoryCell>> =
             vec![user.clone(), head, cont1, cont2];

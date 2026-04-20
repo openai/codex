@@ -115,29 +115,29 @@ async fn turn_started_uses_runtime_context_window_before_first_token_count() {
 
 #[tokio::test]
 async fn current_stream_width_clamps_to_minimum_when_reserved_columns_exhaust_width() {
-    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.last_rendered_width.set(None);
-    assert_eq!(chat.current_stream_width(2), None);
+    assert_eq!(chat.current_stream_width(/*reserved_cols*/ 2), None);
 
     chat.last_rendered_width.set(Some(2));
-    assert_eq!(chat.current_stream_width(2), Some(1));
+    assert_eq!(chat.current_stream_width(/*reserved_cols*/ 2), Some(1));
 
     chat.last_rendered_width.set(Some(4));
-    assert_eq!(chat.current_stream_width(4), Some(1));
+    assert_eq!(chat.current_stream_width(/*reserved_cols*/ 4), Some(1));
 
     chat.last_rendered_width.set(Some(5));
-    assert_eq!(chat.current_stream_width(4), Some(1));
+    assert_eq!(chat.current_stream_width(/*reserved_cols*/ 4), Some(1));
 }
 
 #[tokio::test]
 async fn on_terminal_resize_initial_width_requests_redraw() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let (draw_tx, mut draw_rx) = tokio::sync::broadcast::channel(8);
     chat.frame_requester = FrameRequester::new(draw_tx);
     chat.last_rendered_width.set(None);
 
-    chat.on_terminal_resize(120);
+    chat.on_terminal_resize(/*width*/ 120);
 
     let draw = tokio::time::timeout(std::time::Duration::from_millis(200), draw_rx.recv())
         .await
@@ -147,7 +147,7 @@ async fn on_terminal_resize_initial_width_requests_redraw() {
 
 #[tokio::test]
 async fn flush_answer_stream_does_not_stop_animation_while_plan_stream_is_active() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.to_path_buf();
 
     let mut plan_controller =
@@ -182,7 +182,7 @@ async fn flush_answer_stream_does_not_stop_animation_while_plan_stream_is_active
 
 #[tokio::test]
 async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.to_path_buf();
 
     let mut controller =
@@ -216,7 +216,7 @@ async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
 
 #[tokio::test]
 async fn flush_answer_stream_does_not_stop_animation_while_second_plan_stream_is_active() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let cwd = chat.config.cwd.to_path_buf();
 
     let mut plan_controller =
