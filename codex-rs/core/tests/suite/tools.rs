@@ -626,7 +626,7 @@ async fn shell_timeout_includes_timeout_prefix_and_metadata() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.2");
+    let mut builder = test_codex().with_model("test-shell-json");
     let test = builder.build(&server).await?;
 
     let call_id = "shell-timeout";

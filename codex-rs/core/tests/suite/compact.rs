@@ -1712,7 +1712,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
 
     let server = MockServer::start().await;
     let previous_model = "gpt-5.3-codex";
-    let next_model = "gpt-5.4";
+    let next_model = "gpt-5.2";
 
     let models_mock = mount_models_once(
         &server,
@@ -1838,7 +1838,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
 
     let server = MockServer::start().await;
     let previous_model = "gpt-5.3-codex";
-    let next_model = "gpt-5.4";
+    let next_model = "gpt-5.2";
 
     let models_mock = mount_models_once(
         &server,
