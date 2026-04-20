@@ -853,6 +853,7 @@ impl ChatComposer {
     /// remote images). Cursor is placed at the end after rebuilding elements.
     pub(crate) fn apply_external_edit(&mut self, text: String) {
         self.pending_pastes.clear();
+        let (text, _) = self.imported_text_for_textarea(text, Vec::new());
 
         // Count placeholder occurrences in the new text.
         let mut placeholder_counts: HashMap<String, usize> = HashMap::new();
@@ -1026,18 +1027,7 @@ impl ChatComposer {
         self.attached_images.clear();
         self.mention_bindings.clear();
 
-        let (text, text_elements) = if let Some(stripped) = text.strip_prefix('!') {
-            self.is_bash_mode = true;
-            (
-                stripped.to_string(),
-                text_elements
-                    .into_iter()
-                    .filter_map(|element| Self::shift_text_element(element, /*shift*/ -1))
-                    .collect(),
-            )
-        } else {
-            (text, text_elements)
-        };
+        let (text, text_elements) = self.imported_text_for_textarea(text, text_elements);
         self.textarea.set_text_with_elements(&text, &text_elements);
 
         for (idx, path) in local_image_paths.into_iter().enumerate() {
@@ -1141,6 +1131,30 @@ impl ChatComposer {
     pub(crate) fn move_cursor_to_end(&mut self) {
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
+    }
+
+    /// Convert canonical composer text into the textarea's internal representation.
+    ///
+    /// Bash mode stores the leading `!` as prompt state instead of editable text,
+    /// so full-buffer imports must absorb that prefix before rebuilding the textarea.
+    fn imported_text_for_textarea(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+    ) -> (String, Vec<TextElement>) {
+        if let Some(stripped) = text.strip_prefix('!') {
+            self.is_bash_mode = true;
+            (
+                stripped.to_string(),
+                text_elements
+                    .into_iter()
+                    .filter_map(|element| Self::shift_text_element(element, /*shift*/ -1))
+                    .collect(),
+            )
+        } else {
+            self.is_bash_mode = false;
+            (text, text_elements)
+        }
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
@@ -8797,6 +8811,66 @@ mod tests {
         assert_eq!(composer.attached_images.len(), 1);
         assert_eq!(composer.attached_images[0].placeholder, placeholder);
         assert_eq!(composer.textarea.cursor(), composer.current_text().len());
+    }
+
+    #[test]
+    fn apply_external_edit_absorbs_bash_prefix_without_duplication() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("!git status".to_string(), Vec::new(), Vec::new());
+
+        composer.apply_external_edit("!git status".to_string());
+
+        assert!(composer.is_bash_mode);
+        assert_eq!(composer.textarea.text(), "git status");
+        assert_eq!(composer.current_text(), "!git status");
+    }
+
+    #[test]
+    fn apply_external_edit_can_leave_bash_mode() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("!git status".to_string(), Vec::new(), Vec::new());
+
+        composer.apply_external_edit("git status".to_string());
+
+        assert!(!composer.is_bash_mode);
+        assert_eq!(composer.textarea.text(), "git status");
+        assert_eq!(composer.current_text(), "git status");
+    }
+
+    #[test]
+    fn apply_external_edit_can_enter_bash_mode() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_text_content("git status".to_string(), Vec::new(), Vec::new());
+
+        composer.apply_external_edit("!git status".to_string());
+
+        assert!(composer.is_bash_mode);
+        assert_eq!(composer.textarea.text(), "git status");
+        assert_eq!(composer.current_text(), "!git status");
     }
 
     #[test]
