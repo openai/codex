@@ -6158,6 +6158,40 @@ async fn abort_without_registered_task_requeues_startup_pending_input() {
 }
 
 #[tokio::test]
+async fn replaced_abort_drops_startup_goal_continuation_pending_input() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let queued_goal_continuation = ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "Continue working toward the active thread goal.".to_string(),
+        }],
+    };
+    let queued_user_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "startup pending input".to_string(),
+        }],
+    };
+
+    {
+        let mut active = sess.active_turn.lock().await;
+        let turn = active.get_or_insert_with(ActiveTurn::default);
+        let mut turn_state = turn.turn_state.lock().await;
+        turn_state.push_pending_input(queued_goal_continuation);
+        turn_state.push_pending_input(queued_user_item.clone());
+    }
+
+    sess.abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+        .await;
+
+    assert!(!sess.has_active_turn().await);
+    assert_eq!(
+        sess.take_queued_response_items_for_next_turn().await,
+        vec![queued_user_item]
+    );
+}
+
+#[tokio::test]
 async fn interrupt_clears_only_queued_goal_continuations_for_next_turn() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
@@ -7053,6 +7087,48 @@ async fn idle_interrupt_accounts_goal_wall_clock_before_pausing() -> anyhow::Res
 }
 
 #[tokio::test]
+async fn idle_interrupt_does_not_account_budget_limited_goal_wall_clock() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    state_db
+        .update_thread_goal(
+            sess.conversation_id,
+            codex_state::ThreadGoalUpdate {
+                status: Some(codex_state::ThreadGoalStatus::BudgetLimited),
+                token_budget: None,
+            },
+        )
+        .await?;
+    sleep(Duration::from_millis(1100)).await;
+
+    sess.interrupt_task().await;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after idle interrupt");
+    assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
+    assert_eq!(0, goal.time_used_seconds);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn idle_plan_mode_external_mutation_does_not_account_goal_wall_clock() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
@@ -7270,6 +7346,56 @@ async fn goal_accounting_resets_out_of_band_activation_at_turn_boundary() -> any
         .expect("goal should remain persisted after accounting");
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
     assert_eq!(0, goal.tokens_used);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_goal_activation_marks_baseline_for_turn_end_accounting() -> anyhow::Result<()> {
+    let (sess, tc, rx) = make_goal_session_and_context_with_rx().await;
+    sess.mark_thread_goal_turn_started(tc.as_ref(), TokenUsage::default())
+        .await;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    while rx.try_recv().is_ok() {}
+    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+    sess.account_thread_goal_progress_before_external_mutation()
+        .await?;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .replace_thread_goal(
+            sess.conversation_id,
+            "Keep improving the benchmark",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ Some(1_000),
+        )
+        .await?;
+    sess.mark_active_thread_goal_after_external_mutation(goal.goal_id.clone())
+        .await;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+
+    sess.account_thread_goal_progress(tc.as_ref(), crate::goals::GoalAccountingBoundary::Turn)
+        .await?;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after accounting");
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+    assert_eq!(30, goal.tokens_used);
 
     Ok(())
 }

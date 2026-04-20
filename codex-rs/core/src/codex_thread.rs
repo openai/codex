@@ -101,12 +101,17 @@ impl CodexThread {
     pub async fn apply_goal_set_runtime_effects(
         &self,
         goal_status: ThreadGoalStatus,
+        goal_id: String,
         goal_may_have_in_flight_turn: bool,
         goal_was_replaced: bool,
         should_continue_active_goal: bool,
     ) {
         match goal_status {
             ThreadGoalStatus::Active if should_continue_active_goal => {
+                self.codex
+                    .session
+                    .mark_active_thread_goal_after_external_mutation(goal_id)
+                    .await;
                 self.codex
                     .session
                     .clear_queued_goal_continuations_for_next_turn()

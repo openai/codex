@@ -495,11 +495,14 @@ impl Session {
         };
 
         if let Some((tasks, turn_state)) = active_turn {
-            let startup_pending_input = if tasks.is_empty() {
+            let mut startup_pending_input = if tasks.is_empty() {
                 turn_state.lock().await.take_pending_input()
             } else {
                 Vec::new()
             };
+            if reason == TurnAbortReason::Replaced {
+                startup_pending_input.retain(|item| !crate::goals::is_goal_continuation_item(item));
+            }
             self.queue_response_items_for_next_turn(startup_pending_input)
                 .await;
 

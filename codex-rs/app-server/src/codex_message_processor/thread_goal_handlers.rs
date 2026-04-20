@@ -189,6 +189,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let goal_id = goal.goal_id.clone();
         let goal = api_thread_goal_from_state(goal);
         let goal_status = goal.status;
         self.outgoing
@@ -211,6 +212,7 @@ impl CodexMessageProcessor {
             thread
                 .apply_goal_set_runtime_effects(
                     goal_status.to_core(),
+                    goal_id,
                     goal_may_have_in_flight_turn,
                     replacing_goal,
                     should_continue_active_goal,
@@ -410,11 +412,6 @@ impl CodexMessageProcessor {
     }
 
     pub(super) async fn emit_thread_goal_snapshot(&self, thread_id: ThreadId) {
-        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-        let thread_state = thread_state.lock().await;
-        let listener_command_tx = thread_state.listener_command_tx();
-        drop(thread_state);
-
         let state_db = match self.state_db_for_materialized_thread(thread_id).await {
             Ok(state_db) => state_db,
             Err(err) => {
@@ -425,6 +422,9 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
+        let thread_state = thread_state.lock().await;
+        let listener_command_tx = thread_state.listener_command_tx();
         match state_db.get_thread_goal(thread_id).await {
             Ok(Some(goal)) => {
                 self.emit_thread_goal_updated_ordered(
