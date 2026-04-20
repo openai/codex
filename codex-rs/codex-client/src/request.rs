@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use http::Method;
 use reqwest::header::HeaderMap;
+use reqwest::header::HeaderValue;
 use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
@@ -62,6 +63,131 @@ impl Request {
     pub fn with_compression(mut self, compression: RequestCompression) -> Self {
         self.compression = compression;
         self
+    }
+
+    /// Convert the request body into the exact bytes that will be sent.
+    ///
+    /// Auth schemes such as AWS SigV4 need to sign the final body bytes, including
+    /// compression and content headers. Calling this method is idempotent for
+    /// already-finalized raw request bodies.
+    pub fn prepare_body_for_send(&mut self) -> Result<Bytes, String> {
+        match self.body.take() {
+            Some(RequestBody::Raw(raw_body)) => {
+                if self.compression != RequestCompression::None {
+                    self.body = Some(RequestBody::Raw(raw_body));
+                    return Err("request compression cannot be used with raw bodies".to_string());
+                }
+                let body = raw_body.clone();
+                self.body = Some(RequestBody::Raw(raw_body));
+                Ok(body)
+            }
+            Some(RequestBody::Json(body)) => {
+                let json = serde_json::to_vec(&body).map_err(|err| err.to_string())?;
+                let bytes = if self.compression != RequestCompression::None {
+                    if self.headers.contains_key(http::header::CONTENT_ENCODING) {
+                        self.body = Some(RequestBody::Json(body));
+                        return Err(
+                            "request compression was requested but content-encoding is already set"
+                                .to_string(),
+                        );
+                    }
+
+                    let pre_compression_bytes = json.len();
+                    let compression_start = std::time::Instant::now();
+                    let (compressed, content_encoding) = match self.compression {
+                        RequestCompression::None => unreachable!("guarded by compression != None"),
+                        RequestCompression::Zstd => (
+                            zstd::stream::encode_all(std::io::Cursor::new(json), 3)
+                                .map_err(|err| err.to_string())?,
+                            HeaderValue::from_static("zstd"),
+                        ),
+                    };
+                    let post_compression_bytes = compressed.len();
+                    let compression_duration = compression_start.elapsed();
+
+                    self.headers
+                        .insert(http::header::CONTENT_ENCODING, content_encoding);
+
+                    tracing::debug!(
+                        pre_compression_bytes,
+                        post_compression_bytes,
+                        compression_duration_ms = compression_duration.as_millis(),
+                        "Compressed request body with zstd"
+                    );
+
+                    compressed
+                } else {
+                    json
+                };
+
+                if !self.headers.contains_key(http::header::CONTENT_TYPE) {
+                    self.headers.insert(
+                        http::header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                }
+
+                self.compression = RequestCompression::None;
+                let bytes = Bytes::from(bytes);
+                self.body = Some(RequestBody::Raw(bytes.clone()));
+                Ok(bytes)
+            }
+            None => {
+                self.compression = RequestCompression::None;
+                Ok(Bytes::new())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::HeaderValue;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn prepare_body_for_send_serializes_json_and_sets_content_type() {
+        let mut request =
+            Request::new(Method::POST, "https://example.com/v1/responses".to_string())
+                .with_json(&json!({"model": "test-model"}));
+
+        let body = request
+            .prepare_body_for_send()
+            .expect("body should prepare");
+
+        assert_eq!(body, Bytes::from_static(br#"{"model":"test-model"}"#));
+        assert_eq!(
+            request
+                .headers
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        assert_eq!(request.compression, RequestCompression::None);
+        assert_eq!(request.body, Some(RequestBody::Raw(body)));
+    }
+
+    #[test]
+    fn prepare_body_for_send_rejects_existing_content_encoding_when_compressing() {
+        let mut request =
+            Request::new(Method::POST, "https://example.com/v1/responses".to_string())
+                .with_json(&json!({"model": "test-model"}))
+                .with_compression(RequestCompression::Zstd);
+        request.headers.insert(
+            http::header::CONTENT_ENCODING,
+            HeaderValue::from_static("gzip"),
+        );
+
+        let err = request
+            .prepare_body_for_send()
+            .expect_err("conflicting content-encoding should fail");
+
+        assert_eq!(
+            err,
+            "request compression was requested but content-encoding is already set"
+        );
     }
 }
 

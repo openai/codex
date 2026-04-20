@@ -89,6 +89,7 @@ impl ModelProvider for ConfiguredModelProvider {
 mod tests {
     use std::num::NonZeroU64;
 
+    use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_protocol::config_types::ModelProviderAuthInfo;
 
     use super::*;
@@ -122,5 +123,25 @@ mod tests {
             .expect("command auth provider should have an auth manager");
 
         assert!(auth_manager.has_external_auth());
+    }
+
+    #[test]
+    fn create_model_provider_does_not_use_openai_auth_manager_for_aws_provider() {
+        let provider = create_model_provider(
+            ModelProviderInfo {
+                aws: Some(ModelProviderAwsAuthInfo {
+                    profile: Some("codex-bedrock".to_string()),
+                    region: Some("us-east-1".to_string()),
+                    service: None,
+                }),
+                requires_openai_auth: false,
+                ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+            },
+            Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+                "openai-api-key",
+            ))),
+        );
+
+        assert!(provider.auth_manager().is_none());
     }
 }

@@ -1,4 +1,5 @@
 mod auth;
+mod aws_auth_provider;
 mod bearer_auth_provider;
 mod provider;
 

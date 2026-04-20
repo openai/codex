@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use codex_api::SharedAuthProvider;
+use codex_aws_auth::AwsAuthConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 
+use crate::aws_auth_provider::AwsSigV4AuthProvider;
 use crate::bearer_auth_provider::BearerAuthProvider;
 
 /// Returns the provider-scoped auth manager when this provider uses command-backed auth.
@@ -14,6 +16,10 @@ pub(crate) fn auth_manager_for_provider(
     auth_manager: Option<Arc<AuthManager>>,
     provider: &ModelProviderInfo,
 ) -> Option<Arc<AuthManager>> {
+    if provider.aws.is_some() {
+        return None;
+    }
+
     match provider.auth.clone() {
         Some(config) => Some(AuthManager::external_bearer_only(config)),
         None => auth_manager,
@@ -60,5 +66,13 @@ pub(crate) fn resolve_provider_auth(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> codex_protocol::error::Result<SharedAuthProvider> {
+    if let Some(aws) = provider.aws.as_ref() {
+        return Ok(Arc::new(AwsSigV4AuthProvider::new(AwsAuthConfig {
+            region: aws.region.clone(),
+            profile: aws.profile.clone(),
+            service: aws.service_name().to_string(),
+        })));
+    }
+
     Ok(Arc::new(bearer_auth_provider_from_auth(auth, provider)?))
 }
