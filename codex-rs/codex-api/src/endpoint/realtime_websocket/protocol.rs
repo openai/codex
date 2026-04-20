@@ -89,7 +89,14 @@ pub(super) struct SessionAudioInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) noise_reduction: Option<SessionNoiseReduction>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) transcription: Option<SessionInputAudioTranscription>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) turn_detection: Option<SessionTurnDetection>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionInputAudioTranscription {
+    pub(super) model: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

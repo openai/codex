@@ -547,7 +547,7 @@ existing = "value"
 existing = "value"
 
 [notice.model_migrations]
-gpt-5 = "gpt-5.4"
+"gpt-5.2" = "gpt-5.4"
 "#;
     assert_eq!(contents, expected);
 }
