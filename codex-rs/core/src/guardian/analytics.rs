@@ -160,7 +160,7 @@ impl GuardianReviewAnalyticsResult {
             had_prior_review_context: Some(metadata.had_prior_review_context),
             reviewed_action_truncated: metadata.reviewed_action_truncated,
             token_usage: metadata.token_usage,
-            time_to_first_token_ms: None,
+            time_to_first_token_ms: metadata.time_to_first_token_ms,
             completed_at: metadata.completed_at,
         }
     }
