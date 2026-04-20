@@ -84,9 +84,8 @@ impl OtelProvider {
             Some(MetricsClient::new(config)?)
         };
 
-        crate::metrics::replace_global(metrics.clone());
-
         if !log_enabled && !trace_enabled && metrics.is_none() {
+            crate::metrics::replace_global(/*metrics*/ None);
             debug!("No OTEL exporter enabled in settings.");
             return Ok(None);
         }
@@ -109,6 +108,7 @@ impl OtelProvider {
             global::set_tracer_provider(provider);
             global::set_text_map_propagator(TraceContextPropagator::new());
         }
+        crate::metrics::replace_global(metrics.clone());
         Ok(Some(Self {
             logger,
             tracer_provider,

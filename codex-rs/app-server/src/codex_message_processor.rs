@@ -2628,27 +2628,6 @@ impl CodexMessageProcessor {
             };
         }
 
-        if let Some(otel_reloader) = listener_task_context.otel_reloader.as_ref() {
-            let otel_reload_error = otel_reloader
-                .reload_from_config(&config)
-                .err()
-                .map(|err| err.to_string());
-            if let Some(err) = otel_reload_error {
-                listener_task_context
-                    .outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to reload otel config: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        }
-
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
@@ -2677,6 +2656,31 @@ impl CodexMessageProcessor {
                 .collect()
         };
         let core_dynamic_tool_count = core_dynamic_tools.len();
+        let otel_reload = if let Some(otel_reloader) = listener_task_context.otel_reloader.as_ref()
+        {
+            let otel_reload_result = otel_reloader
+                .reload_from_config(&config)
+                .map_err(|err| err.to_string());
+            match otel_reload_result {
+                Ok(otel_reload) => Some(otel_reload),
+                Err(err) => {
+                    listener_task_context
+                        .outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("failed to reload otel config: {err}"),
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            None
+        };
 
         match listener_task_context
             .thread_manager
@@ -2702,6 +2706,9 @@ impl CodexMessageProcessor {
             .await
         {
             Ok(new_conv) => {
+                if let Some(otel_reload) = otel_reload {
+                    otel_reload.commit();
+                }
                 let NewThread {
                     thread_id,
                     thread,

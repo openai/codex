@@ -4,6 +4,7 @@ mod logger_layer;
 pub(crate) mod metrics;
 pub(crate) mod provider;
 pub(crate) mod trace_context;
+mod trace_layer;
 
 mod otlp;
 mod targets;
@@ -32,6 +33,8 @@ pub use crate::trace_context::set_parent_from_context;
 pub use crate::trace_context::set_parent_from_w3c_trace_context;
 pub use crate::trace_context::span_w3c_trace_context;
 pub use crate::trace_context::traceparent_context_from_env;
+pub use crate::trace_layer::OtelTraceLayer;
+pub use crate::trace_layer::OtelTraceLayerHandle;
 pub use codex_utils_string::sanitize_metric_tag_value;
 
 #[derive(Debug, Clone, Serialize, Display)]

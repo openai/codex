@@ -517,13 +517,12 @@ pub async fn run_main_with_transport(
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
-    let otel_tracing_layer = otel.as_ref().and_then(|provider| provider.tracing_layer());
-    let (otel_layer, otel_reloader) =
+    let (otel_layer, otel_trace_layer, otel_reloader) =
         otel_reload::OtelReloader::new(&config, otel, default_analytics_enabled);
     let _ = tracing_subscriber::registry()
         .with(stderr_fmt)
         .with(otel_layer)
-        .with(otel_tracing_layer)
+        .with(otel_trace_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
         .with(log_db_layer)
