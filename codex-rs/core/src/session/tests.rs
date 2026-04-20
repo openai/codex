@@ -7598,6 +7598,82 @@ async fn goal_accounting_charges_once_when_last_active_turn_task_finishes() -> a
 }
 
 #[tokio::test]
+async fn abort_accounts_active_goal_once_for_multi_task_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: Some(Some(1_000)),
+        },
+    )
+    .await?;
+    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: true,
+        },
+    )
+    .await;
+
+    let second_tc = sess
+        .new_default_turn_with_sub_id("second-task".to_string())
+        .await;
+    sess.mark_thread_goal_turn_started(second_tc.as_ref(), pre_goal_token_usage())
+        .await;
+    let second_cancellation_token = CancellationToken::new();
+    let second_done = Arc::new(tokio::sync::Notify::new());
+    let second_task_token = second_cancellation_token.clone();
+    let second_task_done = Arc::clone(&second_done);
+    let second_handle = tokio::spawn(async move {
+        second_task_token.cancelled().await;
+        second_task_done.notify_waiters();
+    });
+    {
+        let mut active = sess.active_turn.lock().await;
+        active
+            .as_mut()
+            .expect("active turn should exist")
+            .add_task(RunningTask {
+                done: second_done,
+                kind: TaskKind::Regular,
+                task: Arc::new(NeverEndingTask {
+                    kind: TaskKind::Regular,
+                    listen_to_cancellation_token: true,
+                }) as Arc<dyn AnySessionTask>,
+                cancellation_token: second_cancellation_token,
+                handle: Arc::new(RunningTaskHandle::new(second_handle.abort_handle())),
+                turn_context: Arc::clone(&second_tc),
+                _timer: None,
+            });
+    }
+
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+    sess.abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+        .await;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after abort");
+    assert_eq!(30, goal.tokens_used);
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn zero_delta_stopped_goal_clears_accounting_before_later_turn_tokens() -> anyhow::Result<()>
 {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
