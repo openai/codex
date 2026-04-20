@@ -1,4 +1,5 @@
 use super::*;
+use uuid::Uuid;
 
 pub struct ThreadGoalUpdate {
     pub status: Option<crate::ThreadGoalStatus>,
@@ -27,6 +28,7 @@ impl StateRuntime {
             r#"
 SELECT
     thread_id,
+    goal_id,
     objective,
     status,
     token_budget,
@@ -42,8 +44,7 @@ WHERE thread_id = ?
         .fetch_optional(self.pool.as_ref())
         .await?;
 
-        row.map(|row| ThreadGoalRow::try_from_row(&row).and_then(crate::ThreadGoal::try_from))
-            .transpose()
+        row.map(|row| thread_goal_from_row(&row)).transpose()
     }
 
     pub async fn replace_thread_goal(
@@ -53,12 +54,14 @@ WHERE thread_id = ?
         status: crate::ThreadGoalStatus,
         token_budget: Option<i64>,
     ) -> anyhow::Result<crate::ThreadGoal> {
+        let goal_id = Uuid::new_v4().to_string();
         let now_ms = datetime_to_epoch_millis(Utc::now());
         let status = status_after_budget_limit(status, /*tokens_used*/ 0, token_budget);
-        sqlx::query(
+        let row = sqlx::query(
             r#"
 INSERT INTO thread_goals (
     thread_id,
+    goal_id,
     objective,
     status,
     token_budget,
@@ -66,8 +69,9 @@ INSERT INTO thread_goals (
     time_used_seconds,
     created_at_ms,
     updated_at_ms
-) VALUES (?, ?, ?, ?, 0, 0, ?, ?)
+) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
+    goal_id = excluded.goal_id,
     objective = excluded.objective,
     status = excluded.status,
     token_budget = excluded.token_budget,
@@ -75,20 +79,29 @@ ON CONFLICT(thread_id) DO UPDATE SET
     time_used_seconds = 0,
     created_at_ms = excluded.created_at_ms,
     updated_at_ms = excluded.updated_at_ms
+RETURNING
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
             "#,
         )
         .bind(thread_id.to_string())
+        .bind(goal_id)
         .bind(objective)
         .bind(status.as_str())
         .bind(token_budget)
         .bind(now_ms)
         .bind(now_ms)
-        .execute(self.pool.as_ref())
+        .fetch_one(self.pool.as_ref())
         .await?;
 
-        self.get_thread_goal(thread_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("thread goal disappeared after replacement"))
+        thread_goal_from_row(&row)
     }
 
     pub async fn insert_thread_goal(
@@ -273,7 +286,7 @@ WHERE thread_id = ?
         time_delta_seconds: i64,
         token_delta: i64,
         mode: ThreadGoalAccountingMode,
-        expected_created_at_ms: Option<i64>,
+        expected_goal_id: Option<&str>,
     ) -> anyhow::Result<ThreadGoalAccountingOutcome> {
         let time_delta_seconds = time_delta_seconds.max(0);
         let token_delta = token_delta.max(0);
@@ -302,8 +315,8 @@ WHERE thread_id = ?
                 "status IN ('active', 'paused', 'budget_limited')"
             }
         };
-        let created_at_filter = if expected_created_at_ms.is_some() {
-            "created_at_ms = ?"
+        let goal_id_filter = if expected_goal_id.is_some() {
+            "goal_id = ?"
         } else {
             "1 = 1"
         };
@@ -321,7 +334,17 @@ SET
     updated_at_ms = ?
 WHERE thread_id = ?
   AND {status_filter}
-  AND {created_at_filter}
+  AND {goal_id_filter}
+RETURNING
+    thread_id,
+    goal_id,
+    objective,
+    status,
+    token_budget,
+    tokens_used,
+    time_used_seconds,
+    created_at_ms,
+    updated_at_ms
             "#,
         );
 
@@ -332,24 +355,25 @@ WHERE thread_id = ?
             .bind(crate::ThreadGoalStatus::BudgetLimited.as_str())
             .bind(now_ms)
             .bind(thread_id.to_string());
-        if let Some(expected_created_at_ms) = expected_created_at_ms {
-            query = query.bind(expected_created_at_ms);
+        if let Some(expected_goal_id) = expected_goal_id {
+            query = query.bind(expected_goal_id);
         }
 
-        let result = query.execute(self.pool.as_ref()).await?;
+        let row = query.fetch_optional(self.pool.as_ref()).await?;
 
-        if result.rows_affected() == 0 {
+        let Some(row) = row else {
             return Ok(ThreadGoalAccountingOutcome::Unchanged(
                 self.get_thread_goal(thread_id).await?,
             ));
-        }
+        };
 
-        let updated = self
-            .get_thread_goal(thread_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("thread goal disappeared after usage accounting"))?;
+        let updated = thread_goal_from_row(&row)?;
         Ok(ThreadGoalAccountingOutcome::Updated(updated))
     }
+}
+
+fn thread_goal_from_row(row: &sqlx::sqlite::SqliteRow) -> anyhow::Result<crate::ThreadGoal> {
+    ThreadGoalRow::try_from_row(row).and_then(crate::ThreadGoal::try_from)
 }
 
 fn status_after_budget_limit(
@@ -548,7 +572,6 @@ mod tests {
             )
             .await
             .expect("goal replacement should succeed");
-        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         let replacement = runtime
             .replace_thread_goal(
                 thread_id,
@@ -565,7 +588,7 @@ mod tests {
                 /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
                 ThreadGoalAccountingMode::ActiveOnly,
-                Some(original.created_at.timestamp_millis()),
+                Some(original.goal_id.as_str()),
             )
             .await
             .expect("usage accounting should succeed");
@@ -573,6 +596,7 @@ mod tests {
         let ThreadGoalAccountingOutcome::Unchanged(Some(goal)) = outcome else {
             panic!("stale goal version should not be updated");
         };
+        assert_ne!(replacement.goal_id, original.goal_id);
         assert_eq!(replacement.created_at, goal.created_at);
         assert_eq!("new objective", goal.objective);
         assert_eq!(0, goal.tokens_used);
@@ -694,7 +718,7 @@ mod tests {
                 /*time_delta_seconds*/ 7,
                 /*token_delta*/ 5,
                 ThreadGoalAccountingMode::ActiveOnly,
-                /*expected_created_at_ms*/ None,
+                /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
@@ -711,7 +735,7 @@ mod tests {
                 /*time_delta_seconds*/ 3,
                 /*token_delta*/ 15,
                 ThreadGoalAccountingMode::ActiveOnly,
-                /*expected_created_at_ms*/ None,
+                /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
@@ -728,7 +752,7 @@ mod tests {
                 /*time_delta_seconds*/ 5,
                 /*token_delta*/ 5,
                 ThreadGoalAccountingMode::ActiveOnly,
-                /*expected_created_at_ms*/ None,
+                /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
@@ -836,7 +860,7 @@ mod tests {
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
                 ThreadGoalAccountingMode::ActiveOnly,
-                /*expected_created_at_ms*/ None,
+                /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
@@ -878,7 +902,7 @@ mod tests {
                 /*time_delta_seconds*/ 1,
                 /*token_delta*/ 50,
                 ThreadGoalAccountingMode::ActiveOnly,
-                /*expected_created_at_ms*/ None,
+                /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
@@ -963,7 +987,7 @@ mod tests {
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
                 ThreadGoalAccountingMode::ActiveOnly,
-                /*expected_created_at_ms*/ None,
+                /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
@@ -980,7 +1004,7 @@ mod tests {
                 /*time_delta_seconds*/ 30,
                 /*token_delta*/ 200,
                 ThreadGoalAccountingMode::ActiveOrComplete,
-                /*expected_created_at_ms*/ None,
+                /*expected_goal_id*/ None,
             )
             .await
             .expect("usage accounting should succeed");
@@ -1062,14 +1086,14 @@ mod tests {
             /*time_delta_seconds*/ 4,
             /*token_delta*/ 40,
             ThreadGoalAccountingMode::ActiveOnly,
-            /*expected_created_at_ms*/ None,
+            /*expected_goal_id*/ None,
         );
         let second = runtime.account_thread_goal_usage(
             thread_id,
             /*time_delta_seconds*/ 6,
             /*token_delta*/ 60,
             ThreadGoalAccountingMode::ActiveOnly,
-            /*expected_created_at_ms*/ None,
+            /*expected_goal_id*/ None,
         );
         let (first, second) = tokio::join!(first, second);
         first.expect("first usage accounting should succeed");
