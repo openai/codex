@@ -229,6 +229,9 @@ fn codex_apps_mcp_http_headers(
     if let Some(account_id) = auth.and_then(CodexAuth::get_account_id) {
         headers.insert("ChatGPT-Account-ID".to_string(), account_id);
     }
+    if auth.is_some_and(CodexAuth::is_fedramp_account) {
+        headers.insert("X-OpenAI-Fedramp".to_string(), "true".to_string());
+    }
     if headers.is_empty() {
         None
     } else {

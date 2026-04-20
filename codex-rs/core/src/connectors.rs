@@ -435,6 +435,7 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
     };
     let access_token = token_data.access_token.clone();
     let account_id = account_id.to_string();
+    let is_fedramp_account = token_data.id_token.is_fedramp_account();
     let authorization_header_value = {
         let auth_manager =
             AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false);
@@ -467,6 +468,7 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
                     path,
                     authorization_header_value.as_str(),
                     account_id.as_str(),
+                    is_fedramp_account,
                 )
                 .await
             }
@@ -480,18 +482,20 @@ async fn chatgpt_get_request_with_authorization_header<T: DeserializeOwned>(
     path: String,
     authorization_header_value: &str,
     account_id: &str,
+    is_fedramp_account: bool,
 ) -> anyhow::Result<T> {
     let client = create_client();
     let url = format!("{}{}", config.chatgpt_base_url, path);
-    let response = client
+    let mut request = client
         .get(&url)
         .header("authorization", authorization_header_value)
         .header("chatgpt-account-id", account_id)
         .header("Content-Type", "application/json")
-        .timeout(DIRECTORY_CONNECTORS_TIMEOUT)
-        .send()
-        .await
-        .context("failed to send request")?;
+        .timeout(DIRECTORY_CONNECTORS_TIMEOUT);
+    if is_fedramp_account {
+        request = request.header("X-OpenAI-Fedramp", "true");
+    }
+    let response = request.send().await.context("failed to send request")?;
 
     if response.status().is_success() {
         response

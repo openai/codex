@@ -324,15 +324,17 @@ async fn send_track_events(
     let url = format!("{base_url}/codex/analytics-events/events");
     let payload = TrackEventsRequest { events };
 
-    let response = create_client()
+    let mut request = create_client()
         .post(&url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
         .header("authorization", authorization_header_value)
         .header("chatgpt-account-id", &account_id)
         .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await;
+        .json(&payload);
+    if auth.is_fedramp_account() {
+        request = request.header("X-OpenAI-Fedramp", "true");
+    }
+    let response = request.send().await;
 
     match response {
         Ok(response) if response.status().is_success() => {}

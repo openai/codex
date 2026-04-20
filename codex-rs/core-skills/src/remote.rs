@@ -120,6 +120,9 @@ pub async fn list_remote_skills(
     if let Some(account_id) = auth.get_account_id() {
         request = request.header("chatgpt-account-id", account_id);
     }
+    if auth.is_fedramp_account() {
+        request = request.header("X-OpenAI-Fedramp", "true");
+    }
     let response = request
         .send()
         .await
@@ -163,6 +166,9 @@ pub async fn export_remote_skill(
     request = request.header("authorization", authorization_header_value);
     if let Some(account_id) = auth.get_account_id() {
         request = request.header("chatgpt-account-id", account_id);
+    }
+    if auth.is_fedramp_account() {
+        request = request.header("X-OpenAI-Fedramp", "true");
     }
 
     let response = request
