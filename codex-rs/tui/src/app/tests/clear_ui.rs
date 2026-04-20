@@ -75,7 +75,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
     };
 
     app.transcript_cells = vec![
-        make_header(true),
+        make_header(/*is_first*/ true),
         Arc::new(crate::history_cell::new_info_event(
             "startup tip that used to replay".to_string(),
             /*hint*/ None,
