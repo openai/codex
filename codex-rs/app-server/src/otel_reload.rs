@@ -82,7 +82,7 @@ impl OtelReloader {
     }
 
     pub(crate) fn shutdown(&self) {
-        self.logger_layer.replace_provider(None);
+        self.logger_layer.replace_provider(/*provider*/ None);
         let mut state = self
             .state
             .lock()
@@ -130,7 +130,11 @@ mod tests {
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await?;
-        let (layer, reloader) = OtelReloader::new(&initial_config, /*provider*/ None, false);
+        let (layer, reloader) = OtelReloader::new(
+            &initial_config,
+            /*provider*/ None,
+            /*default_analytics_enabled*/ false,
+        );
         let subscriber = tracing_subscriber::registry().with(layer);
         let _guard = tracing::subscriber::set_default(subscriber);
 
