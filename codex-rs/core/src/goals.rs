@@ -930,6 +930,12 @@ impl Session {
         if !self.enabled(Feature::Goals) {
             return Ok(false);
         }
+        if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
+            tracing::debug!(
+                "skipping paused goal auto-resume while current collaboration mode ignores goals"
+            );
+            return Ok(false);
+        }
 
         let _continuation_guard = self.goal_continuation_lock.lock().await;
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
