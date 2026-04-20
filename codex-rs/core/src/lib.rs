@@ -20,6 +20,8 @@ mod compact_remote;
 pub use codex_thread::CodexThread;
 pub use codex_thread::ThreadConfigSnapshot;
 mod agent;
+mod codex_apps_file_download;
+mod codex_apps_mcp_tools;
 mod codex_delegate;
 mod command_canonicalization;
 mod commit_attribution;

@@ -12,6 +12,9 @@ use tracing::error;
 
 use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
+use crate::codex_apps_file_download::maybe_materialize_codex_apps_file_download_result;
+use crate::codex_apps_mcp_tools::CODEX_APPS_META_KEY;
+use crate::codex_apps_mcp_tools::is_direct_exposed_codex_apps_builtin;
 use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
@@ -33,6 +36,7 @@ use crate::session::turn_context::TurnContext;
 use codex_analytics::AppInvocation;
 use codex_analytics::InvocationType;
 use codex_analytics::build_track_events_context;
+use codex_api::OpenAiFileUploadOptions;
 use codex_config::types::AppToolApproval;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -475,6 +479,7 @@ async fn execute_mcp_tool_call(
         turn_context,
         arguments_value,
         metadata.and_then(|metadata| metadata.openai_file_input_params.as_deref()),
+        metadata.and_then(|metadata| metadata.openai_file_upload_options.as_ref()),
     )
     .await?;
     let request_meta =
@@ -487,6 +492,14 @@ async fn execute_mcp_tool_call(
         .call_tool(server, tool_name, rewritten_arguments, request_meta)
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
+    let result = maybe_materialize_codex_apps_file_download_result(
+        sess,
+        turn_context,
+        server,
+        metadata.and_then(|metadata| metadata.codex_apps_meta.as_ref()),
+        result,
+    )
+    .await;
     sanitize_mcp_tool_result_for_model(
         turn_context
             .model_info
@@ -657,12 +670,36 @@ pub(crate) struct McpToolApprovalMetadata {
     mcp_app_resource_uri: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
     openai_file_input_params: Option<Vec<String>>,
+    openai_file_upload_options: Option<OpenAiFileUploadOptions>,
 }
 
-const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 const MCP_TOOL_OPENAI_OUTPUT_TEMPLATE_META_KEY: &str = "openai/outputTemplate";
 const MCP_TOOL_UI_RESOURCE_URI_META_KEY: &str = "ui/resourceUri";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
+const MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY: &str = "openai/fileUploadConfig";
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawOpenAiFileUploadConfig {
+    #[serde(default)]
+    store_in_library: bool,
+}
+
+fn parse_openai_file_upload_options(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<OpenAiFileUploadOptions> {
+    let raw = meta?
+        .get(MCP_TOOL_OPENAI_FILE_UPLOAD_CONFIG_KEY)
+        .cloned()
+        .and_then(|value| serde_json::from_value::<RawOpenAiFileUploadConfig>(value).ok())?;
+
+    if !raw.store_in_library {
+        return None;
+    }
+
+    Some(OpenAiFileUploadOptions {
+        store_in_library: true,
+    })
+}
 
 fn custom_mcp_tool_approval_mode(
     turn_context: &TurnContext,
@@ -709,7 +746,7 @@ fn build_mcp_tool_call_request_meta(
             metadata.and_then(|metadata| metadata.codex_apps_meta.clone())
     {
         request_meta.insert(
-            MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
+            CODEX_APPS_META_KEY.to_string(),
             serde_json::Value::Object(codex_apps_meta),
         );
     }
@@ -1022,7 +1059,11 @@ fn session_mcp_tool_approval_key(
     }
 
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.clone());
-    if invocation.server == CODEX_APPS_MCP_SERVER_NAME && connector_id.is_none() {
+    if is_direct_exposed_codex_apps_builtin(
+        invocation.server.as_str(),
+        connector_id.as_deref(),
+        metadata.and_then(|metadata| metadata.codex_apps_meta.as_ref()),
+    ) {
         return None;
     }
 
@@ -1154,13 +1195,16 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             .tool
             .meta
             .as_ref()
-            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+            .and_then(|meta| meta.get(CODEX_APPS_META_KEY))
             .and_then(serde_json::Value::as_object)
             .cloned(),
         openai_file_input_params: Some(declared_openai_file_input_param_names(
             tool_info.tool.meta.as_deref(),
         ))
         .filter(|params| !params.is_empty()),
+        openai_file_upload_options: parse_openai_file_upload_options(
+            tool_info.tool.meta.as_deref(),
+        ),
     })
 }
 

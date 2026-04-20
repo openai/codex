@@ -45,6 +45,16 @@ fn make_mcp_tool(
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> ToolInfo {
+    make_mcp_tool_with_meta(server_name, tool_name, connector_id, connector_name, None)
+}
+
+fn make_mcp_tool_with_meta(
+    server_name: &str,
+    tool_name: &str,
+    connector_id: Option<&str>,
+    connector_name: Option<&str>,
+    meta: Option<JsonObject>,
+) -> ToolInfo {
     let tool_namespace = if server_name == CODEX_APPS_MCP_SERVER_NAME {
         connector_name
             .map(sanitize_name)
@@ -68,13 +78,25 @@ fn make_mcp_tool(
             annotations: None,
             execution: None,
             icons: None,
-            meta: None,
+            meta: meta.map(rmcp::model::Meta),
         },
         connector_id: connector_id.map(str::to_string),
         connector_name: connector_name.map(str::to_string),
         plugin_display_names: Vec::new(),
         connector_description: None,
     }
+}
+
+fn direct_exposed_builtin_codex_apps_meta() -> JsonObject {
+    serde_json::json!({
+        "_codex_apps": {
+            "provider": "builtin",
+            "direct_expose": true,
+        },
+    })
+    .as_object()
+    .cloned()
+    .expect("tool metadata object")
 }
 
 fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
@@ -256,4 +278,70 @@ async fn always_defer_feature_preserves_explicit_apps() {
         .expect("MCP tools should be discoverable through tool_search");
     assert!(deferred_tools.contains_key("mcp__rmcp__tool"));
     assert!(!deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
+}
+
+#[tokio::test]
+async fn directly_exposes_builtin_codex_apps_tools_marked_for_direct_exposure() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
+    let mcp_tools = HashMap::from([(
+        "mcp__codex_apps__builtin_search_file".to_string(),
+        make_mcp_tool_with_meta(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "builtin_search_file",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+            Some(direct_exposed_builtin_codex_apps_meta()),
+        ),
+    )]);
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        /*connectors*/ None,
+        &[],
+        &config,
+        &tools_config,
+    );
+
+    assert_eq!(
+        exposure.direct_tools.into_keys().collect::<Vec<_>>(),
+        vec!["mcp__codex_apps__builtin_search_file".to_string()]
+    );
+    assert!(exposure.deferred_tools.is_none());
+}
+
+#[tokio::test]
+async fn keeps_direct_exposed_builtin_codex_apps_tools_direct_in_large_search_sets() {
+    let config = test_config().await;
+    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true).await;
+    let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
+    mcp_tools.insert(
+        "mcp__codex_apps__builtin_search_file".to_string(),
+        make_mcp_tool_with_meta(
+            CODEX_APPS_MCP_SERVER_NAME,
+            "builtin_search_file",
+            /*connector_id*/ None,
+            /*connector_name*/ None,
+            Some(direct_exposed_builtin_codex_apps_meta()),
+        ),
+    );
+
+    let exposure = build_mcp_tool_exposure(
+        &mcp_tools,
+        /*connectors*/ None,
+        &[],
+        &config,
+        &tools_config,
+    );
+
+    assert_eq!(
+        exposure.direct_tools.into_keys().collect::<Vec<_>>(),
+        vec!["mcp__codex_apps__builtin_search_file".to_string()]
+    );
+    let deferred_tools = exposure
+        .deferred_tools
+        .as_ref()
+        .expect("large tool sets should be discoverable through tool_search");
+    assert!(deferred_tools.contains_key("mcp__codex_apps__builtin_search_file"));
+    assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
 }
