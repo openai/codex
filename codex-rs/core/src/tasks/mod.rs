@@ -478,9 +478,9 @@ impl Session {
             && let Err(err) = self
                 .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
                 .await
-            {
-                warn!("failed to account thread goal progress after abort: {err}");
-            }
+        {
+            warn!("failed to account thread goal progress after abort: {err}");
+        }
 
         if reason == TurnAbortReason::Interrupted
             && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
