@@ -28,6 +28,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_tools::UPDATE_GOAL_TOOL_NAME;
 use codex_utils_readiness::Readiness;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -445,12 +446,17 @@ impl ToolRegistry {
             }
         }
 
-        if let Err(err) = invocation
-            .session
-            .account_thread_goal_progress(invocation.turn.as_ref(), GoalAccountingBoundary::Tool)
-            .await
-        {
-            warn!("failed to account thread goal progress after tool call: {err}");
+        if tool_name.name != UPDATE_GOAL_TOOL_NAME {
+            if let Err(err) = invocation
+                .session
+                .account_thread_goal_progress(
+                    invocation.turn.as_ref(),
+                    GoalAccountingBoundary::Tool,
+                )
+                .await
+            {
+                warn!("failed to account thread goal progress after tool call: {err}");
+            }
         }
 
         match result {

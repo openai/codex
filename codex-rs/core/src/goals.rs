@@ -739,6 +739,9 @@ impl Session {
                 .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Tool)
                 .await;
         }
+        if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
+            return Ok(());
+        }
 
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
