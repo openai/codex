@@ -233,7 +233,8 @@ fn mitm_enabled_from_network_requirements(layers: &ConfigLayerStack) -> bool {
         .requirements()
         .network
         .as_ref()
-        .and_then(|network| network.value.mitm)
+        .and_then(|network| network.value.mitm.as_ref())
+        .and_then(|mitm| mitm.enabled)
         .unwrap_or(false)
 }
 

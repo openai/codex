@@ -233,7 +233,7 @@ impl std::fmt::Display for NetworkUnixSocketPermissionToml {
 #[derive(Serialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkRequirementsToml {
     pub enabled: Option<bool>,
-    pub mitm: Option<bool>,
+    pub mitm: Option<NetworkMitmRequirementsToml>,
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
@@ -247,10 +247,15 @@ pub struct NetworkRequirementsToml {
     pub allow_local_binding: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetworkMitmRequirementsToml {
+    pub enabled: Option<bool>,
+}
+
 #[derive(Deserialize)]
 struct RawNetworkRequirementsToml {
     enabled: Option<bool>,
-    mitm: Option<bool>,
+    mitm: Option<NetworkMitmRequirementsToml>,
     http_port: Option<u16>,
     socks_port: Option<u16>,
     allow_upstream_proxy: Option<bool>,
@@ -359,7 +364,7 @@ fn legacy_unix_socket_permissions_from_list(
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct NetworkConstraints {
     pub enabled: Option<bool>,
-    pub mitm: Option<bool>,
+    pub mitm: Option<NetworkMitmRequirementsToml>,
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
@@ -2015,11 +2020,13 @@ allowed_approvals_reviewers = ["user"]
         let toml_str = r#"
             [experimental_network]
             enabled = true
-            mitm = true
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
             managed_allowed_domains_only = true
             allow_local_binding = false
+
+            [experimental_network.mitm]
+            enabled = true
 
             [experimental_network.domains]
             "api.example.com" = "allow"
@@ -2041,7 +2048,12 @@ allowed_approvals_reviewers = ["user"]
 
         assert_eq!(sourced_network.source, source);
         assert_eq!(sourced_network.value.enabled, Some(true));
-        assert_eq!(sourced_network.value.mitm, Some(true));
+        assert_eq!(
+            sourced_network.value.mitm,
+            Some(NetworkMitmRequirementsToml {
+                enabled: Some(true)
+            })
+        );
         assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
         assert_eq!(
             sourced_network.value.dangerously_allow_all_unix_sockets,

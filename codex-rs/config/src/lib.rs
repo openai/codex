@@ -39,6 +39,7 @@ pub use config_requirements::McpServerRequirement;
 pub use config_requirements::NetworkConstraints;
 pub use config_requirements::NetworkDomainPermissionToml;
 pub use config_requirements::NetworkDomainPermissionsToml;
+pub use config_requirements::NetworkMitmRequirementsToml;
 pub use config_requirements::NetworkRequirementsToml;
 pub use config_requirements::NetworkUnixSocketPermissionToml;
 pub use config_requirements::NetworkUnixSocketPermissionsToml;

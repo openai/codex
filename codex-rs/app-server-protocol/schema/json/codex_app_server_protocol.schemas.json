@@ -10023,6 +10023,17 @@
         ],
         "type": "string"
       },
+      "NetworkMitmRequirements": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "NetworkRequirements": {
         "properties": {
           "allowLocalBinding": {
@@ -10111,9 +10122,13 @@
             ]
           },
           "mitm": {
-            "type": [
-              "boolean",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/NetworkMitmRequirements"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "socksPort": {

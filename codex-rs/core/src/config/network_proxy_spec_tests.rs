@@ -52,7 +52,7 @@ fn constructor_rejects_mitm_without_managed_network_requirement() {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert!(
         err.to_string()
-            .contains("network MITM settings are configured, but `experimental_network.mitm = true` is not enabled in managed requirements")
+            .contains("network MITM settings are configured, but `experimental_network.mitm.enabled = true` is not enabled in managed requirements")
     );
 }
 
@@ -64,7 +64,9 @@ fn constructor_allows_mitm_with_managed_network_requirement() {
     NetworkProxySpec::from_config_and_constraints(
         config,
         Some(NetworkConstraints {
-            mitm: Some(true),
+            mitm: Some(crate::config_loader::NetworkMitmRequirementsToml {
+                enabled: Some(true),
+            }),
             ..Default::default()
         }),
         &SandboxPolicy::new_read_only_policy(),

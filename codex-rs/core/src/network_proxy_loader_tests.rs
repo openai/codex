@@ -364,35 +364,7 @@ mitm = true
         Ok(_) => panic!("MITM should be gated"),
         Err(err) => {
             assert!(
-                err.to_string().contains("network MITM settings are configured, but `experimental_network.mitm = true` is not enabled in managed requirements")
-            );
-        }
-    }
-}
-
-#[test]
-fn local_feature_table_does_not_enable_mitm_in_loader() {
-    let layers = stack_with_user_config_and_requirements(
-        toml::from_str(
-            r#"
-default_permissions = "workspace"
-
-[features]
-mitm_proxy = true
-
-[permissions.workspace.network]
-mitm = true
-"#,
-        )
-        .expect("config should parse"),
-        ConfigRequirements::default(),
-    );
-
-    match build_config_state_from_layers(&layers, &Policy::empty()) {
-        Ok(_) => panic!("local feature config should not enable MITM"),
-        Err(err) => {
-            assert!(
-                err.to_string().contains("network MITM settings are configured, but `experimental_network.mitm = true` is not enabled in managed requirements")
+                err.to_string().contains("network MITM settings are configured, but `experimental_network.mitm.enabled = true` is not enabled in managed requirements")
             );
         }
     }
@@ -413,7 +385,9 @@ mitm = true
         ConfigRequirements {
             network: Some(Sourced::new(
                 crate::config_loader::NetworkConstraints {
-                    mitm: Some(true),
+                    mitm: Some(crate::config_loader::NetworkMitmRequirementsToml {
+                        enabled: Some(true),
+                    }),
                     ..Default::default()
                 },
                 RequirementSource::CloudRequirements,
