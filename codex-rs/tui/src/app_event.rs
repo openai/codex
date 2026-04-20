@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
@@ -322,11 +323,14 @@ pub(crate) enum AppEvent {
     PluginInstallAuthAbandon,
 
     /// Fetch MCP inventory via app-server RPCs and render it into history.
-    FetchMcpInventory,
+    FetchMcpInventory {
+        detail: McpServerStatusDetail,
+    },
 
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
         result: Result<Vec<McpServerStatus>, String>,
+        detail: McpServerStatusDetail,
     },
 
     /// Result of the startup skills refresh that runs after the first frame is scheduled.

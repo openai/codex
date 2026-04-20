@@ -2054,14 +2054,18 @@ impl App {
     /// tradeoff because the effect is limited to stale inventory output in history,
     /// while request-token invalidation would add cross-cutting async state for a
     /// low-severity path.
-    fn fetch_mcp_inventory(&mut self, app_server: &AppServerSession) {
+    fn fetch_mcp_inventory(
+        &mut self,
+        app_server: &AppServerSession,
+        detail: McpServerStatusDetail,
+    ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = fetch_all_mcp_server_statuses(request_handle)
+            let result = fetch_all_mcp_server_statuses(request_handle, detail)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+            app_event_tx.send(AppEvent::McpInventoryLoaded { result, detail });
         });
     }
 
@@ -2371,7 +2375,11 @@ impl App {
     ///
     /// When both the local config and the app-server report zero servers, a special
     /// "empty" cell is shown instead of the full table.
-    fn handle_mcp_inventory_result(&mut self, result: Result<Vec<McpServerStatus>, String>) {
+    fn handle_mcp_inventory_result(
+        &mut self,
+        result: Result<Vec<McpServerStatus>, String>,
+        detail: McpServerStatusDetail,
+    ) {
         let config = self.chat_widget.config_ref().clone();
         self.chat_widget.clear_mcp_inventory_loading();
         self.clear_committed_mcp_inventory_loading();
@@ -2393,9 +2401,7 @@ impl App {
 
         self.chat_widget
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
-                &config,
-                &statuses,
-                McpServerStatusDetail::ToolsAndAuthOnly,
+                &config, &statuses, detail,
             ));
     }
 
@@ -4953,11 +4959,11 @@ impl App {
                         .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
                 }
             }
-            AppEvent::FetchMcpInventory => {
-                self.fetch_mcp_inventory(app_server);
+            AppEvent::FetchMcpInventory { detail } => {
+                self.fetch_mcp_inventory(app_server, detail);
             }
-            AppEvent::McpInventoryLoaded { result } => {
-                self.handle_mcp_inventory_result(result);
+            AppEvent::McpInventoryLoaded { result, detail } => {
+                self.handle_mcp_inventory_result(result, detail);
             }
             AppEvent::SkillsListLoaded { result } => {
                 self.handle_skills_list_result(
@@ -6643,6 +6649,7 @@ fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
 /// the inventory atomically. Each page requests up to 100 entries.
 async fn fetch_all_mcp_server_statuses(
     request_handle: AppServerRequestHandle,
+    detail: McpServerStatusDetail,
 ) -> Result<Vec<McpServerStatus>> {
     let mut cursor = None;
     let mut statuses = Vec::new();
@@ -6655,7 +6662,7 @@ async fn fetch_all_mcp_server_statuses(
                 params: ListMcpServerStatusParams {
                     cursor: cursor.clone(),
                     limit: Some(100),
-                    detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+                    detail: Some(detail),
                 },
             })
             .await
@@ -7098,13 +7105,16 @@ mod tests {
                 /*animations_enabled*/ false,
             )));
 
-        app.handle_mcp_inventory_result(Ok(vec![McpServerStatus {
-            name: "docs".to_string(),
-            tools: HashMap::new(),
-            resources: Vec::new(),
-            resource_templates: Vec::new(),
-            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-        }]));
+        app.handle_mcp_inventory_result(
+            Ok(vec![McpServerStatus {
+                name: "docs".to_string(),
+                tools: HashMap::new(),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            }]),
+            McpServerStatusDetail::ToolsAndAuthOnly,
+        );
 
         assert_eq!(app.transcript_cells.len(), 0);
     }
