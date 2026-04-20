@@ -1,0 +1,5 @@
+# Core crate ownership.
+/codex-rs/core/ @openai/codex-core-agent-team
+
+# Keep ownership changes reviewed by the same team.
+/.github/CODEOWNERS @openai/codex-core-agent-team

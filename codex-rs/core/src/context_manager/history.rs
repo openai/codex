@@ -649,8 +649,8 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
     match item {
         ResponseItem::Message { content, .. } => {
             for content_item in content {
-                if let ContentItem::InputImage { image_url } = content_item {
-                    accumulate(image_url, None);
+                if let ContentItem::InputImage { image_url, detail } = content_item {
+                    accumulate(image_url, *detail);
                 }
             }
         }

@@ -100,6 +100,7 @@ mod tests {
                 page_size: 10,
                 cursor: None,
                 sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: crate::SortDirection::Desc,
                 allowed_sources: Vec::new(),
                 model_providers: None,
                 archived: true,

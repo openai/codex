@@ -321,7 +321,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn queued_inter_agent_mail_waits_for_request_boundary_after_reasoning_item() {
+async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
     let (gate_reasoning_done_tx, gate_reasoning_done_rx) = oneshot::channel();
 
     let first_chunks = vec![
@@ -331,18 +331,14 @@ async fn queued_inter_agent_mail_waits_for_request_boundary_after_reasoning_item
             gate_reasoning_done_rx,
             vec![
                 ev_reasoning_item("reason-1", &["thinking"], &[]),
-                ev_message_item_added("msg-preserved", ""),
-                ev_output_text_delta("preserved commentary"),
-                json!({
-                    "type": "response.output_item.done",
-                    "item": {
-                        "type": "message",
-                        "role": "assistant",
-                        "id": "msg-preserved",
-                        "content": [{"type": "output_text", "text": "preserved commentary"}],
-                        "phase": "commentary",
-                    }
-                }),
+                ev_function_call(
+                    "call-stale",
+                    "shell",
+                    r#"{"command":"echo stale tool call"}"#,
+                ),
+                ev_message_item_added("msg-stale", ""),
+                ev_output_text_delta("stale final"),
+                ev_message_item_done("msg-stale", "stale final"),
                 ev_completed("resp-1"),
             ],
         ),
@@ -370,7 +366,7 @@ async fn queued_inter_agent_mail_waits_for_request_boundary_after_reasoning_item
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn queued_inter_agent_mail_waits_for_request_boundary_after_commentary_message_item() {
+async fn queued_inter_agent_mail_triggers_follow_up_after_commentary_message_item() {
     let (gate_message_done_tx, gate_message_done_rx) = oneshot::channel();
 
     let first_chunks = vec![
@@ -379,18 +375,25 @@ async fn queued_inter_agent_mail_waits_for_request_boundary_after_commentary_mes
         gated_chunk(
             gate_message_done_rx,
             vec![
-                ev_output_text_delta("first commentary"),
+                ev_output_text_delta("first answer"),
                 json!({
                     "type": "response.output_item.done",
                     "item": {
                         "type": "message",
                         "role": "assistant",
                         "id": "msg-1",
-                        "content": [{"type": "output_text", "text": "first commentary"}],
+                        "content": [{"type": "output_text", "text": "first answer"}],
                         "phase": "commentary",
                     }
                 }),
-                ev_function_call("call-preserved", "test_tool", "{}"),
+                ev_function_call(
+                    "call-stale",
+                    "shell",
+                    r#"{"command":"echo stale tool call"}"#,
+                ),
+                ev_message_item_added("msg-stale", ""),
+                ev_output_text_delta("stale final"),
+                ev_message_item_done("msg-stale", "stale final"),
                 ev_completed("resp-1"),
             ],
         ),
@@ -416,7 +419,7 @@ async fn queued_inter_agent_mail_waits_for_request_boundary_after_commentary_mes
 
     let _ = gate_message_done_tx.send(());
 
-    wait_for_agent_message(&codex, "first commentary").await;
+    wait_for_agent_message(&codex, "first answer").await;
 
     wait_for_turn_complete(&codex).await;
 

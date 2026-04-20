@@ -27,10 +27,11 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
+use crate::transport::RemoteControlStartOptions;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
-use crate::transport::start_remote_control;
+use crate::transport::start_remote_control_with_options;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
 use codex_analytics::AppServerRpcTransport;
@@ -280,21 +281,16 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ true,
     ) {
-        if !matches!(layer.name, ConfigLayerSource::Project { .. })
-            || layer.disabled_reason.is_none()
-        {
+        let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
             continue;
-        }
-        if let ConfigLayerSource::Project { dot_codex_folder } = &layer.name {
-            disabled_folders.push((
-                dot_codex_folder.as_path().display().to_string(),
-                layer
-                    .disabled_reason
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "config.toml is disabled.".to_string()),
-            ));
-        }
+        };
+        let Some(disabled_reason) = &layer.disabled_reason else {
+            continue;
+        };
+        disabled_folders.push((
+            dot_codex_folder.as_path().display().to_string(),
+            disabled_reason.clone(),
+        ));
     }
 
     if disabled_folders.is_empty() {
@@ -302,8 +298,8 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
     }
 
     let mut message = concat!(
-        "Project config.toml files are disabled in the following folders. ",
-        "Settings in those files are ignored, but skills and exec policies still load.\n",
+        "Project-local config, hooks, and exec policies are disabled in the following folders ",
+        "until the project is trusted, but skills still load.\n",
     )
     .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
@@ -580,16 +576,17 @@ pub async fn run_main_with_transport(
         ));
     }
 
-    let (remote_control_accept_handle, remote_control_handle) = start_remote_control(
-        config.chatgpt_base_url.clone(),
-        state_db.clone(),
-        auth_manager.clone(),
-        transport_event_tx.clone(),
-        transport_shutdown_token.clone(),
-        app_server_client_name_rx,
-        remote_control_enabled,
-    )
-    .await?;
+    let (remote_control_accept_handle, remote_control_handle) =
+        start_remote_control_with_options(RemoteControlStartOptions {
+            remote_control_url: config.chatgpt_base_url.clone(),
+            state_db: state_db.clone(),
+            auth_manager: auth_manager.clone(),
+            transport_event_tx: transport_event_tx.clone(),
+            shutdown_token: transport_shutdown_token.clone(),
+            app_server_client_name_rx,
+            initial_enabled: remote_control_enabled,
+        })
+        .await?;
     transport_accept_handles.push(remote_control_accept_handle);
 
     let outbound_handle = tokio::spawn(async move {

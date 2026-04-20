@@ -112,6 +112,12 @@ pub enum ThreadSortKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadListLayout {
     NestedByDate,
     Flat,
@@ -124,26 +130,28 @@ pub struct ThreadListConfig<'a> {
     pub layout: ThreadListLayout,
 }
 
-/// Pagination cursor identifying a file by timestamp and UUID.
+/// Pagination cursor identifying the timestamp of the last item in a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
     ts: OffsetDateTime,
-    id: Uuid,
 }
 
 impl Cursor {
-    fn new(ts: OffsetDateTime, id: Uuid) -> Self {
-        Self { ts, id }
+    fn new(ts: OffsetDateTime) -> Self {
+        Self { ts }
+    }
+
+    pub(crate) fn timestamp(&self) -> OffsetDateTime {
+        self.ts
     }
 }
 
 /// Keeps track of where a paginated listing left off. As the file scan goes newest -> oldest,
-/// it ignores everything until it reaches the last seen item from the previous page, then
+/// it ignores everything until it passes the last seen timestamp from the previous page, then
 /// starts returning results after that. This makes paging stable even if new files show up during
 /// pagination.
 struct AnchorState {
     ts: OffsetDateTime,
-    id: Uuid,
     passed: bool,
 }
 
@@ -152,22 +160,20 @@ impl AnchorState {
         match anchor {
             Some(cursor) => Self {
                 ts: cursor.ts,
-                id: cursor.id,
                 passed: false,
             },
             None => Self {
                 ts: OffsetDateTime::UNIX_EPOCH,
-                id: Uuid::nil(),
                 passed: true,
             },
         }
     }
 
-    fn should_skip(&mut self, ts: OffsetDateTime, id: Uuid) -> bool {
+    fn should_skip(&mut self, ts: OffsetDateTime, _id: Uuid) -> bool {
         if self.passed {
             return false;
         }
-        if ts < self.ts || (ts == self.ts && id < self.id) {
+        if ts < self.ts {
             self.passed = true;
             false
         } else {
@@ -275,7 +281,7 @@ impl serde::Serialize for Cursor {
             .ts
             .format(&Rfc3339)
             .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
-        serializer.serialize_str(&format!("{ts_str}|{}", self.id))
+        serializer.serialize_str(&ts_str)
     }
 }
 
@@ -296,14 +302,14 @@ impl From<codex_state::Anchor> for Cursor {
             .timestamp_nanos_opt()
             .and_then(|nanos| OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).ok())
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        Self::new(ts, anchor.id)
+        Self::new(ts)
     }
 }
 
 /// Retrieve recorded thread file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
 /// concurrent new sessions being appended. Ordering is stable by the requested sort key
-/// (timestamp desc, then UUID desc).
+/// (timestamp desc).
 pub async fn get_threads(
     codex_home: &Path,
     page_size: usize,
@@ -657,31 +663,27 @@ async fn traverse_flat_paths_updated(
     })
 }
 
-/// Pagination cursor token format: "<ts>|<uuid>" where `ts` uses
-/// YYYY-MM-DDThh-mm-ss (UTC, second precision).
-/// The cursor orders files by the requested sort key (timestamp desc, then UUID desc).
+/// Pagination cursor token format: an RFC3339 timestamp.
 pub fn parse_cursor(token: &str) -> Option<Cursor> {
-    let (file_ts, uuid_str) = token.split_once('|')?;
-
-    let Ok(uuid) = Uuid::parse_str(uuid_str) else {
+    if token.contains('|') {
         return None;
-    };
+    }
 
-    let ts = OffsetDateTime::parse(file_ts, &Rfc3339).ok().or_else(|| {
+    let ts = OffsetDateTime::parse(token, &Rfc3339).ok().or_else(|| {
         let format: &[FormatItem] =
             format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
-        PrimitiveDateTime::parse(file_ts, format)
+        PrimitiveDateTime::parse(token, format)
             .ok()
             .map(PrimitiveDateTime::assume_utc)
     })?;
 
-    Some(Cursor::new(ts, uuid))
+    Some(Cursor::new(ts))
 }
 
 fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {
     let last = items.last()?;
     let file_name = last.path.file_name()?.to_string_lossy();
-    let (created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    let (created_ts, _id) = parse_timestamp_uuid_from_filename(&file_name)?;
     let ts = match sort_key {
         ThreadSortKey::CreatedAt => created_ts,
         ThreadSortKey::UpdatedAt => {
@@ -689,7 +691,7 @@ fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cu
             OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
         }
     };
-    Some(Cursor::new(ts, id))
+    Some(Cursor::new(ts))
 }
 
 async fn build_thread_item(
@@ -1080,6 +1082,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::Compacted(_) => {
                 // Not included in `head`; skip.
             }
+            RolloutItem::SessionState(_) => {
+                // Not included in `head`; skip.
+            }
             RolloutItem::EventMsg(ev) => {
                 if let EventMsg::UserMessage(user) = ev {
                     summary.saw_user_event = true;
@@ -1132,6 +1137,7 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                     }
                 }
                 RolloutItem::Compacted(_)
+                | RolloutItem::SessionState(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => {}
             }

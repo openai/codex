@@ -720,6 +720,7 @@ pub(crate) fn build_guardian_review_session_config(
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
+    guardian_config.include_skill_instructions = false;
     guardian_config.developer_instructions = Some(
         parent_config
             .guardian_policy_config
@@ -872,6 +873,22 @@ mod tests {
         .expect("guardian config");
 
         assert!(!guardian_config.features.enabled(Feature::CodexHooks));
+    }
+
+    #[tokio::test]
+    async fn guardian_review_session_config_disables_skill_instructions() {
+        let mut parent_config = crate::config::test_config().await;
+        parent_config.include_skill_instructions = true;
+
+        let guardian_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("guardian config");
+
+        assert!(!guardian_config.include_skill_instructions);
     }
 
     #[tokio::test(flavor = "current_thread")]

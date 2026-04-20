@@ -1,4 +1,6 @@
 use super::*;
+use crate::agent_identity::RegisteredAgentTask;
+use crate::agent_identity::StoredAgentIdentity;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -8,19 +10,33 @@ use crate::config_loader::NetworkDomainPermissionToml;
 use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::config_loader::project_trust_key;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
+use crate::skills::SkillRenderSideEffects;
+use crate::skills::render::SkillMetadataBudget;
 use crate::tools::format_exec_output_str;
-
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use chrono::SecondsFormat;
+use chrono::Utc;
 use codex_features::Feature;
 use codex_features::Features;
+use codex_login::AgentIdentityAuthRecord;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthDotJson;
 use codex_login::CodexAuth;
+use codex_login::save_auth;
+use codex_login::token_data::IdTokenInfo;
+use codex_login::token_data::TokenData;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -53,10 +69,17 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
+use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ProjectConfig;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
+use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
+use codex_otel::THREAD_SKILLS_TRUNCATED_METRIC;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -82,6 +105,7 @@ use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TokenCountEvent;
@@ -102,15 +126,32 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
+use crypto_box::SecretKey as Curve25519SecretKey;
+use ed25519_dalek::SigningKey;
+use ed25519_dalek::pkcs8::EncodePrivateKey;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Metric;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use sha2::Digest as _;
+use sha2::Sha512;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
@@ -148,6 +189,54 @@ fn assistant_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+    }
+}
+
+fn test_session_telemetry_without_metadata() -> SessionTelemetry {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
+    SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        /*account_id*/ None,
+        /*account_email*/ None,
+        /*auth_mode*/ None,
+        "test_originator".to_string(),
+        /*log_user_prompts*/ false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics_without_metadata_tags(metrics)
+}
+
+fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
+    for scope_metrics in resource_metrics.scope_metrics() {
+        for metric in scope_metrics.metrics() {
+            if metric.name() == name {
+                return metric;
+            }
+        }
+    }
+    panic!("metric {name} missing");
+}
+
+fn histogram_sum(resource_metrics: &ResourceMetrics, name: &str) -> u64 {
+    let metric = find_metric(resource_metrics, name);
+    match metric.data() {
+        AggregatedMetrics::F64(data) => match data {
+            MetricData::Histogram(histogram) => {
+                let points: Vec<_> = histogram.data_points().collect();
+                assert_eq!(points.len(), 1);
+                points[0].sum().round() as u64
+            }
+            _ => panic!("unexpected histogram aggregation"),
+        },
+        _ => panic!("unexpected metric data type"),
     }
 }
 
@@ -301,6 +390,75 @@ fn user_input_texts(items: &[ResponseItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+fn write_project_hooks(dot_codex: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dot_codex)?;
+    std::fs::write(
+        dot_codex.join("hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo hello from hook"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )
+}
+
+async fn write_project_trust_config(
+    codex_home: &Path,
+    trusted_projects: &[(&Path, TrustLevel)],
+) -> std::io::Result<()> {
+    tokio::fs::write(
+        codex_home.join(codex_config::CONFIG_TOML_FILE),
+        toml::to_string(&ConfigToml {
+            projects: Some(
+                trusted_projects
+                    .iter()
+                    .map(|(project, trust_level)| {
+                        (
+                            project_trust_key(project),
+                            ProjectConfig {
+                                trust_level: Some(*trust_level),
+                            },
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>(),
+            ),
+            ..Default::default()
+        })
+        .expect("serialize config"),
+    )
+    .await
+}
+
+async fn preview_session_start_hooks(
+    config: &crate::config::Config,
+) -> std::io::Result<Vec<codex_protocol::protocol::HookRunSummary>> {
+    let hooks = Hooks::new(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(config.config_layer_stack.clone()),
+        ..HooksConfig::default()
+    });
+
+    Ok(
+        hooks.preview_session_start(&codex_hooks::SessionStartRequest {
+            session_id: ThreadId::new(),
+            cwd: config.cwd.clone(),
+            transcript_path: None,
+            model: "gpt-5".to_string(),
+            permission_mode: "default".to_string(),
+            source: codex_hooks::SessionStartSource::Startup,
+        }),
+    )
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
@@ -1130,6 +1288,120 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
+}
+
+#[tokio::test]
+async fn record_initial_history_restores_latest_persisted_agent_task() {
+    let auth = make_chatgpt_auth("account-123", Some("user-123"));
+    seed_stored_identity(&auth, "agent-123", "account-123");
+    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
+        auth,
+        "https://chatgpt.com/backend-api".to_string(),
+    )
+    .await;
+    let expected = RegisteredAgentTask {
+        agent_runtime_id: "agent-123".to_string(),
+        task_id: "task-123".to_string(),
+        registered_at: "2026-03-23T12:00:00Z".to_string(),
+    };
+    let rollout_items = vec![
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: Some(expected.to_session_agent_task()),
+        }),
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: None,
+        }),
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: Some(expected.to_session_agent_task()),
+        }),
+    ];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    assert_eq!(
+        session.state.lock().await.agent_task(),
+        Some(expected.to_session_agent_task())
+    );
+}
+
+#[tokio::test]
+async fn record_initial_history_discards_persisted_agent_task_for_different_identity() {
+    let auth = make_chatgpt_auth("account-123", Some("user-123"));
+    seed_stored_identity(&auth, "agent-123", "account-123");
+    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
+        auth,
+        "https://chatgpt.com/backend-api".to_string(),
+    )
+    .await;
+    let rollout_items = vec![RolloutItem::SessionState(
+        codex_protocol::protocol::SessionStateUpdate {
+            agent_task: Some(
+                RegisteredAgentTask {
+                    agent_runtime_id: "agent-other".to_string(),
+                    task_id: "task-other".to_string(),
+                    registered_at: "2026-03-23T12:00:00Z".to_string(),
+                }
+                .to_session_agent_task(),
+            ),
+        },
+    )];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    assert_eq!(session.state.lock().await.agent_task(), None);
+}
+
+#[tokio::test]
+async fn record_initial_history_honors_cleared_persisted_agent_task() {
+    let (session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        state.set_agent_task(
+            RegisteredAgentTask {
+                agent_runtime_id: "agent-fresh".to_string(),
+                task_id: "task-fresh".to_string(),
+                registered_at: "2026-03-23T12:01:00Z".to_string(),
+            }
+            .to_session_agent_task(),
+        );
+    }
+    let rollout_items = vec![
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: Some(
+                RegisteredAgentTask {
+                    agent_runtime_id: "agent-123".to_string(),
+                    task_id: "task-123".to_string(),
+                    registered_at: "2026-03-23T12:00:00Z".to_string(),
+                }
+                .to_session_agent_task(),
+            ),
+        }),
+        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
+            agent_task: None,
+        }),
+    ];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    assert_eq!(session.state.lock().await.agent_task(), None);
 }
 
 #[tokio::test]
@@ -2070,6 +2342,7 @@ async fn set_rate_limits_retains_previous_credits() {
             balance: Some("10.00".to_string()),
         }),
         plan_type: Some(codex_protocol::account::PlanType::Plus),
+        rate_limit_reached_type: None,
     };
     state.set_rate_limits(initial.clone());
 
@@ -2088,6 +2361,7 @@ async fn set_rate_limits_retains_previous_credits() {
         }),
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     };
     state.set_rate_limits(update.clone());
 
@@ -2100,6 +2374,7 @@ async fn set_rate_limits_retains_previous_credits() {
             secondary: update.secondary,
             credits: initial.credits,
             plan_type: initial.plan_type,
+            rate_limit_reached_type: None,
         })
     );
 }
@@ -2176,6 +2451,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             balance: Some("15.00".to_string()),
         }),
         plan_type: Some(codex_protocol::account::PlanType::Plus),
+        rate_limit_reached_type: None,
     };
     state.set_rate_limits(initial.clone());
 
@@ -2190,6 +2466,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         secondary: None,
         credits: None,
         plan_type: Some(codex_protocol::account::PlanType::Pro),
+        rate_limit_reached_type: None,
     };
     state.set_rate_limits(update.clone());
 
@@ -2202,6 +2479,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
             secondary: update.secondary,
             credits: initial.credits,
             plan_type: update.plan_type,
+            rate_limit_reached_type: None,
         })
     );
 }
@@ -3027,6 +3305,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
+        agent_task_registration_lock: Mutex::new(()),
     };
 
     (session, turn_context)
@@ -3776,19 +4055,25 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         .expect("ephemeral guardian review should receive a shutdown op");
 }
 
-pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
+async fn make_session_and_context_with_auth_and_config_and_rx<F>(
+    auth: CodexAuth,
     dynamic_tools: Vec<DynamicToolSpec>,
+    configure_config: F,
 ) -> (
     Arc<Session>,
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
-) {
+)
+where
+    F: FnOnce(&mut Config),
+{
     let (tx_event, rx_event) = async_channel::unbounded();
     let codex_home = tempfile::tempdir().expect("create temp dir");
-    let config = build_test_config(codex_home.path()).await;
+    let mut config = build_test_config(codex_home.path()).await;
+    configure_config(&mut config);
     let config = Arc::new(config);
     let conversation_id = ThreadId::default();
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager = AuthManager::from_auth_for_testing(auth);
     let models_manager = Arc::new(ModelsManager::new(
         config.codex_home.to_path_buf(),
         auth_manager.clone(),
@@ -3990,9 +4275,43 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
+        agent_task_registration_lock: Mutex::new(()),
     });
 
     (session, turn_context, rx_event)
+}
+
+pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
+    dynamic_tools: Vec<DynamicToolSpec>,
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
+    make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        dynamic_tools,
+        |_config| {},
+    )
+    .await
+}
+
+async fn make_agent_identity_session_and_context_with_rx(
+    auth: CodexAuth,
+    chatgpt_base_url: String,
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
+    make_session_and_context_with_auth_and_config_and_rx(auth, Vec::new(), move |config| {
+        config.chatgpt_base_url = chatgpt_base_url;
+        config
+            .features
+            .enable(Feature::UseAgentIdentity)
+            .expect("test config should allow use_agent_identity");
+    })
+    .await
 }
 
 // Like make_session_and_context, but returns Arc<Session> and the event receiver
@@ -4032,6 +4351,221 @@ async fn fail_agent_identity_registration_emits_error_without_shutdown() {
     }
 
     assert!(rx_event.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn startup_agent_task_prewarm_caches_registered_task() {
+    let server = MockServer::start().await;
+    let chatgpt_base_url = server.uri();
+    let auth = make_chatgpt_auth("account-123", Some("user-123"));
+    let stored_identity = seed_stored_identity(&auth, "agent-123", "account-123");
+    let encrypted_task_id =
+        encrypt_task_id_for_identity(&stored_identity, "task_123").expect("task ciphertext");
+    mount_human_biscuit(&server, &chatgpt_base_url, "agent-123").await;
+    Mock::given(method("POST"))
+        .and(path("/v1/agent/agent-123/task/register"))
+        .and(header("x-openai-authorization", "human-biscuit"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "encrypted_task_id": encrypted_task_id,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (session, _turn_context, rx_event) =
+        make_agent_identity_session_and_context_with_rx(auth, chatgpt_base_url).await;
+
+    session.maybe_prewarm_agent_task_registration().await;
+
+    let cached_task = session
+        .state
+        .lock()
+        .await
+        .agent_task()
+        .expect("task should be cached");
+    assert_eq!(cached_task.agent_runtime_id, "agent-123");
+    assert_eq!(cached_task.task_id, "task_123");
+    assert!(rx_event.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn startup_agent_task_prewarm_failure_does_not_emit_error() {
+    let server = MockServer::start().await;
+    let chatgpt_base_url = server.uri();
+    let auth = make_chatgpt_auth("account-123", Some("user-123"));
+    seed_stored_identity(&auth, "agent-123", "account-123");
+    mount_human_biscuit(&server, &chatgpt_base_url, "agent-123").await;
+    Mock::given(method("POST"))
+        .and(path("/v1/agent/agent-123/task/register"))
+        .and(header("x-openai-authorization", "human-biscuit"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (session, _turn_context, rx_event) =
+        make_agent_identity_session_and_context_with_rx(auth, chatgpt_base_url).await;
+
+    session.maybe_prewarm_agent_task_registration().await;
+
+    assert_eq!(session.state.lock().await.agent_task(), None);
+    assert!(rx_event.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn cached_agent_task_for_current_identity_clears_stale_task() {
+    let auth = make_chatgpt_auth("account-123", Some("user-123"));
+    seed_stored_identity(&auth, "agent-123", "account-123");
+    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
+        auth,
+        "https://chatgpt.com/backend-api".to_string(),
+    )
+    .await;
+    {
+        let mut state = session.state.lock().await;
+        state.set_agent_task(
+            RegisteredAgentTask {
+                agent_runtime_id: "agent-old".to_string(),
+                task_id: "task-old".to_string(),
+                registered_at: "2026-04-15T00:00:00Z".to_string(),
+            }
+            .to_session_agent_task(),
+        );
+    }
+
+    assert_eq!(session.cached_agent_task_for_current_identity().await, None);
+    assert_eq!(session.state.lock().await.agent_task(), None);
+}
+
+fn seed_stored_identity(
+    auth: &CodexAuth,
+    agent_runtime_id: &str,
+    account_id: &str,
+) -> StoredAgentIdentity {
+    let signing_key = generate_test_signing_key();
+    let private_key_pkcs8 = signing_key
+        .to_pkcs8_der()
+        .expect("encode test signing key as PKCS#8");
+    let stored_identity = StoredAgentIdentity {
+        binding_id: format!("chatgpt-account-{account_id}"),
+        chatgpt_account_id: account_id.to_string(),
+        chatgpt_user_id: Some("user-123".to_string()),
+        agent_runtime_id: agent_runtime_id.to_string(),
+        private_key_pkcs8_base64: BASE64_STANDARD.encode(private_key_pkcs8.as_bytes()),
+        public_key_ssh: "ssh-ed25519 test".to_string(),
+        registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        abom: crate::agent_identity::AgentBillOfMaterials {
+            agent_version: env!("CARGO_PKG_VERSION").to_string(),
+            agent_harness_id: "codex-cli".to_string(),
+            running_location: format!("{}-{}", SessionSource::Exec, std::env::consts::OS),
+        },
+    };
+
+    auth.set_agent_identity(AgentIdentityAuthRecord {
+        workspace_id: account_id.to_string(),
+        chatgpt_user_id: stored_identity.chatgpt_user_id.clone(),
+        agent_runtime_id: stored_identity.agent_runtime_id.clone(),
+        agent_private_key: stored_identity.private_key_pkcs8_base64.clone(),
+        registered_at: stored_identity.registered_at.clone(),
+        background_task_id: None,
+    })
+    .expect("store identity");
+
+    stored_identity
+}
+
+fn encrypt_task_id_for_identity(
+    stored_identity: &StoredAgentIdentity,
+    task_id: &str,
+) -> anyhow::Result<String> {
+    let signing_key = stored_identity.signing_key()?;
+    let mut rng = crypto_box::aead::OsRng;
+    let public_key = curve25519_secret_key_from_signing_key_for_tests(&signing_key).public_key();
+    let ciphertext = public_key
+        .seal(&mut rng, task_id.as_bytes())
+        .map_err(|_| anyhow::anyhow!("failed to encrypt test task id"))?;
+    Ok(BASE64_STANDARD.encode(ciphertext))
+}
+
+fn curve25519_secret_key_from_signing_key_for_tests(
+    signing_key: &SigningKey,
+) -> Curve25519SecretKey {
+    let digest = Sha512::digest(signing_key.to_bytes());
+    let mut secret_key = [0u8; 32];
+    secret_key.copy_from_slice(&digest[..32]);
+    secret_key[0] &= 248;
+    secret_key[31] &= 127;
+    secret_key[31] |= 64;
+    Curve25519SecretKey::from(secret_key)
+}
+
+fn generate_test_signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[7u8; 32])
+}
+
+async fn mount_human_biscuit(server: &MockServer, chatgpt_base_url: &str, agent_runtime_id: &str) {
+    let biscuit_url = format!(
+        "{}/authenticate_app_v2",
+        chatgpt_base_url.trim_end_matches('/')
+    );
+    let biscuit_path = reqwest::Url::parse(&biscuit_url)
+        .expect("biscuit URL parses")
+        .path()
+        .to_string();
+    let target_url = format!(
+        "{}/v1/agent/{agent_runtime_id}/task/register",
+        chatgpt_base_url.trim_end_matches('/')
+    );
+    Mock::given(method("GET"))
+        .and(path(biscuit_path))
+        .and(header("authorization", "Bearer access-token-account-123"))
+        .and(header("x-original-method", "POST"))
+        .and(header("x-original-url", target_url))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("x-openai-authorization", "human-biscuit"),
+        )
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+fn make_chatgpt_auth(account_id: &str, user_id: Option<&str>) -> CodexAuth {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let auth_json = AuthDotJson {
+        auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: IdTokenInfo {
+                email: None,
+                chatgpt_plan_type: None,
+                chatgpt_user_id: user_id.map(ToOwned::to_owned),
+                chatgpt_account_id: Some(account_id.to_string()),
+                chatgpt_account_is_fedramp: false,
+                raw_jwt: fake_id_token(account_id, user_id),
+            },
+            access_token: format!("access-token-{account_id}"),
+            refresh_token: "refresh-token".to_string(),
+            account_id: Some(account_id.to_string()),
+        }),
+        last_refresh: Some(Utc::now()),
+        agent_identity: None,
+    };
+    save_auth(tempdir.path(), &auth_json, AuthCredentialsStoreMode::File).expect("save auth");
+    CodexAuth::from_auth_storage(tempdir.path(), AuthCredentialsStoreMode::File)
+        .expect("load auth")
+        .expect("auth")
+}
+
+fn fake_id_token(account_id: &str, user_id: Option<&str>) -> String {
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+    let payload = serde_json::json!({
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": user_id,
+            "chatgpt_account_id": account_id,
+        }
+    });
+    let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
+    format!("{header}.{payload}.signature")
 }
 
 #[tokio::test]
@@ -4401,6 +4935,138 @@ async fn build_initial_context_omits_default_image_save_location_without_image_h
             .any(|text| text.contains("Generated images are saved to")),
         "expected initial context to omit image save instructions without image history, got {developer_texts:?}"
     );
+}
+
+#[tokio::test]
+async fn build_initial_context_trims_skill_metadata_from_context_window_budget() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "admin-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            scope: SkillScope::Admin,
+        },
+        SkillMetadata {
+            name: "repo-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+    ];
+    turn_context.model_info.context_window = Some(100);
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+
+    assert!(
+        developer_texts
+            .iter()
+            .all(|text| !text.contains(THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE)),
+        "expected skill budget warning to stay out of the initial context, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .all(|text| !text.contains("- admin-skill:") && !text.contains("- repo-skill:")),
+        "expected no skill metadata entries to fit the tiny budget, got {developer_texts:?}"
+    );
+}
+
+#[test]
+fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
+    let session_telemetry = test_session_telemetry_without_metadata();
+    let rendered = render_skills_section(
+        &[SkillMetadata {
+            name: "repo-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        }],
+        SkillMetadataBudget::Characters(1),
+        SkillRenderSideEffects::ThreadStart {
+            session_telemetry: &session_telemetry,
+        },
+    )
+    .expect("skills should render");
+
+    assert!(rendered.emit_warning);
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    assert_eq!(
+        histogram_sum(&snapshot, THREAD_SKILLS_ENABLED_TOTAL_METRIC),
+        1
+    );
+    assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_KEPT_TOTAL_METRIC), 0);
+    assert_eq!(histogram_sum(&snapshot, THREAD_SKILLS_TRUNCATED_METRIC), 1);
+}
+
+#[tokio::test]
+async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_builds() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let mut turn_context = Arc::into_inner(turn_context).expect("sole turn context owner");
+    let mut outcome = SkillLoadOutcome::default();
+    outcome.skills = vec![
+        SkillMetadata {
+            name: "admin-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            scope: SkillScope::Admin,
+        },
+        SkillMetadata {
+            name: "repo-skill".to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            scope: SkillScope::Repo,
+        },
+    ];
+    turn_context.model_info.context_window = Some(100);
+    turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
+
+    let _ = session.build_initial_context(&turn_context).await;
+    let warning_event = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("warning event should arrive")
+        .expect("warning event should be readable");
+    assert!(matches!(
+        warning_event.msg,
+        EventMsg::Warning(WarningEvent { message })
+            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+    ));
+
+    let _ = session.build_initial_context(&turn_context).await;
+    let warning_event = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("warning event should arrive on repeated build")
+        .expect("warning event should be readable");
+    assert!(matches!(
+        warning_event.msg,
+        EventMsg::Warning(WarningEvent { message })
+            if message == THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE
+    ));
 }
 
 #[tokio::test]
@@ -6037,4 +6703,86 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     );
 
     pretty_assertions::assert_eq!(output, expected);
+}
+
+#[tokio::test]
+async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let codex_home = temp.path().join("home");
+    let project_root = temp.path().join("project");
+    let nested = project_root.join("nested");
+    let root_dot_codex = project_root.join(".codex");
+    let nested_dot_codex = nested.join(".codex");
+
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&nested_dot_codex)?;
+    std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    write_project_hooks(&root_dot_codex)?;
+    write_project_hooks(&nested_dot_codex)?;
+    write_project_trust_config(&codex_home, &[(&nested, TrustLevel::Trusted)]).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+
+    let preview = preview_session_start_hooks(&config).await?;
+    let expected_source_path = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+        nested_dot_codex.join("hooks.json"),
+    )?;
+    assert_eq!(
+        preview
+            .iter()
+            .map(|run| &run.source_path)
+            .collect::<Vec<_>>(),
+        vec![&expected_source_path],
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_start_hooks_require_project_trust_without_config_toml() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let project_root = temp.path().join("project");
+    let nested = project_root.join("nested");
+    let dot_codex = project_root.join(".codex");
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    write_project_hooks(&dot_codex)?;
+
+    let cases = [
+        ("unknown", Vec::<(&Path, TrustLevel)>::new(), 0_usize),
+        (
+            "untrusted",
+            vec![(&project_root as &Path, TrustLevel::Untrusted)],
+            0_usize,
+        ),
+        (
+            "trusted",
+            vec![(&project_root as &Path, TrustLevel::Trusted)],
+            1_usize,
+        ),
+    ];
+
+    for (name, trust_entries, expected_hooks) in cases {
+        let codex_home = temp.path().join(format!("home_{name}"));
+        std::fs::create_dir_all(&codex_home)?;
+        write_project_trust_config(&codex_home, &trust_entries).await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home)
+            .fallback_cwd(Some(nested.clone()))
+            .build()
+            .await?;
+
+        assert_eq!(
+            preview_session_start_hooks(&config).await?.len(),
+            expected_hooks,
+            "unexpected hook count for {name}",
+        );
+    }
+
+    Ok(())
 }

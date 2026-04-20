@@ -4,6 +4,7 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use crate::config_loader::RequirementSource;
+use crate::config_loader::project_trust_key;
 use crate::plugins::PluginsManager;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
@@ -31,6 +32,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
+use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
@@ -221,7 +223,7 @@ persistence = "none"
 
     let memories = r#"
 [memories]
-no_memories_if_mcp_or_web_search = true
+disable_on_external_context = true
 generate_memories = false
 use_memories = false
 max_raw_memories_for_consolidation = 512
@@ -236,7 +238,7 @@ consolidation_model = "gpt-5"
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
     assert_eq!(
         Some(MemoriesToml {
-            no_memories_if_mcp_or_web_search: Some(true),
+            disable_on_external_context: Some(true),
             generate_memories: Some(false),
             use_memories: Some(false),
             max_raw_memories_for_consolidation: Some(512),
@@ -260,7 +262,7 @@ consolidation_model = "gpt-5"
     assert_eq!(
         config.memories,
         MemoriesConfig {
-            no_memories_if_mcp_or_web_search: true,
+            disable_on_external_context: true,
             generate_memories: false,
             use_memories: false,
             max_raw_memories_for_consolidation: 512,
@@ -272,12 +274,27 @@ consolidation_model = "gpt-5"
             consolidation_model: Some("gpt-5".to_string()),
         }
     );
+
+    let legacy_memories_cfg =
+        toml::from_str::<ConfigToml>("[memories]\nno_memories_if_mcp_or_web_search = true\n")
+            .expect("legacy memories TOML should deserialize");
+    assert!(
+        MemoriesConfig::from(
+            legacy_memories_cfg
+                .memories
+                .expect("legacy memories config")
+        )
+        .disable_on_external_context
+    );
 }
 
 #[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"
+[skills]
+include_instructions = false
+
 [skills.bundled]
 enabled = false
 "#,
@@ -288,6 +305,7 @@ enabled = false
         cfg.skills,
         Some(SkillsConfig {
             bundled: Some(BundledSkillsConfig { enabled: false }),
+            include_instructions: Some(false),
             config: Vec::new(),
         })
     );
@@ -2477,7 +2495,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
-                env_vars: vec!["ALPHA".to_string(), "BETA".to_string()],
+                env_vars: vec!["ALPHA".into(), "BETA".into()],
                 cwd: None,
             },
             experimental_environment: None,
@@ -2513,10 +2531,66 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
     let docs = loaded.get("docs").expect("docs entry");
     match &docs.transport {
         McpServerTransportConfig::Stdio { env_vars, .. } => {
-            assert_eq!(env_vars, &vec!["ALPHA".to_string(), "BETA".to_string()]);
+            assert_eq!(env_vars, &vec!["ALPHA".into(), "BETA".into()]);
         }
         other => panic!("unexpected transport {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let servers = BTreeMap::from([(
+        "docs".to_string(),
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "docs-server".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: vec![
+                    "LEGACY".into(),
+                    McpServerEnvVar::Config {
+                        name: "REMOTE_TOKEN".to_string(),
+                        source: Some("remote".to_string()),
+                    },
+                ],
+                cwd: None,
+            },
+            experimental_environment: None,
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    )]);
+
+    apply_blocking(
+        codex_home.path(),
+        /*profile*/ None,
+        &[ConfigEdit::ReplaceMcpServers(servers.clone())],
+    )?;
+
+    let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let serialized = std::fs::read_to_string(&config_path)?;
+    assert!(
+        serialized
+            .contains(r#"env_vars = ["LEGACY", { name = "REMOTE_TOKEN", source = "remote" }]"#),
+        "serialized config missing sourced env_vars field:\n{serialized}"
+    );
+
+    let loaded = load_global_mcp_servers(codex_home.path()).await?;
+    assert_eq!(loaded, servers);
 
     Ok(())
 }
@@ -4818,6 +4892,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             guardian_policy_config: None,
             include_permissions_instructions: true,
             include_apps_instructions: true,
+            include_skill_instructions: true,
             include_environment_context: true,
             compact_prompt: None,
             commit_attribution: None,
@@ -4968,6 +5043,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5116,6 +5192,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5249,6 +5326,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5437,7 +5515,9 @@ model = "foo""#;
 
     // Since we created the [projects] table as part of migration, it is kept implicit.
     // Expect explicit per-project tables, preserving prior entries and appending the new one.
-    let expected = r#"toplevel = "baz"
+    let new_project_key = project_trust_key(new_project);
+    let expected = format!(
+        r#"toplevel = "baz"
 model = "foo"
 
 [projects."/Users/mbolin/code/codex4"]
@@ -5447,10 +5527,38 @@ foo = "bar"
 [projects."/Users/mbolin/code/codex3"]
 trust_level = "trusted"
 
-[projects."/Users/mbolin/code/codex2"]
+[projects."{new_project_key}"]
 trust_level = "trusted"
-"#;
+"#
+    );
     assert_eq!(contents, expected);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn active_project_does_not_match_configured_alias_for_canonical_cwd() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let alias_root = tmp.path().join("project_alias");
+    std::fs::create_dir_all(&project_root)?;
+    std::os::unix::fs::symlink(&project_root, &alias_root)?;
+
+    let config = ConfigToml {
+        projects: Some(HashMap::from([(
+            alias_root.to_string_lossy().to_string(),
+            ProjectConfig {
+                trust_level: Some(TrustLevel::Trusted),
+            },
+        )])),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        config.get_active_project(&project_root, /*repo_root*/ None),
+        None
+    );
 
     Ok(())
 }
@@ -6170,6 +6278,9 @@ include_apps_instructions = false
 include_environment_context = false
 profile = "chatty"
 
+[skills]
+include_instructions = false
+
 [profiles.chatty]
 include_permissions_instructions = true
 include_environment_context = true
@@ -6184,6 +6295,7 @@ include_environment_context = true
 
     assert!(config.include_permissions_instructions);
     assert!(!config.include_apps_instructions);
+    assert!(!config.include_skill_instructions);
     assert!(config.include_environment_context);
     Ok(())
 }

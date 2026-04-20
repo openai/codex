@@ -78,6 +78,7 @@ use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
@@ -332,20 +333,23 @@ pub(crate) async fn run_turn(
         }))
         .await;
     }
-    if let Err(error) = sess.ensure_agent_task_registered().await {
-        warn!(error = %error, "agent task registration failed");
-        sess.send_event(
-            turn_context.as_ref(),
-            EventMsg::Error(ErrorEvent {
-                message: format!(
-                    "Agent task registration failed. Please try again; Codex will attempt to register the task again on the next turn: {error}"
-                ),
-                codex_error_info: Some(CodexErrorInfo::Other),
-            }),
-        )
-        .await;
-        return None;
-    }
+    let agent_task = match sess.ensure_agent_task_registered().await {
+        Ok(agent_task) => agent_task,
+        Err(error) => {
+            warn!(error = %error, "agent task registration failed");
+            sess.send_event(
+                turn_context.as_ref(),
+                EventMsg::Error(ErrorEvent {
+                    message: format!(
+                        "Agent task registration failed. Please try again; Codex will attempt to register the task again on the next turn: {error}"
+                    ),
+                    codex_error_info: Some(CodexErrorInfo::Other),
+                }),
+            )
+            .await;
+            return None;
+        }
+    };
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -370,8 +374,21 @@ pub(crate) async fn run_turn(
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut prewarmed_client_session = prewarmed_client_session;
+    if agent_task.is_some()
+        && let Some(prewarmed_client_session) = prewarmed_client_session.as_mut()
+    {
+        prewarmed_client_session.disable_cached_websocket_session_on_drop();
+    }
+    let mut client_session = if let Some(agent_task) = agent_task {
+        sess.services
+            .model_client
+            .new_session_with_agent_task(Some(agent_task))
+    } else if let Some(prewarmed_client_session) = prewarmed_client_session.take() {
+        prewarmed_client_session
+    } else {
+        sess.services.model_client.new_session()
+    };
     // Pending input is drained into history before building the next model request.
     // However, we defer that drain until after sampling in two cases:
     // 1. At the start of a turn, so the fresh user prompt in `input` gets sampled first.
@@ -1948,6 +1965,25 @@ async fn try_run_sampling_request(
                     cancellation_token: cancellation_token.child_token(),
                 };
 
+                let preempt_for_mailbox_mail = match &item {
+                    ResponseItem::Message { role, phase, .. } => {
+                        role == "assistant" && matches!(phase, Some(MessagePhase::Commentary))
+                    }
+                    ResponseItem::Reasoning { .. } => true,
+                    ResponseItem::LocalShellCall { .. }
+                    | ResponseItem::FunctionCall { .. }
+                    | ResponseItem::ToolSearchCall { .. }
+                    | ResponseItem::FunctionCallOutput { .. }
+                    | ResponseItem::CustomToolCall { .. }
+                    | ResponseItem::CustomToolCallOutput { .. }
+                    | ResponseItem::ToolSearchOutput { .. }
+                    | ResponseItem::WebSearchCall { .. }
+                    | ResponseItem::ImageGenerationCall { .. }
+                    | ResponseItem::GhostSnapshot { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::Other => false,
+                };
+
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_active_item)
                         .instrument(handle_responses)
@@ -1963,6 +1999,13 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
+                // todo: remove before stabilizing multi-agent v2
+                if preempt_for_mailbox_mail && sess.mailbox_rx.lock().await.has_pending() {
+                    break Ok(SamplingRequestResult {
+                        needs_follow_up: true,
+                        last_agent_message,
+                    });
+                }
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let ResponseItem::CustomToolCall { call_id, name, .. } = &item {

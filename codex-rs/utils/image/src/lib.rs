@@ -15,10 +15,8 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::codecs::webp::WebPEncoder;
 use image::imageops::FilterType;
-/// Maximum width used when resizing images before uploading.
-pub const MAX_WIDTH: u32 = 2048;
-/// Maximum height used when resizing images before uploading.
-pub const MAX_HEIGHT: u32 = 768;
+/// Maximum width or height used when resizing images before uploading.
+pub const MAX_DIMENSION: u32 = 2048;
 
 pub mod error;
 
@@ -80,40 +78,41 @@ pub fn load_for_prompt_bytes(
 
         let (width, height) = dynamic.dimensions();
 
-        let encoded =
-            if mode == PromptImageMode::Original || (width <= MAX_WIDTH && height <= MAX_HEIGHT) {
-                if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format)) {
-                    let mime = format_to_mime(format);
-                    EncodedImage {
-                        bytes: file_bytes,
-                        mime,
-                        width,
-                        height,
-                    }
-                } else {
-                    let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png)?;
-                    let mime = format_to_mime(output_format);
-                    EncodedImage {
-                        bytes,
-                        mime,
-                        width,
-                        height,
-                    }
+        let encoded = if mode == PromptImageMode::Original
+            || (width <= MAX_DIMENSION && height <= MAX_DIMENSION)
+        {
+            if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format)) {
+                let mime = format_to_mime(format);
+                EncodedImage {
+                    bytes: file_bytes,
+                    mime,
+                    width,
+                    height,
                 }
             } else {
-                let resized = dynamic.resize(MAX_WIDTH, MAX_HEIGHT, FilterType::Triangle);
-                let target_format = format
-                    .filter(|format| can_preserve_source_bytes(*format))
-                    .unwrap_or(ImageFormat::Png);
-                let (bytes, output_format) = encode_image(&resized, target_format)?;
+                let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png)?;
                 let mime = format_to_mime(output_format);
                 EncodedImage {
                     bytes,
                     mime,
-                    width: resized.width(),
-                    height: resized.height(),
+                    width,
+                    height,
                 }
-            };
+            }
+        } else {
+            let resized = dynamic.resize(MAX_DIMENSION, MAX_DIMENSION, FilterType::Triangle);
+            let target_format = format
+                .filter(|format| can_preserve_source_bytes(*format))
+                .unwrap_or(ImageFormat::Png);
+            let (bytes, output_format) = encode_image(&resized, target_format)?;
+            let mime = format_to_mime(output_format);
+            EncodedImage {
+                bytes,
+                mime,
+                width: resized.width(),
+                height: resized.height(),
+            }
+        };
 
         Ok(encoded)
     })
@@ -251,8 +250,8 @@ mod tests {
             )
             .expect("process image");
 
-            assert!(processed.width <= MAX_WIDTH);
-            assert!(processed.height <= MAX_HEIGHT);
+            assert!(processed.width <= MAX_DIMENSION);
+            assert!(processed.height <= MAX_DIMENSION);
             assert_eq!(processed.mime, mime);
 
             let detected_format =
@@ -263,6 +262,23 @@ mod tests {
                 .expect("read resized bytes back into image");
             assert_eq!(loaded.dimensions(), (processed.width, processed.height));
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn downscales_tall_image_to_fit_square_bounds() {
+        let image = ImageBuffer::from_pixel(1024, 4096, Rgba([200u8, 10, 10, 255]));
+        let original_bytes = image_bytes(&image, ImageFormat::Png);
+
+        let processed = load_for_prompt_bytes(
+            Path::new("in-memory-image"),
+            original_bytes,
+            PromptImageMode::ResizeToFit,
+        )
+        .expect("process image");
+
+        assert_eq!(processed.width, 512);
+        assert_eq!(processed.height, MAX_DIMENSION);
+        assert_eq!(processed.mime, "image/png");
     }
 
     #[tokio::test(flavor = "multi_thread")]

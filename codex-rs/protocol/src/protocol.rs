@@ -2200,6 +2200,18 @@ pub struct RateLimitSnapshot {
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
     pub plan_type: Option<crate::account::PlanType>,
+    pub rate_limit_reached_type: Option<RateLimitReachedType>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum RateLimitReachedType {
+    RateLimitReached,
+    WorkspaceOwnerCreditsDepleted,
+    WorkspaceMemberCreditsDepleted,
+    WorkspaceOwnerUsageLimitReached,
+    WorkspaceMemberUsageLimitReached,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -2711,6 +2723,9 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
                 agent_path.clone()
             }
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+                Some(AgentPath::morpheus())
+            }
             _ => None,
         }
     }
@@ -2751,6 +2766,26 @@ impl fmt::Display for SubAgentSource {
             SubAgentSource::Other(other) => f.write_str(other),
         }
     }
+}
+
+/// Persisted agent-task details that let a resumed thread keep using the same backend task.
+///
+/// `agent_runtime_id` is validation metadata for the globally registered agent identity, not a
+/// separate session-scoped identity. Resume only restores this task after confirming that runtime
+/// id still matches the globally registered identity; otherwise the cached task is discarded and a
+/// fresh task can be registered.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct SessionAgentTask {
+    pub agent_runtime_id: String,
+    pub task_id: String,
+    pub registered_at: String,
+}
+
+/// Session-scoped state updates that can be appended after the canonical SessionMeta line.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
+pub struct SessionStateUpdate {
+    #[serde(default)]
+    pub agent_task: Option<SessionAgentTask>,
 }
 
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.
@@ -2822,6 +2857,7 @@ pub struct SessionMetaLine {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
+    SessionState(SessionStateUpdate),
     ResponseItem(ResponseItem),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
