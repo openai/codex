@@ -33,6 +33,21 @@ struct OtelTraceLayerState<S> {
     active_spans: HashMap<Id, Arc<TraceLayer<S>>>,
 }
 
+impl<S> OtelTraceLayerState<S> {
+    fn prune_inactive_retired(&mut self) {
+        let active_layers = self
+            .active_spans
+            .values()
+            .cloned()
+            .collect::<Vec<Arc<TraceLayer<S>>>>();
+        self.retired.retain(|retired| {
+            active_layers
+                .iter()
+                .any(|active| Arc::ptr_eq(active, retired))
+        });
+    }
+}
+
 impl<S> Default for OtelTraceLayerState<S> {
     fn default() -> Self {
         Self {
@@ -46,12 +61,17 @@ impl<S> Default for OtelTraceLayerState<S> {
 #[derive(Clone)]
 pub struct OtelTraceLayerHandle {
     replace_provider: Arc<ReplaceProviderFn>,
+    restore_provider: Arc<ReplaceProviderFn>,
     shutdown: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl OtelTraceLayerHandle {
     pub fn replace_provider(&self, provider: Option<&OtelProvider>) {
         (self.replace_provider)(provider);
+    }
+
+    pub fn restore_provider(&self, provider: Option<&OtelProvider>) {
+        (self.restore_provider)(provider);
     }
 
     pub fn shutdown(&self) {
@@ -73,10 +93,14 @@ where
             state: Arc::clone(&state),
         };
         let replace_state = Arc::clone(&state);
+        let restore_state = Arc::clone(&state);
         let shutdown_state = Arc::clone(&state);
         let handle = OtelTraceLayerHandle {
             replace_provider: Arc::new(move |provider| {
                 replace_trace_layer(&replace_state, trace_layer(provider));
+            }),
+            restore_provider: Arc::new(move |provider| {
+                restore_trace_layer(&restore_state, trace_layer(provider));
             }),
             shutdown: Arc::new(move || {
                 let mut state = shutdown_state
@@ -123,10 +147,12 @@ where
             .state
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state
+        let layer = state
             .active_spans
             .remove(id)
-            .or_else(|| state.current.clone())
+            .or_else(|| state.current.clone());
+        state.prune_inactive_retired();
+        layer
     }
 }
 
@@ -211,7 +237,11 @@ where
             .state
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let layer = state.current.as_ref()?;
+        let layer = state
+            .current
+            .clone()
+            .or_else(|| state.active_spans.values().next().cloned())
+            .or_else(|| state.retired.last().cloned())?;
         unsafe { Layer::<S>::downcast_raw(layer.as_ref(), id) }
     }
 }
@@ -227,6 +257,18 @@ fn replace_trace_layer<S>(
         state.retired.push(current);
     }
     state.current = next_layer;
+    state.prune_inactive_retired();
+}
+
+fn restore_trace_layer<S>(
+    state: &RwLock<OtelTraceLayerState<S>>,
+    restored_layer: Option<Arc<TraceLayer<S>>>,
+) {
+    let mut state = state
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.current = restored_layer;
+    state.prune_inactive_retired();
 }
 
 fn trace_layer<S>(provider: Option<&OtelProvider>) -> Option<Arc<TraceLayer<S>>>
@@ -357,5 +399,40 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].events.len(), 1);
+    }
+
+    #[test]
+    fn downcast_uses_active_span_layer_after_provider_is_disabled() {
+        let (provider, _spans) = provider_with_tracer("first");
+        let (layer, handle) = OtelTraceLayer::from_provider(Some(&provider));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let span = trace_span!("old_span");
+        let _entered = span.enter();
+        let before_disable = current_span_trace_id().expect("trace id before disable");
+
+        handle.replace_provider(/*provider*/ None);
+        let after_disable = current_span_trace_id().expect("trace id after disable");
+
+        assert_eq!(after_disable, before_disable);
+    }
+
+    #[test]
+    fn restore_provider_reclaims_provisional_layer_without_active_spans() {
+        let (first_provider, _first_spans) = provider_with_tracer("first");
+        let (second_provider, _second_spans) = provider_with_tracer("second");
+        let (layer, handle): (OtelTraceLayer<tracing_subscriber::Registry>, _) =
+            OtelTraceLayer::from_provider(Some(&first_provider));
+
+        handle.replace_provider(Some(&second_provider));
+        handle.restore_provider(Some(&first_provider));
+
+        let state = layer
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(state.current.is_some());
+        assert!(state.retired.is_empty());
     }
 }

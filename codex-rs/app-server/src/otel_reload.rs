@@ -29,6 +29,7 @@ struct OtelReloadState {
     provider: Option<OtelProvider>,
     retired_providers: Vec<OtelProvider>,
     initialized_from_thread_config: bool,
+    pending_reload: bool,
 }
 
 #[derive(Clone)]
@@ -61,6 +62,7 @@ impl OtelReloader {
                     provider,
                     retired_providers: Vec::new(),
                     initialized_from_thread_config: false,
+                    pending_reload: false,
                 })),
                 default_analytics_enabled,
             },
@@ -90,6 +92,9 @@ impl OtelReloader {
         if state.initialized_from_thread_config {
             return Err("app-server OTel config is already initialized from a different effective thread config; restart the app server to use a different project OTel config".into());
         }
+        if state.pending_reload {
+            return Err("app-server OTel config reload is already pending for a different effective thread config".into());
+        }
 
         let next_provider = codex_core::otel_init::build_provider(
             config,
@@ -102,6 +107,7 @@ impl OtelReloader {
         let previous_key = state.key.clone();
         state.key = Some(next_key.clone());
         let old_provider = std::mem::replace(&mut state.provider, next_provider);
+        state.pending_reload = true;
         Ok(OtelReloadCommit::new(
             Arc::clone(&self.state),
             next_key,
@@ -123,6 +129,7 @@ impl OtelReloader {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.provider.take();
         state.retired_providers.clear();
+        state.pending_reload = false;
     }
 }
 
@@ -169,6 +176,7 @@ impl OtelReloadCommit {
                 state.retired_providers.push(old_provider);
             }
             state.initialized_from_thread_config = true;
+            state.pending_reload = false;
             self.committed = true;
         }
     }
@@ -193,10 +201,12 @@ impl Drop for OtelReloadCommit {
                 std::mem::replace(&mut state.provider, self.old_provider.take());
             state.key = self.previous_key.clone();
             self.logger_layer.replace_provider(state.provider.as_ref());
-            self.trace_layer.replace_provider(state.provider.as_ref());
+            self.trace_layer.restore_provider(state.provider.as_ref());
             OtelProvider::replace_global_metrics(state.provider.as_ref());
+            state.pending_reload = false;
         } else if let Some(old_provider) = self.old_provider.take() {
             state.retired_providers.push(old_provider);
+            state.pending_reload = false;
         }
     }
 }
@@ -379,6 +389,56 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        reloader.shutdown();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reload_from_config_rejects_different_config_while_pending()
+    -> Result<(), Box<dyn Error>> {
+        let server = MockServer::start().await;
+        let codex_home = TempDir::new()?;
+        let initial_config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await?;
+        let (_logger_layer, _trace_layer, reloader): (
+            _,
+            OtelTraceLayer<tracing_subscriber::Registry>,
+            _,
+        ) = OtelReloader::new(
+            &initial_config,
+            /*provider*/ None,
+            /*default_analytics_enabled*/ false,
+        );
+
+        let mut first_config = initial_config.clone();
+        first_config.otel.exporter = OtelExporterKind::OtlpHttp {
+            endpoint: format!("{}/v1/logs", server.uri()),
+            headers: HashMap::new(),
+            protocol: OtelHttpProtocol::Json,
+            tls: None,
+        };
+        let first_reload = reloader.reload_from_config(&first_config)?;
+
+        let mut second_config = initial_config;
+        second_config.otel.exporter = OtelExporterKind::OtlpHttp {
+            endpoint: format!("{}/other/logs", server.uri()),
+            headers: HashMap::new(),
+            protocol: OtelHttpProtocol::Json,
+            tls: None,
+        };
+        let err = match reloader.reload_from_config(&second_config) {
+            Ok(_) => panic!("different effective OTel config should be rejected while pending"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("reload is already pending"),
+            "unexpected error: {err}"
+        );
+
+        drop(first_reload);
+        reloader.reload_from_config(&second_config)?.commit();
         reloader.shutdown();
         Ok(())
     }
