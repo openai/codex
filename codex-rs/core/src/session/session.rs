@@ -1,4 +1,5 @@
 use super::*;
+use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
 ///
@@ -11,7 +12,7 @@ pub(crate) struct Session {
     pub(super) state: Mutex<SessionState>,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
-    pub(super) managed_network_proxy_refresh_lock: Mutex<()>,
+    pub(super) managed_network_proxy_refresh_lock: Semaphore,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
@@ -25,7 +26,7 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     pub(super) js_repl: Arc<JsReplHandle>,
     pub(super) next_internal_sub_id: AtomicU64,
-    pub(super) agent_task_registration_lock: Mutex<()>,
+    pub(super) agent_task_registration_lock: Semaphore,
 }
 
 #[derive(Clone)]
@@ -332,8 +333,20 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
+            let authorization_header_value = match auth.as_ref() {
+                Some(auth) => {
+                    auth_manager_clone
+                        .chatgpt_authorization_header_for_auth(auth)
+                        .await
+                }
+                None => None,
+            };
             let mcp_servers = mcp_manager_for_mcp
-                .effective_servers(&config_for_mcp, auth.as_ref())
+                .effective_servers_with_authorization_header(
+                    &config_for_mcp,
+                    auth.as_ref(),
+                    authorization_header_value.as_deref(),
+                )
                 .await;
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
@@ -697,7 +710,7 @@ impl Session {
             agent_status,
             out_of_band_elicitation_paused,
             state: Mutex::new(state),
-            managed_network_proxy_refresh_lock: Mutex::new(()),
+            managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
@@ -709,7 +722,7 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
-            agent_task_registration_lock: Mutex::new(()),
+            agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;

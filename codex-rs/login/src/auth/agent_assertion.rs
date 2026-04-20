@@ -167,6 +167,7 @@ mod tests {
             agent_runtime_id: agent_runtime_id.to_string(),
             agent_private_key: BASE64_STANDARD.encode(private_key.as_bytes()),
             registered_at: "2026-03-23T12:00:00Z".to_string(),
+            background_task_id: None,
         }
     }
 }

@@ -112,6 +112,63 @@ async fn returns_config_error_for_invalid_user_config_toml() {
 }
 
 #[tokio::test]
+async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "model = \"from-user-config\"\ninvalid = [",
+    )
+    .expect("write config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            ignore_user_config: true,
+            ..Default::default()
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let user_layer = layers
+        .get_user_layer()
+        .expect("expected a user layer even when CODEX_HOME/config.toml is ignored");
+    assert_eq!(
+        user_layer.config,
+        TomlValue::Table(toml::map::Map::new()),
+        "expected ignored user config to preserve only layer metadata"
+    );
+    assert_eq!(layers.effective_config().get("model"), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            ignore_user_and_project_exec_policy_rules: true,
+            ..Default::default()
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    assert!(layers.ignore_user_and_project_exec_policy_rules());
+    Ok(())
+}
+
+#[tokio::test]
 async fn returns_config_error_for_invalid_managed_config_toml() {
     let tmp = tempdir().expect("tempdir");
     let managed_path = tmp.path().join("managed_config.toml");

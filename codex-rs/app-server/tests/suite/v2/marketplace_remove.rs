@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
@@ -10,7 +11,6 @@ use codex_app_server_protocol::RequestId;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
 use codex_core::plugins::marketplace_install_root;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -35,14 +35,23 @@ fn write_installed_marketplace(codex_home: &std::path::Path, marketplace_name: &
     Ok(())
 }
 
+fn canonicalize_path_with_existing_parent(path: &std::path::Path) -> Result<std::path::PathBuf> {
+    let parent = path
+        .parent()
+        .with_context(|| format!("path {} should have a parent", path.display()))?;
+    let file_name = path
+        .file_name()
+        .with_context(|| format!("path {} should have a file name", path.display()))?;
+
+    Ok(parent.canonicalize()?.join(file_name))
+}
+
 #[tokio::test]
 async fn marketplace_remove_deletes_config_and_installed_root() -> Result<()> {
     let codex_home = TempDir::new()?;
     record_user_marketplace(codex_home.path(), "debug", &configured_marketplace_update())?;
     write_installed_marketplace(codex_home.path(), "debug")?;
-    let installed_root = marketplace_install_root(codex_home.path())
-        .join("debug")
-        .canonicalize()?;
+    let installed_root = marketplace_install_root(codex_home.path()).join("debug");
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -59,12 +68,13 @@ async fn marketplace_remove_deletes_config_and_installed_root() -> Result<()> {
     )
     .await??;
     let response: MarketplaceRemoveResponse = to_response(response)?;
+    assert_eq!(response.marketplace_name, "debug");
+    let removed_installed_root = response
+        .installed_root
+        .context("marketplace/remove should return removed installed root")?;
     assert_eq!(
-        response,
-        MarketplaceRemoveResponse {
-            marketplace_name: "debug".to_string(),
-            installed_root: Some(AbsolutePathBuf::try_from(installed_root)?),
-        }
+        canonicalize_path_with_existing_parent(removed_installed_root.as_path())?,
+        canonicalize_path_with_existing_parent(&installed_root)?,
     );
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;

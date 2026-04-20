@@ -21,6 +21,7 @@ codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-template = { workspace = true }
+crypto_box = { workspace = true }
 ed25519-dalek = { workspace = true }
 once_cell = { workspace = true }
 os_info = { workspace = true }

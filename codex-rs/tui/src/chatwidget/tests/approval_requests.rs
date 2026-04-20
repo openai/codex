@@ -113,6 +113,7 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
                 file_system: Some(AppServerAdditionalFileSystemPermissions {
                     read: Some(vec![read_path.clone()]),
                     write: Some(vec![write_path.clone()]),
+                    entries: None,
                 }),
             }),
             proposed_execpolicy_amendment: None,
@@ -135,10 +136,10 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![read_path]),
-                write: Some(vec![write_path]),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![read_path]),
+                Some(vec![write_path]),
+            )),
         })
     );
 }
@@ -162,6 +163,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
             file_system: Some(AppServerAdditionalFileSystemPermissions {
                 read: Some(vec![read_path.clone()]),
                 write: Some(vec![write_path.clone()]),
+                entries: None,
             }),
         },
     });
@@ -172,10 +174,10 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![read_path]),
-                write: Some(vec![write_path]),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![read_path]),
+                Some(vec![write_path]),
+            )),
         }
     );
 }
