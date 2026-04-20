@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use crate::legacy_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
-use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
@@ -13,10 +12,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use crate::key_hint;
 use crate::key_hint::KeyBindingListExt;
-use crate::keymap::OnboardingKeymap;
-use crate::keymap::primary_binding;
+use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::render::Insets;
@@ -35,7 +32,6 @@ pub(crate) struct TrustDirectoryWidget {
     pub selection: Option<TrustDirectorySelection>,
     pub highlighted: TrustDirectorySelection,
     pub error: Option<String>,
-    pub onboarding_keymap: OnboardingKeymap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,9 +112,7 @@ impl WidgetRef for &TrustDirectoryWidget {
         column.push(
             Line::from(vec![
                 "Press ".dim(),
-                primary_binding(&self.onboarding_keymap.confirm)
-                    .unwrap_or(key_hint::plain(KeyCode::Enter))
-                    .into(),
+                keys::CONFIRM[0].into(),
                 if self.show_windows_create_sandbox_hint {
                     " to continue and create a sandbox...".dim()
                 } else {
@@ -140,18 +134,18 @@ impl KeyboardHandler for TrustDirectoryWidget {
             return;
         }
 
-        if self.onboarding_keymap.move_up.is_pressed(key_event) {
+        if keys::MOVE_UP.is_pressed(key_event) {
             self.highlighted = TrustDirectorySelection::Trust;
-        } else if self.onboarding_keymap.move_down.is_pressed(key_event) {
+        } else if keys::MOVE_DOWN.is_pressed(key_event) {
             self.highlighted = TrustDirectorySelection::Quit;
-        } else if self.onboarding_keymap.select_first.is_pressed(key_event) {
+        } else if keys::SELECT_FIRST.is_pressed(key_event) {
             self.handle_trust();
-        } else if self.onboarding_keymap.select_second.is_pressed(key_event)
-            || self.onboarding_keymap.quit.is_pressed(key_event)
-            || self.onboarding_keymap.cancel.is_pressed(key_event)
+        } else if keys::SELECT_SECOND.is_pressed(key_event)
+            || keys::QUIT.is_pressed(key_event)
+            || keys::CANCEL.is_pressed(key_event)
         {
             self.handle_quit();
-        } else if self.onboarding_keymap.confirm.is_pressed(key_event) {
+        } else if keys::CONFIRM.is_pressed(key_event) {
             match self.highlighted {
                 TrustDirectorySelection::Trust => self.handle_trust(),
                 TrustDirectorySelection::Quit => self.handle_quit(),
@@ -217,7 +211,6 @@ mod tests {
             selection: None,
             highlighted: TrustDirectorySelection::Quit,
             error: None,
-            onboarding_keymap: crate::keymap::RuntimeKeymap::defaults().onboarding,
         };
 
         let release = KeyEvent {
@@ -244,7 +237,6 @@ mod tests {
             selection: None,
             highlighted: TrustDirectorySelection::Trust,
             error: None,
-            onboarding_keymap: crate::keymap::RuntimeKeymap::defaults().onboarding,
         };
 
         let mut terminal =

@@ -2242,17 +2242,6 @@
               "move_down": null,
               "move_up": null
             },
-            "onboarding": {
-              "cancel": null,
-              "confirm": null,
-              "move_down": null,
-              "move_up": null,
-              "quit": null,
-              "select_first": null,
-              "select_second": null,
-              "select_third": null,
-              "toggle_animation": null
-            },
             "pager": {
               "close": null,
               "close_transcript": null,
@@ -2748,24 +2737,6 @@
             "move_up": null
           }
         },
-        "onboarding": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/TuiOnboardingKeymap"
-            }
-          ],
-          "default": {
-            "cancel": null,
-            "confirm": null,
-            "move_down": null,
-            "move_up": null,
-            "quit": null,
-            "select_first": null,
-            "select_second": null,
-            "select_third": null,
-            "toggle_animation": null
-          }
-        },
         "pager": {
           "allOf": [
             {
@@ -2826,85 +2797,6 @@
             }
           ],
           "description": "Move list selection up."
-        }
-      },
-      "type": "object"
-    },
-    "TuiOnboardingKeymap": {
-      "additionalProperties": false,
-      "description": "Onboarding keybindings.",
-      "properties": {
-        "cancel": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Cancel current screen action."
-        },
-        "confirm": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Confirm current selection."
-        },
-        "move_down": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Move selection down."
-        },
-        "move_up": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Move selection up."
-        },
-        "quit": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Quit onboarding flow."
-        },
-        "select_first": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Pick first option."
-        },
-        "select_second": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Pick second option."
-        },
-        "select_third": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Pick third option."
-        },
-        "toggle_animation": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Cycle welcome animation variant."
         }
       },
       "type": "object"

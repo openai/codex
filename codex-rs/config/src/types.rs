@@ -35,7 +35,6 @@ pub use crate::tui_keymap::TuiEditorKeymap;
 pub use crate::tui_keymap::TuiGlobalKeymap;
 pub use crate::tui_keymap::TuiKeymap;
 pub use crate::tui_keymap::TuiListKeymap;
-pub use crate::tui_keymap::TuiOnboardingKeymap;
 pub use crate::tui_keymap::TuiPagerKeymap;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";

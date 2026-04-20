@@ -6,7 +6,7 @@
 //! widgets.
 //!
 //! In particular, onboarding quit handling has a text-entry guard for API-key
-//! input: printable quit bindings are treated as text input while the user is
+//! input: the printable `q` quit key is treated as text input while the user is
 //! editing a non-empty API-key field, while control/alt chords remain available
 //! as explicit exit shortcuts.
 
@@ -33,14 +33,13 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use crate::LoginStatus;
 use crate::app_server_session::AppServerSession;
 use crate::key_hint::KeyBindingListExt;
-use crate::keymap::OnboardingKeymap;
-use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
+use crate::onboarding::keys;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
@@ -77,7 +76,6 @@ pub(crate) trait StepStateProvider {
 pub(crate) struct OnboardingScreen {
     request_frame: FrameRequester,
     steps: Vec<Step>,
-    onboarding_keymap: OnboardingKeymap,
     is_done: bool,
     should_exit: bool,
 }
@@ -115,22 +113,11 @@ impl OnboardingScreen {
         let cwd = config.cwd.to_path_buf();
         let codex_home = config.codex_home.to_path_buf();
         let forced_login_method = config.forced_login_method;
-        let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).unwrap_or_else(|err| {
-            tracing::warn!(
-                "Invalid `tui.keymap` configuration during onboarding: {err}. \
-Falling back to default onboarding keymap values. \
-Fix `~/.codex/config.toml`.\n\
-See the Codex keymap documentation for supported actions and examples."
-            );
-            RuntimeKeymap::defaults()
-        });
-        let onboarding_keymap = runtime_keymap.onboarding;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
             !matches!(login_status, LoginStatus::NotAuthenticated),
             tui.frame_requester(),
             config.animations,
-            onboarding_keymap.clone(),
         )));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
@@ -148,7 +135,6 @@ See the Codex keymap documentation for supported actions and examples."
                     forced_login_method,
                     animations_enabled: config.animations,
                     animations_suppressed: std::cell::Cell::new(false),
-                    onboarding_keymap: onboarding_keymap.clone(),
                 }));
             } else {
                 tracing::warn!("skipping onboarding login step without app-server request handle");
@@ -174,13 +160,11 @@ See the Codex keymap documentation for supported actions and examples."
                 selection: None,
                 highlighted,
                 error: None,
-                onboarding_keymap: onboarding_keymap.clone(),
             }))
         }
         Self {
             request_frame: tui.frame_requester(),
             steps,
-            onboarding_keymap,
             is_done: false,
             should_exit: false,
         }
@@ -308,8 +292,8 @@ impl KeyboardHandler for OnboardingScreen {
     /// Route key events to onboarding steps while preserving text-entry safety.
     ///
     /// In API-key entry mode, printable quit bindings are suppressed only after
-    /// the user has started typing in the API-key field. This keeps custom
-    /// printable quit keys usable on an empty field while protecting in-progress
+    /// the user has started typing in the API-key field. This keeps the
+    /// printable `q` quit key usable on an empty field while protecting in-progress
     /// text entry from accidental exits. Control/alt quit chords still work as
     /// emergency exits.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -318,7 +302,7 @@ impl KeyboardHandler for OnboardingScreen {
         }
         let api_key_entry_context = self.api_key_entry_context();
         let should_quit = key_event.kind == KeyEventKind::Press
-            && self.onboarding_keymap.quit.is_pressed(key_event)
+            && keys::QUIT.is_pressed(key_event)
             && !suppress_quit_while_typing_api_key(key_event, api_key_entry_context);
         if should_quit {
             if self.is_auth_in_progress() {
@@ -370,7 +354,7 @@ impl KeyboardHandler for OnboardingScreen {
 /// This only applies while API-key entry is active and the key is a printable
 /// character without control/alt modifiers and there is already text in the
 /// input field. Empty input intentionally does not trigger suppression so
-/// printable custom quit bindings can still exit onboarding.
+/// the printable `q` quit key can still exit onboarding.
 fn suppress_quit_while_typing_api_key(
     key_event: KeyEvent,
     api_key_entry_context: ApiKeyEntryContext,
@@ -605,9 +589,9 @@ mod tests {
     use crossterm::event::KeyModifiers;
 
     #[test]
-    fn suppresses_printable_custom_quit_key_during_api_key_entry() {
+    fn suppresses_printable_quit_key_during_api_key_entry() {
         let suppressed = suppress_quit_while_typing_api_key(
-            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
             ApiKeyEntryContext {
                 active: true,
                 has_text: true,
@@ -619,7 +603,7 @@ mod tests {
     #[test]
     fn does_not_suppress_printable_quit_key_when_api_key_input_is_empty() {
         let suppressed = suppress_quit_while_typing_api_key(
-            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
             ApiKeyEntryContext {
                 active: true,
                 has_text: false,

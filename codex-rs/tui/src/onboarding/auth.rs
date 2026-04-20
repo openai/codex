@@ -44,11 +44,9 @@ use std::sync::RwLock;
 use uuid::Uuid;
 
 use crate::LoginStatus;
-use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
-use crate::keymap::OnboardingKeymap;
-use crate::keymap::primary_binding;
+use crate::onboarding::keys;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::shimmer_spans;
@@ -197,27 +195,27 @@ impl KeyboardHandler for AuthModeWidget {
             return;
         }
 
-        if self.onboarding_keymap.move_up.is_pressed(key_event) {
+        if keys::MOVE_UP.is_pressed(key_event) {
             self.move_highlight(/*delta*/ -1);
             return;
         }
-        if self.onboarding_keymap.move_down.is_pressed(key_event) {
+        if keys::MOVE_DOWN.is_pressed(key_event) {
             self.move_highlight(/*delta*/ 1);
             return;
         }
-        if self.onboarding_keymap.select_first.is_pressed(key_event) {
+        if keys::SELECT_FIRST.is_pressed(key_event) {
             self.select_option_by_index(/*index*/ 0);
             return;
         }
-        if self.onboarding_keymap.select_second.is_pressed(key_event) {
+        if keys::SELECT_SECOND.is_pressed(key_event) {
             self.select_option_by_index(/*index*/ 1);
             return;
         }
-        if self.onboarding_keymap.select_third.is_pressed(key_event) {
+        if keys::SELECT_THIRD.is_pressed(key_event) {
             self.select_option_by_index(/*index*/ 2);
             return;
         }
-        if self.onboarding_keymap.confirm.is_pressed(key_event) {
+        if keys::CONFIRM.is_pressed(key_event) {
             let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
             match sign_in_state {
                 SignInState::PickMode => {
@@ -230,7 +228,7 @@ impl KeyboardHandler for AuthModeWidget {
             }
             return;
         }
-        if self.onboarding_keymap.cancel.is_pressed(key_event) {
+        if keys::CANCEL.is_pressed(key_event) {
             tracing::info!("Cancel onboarding auth step");
             self.cancel_active_attempt();
         }
@@ -253,7 +251,6 @@ pub(crate) struct AuthModeWidget {
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub animations_enabled: bool,
     pub animations_suppressed: Cell<bool>,
-    pub onboarding_keymap: OnboardingKeymap,
 }
 
 impl AuthModeWidget {
@@ -317,11 +314,11 @@ impl AuthModeWidget {
     }
 
     fn confirm_binding(&self) -> KeyBinding {
-        primary_binding(&self.onboarding_keymap.confirm).unwrap_or(key_hint::plain(KeyCode::Enter))
+        keys::CONFIRM[0]
     }
 
     fn cancel_binding(&self) -> KeyBinding {
-        primary_binding(&self.onboarding_keymap.cancel).unwrap_or(key_hint::plain(KeyCode::Esc))
+        keys::CANCEL[0]
     }
 
     fn is_api_login_allowed(&self) -> bool {
@@ -693,11 +690,11 @@ impl AuthModeWidget {
         {
             let mut guard = self.sign_in_state.write().unwrap();
             if let SignInState::ApiKeyEntry(state) = &mut *guard {
-                if self.onboarding_keymap.cancel.is_pressed(*key_event) {
+                if keys::CANCEL.is_pressed(*key_event) {
                     *guard = SignInState::PickMode;
                     self.set_error(/*message*/ None);
                     should_request_frame = true;
-                } else if self.onboarding_keymap.confirm.is_pressed(*key_event) {
+                } else if keys::CONFIRM.is_pressed(*key_event) {
                     let trimmed = state.value.trim().to_string();
                     if trimmed.is_empty() {
                         self.set_error(Some("API key cannot be empty".to_string()));
@@ -1069,7 +1066,6 @@ mod tests {
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
             animations_enabled: true,
             animations_suppressed: std::cell::Cell::new(false),
-            onboarding_keymap: crate::keymap::RuntimeKeymap::defaults().onboarding,
         };
         (widget, codex_home)
     }
