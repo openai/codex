@@ -79,15 +79,6 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("approval", "Approval", "approve_for_prefix", "Approve with an exec-policy prefix when available."),
     action("approval", "Approval", "decline", "Decline and provide corrective guidance."),
     action("approval", "Approval", "cancel", "Cancel an elicitation request."),
-    action("onboarding", "Onboarding", "move_up", "Move onboarding selection up."),
-    action("onboarding", "Onboarding", "move_down", "Move onboarding selection down."),
-    action("onboarding", "Onboarding", "select_first", "Pick the first onboarding option."),
-    action("onboarding", "Onboarding", "select_second", "Pick the second onboarding option."),
-    action("onboarding", "Onboarding", "select_third", "Pick the third onboarding option."),
-    action("onboarding", "Onboarding", "confirm", "Confirm the current onboarding selection."),
-    action("onboarding", "Onboarding", "cancel", "Cancel the current onboarding screen action."),
-    action("onboarding", "Onboarding", "quit", "Quit the onboarding flow."),
-    action("onboarding", "Onboarding", "toggle_animation", "Cycle the welcome animation variant."),
 ];
 
 pub(super) fn action_label(action: &str) -> String {
@@ -158,15 +149,6 @@ pub(super) fn binding_slot<'a>(
         ("approval", "approve_for_prefix") => Some(&mut keymap.approval.approve_for_prefix),
         ("approval", "decline") => Some(&mut keymap.approval.decline),
         ("approval", "cancel") => Some(&mut keymap.approval.cancel),
-        ("onboarding", "move_up") => Some(&mut keymap.onboarding.move_up),
-        ("onboarding", "move_down") => Some(&mut keymap.onboarding.move_down),
-        ("onboarding", "select_first") => Some(&mut keymap.onboarding.select_first),
-        ("onboarding", "select_second") => Some(&mut keymap.onboarding.select_second),
-        ("onboarding", "select_third") => Some(&mut keymap.onboarding.select_third),
-        ("onboarding", "confirm") => Some(&mut keymap.onboarding.confirm),
-        ("onboarding", "cancel") => Some(&mut keymap.onboarding.cancel),
-        ("onboarding", "quit") => Some(&mut keymap.onboarding.quit),
-        ("onboarding", "toggle_animation") => Some(&mut keymap.onboarding.toggle_animation),
         _ => None,
     }
 }
@@ -225,15 +207,6 @@ pub(super) fn bindings_for_action<'a>(
         ("approval", "approve_for_prefix") => Some(runtime_keymap.approval.approve_for_prefix.as_slice()),
         ("approval", "decline") => Some(runtime_keymap.approval.decline.as_slice()),
         ("approval", "cancel") => Some(runtime_keymap.approval.cancel.as_slice()),
-        ("onboarding", "move_up") => Some(runtime_keymap.onboarding.move_up.as_slice()),
-        ("onboarding", "move_down") => Some(runtime_keymap.onboarding.move_down.as_slice()),
-        ("onboarding", "select_first") => Some(runtime_keymap.onboarding.select_first.as_slice()),
-        ("onboarding", "select_second") => Some(runtime_keymap.onboarding.select_second.as_slice()),
-        ("onboarding", "select_third") => Some(runtime_keymap.onboarding.select_third.as_slice()),
-        ("onboarding", "confirm") => Some(runtime_keymap.onboarding.confirm.as_slice()),
-        ("onboarding", "cancel") => Some(runtime_keymap.onboarding.cancel.as_slice()),
-        ("onboarding", "quit") => Some(runtime_keymap.onboarding.quit.as_slice()),
-        ("onboarding", "toggle_animation") => Some(runtime_keymap.onboarding.toggle_animation.as_slice()),
         _ => None,
     }
 }

@@ -892,20 +892,6 @@ mod tests {
     }
 
     #[test]
-    fn picker_keeps_onboarding_actions_searchable_without_dedicated_tab() {
-        let runtime = RuntimeKeymap::defaults();
-        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
-        let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
-
-        assert!(params.tabs.iter().all(|tab| tab.label != "Onboarding"));
-        assert!(all_tab.items.iter().any(|item| {
-            item.search_value
-                .as_deref()
-                .is_some_and(|search_value| search_value.contains("Onboarding quit"))
-        }));
-    }
-
-    #[test]
     fn picker_content_snapshot() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());

@@ -2,7 +2,7 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-tab: All (56 selectable)
+tab: All (47 selectable)
 tab: Common (18 selectable)
 tab: Customized (0) (0 selectable)
 tab: Unbound (0) (0 selectable)
