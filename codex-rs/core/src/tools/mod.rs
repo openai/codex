@@ -3,6 +3,7 @@ pub(crate) mod context;
 pub(crate) mod events;
 pub(crate) mod handlers;
 pub(crate) mod js_repl;
+pub(crate) mod mcp_tool_definition;
 pub(crate) mod network_approval;
 pub(crate) mod orchestrator;
 pub(crate) mod parallel;

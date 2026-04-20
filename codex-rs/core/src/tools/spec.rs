@@ -11,11 +11,11 @@ use codex_tools::AdditionalProperties;
 use codex_tools::DiscoverableTool;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
+use codex_tools::ToolDefinition;
 use codex_tools::ToolHandlerKind;
+use codex_tools::ToolLoadingPolicy;
 use codex_tools::ToolName;
 use codex_tools::ToolNamespace;
-use codex_tools::ToolRegistryPlanDeferredTool;
-use codex_tools::ToolRegistryPlanMcpTool;
 use codex_tools::ToolRegistryPlanParams;
 use codex_tools::ToolUserShellType;
 use codex_tools::ToolsConfig;
@@ -36,36 +36,57 @@ pub(crate) fn tool_user_shell_type(user_shell: &Shell) -> ToolUserShellType {
     }
 }
 
-struct McpToolPlanInputs<'a> {
-    mcp_tools: Vec<ToolRegistryPlanMcpTool<'a>>,
+struct McpToolPlanInputs {
+    mcp_tools: Vec<ToolDefinition>,
     tool_namespaces: HashMap<String, ToolNamespace>,
 }
 
-fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs<'_> {
+fn map_mcp_tools_for_plan(mcp_tools: &HashMap<String, ToolInfo>) -> McpToolPlanInputs {
+    let mcp_tools = mcp_tool_definitions_for_plan(mcp_tools, ToolLoadingPolicy::Eager);
+    let tool_namespaces = mcp_tools
+        .iter()
+        .filter_map(|tool| {
+            let namespace = tool.name.namespace.clone()?;
+            Some((
+                namespace.clone(),
+                ToolNamespace {
+                    name: namespace,
+                    description: tool
+                        .presentation
+                        .as_ref()
+                        .and_then(|presentation| presentation.namespace_description.clone()),
+                },
+            ))
+        })
+        .collect();
+
     McpToolPlanInputs {
-        mcp_tools: mcp_tools
-            .values()
-            .map(|tool| ToolRegistryPlanMcpTool {
-                name: tool.canonical_tool_name(),
-                tool: &tool.tool,
-            })
-            .collect(),
-        tool_namespaces: mcp_tools
-            .values()
-            .map(|tool| {
-                (
-                    tool.callable_namespace.clone(),
-                    ToolNamespace {
-                        name: tool.callable_namespace.clone(),
-                        description: tool
-                            .connector_description
-                            .clone()
-                            .or_else(|| tool.server_instructions.clone()),
-                    },
-                )
-            })
-            .collect(),
+        mcp_tools,
+        tool_namespaces,
     }
+}
+
+fn mcp_tool_definitions_for_plan(
+    mcp_tools: &HashMap<String, ToolInfo>,
+    loading: ToolLoadingPolicy,
+) -> Vec<ToolDefinition> {
+    use crate::tools::mcp_tool_definition::mcp_tool_info_to_tool_definition;
+
+    mcp_tools
+        .values()
+        .filter_map(
+            |tool| match mcp_tool_info_to_tool_definition(tool, loading) {
+                Ok(tool_definition) => Some(tool_definition),
+                Err(error) => {
+                    let tool_name = tool.canonical_tool_name();
+                    tracing::error!(
+                        "Failed to convert MCP tool `{tool_name}` to tool definition: {error:?}"
+                    );
+                    None
+                }
+            },
+        )
+        .collect()
 }
 
 pub(crate) fn build_specs_with_discoverable_tools(
@@ -112,17 +133,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     let mut builder = ToolRegistryBuilder::new();
     let mcp_tool_plan_inputs = mcp_tools.as_ref().map(map_mcp_tools_for_plan);
-    let deferred_mcp_tool_sources = deferred_mcp_tools.as_ref().map(|tools| {
-        tools
-            .values()
-            .map(|tool| ToolRegistryPlanDeferredTool {
-                name: tool.canonical_tool_name(),
-                server_name: tool.server_name.as_str(),
-                connector_name: tool.connector_name.as_deref(),
-                connector_description: tool.connector_description.as_deref(),
-            })
-            .collect::<Vec<_>>()
-    });
+    let deferred_mcp_tool_definitions = deferred_mcp_tools
+        .as_ref()
+        .map(|tools| mcp_tool_definitions_for_plan(tools, ToolLoadingPolicy::Deferred));
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let plan = build_tool_registry_plan(
@@ -131,7 +144,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             mcp_tools: mcp_tool_plan_inputs
                 .as_ref()
                 .map(|inputs| inputs.mcp_tools.as_slice()),
-            deferred_mcp_tools: deferred_mcp_tool_sources.as_deref(),
+            deferred_mcp_tools: deferred_mcp_tool_definitions.as_deref(),
             tool_namespaces: mcp_tool_plan_inputs
                 .as_ref()
                 .map(|inputs| &inputs.tool_namespaces),
@@ -266,7 +279,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ToolHandlerKind::ToolSearch => {
                 if tool_search_handler.is_none() {
                     let entries = build_tool_search_entries(
-                        deferred_mcp_tools.as_ref(),
+                        deferred_mcp_tool_definitions.as_deref(),
                         &deferred_dynamic_tools,
                     );
                     tool_search_handler = Some(Arc::new(ToolSearchHandler::new(entries)));

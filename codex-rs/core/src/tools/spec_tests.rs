@@ -32,7 +32,8 @@ use codex_tools::ToolsConfigParams;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::ZshForkConfig;
 use codex_tools::mcp_call_tool_result_output_schema;
-use codex_tools::mcp_tool_to_deferred_responses_api_tool;
+use codex_tools::mcp_tool_to_tool_definition;
+use codex_tools::tool_definition_to_responses_api_tool;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
@@ -129,12 +130,14 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
         }),
     );
 
+    let tool_definition = mcp_tool_to_tool_definition(
+        &ToolName::namespaced("mcp__codex_apps__", "lookup_order"),
+        &tool,
+    )
+    .expect("convert deferred tool")
+    .into_deferred();
     let serialized = serde_json::to_value(ToolSpec::Function(
-        mcp_tool_to_deferred_responses_api_tool(
-            &ToolName::namespaced("mcp__codex_apps__", "lookup_order"),
-            &tool,
-        )
-        .expect("convert deferred tool"),
+        tool_definition_to_responses_api_tool(&tool_definition),
     ))
     .expect("serialize deferred tool");
 

@@ -41,9 +41,8 @@ schema and Responses API tool primitives that no longer need to live in
 - `create_tools_json_for_responses_api()`
 - `mcp_call_tool_result_output_schema()`
 - `tool_definition_to_responses_api_tool()`
+- `tool_definition_to_tool_search_output_tool()`
 - `dynamic_tool_to_responses_api_tool()`
-- `mcp_tool_to_responses_api_tool()`
-- `mcp_tool_to_deferred_responses_api_tool()`
 - `augment_tool_spec_for_code_mode()`
 - `tool_spec_to_code_mode_tool_definition()`
 
