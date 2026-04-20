@@ -1,3 +1,4 @@
+use std::fs;
 use std::fs::File;
 use std::future::Future;
 use std::path::Path;
@@ -12,6 +13,8 @@ use tempfile::TempDir;
 
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
+#[cfg(windows)]
+const WINDOWS_RG_EXE: &str = "rg.exe";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
@@ -320,6 +323,17 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         }
     }
 
+    #[cfg(windows)]
+    {
+        // Store-packaged Windows builds can expose sibling tools under
+        // `WindowsApps`, where direct execution fails with "Access is denied".
+        // Copy ripgrep into the helper PATH entry so shells inherit a runnable
+        // `rg.exe` ahead of the blocked packaged path.
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = copy_optional_sibling_binary(&exe, WINDOWS_RG_EXE, path);
+        }
+    }
+
     #[cfg(unix)]
     const PATH_SEPARATOR: &str = ":";
 
@@ -413,11 +427,31 @@ fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
+fn copy_optional_sibling_binary(
+    current_exe: &Path,
+    binary_name: &str,
+    destination_dir: &Path,
+) -> std::io::Result<Option<PathBuf>> {
+    let Some(source_dir) = current_exe.parent() else {
+        return Ok(None);
+    };
+    let source = source_dir.join(binary_name);
+    if !source.exists() {
+        return Ok(None);
+    }
+
+    let destination = destination_dir.join(binary_name);
+    fs::copy(&source, &destination)?;
+    Ok(Some(destination))
+}
+
 #[cfg(test)]
 mod tests {
     use super::Arg0DispatchPaths;
     use super::Arg0PathEntryGuard;
     use super::LOCK_FILENAME;
+    use super::copy_optional_sibling_binary;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
     use std::fs;
@@ -494,6 +528,46 @@ mod tests {
         janitor_cleanup(root.path())?;
 
         assert!(!dir.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn copy_optional_sibling_binary_copies_present_tool() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source_dir = root.path().join("source");
+        let destination_dir = root.path().join("destination");
+        fs::create_dir_all(&source_dir)?;
+        fs::create_dir_all(&destination_dir)?;
+
+        let current_exe = source_dir.join("codex.exe");
+        let tool = source_dir.join("rg.exe");
+        fs::write(&current_exe, b"codex")?;
+        fs::write(&tool, b"ripgrep")?;
+
+        let copied =
+            copy_optional_sibling_binary(&current_exe, "rg.exe", &destination_dir)?;
+
+        assert_eq!(Some(destination_dir.join("rg.exe")), copied);
+        assert_eq!(b"ripgrep".as_slice(), fs::read(destination_dir.join("rg.exe"))?);
+        Ok(())
+    }
+
+    #[test]
+    fn copy_optional_sibling_binary_skips_missing_tool() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source_dir = root.path().join("source");
+        let destination_dir = root.path().join("destination");
+        fs::create_dir_all(&source_dir)?;
+        fs::create_dir_all(&destination_dir)?;
+
+        let current_exe = source_dir.join("codex.exe");
+        fs::write(&current_exe, b"codex")?;
+
+        let copied =
+            copy_optional_sibling_binary(&current_exe, "rg.exe", &destination_dir)?;
+
+        assert_eq!(None, copied);
+        assert!(!destination_dir.join("rg.exe").exists());
         Ok(())
     }
 }
