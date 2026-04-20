@@ -333,9 +333,9 @@ mod tests {
         log.publish(ExecProcessEvent::Closed { seq: 4 });
 
         let response = log.read_retained(
-            Some(1),
+            /*after_seq*/ Some(1),
             /*max_bytes*/ None,
-            Some("exec-server transport disconnected".to_string()),
+            /*failure*/ Some("exec-server transport disconnected".to_string()),
         );
 
         assert_eq!(

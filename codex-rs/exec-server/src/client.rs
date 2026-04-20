@@ -609,7 +609,10 @@ impl Session {
                 // reader task may already have delivered tail output locally.
                 // Return that first instead of synthesizing an early terminal
                 // failure that would make polling clients stop before seeing it.
-                let mut response = self.state.events.read_retained(after_seq, max_bytes, None);
+                let mut response = self
+                    .state
+                    .events
+                    .read_retained(after_seq, max_bytes, /*failure*/ None);
                 if !response.chunks.is_empty()
                     || response.exited
                     || response.closed
@@ -625,7 +628,10 @@ impl Session {
                 {
                     return Ok(failed_response);
                 }
-                response = self.state.events.read_retained(after_seq, max_bytes, None);
+                response = self
+                    .state
+                    .events
+                    .read_retained(after_seq, max_bytes, /*failure*/ None);
                 Ok(response)
             }
             Err(err) => Err(err),
