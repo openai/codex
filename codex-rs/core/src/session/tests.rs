@@ -4148,7 +4148,7 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
-async fn fail_agent_identity_registration_emits_error_without_shutdown() {
+async fn fail_agent_identity_registration_emits_error_and_shutdown() {
     let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
 
     session
@@ -4166,14 +4166,21 @@ async fn fail_agent_identity_registration_emits_error_without_shutdown() {
         }) => {
             assert_eq!(
                 message,
-                "Agent identity registration failed while `features.use_agent_identity` is enabled: registration exploded".to_string()
+                "Agent identity registration failed. Codex cannot continue while `features.use_agent_identity` is enabled: registration exploded".to_string()
             );
             assert_eq!(codex_error_info, Some(CodexErrorInfo::Other));
         }
         other => panic!("expected error event, got {other:?}"),
     }
 
-    assert!(rx_event.try_recv().is_err());
+    let shutdown_event = timeout(Duration::from_secs(1), rx_event.recv())
+        .await
+        .expect("shutdown event should arrive")
+        .expect("shutdown event should be readable");
+    match shutdown_event.msg {
+        EventMsg::ShutdownComplete => {}
+        other => panic!("expected shutdown event, got {other:?}"),
+    }
 }
 
 #[tokio::test]
