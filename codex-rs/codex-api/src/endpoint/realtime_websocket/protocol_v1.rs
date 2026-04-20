@@ -2,6 +2,7 @@ use crate::endpoint::realtime_websocket::protocol_common::parse_error_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_realtime_payload;
 use crate::endpoint::realtime_websocket::protocol_common::parse_session_updated_event;
 use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_delta_event;
+use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_done_event;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
@@ -38,23 +39,28 @@ pub(super) fn parse_realtime_event_v1(payload: &str) -> Option<RealtimeEvent> {
                 item_id: None,
             }))
         }
-        "conversation.input_transcript.delta" => {
+        "conversation.input_transcript.delta"
+        | "conversation.item.input_audio_transcription.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::InputTranscriptDelta)
         }
-        "conversation.output_transcript.delta" => {
+        "conversation.item.input_audio_transcription.completed" => {
+            parse_transcript_done_event(&parsed, "transcript")
+                .map(RealtimeEvent::InputTranscriptDone)
+        }
+        "conversation.output_transcript.delta"
+        | "response.output_text.delta"
+        | "response.output_audio_transcript.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::OutputTranscriptDelta)
+        }
+        "response.output_audio_transcript.done" => {
+            parse_transcript_done_event(&parsed, "transcript")
+                .map(RealtimeEvent::OutputTranscriptDone)
         }
         "conversation.item.added" => parsed
             .get("item")
             .cloned()
             .map(RealtimeEvent::ConversationItemAdded),
-        "conversation.item.done" => parsed
-            .get("item")
-            .and_then(Value::as_object)
-            .and_then(|item| item.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .map(|item_id| RealtimeEvent::ConversationItemDone { item_id }),
+        "conversation.item.done" => parse_conversation_item_done_event(&parsed),
         "conversation.handoff.requested" => {
             let handoff_id = parsed
                 .get("handoff_id")
@@ -81,4 +87,12 @@ pub(super) fn parse_realtime_event_v1(payload: &str) -> Option<RealtimeEvent> {
             None
         }
     }
+}
+
+fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
+    let item = parsed.get("item")?.as_object()?;
+    item.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .map(|item_id| RealtimeEvent::ConversationItemDone { item_id })
 }
