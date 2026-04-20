@@ -319,6 +319,7 @@ impl From<CoreAskForApproval> for AskForApproval {
 /// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
+    #[serde(rename = "user")]
     User,
     #[serde(rename = "auto_review", alias = "guardian_subagent")]
     AutoReview,
@@ -7008,15 +7009,24 @@ mod tests {
     #[test]
     fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
         assert_eq!(
+            serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),
+            "\"user\""
+        );
+        assert_eq!(
             serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
             "\"auto_review\""
         );
 
-        for value in ["auto_review", "guardian_subagent"] {
+        for value in ["user", "auto_review", "guardian_subagent"] {
             let json = format!("\"{value}\"");
             let reviewer: ApprovalsReviewer =
                 serde_json::from_str(&json).expect("deserialize reviewer");
-            assert_eq!(ApprovalsReviewer::AutoReview, reviewer);
+            let expected = if value == "user" {
+                ApprovalsReviewer::User
+            } else {
+                ApprovalsReviewer::AutoReview
+            };
+            assert_eq!(expected, reviewer);
         }
     }
 

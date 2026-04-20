@@ -206,15 +206,30 @@ fn parse_feature_requirements(
     Ok(pinned_features)
 }
 
+fn explicit_feature_settings_from_entries(
+    path_prefix: &str,
+    entries: BTreeMap<String, bool>,
+) -> Vec<(String, Feature, bool)> {
+    let mut explicit_settings = Vec::new();
+    for (key, enabled) in &entries {
+        if let Some(feature) = feature_for_key(key) {
+            if key != feature.key() && entries.contains_key(feature.key()) {
+                continue;
+            }
+            explicit_settings.push((format!("{path_prefix}.{key}"), feature, *enabled));
+        }
+    }
+    explicit_settings
+}
+
 fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature, bool)> {
     let mut explicit_settings = Vec::new();
 
     if let Some(features) = cfg.features.as_ref() {
-        for (key, enabled) in features.entries() {
-            if let Some(feature) = feature_for_key(&key) {
-                explicit_settings.push((format!("features.{key}"), feature, enabled));
-            }
-        }
+        explicit_settings.extend(explicit_feature_settings_from_entries(
+            "features",
+            features.entries(),
+        ));
     }
     if let Some(enabled) = cfg.experimental_use_unified_exec_tool {
         explicit_settings.push((
@@ -232,15 +247,10 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
     }
     for (profile_name, profile) in &cfg.profiles {
         if let Some(features) = profile.features.as_ref() {
-            for (key, enabled) in features.entries() {
-                if let Some(feature) = feature_for_key(&key) {
-                    explicit_settings.push((
-                        format!("profiles.{profile_name}.features.{key}"),
-                        feature,
-                        enabled,
-                    ));
-                }
-            }
+            explicit_settings.extend(explicit_feature_settings_from_entries(
+                &format!("profiles.{profile_name}.features"),
+                features.entries(),
+            ));
         }
         if let Some(enabled) = profile.include_apply_patch_tool {
             explicit_settings.push((

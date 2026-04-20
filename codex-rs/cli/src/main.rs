@@ -70,6 +70,14 @@ use codex_terminal_detection::TerminalName;
 const AUTO_REVIEW_FEATURE_KEY: &str = "auto_review";
 const LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY: &str = "guardian_approval";
 
+fn feature_write_key(feature: &str) -> &str {
+    if feature == LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY {
+        AUTO_REVIEW_FEATURE_KEY
+    } else {
+        feature
+    }
+}
+
 /// Codex CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
@@ -1194,11 +1202,7 @@ async fn run_exec_server_command(
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
-    let write_feature = if feature == LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY {
-        AUTO_REVIEW_FEATURE_KEY
-    } else {
-        feature
-    };
+    let write_feature = feature_write_key(feature);
     let codex_home = find_codex_home()?;
     ConfigEditsBuilder::new(&codex_home)
         .with_profile(interactive.config_profile.as_deref())
@@ -1212,10 +1216,11 @@ async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow
 
 async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
+    let write_feature = feature_write_key(feature);
     let codex_home = find_codex_home()?;
     let mut builder =
         ConfigEditsBuilder::new(&codex_home).with_profile(interactive.config_profile.as_deref());
-    if feature == AUTO_REVIEW_FEATURE_KEY {
+    if write_feature == AUTO_REVIEW_FEATURE_KEY {
         let segments = if let Some(profile) = interactive.config_profile.as_deref() {
             vec![
                 "profiles".to_string(),
@@ -1232,7 +1237,7 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
         builder = builder.with_edits([ConfigEdit::ClearPath { segments }]);
     }
     builder
-        .set_feature_enabled(feature, /*enabled*/ false)
+        .set_feature_enabled(write_feature, /*enabled*/ false)
         .apply()
         .await?;
     println!("Disabled feature `{feature}` in config.toml.");
