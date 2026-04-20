@@ -13,7 +13,6 @@ use crate::agent::Mailbox;
 use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
-use crate::agent_identity::AgentIdentityManager;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -164,7 +163,6 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
-mod agent_task_lifecycle;
 mod handlers;
 mod mcp;
 mod review;
@@ -974,58 +972,6 @@ impl Session {
         });
     }
 
-    fn start_agent_identity_registration(self: &Arc<Self>) {
-        if !self.services.agent_identity_manager.is_enabled() {
-            return;
-        }
-
-        let weak_sess = Arc::downgrade(self);
-        let mut auth_state_rx = self.services.auth_manager.subscribe_auth_state();
-        tokio::spawn(async move {
-            loop {
-                let Some(sess) = weak_sess.upgrade() else {
-                    return;
-                };
-                match sess
-                    .services
-                    .agent_identity_manager
-                    .ensure_registered_identity()
-                    .await
-                {
-                    Ok(Some(_)) => {
-                        sess.maybe_prewarm_agent_task_registration().await;
-                        return;
-                    }
-                    Ok(None) => {
-                        drop(sess);
-                        if auth_state_rx.changed().await.is_err() {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        sess.fail_agent_identity_registration(error).await;
-                        return;
-                    }
-                }
-            }
-        });
-    }
-
-    async fn fail_agent_identity_registration(self: &Arc<Self>, error: anyhow::Error) {
-        warn!(error = %error, "agent identity registration failed");
-        let message = format!(
-            "Agent identity registration failed while `features.use_agent_identity` is enabled: {error}"
-        );
-        self.send_event_raw(Event {
-            id: self.next_internal_sub_id(),
-            msg: EventMsg::Error(ErrorEvent {
-                message,
-                codex_error_info: Some(CodexErrorInfo::Other),
-            }),
-        })
-        .await;
-    }
-
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
         self.tx_event.clone()
     }
@@ -1173,7 +1119,6 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
-                self.restore_persisted_agent_task(&rollout_items).await;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;

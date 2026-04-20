@@ -1,48 +1,27 @@
 use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::Context;
 use anyhow::Result;
-use chrono::SecondsFormat;
-use chrono::Utc;
-use codex_agent_identity::AgentBillOfMaterials;
 use codex_agent_identity::AgentIdentityKey;
-use codex_agent_identity::agent_identity_biscuit_url;
-use codex_agent_identity::agent_identity_request_id;
-use codex_agent_identity::agent_registration_url;
-use codex_agent_identity::agent_task_registration_url;
 use codex_agent_identity::authorization_header_for_agent_task;
-use codex_agent_identity::build_abom;
-use codex_agent_identity::decrypt_task_id_response;
+#[cfg(test)]
 use codex_agent_identity::generate_agent_key_material;
 use codex_agent_identity::normalize_chatgpt_base_url;
 use codex_agent_identity::public_key_ssh_from_private_key_pkcs8_base64;
-use codex_agent_identity::sign_task_registration_payload;
 use codex_agent_identity::supports_background_agent_task_auth;
+#[cfg(test)]
 use codex_protocol::protocol::SessionSource;
-use serde::Deserialize;
-use serde::Serialize;
-use tokio::sync::Semaphore;
 use tracing::debug;
-use tracing::info;
 use tracing::warn;
 
 use crate::AgentIdentityAuthRecord;
 use crate::AuthManager;
 use crate::CodexAuth;
-use crate::default_client::create_client;
-
-const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
-const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
-const AGENT_IDENTITY_BISCUIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub(crate) struct BackgroundAgentTaskManager {
     auth_manager: Arc<AuthManager>,
     chatgpt_base_url: String,
     auth_mode: BackgroundAgentTaskAuthMode,
-    abom: AgentBillOfMaterials,
-    ensure_lock: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for BackgroundAgentTaskManager {
@@ -50,7 +29,6 @@ impl std::fmt::Debug for BackgroundAgentTaskManager {
         f.debug_struct("BackgroundAgentTaskManager")
             .field("chatgpt_base_url", &self.chatgpt_base_url)
             .field("auth_mode", &self.auth_mode)
-            .field("abom", &self.abom)
             .finish_non_exhaustive()
     }
 }
@@ -76,7 +54,7 @@ impl BackgroundAgentTaskAuthMode {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct StoredAgentIdentity {
     binding_id: String,
     chatgpt_account_id: String,
@@ -86,30 +64,6 @@ struct StoredAgentIdentity {
     public_key_ssh: String,
     registered_at: String,
     background_task_id: Option<String>,
-    abom: AgentBillOfMaterials,
-}
-
-#[derive(Debug, Serialize)]
-struct RegisterAgentRequest {
-    abom: AgentBillOfMaterials,
-    agent_public_key: String,
-    capabilities: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RegisterAgentResponse {
-    agent_runtime_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct RegisterTaskRequest {
-    signature: String,
-    timestamp: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RegisterTaskResponse {
-    encrypted_task_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,7 +71,6 @@ struct AgentIdentityBinding {
     binding_id: String,
     chatgpt_account_id: String,
     chatgpt_user_id: Option<String>,
-    access_token: String,
 }
 
 impl BackgroundAgentTaskManager {
@@ -125,12 +78,11 @@ impl BackgroundAgentTaskManager {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
         chatgpt_base_url: String,
-        session_source: SessionSource,
+        _session_source: SessionSource,
     ) -> Self {
         Self::new_with_auth_mode(
             auth_manager,
             chatgpt_base_url,
-            session_source,
             BackgroundAgentTaskAuthMode::Disabled,
         )
     }
@@ -138,15 +90,12 @@ impl BackgroundAgentTaskManager {
     pub(crate) fn new_with_auth_mode(
         auth_manager: Arc<AuthManager>,
         chatgpt_base_url: String,
-        session_source: SessionSource,
         auth_mode: BackgroundAgentTaskAuthMode,
     ) -> Self {
         Self {
             auth_manager,
             chatgpt_base_url: normalize_chatgpt_base_url(&chatgpt_base_url),
             auth_mode,
-            abom: build_abom(session_source),
-            ensure_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
         }
     }
 
@@ -174,29 +123,20 @@ impl BackgroundAgentTaskManager {
             return Ok(None);
         };
 
-        let _guard = self
-            .ensure_lock
-            .acquire()
-            .await
-            .context("background agent task ensure semaphore closed")?;
-        let mut stored_identity = self
-            .ensure_registered_identity_for_binding(auth, &binding)
-            .await?;
-        let background_task_id = match stored_identity.background_task_id.clone() {
-            Some(background_task_id) => background_task_id,
-            _ => {
-                let background_task_id = self
-                    .register_background_task_for_identity(&binding, &stored_identity)
-                    .await?;
-                stored_identity.background_task_id = Some(background_task_id.clone());
-                self.store_identity(auth, &stored_identity)?;
-                background_task_id
-            }
+        let Some(stored_identity) = self.load_stored_identity(auth, &binding)? else {
+            return Ok(None);
+        };
+        let Some(background_task_id) = stored_identity.background_task_id.as_ref() else {
+            debug!(
+                agent_runtime_id = %stored_identity.agent_runtime_id,
+                "skipping background agent task auth because stored agent identity has no background task id"
+            );
+            return Ok(None);
         };
 
         Ok(Some(authorization_header_for_task(
             &stored_identity,
-            &background_task_id,
+            background_task_id,
         )?))
     }
 
@@ -224,167 +164,6 @@ impl BackgroundAgentTaskManager {
         }
     }
 
-    async fn ensure_registered_identity_for_binding(
-        &self,
-        auth: &CodexAuth,
-        binding: &AgentIdentityBinding,
-    ) -> Result<StoredAgentIdentity> {
-        if let Some(stored_identity) = self.load_stored_identity(auth, binding)? {
-            return Ok(stored_identity);
-        }
-
-        let stored_identity = self.register_agent_identity(binding).await?;
-        self.store_identity(auth, &stored_identity)?;
-        Ok(stored_identity)
-    }
-
-    async fn register_agent_identity(
-        &self,
-        binding: &AgentIdentityBinding,
-    ) -> Result<StoredAgentIdentity> {
-        let key_material = generate_agent_key_material()?;
-        let request_body = RegisterAgentRequest {
-            abom: self.abom.clone(),
-            agent_public_key: key_material.public_key_ssh.clone(),
-            capabilities: Vec::new(),
-        };
-
-        let url = agent_registration_url(&self.chatgpt_base_url);
-        let human_biscuit = self.mint_human_biscuit(binding, "POST", &url).await?;
-        let client = create_client();
-        let response = client
-            .post(&url)
-            .header("X-OpenAI-Authorization", human_biscuit)
-            .json(&request_body)
-            .timeout(AGENT_REGISTRATION_TIMEOUT)
-            .send()
-            .await
-            .with_context(|| {
-                format!("failed to send agent identity registration request to {url}")
-            })?;
-
-        if response.status().is_success() {
-            let response_body = response
-                .json::<RegisterAgentResponse>()
-                .await
-                .with_context(|| format!("failed to parse agent identity response from {url}"))?;
-            let stored_identity = StoredAgentIdentity {
-                binding_id: binding.binding_id.clone(),
-                chatgpt_account_id: binding.chatgpt_account_id.clone(),
-                chatgpt_user_id: binding.chatgpt_user_id.clone(),
-                agent_runtime_id: response_body.agent_runtime_id,
-                private_key_pkcs8_base64: key_material.private_key_pkcs8_base64,
-                public_key_ssh: key_material.public_key_ssh,
-                registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                background_task_id: None,
-                abom: self.abom.clone(),
-            };
-            info!(
-                agent_runtime_id = %stored_identity.agent_runtime_id,
-                binding_id = %binding.binding_id,
-                "registered background agent identity"
-            );
-            return Ok(stored_identity);
-        }
-
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("agent identity registration failed with status {status} from {url}: {body}")
-    }
-
-    async fn register_background_task_for_identity(
-        &self,
-        binding: &AgentIdentityBinding,
-        stored_identity: &StoredAgentIdentity,
-    ) -> Result<String> {
-        let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        let request_body = RegisterTaskRequest {
-            signature: sign_task_registration_payload(
-                stored_identity.agent_identity_key(),
-                &timestamp,
-            )?,
-            timestamp,
-        };
-
-        let client = create_client();
-        let url =
-            agent_task_registration_url(&self.chatgpt_base_url, &stored_identity.agent_runtime_id);
-        let human_biscuit = self.mint_human_biscuit(binding, "POST", &url).await?;
-        let response = client
-            .post(&url)
-            .header("X-OpenAI-Authorization", human_biscuit)
-            .json(&request_body)
-            .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
-            .send()
-            .await
-            .with_context(|| format!("failed to send background agent task request to {url}"))?;
-
-        if response.status().is_success() {
-            let response_body = response
-                .json::<RegisterTaskResponse>()
-                .await
-                .with_context(|| format!("failed to parse background task response from {url}"))?;
-            let background_task_id = decrypt_task_id_response(
-                stored_identity.agent_identity_key(),
-                &response_body.encrypted_task_id,
-            )?;
-            info!(
-                agent_runtime_id = %stored_identity.agent_runtime_id,
-                task_id = %background_task_id,
-                "registered background agent task"
-            );
-            return Ok(background_task_id);
-        }
-
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "background agent task registration failed with status {status} from {url}: {body}"
-        )
-    }
-
-    async fn mint_human_biscuit(
-        &self,
-        binding: &AgentIdentityBinding,
-        target_method: &str,
-        target_url: &str,
-    ) -> Result<String> {
-        let url = agent_identity_biscuit_url(&self.chatgpt_base_url);
-        let request_id = agent_identity_request_id()?;
-        let client = create_client();
-        let response = client
-            .get(&url)
-            .bearer_auth(&binding.access_token)
-            .header("X-Request-Id", request_id.clone())
-            .header("X-Original-Method", target_method)
-            .header("X-Original-Url", target_url)
-            .timeout(AGENT_IDENTITY_BISCUIT_TIMEOUT)
-            .send()
-            .await
-            .with_context(|| format!("failed to send agent identity biscuit request to {url}"))?;
-
-        if response.status().is_success() {
-            let human_biscuit = response
-                .headers()
-                .get("x-openai-authorization")
-                .context("agent identity biscuit response did not include x-openai-authorization")?
-                .to_str()
-                .context("agent identity biscuit response header was not valid UTF-8")?
-                .to_string();
-            info!(
-                request_id = %request_id,
-                "minted human biscuit for background agent task"
-            );
-            return Ok(human_biscuit);
-        }
-
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "agent identity biscuit minting failed with status {status} from {url}: {body}"
-        )
-    }
-
     fn load_stored_identity(
         &self,
         auth: &CodexAuth,
@@ -394,19 +173,18 @@ impl BackgroundAgentTaskManager {
             return Ok(None);
         };
 
-        let stored_identity =
-            match StoredAgentIdentity::from_auth_record(binding, record, self.abom.clone()) {
-                Ok(stored_identity) => stored_identity,
-                Err(error) => {
-                    warn!(
-                        binding_id = %binding.binding_id,
-                        error = %error,
-                        "stored agent identity is invalid; deleting cached value"
-                    );
-                    auth.remove_agent_identity()?;
-                    return Ok(None);
-                }
-            };
+        let stored_identity = match StoredAgentIdentity::from_auth_record(binding, record) {
+            Ok(stored_identity) => stored_identity,
+            Err(error) => {
+                warn!(
+                    binding_id = %binding.binding_id,
+                    error = %error,
+                    "stored agent identity is invalid; deleting cached value"
+                );
+                auth.remove_agent_identity()?;
+                return Ok(None);
+            }
+        };
 
         if !stored_identity.matches_binding(binding) {
             warn!(
@@ -430,15 +208,6 @@ impl BackgroundAgentTaskManager {
 
         Ok(Some(stored_identity))
     }
-
-    fn store_identity(
-        &self,
-        auth: &CodexAuth,
-        stored_identity: &StoredAgentIdentity,
-    ) -> Result<()> {
-        auth.set_agent_identity(stored_identity.to_auth_record())?;
-        Ok(())
-    }
 }
 
 pub fn cached_background_agent_task_authorization_header_value(
@@ -455,8 +224,7 @@ pub fn cached_background_agent_task_authorization_header_value(
     let Some(record) = auth.get_agent_identity(&binding.chatgpt_account_id) else {
         return Ok(None);
     };
-    let stored_identity =
-        StoredAgentIdentity::from_auth_record(&binding, record, build_abom(SessionSource::Cli))?;
+    let stored_identity = StoredAgentIdentity::from_auth_record(&binding, record)?;
     if !stored_identity.matches_binding(&binding) {
         return Ok(None);
     }
@@ -471,7 +239,6 @@ impl StoredAgentIdentity {
     fn from_auth_record(
         binding: &AgentIdentityBinding,
         record: AgentIdentityAuthRecord,
-        abom: AgentBillOfMaterials,
     ) -> Result<Self> {
         if record.workspace_id != binding.chatgpt_account_id {
             anyhow::bail!(
@@ -491,19 +258,7 @@ impl StoredAgentIdentity {
             public_key_ssh,
             registered_at: record.registered_at,
             background_task_id: record.background_task_id,
-            abom,
         })
-    }
-
-    fn to_auth_record(&self) -> AgentIdentityAuthRecord {
-        AgentIdentityAuthRecord {
-            workspace_id: self.chatgpt_account_id.clone(),
-            chatgpt_user_id: self.chatgpt_user_id.clone(),
-            agent_runtime_id: self.agent_runtime_id.clone(),
-            agent_private_key: self.private_key_pkcs8_base64.clone(),
-            registered_at: self.registered_at.clone(),
-            background_task_id: self.background_task_id.clone(),
-        }
     }
 
     fn matches_binding(&self, binding: &AgentIdentityBinding) -> bool {
@@ -568,7 +323,6 @@ impl AgentIdentityBinding {
                 .id_token
                 .chatgpt_user_id
                 .filter(|value| !value.is_empty()),
-            access_token: token_data.access_token,
         })
     }
 }
@@ -597,7 +351,6 @@ mod tests {
         let manager = BackgroundAgentTaskManager::new_with_auth_mode(
             auth_manager,
             "https://chatgpt.com/backend-api".to_string(),
-            SessionSource::Cli,
             BackgroundAgentTaskAuthMode::Disabled,
         );
 

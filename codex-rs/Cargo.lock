@@ -1991,7 +1991,6 @@ dependencies = [
  "codex-windows-sandbox",
  "core-foundation 0.9.4",
  "core_test_support",
- "crypto_box",
  "csv",
  "ctor 0.6.3",
  "dirs",

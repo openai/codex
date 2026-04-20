@@ -1,6 +1,4 @@
 use super::*;
-use crate::agent_identity::RegisteredAgentTask;
-use crate::agent_identity::StoredAgentIdentity;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -17,22 +15,9 @@ use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills::render::SkillMetadataBudget;
 use crate::tools::format_exec_output_str;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chrono::SecondsFormat;
-use chrono::Utc;
-use codex_agent_identity::AgentBillOfMaterials;
-use codex_agent_identity::curve25519_secret_key_from_private_key_pkcs8_base64;
 use codex_features::Feature;
 use codex_features::Features;
-use codex_login::AgentIdentityAuthRecord;
-use codex_login::AuthCredentialsStoreMode;
-use codex_login::AuthDotJson;
 use codex_login::CodexAuth;
-use codex_login::save_auth;
-use codex_login::token_data::IdTokenInfo;
-use codex_login::token_data::TokenData;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info;
@@ -131,8 +116,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
-use ed25519_dalek::SigningKey;
-use ed25519_dalek::pkcs8::EncodePrivateKey;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -146,12 +129,6 @@ use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::header;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
 use pretty_assertions::assert_eq;
@@ -1288,120 +1265,6 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
-}
-
-#[tokio::test]
-async fn record_initial_history_restores_latest_persisted_agent_task() {
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    seed_stored_identity(&auth, "agent-123", "account-123");
-    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
-        auth,
-        "https://chatgpt.com/backend-api".to_string(),
-    )
-    .await;
-    let expected = RegisteredAgentTask {
-        agent_runtime_id: "agent-123".to_string(),
-        task_id: "task-123".to_string(),
-        registered_at: "2026-03-23T12:00:00Z".to_string(),
-    };
-    let rollout_items = vec![
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: Some(expected.to_session_agent_task()),
-        }),
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: None,
-        }),
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: Some(expected.to_session_agent_task()),
-        }),
-    ];
-
-    session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-        }))
-        .await;
-
-    assert_eq!(
-        session.state.lock().await.agent_task(),
-        Some(expected.to_session_agent_task())
-    );
-}
-
-#[tokio::test]
-async fn record_initial_history_discards_persisted_agent_task_for_different_identity() {
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    seed_stored_identity(&auth, "agent-123", "account-123");
-    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
-        auth,
-        "https://chatgpt.com/backend-api".to_string(),
-    )
-    .await;
-    let rollout_items = vec![RolloutItem::SessionState(
-        codex_protocol::protocol::SessionStateUpdate {
-            agent_task: Some(
-                RegisteredAgentTask {
-                    agent_runtime_id: "agent-other".to_string(),
-                    task_id: "task-other".to_string(),
-                    registered_at: "2026-03-23T12:00:00Z".to_string(),
-                }
-                .to_session_agent_task(),
-            ),
-        },
-    )];
-
-    session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-        }))
-        .await;
-
-    assert_eq!(session.state.lock().await.agent_task(), None);
-}
-
-#[tokio::test]
-async fn record_initial_history_honors_cleared_persisted_agent_task() {
-    let (session, _turn_context) = make_session_and_context().await;
-    {
-        let mut state = session.state.lock().await;
-        state.set_agent_task(
-            RegisteredAgentTask {
-                agent_runtime_id: "agent-fresh".to_string(),
-                task_id: "task-fresh".to_string(),
-                registered_at: "2026-03-23T12:01:00Z".to_string(),
-            }
-            .to_session_agent_task(),
-        );
-    }
-    let rollout_items = vec![
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: Some(
-                RegisteredAgentTask {
-                    agent_runtime_id: "agent-123".to_string(),
-                    task_id: "task-123".to_string(),
-                    registered_at: "2026-03-23T12:00:00Z".to_string(),
-                }
-                .to_session_agent_task(),
-            ),
-        }),
-        RolloutItem::SessionState(codex_protocol::protocol::SessionStateUpdate {
-            agent_task: None,
-        }),
-    ];
-
-    session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: rollout_items,
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-        }))
-        .await;
-
-    assert_eq!(session.state.lock().await.agent_task(), None);
 }
 
 #[tokio::test]
@@ -3208,11 +3071,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
-        agent_identity_manager: Arc::new(crate::agent_identity::AgentIdentityManager::new(
-            config.as_ref(),
-            Arc::clone(&auth_manager),
-            session_configuration.session_source.clone(),
-        )),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
@@ -3305,7 +3163,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
-        agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
     };
 
     (session, turn_context)
@@ -4178,11 +4035,6 @@ where
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
-        agent_identity_manager: Arc::new(crate::agent_identity::AgentIdentityManager::new(
-            config.as_ref(),
-            Arc::clone(&auth_manager),
-            session_configuration.session_source.clone(),
-        )),
         shell_snapshot_tx: watch::channel(None).0,
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
@@ -4275,7 +4127,6 @@ where
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
-        agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
     });
 
     (session, turn_context, rx_event)
@@ -4296,24 +4147,6 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     .await
 }
 
-async fn make_agent_identity_session_and_context_with_rx(
-    auth: CodexAuth,
-    chatgpt_base_url: String,
-) -> (
-    Arc<Session>,
-    Arc<TurnContext>,
-    async_channel::Receiver<Event>,
-) {
-    make_session_and_context_with_auth_and_config_and_rx(auth, Vec::new(), move |config| {
-        config.chatgpt_base_url = chatgpt_base_url;
-        config
-            .features
-            .enable(Feature::UseAgentIdentity)
-            .expect("test config should allow use_agent_identity");
-    })
-    .await
-}
-
 // Like make_session_and_context, but returns Arc<Session> and the event receiver
 // so tests can assert on emitted events.
 pub(crate) async fn make_session_and_context_with_rx() -> (
@@ -4322,240 +4155,6 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
-}
-
-#[tokio::test]
-async fn fail_agent_identity_registration_emits_error_without_shutdown() {
-    let (session, _turn_context, rx_event) = make_session_and_context_with_rx().await;
-
-    session
-        .fail_agent_identity_registration(anyhow::anyhow!("registration exploded"))
-        .await;
-
-    let error_event = timeout(Duration::from_secs(1), rx_event.recv())
-        .await
-        .expect("error event should arrive")
-        .expect("error event should be readable");
-    match error_event.msg {
-        EventMsg::Error(ErrorEvent {
-            message,
-            codex_error_info,
-        }) => {
-            assert_eq!(
-                message,
-                "Agent identity registration failed while `features.use_agent_identity` is enabled: registration exploded".to_string()
-            );
-            assert_eq!(codex_error_info, Some(CodexErrorInfo::Other));
-        }
-        other => panic!("expected error event, got {other:?}"),
-    }
-
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn startup_agent_task_prewarm_caches_registered_task() {
-    let server = MockServer::start().await;
-    let chatgpt_base_url = server.uri();
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    let stored_identity = seed_stored_identity(&auth, "agent-123", "account-123");
-    let encrypted_task_id =
-        encrypt_task_id_for_identity(&stored_identity, "task_123").expect("task ciphertext");
-    mount_human_biscuit(&server, &chatgpt_base_url, "agent-123").await;
-    Mock::given(method("POST"))
-        .and(path("/v1/agent/agent-123/task/register"))
-        .and(header("x-openai-authorization", "human-biscuit"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "encrypted_task_id": encrypted_task_id,
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let (session, _turn_context, rx_event) =
-        make_agent_identity_session_and_context_with_rx(auth, chatgpt_base_url).await;
-
-    session.maybe_prewarm_agent_task_registration().await;
-
-    let cached_task = session
-        .state
-        .lock()
-        .await
-        .agent_task()
-        .expect("task should be cached");
-    assert_eq!(cached_task.agent_runtime_id, "agent-123");
-    assert_eq!(cached_task.task_id, "task_123");
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn startup_agent_task_prewarm_failure_does_not_emit_error() {
-    let server = MockServer::start().await;
-    let chatgpt_base_url = server.uri();
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    seed_stored_identity(&auth, "agent-123", "account-123");
-    mount_human_biscuit(&server, &chatgpt_base_url, "agent-123").await;
-    Mock::given(method("POST"))
-        .and(path("/v1/agent/agent-123/task/register"))
-        .and(header("x-openai-authorization", "human-biscuit"))
-        .respond_with(ResponseTemplate::new(500))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let (session, _turn_context, rx_event) =
-        make_agent_identity_session_and_context_with_rx(auth, chatgpt_base_url).await;
-
-    session.maybe_prewarm_agent_task_registration().await;
-
-    assert_eq!(session.state.lock().await.agent_task(), None);
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn cached_agent_task_for_current_identity_clears_stale_task() {
-    let auth = make_chatgpt_auth("account-123", Some("user-123"));
-    seed_stored_identity(&auth, "agent-123", "account-123");
-    let (session, _turn_context, _rx_event) = make_agent_identity_session_and_context_with_rx(
-        auth,
-        "https://chatgpt.com/backend-api".to_string(),
-    )
-    .await;
-    {
-        let mut state = session.state.lock().await;
-        state.set_agent_task(
-            RegisteredAgentTask {
-                agent_runtime_id: "agent-old".to_string(),
-                task_id: "task-old".to_string(),
-                registered_at: "2026-04-15T00:00:00Z".to_string(),
-            }
-            .to_session_agent_task(),
-        );
-    }
-
-    assert_eq!(session.cached_agent_task_for_current_identity().await, None);
-    assert_eq!(session.state.lock().await.agent_task(), None);
-}
-
-fn seed_stored_identity(
-    auth: &CodexAuth,
-    agent_runtime_id: &str,
-    account_id: &str,
-) -> StoredAgentIdentity {
-    let signing_key = generate_test_signing_key();
-    let private_key_pkcs8 = signing_key
-        .to_pkcs8_der()
-        .expect("encode test signing key as PKCS#8");
-    let stored_identity = StoredAgentIdentity {
-        binding_id: format!("chatgpt-account-{account_id}"),
-        chatgpt_account_id: account_id.to_string(),
-        chatgpt_user_id: Some("user-123".to_string()),
-        agent_runtime_id: agent_runtime_id.to_string(),
-        private_key_pkcs8_base64: BASE64_STANDARD.encode(private_key_pkcs8.as_bytes()),
-        public_key_ssh: "ssh-ed25519 test".to_string(),
-        registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        abom: AgentBillOfMaterials {
-            agent_version: env!("CARGO_PKG_VERSION").to_string(),
-            agent_harness_id: "codex-cli".to_string(),
-            running_location: format!("{}-{}", SessionSource::Exec, std::env::consts::OS),
-        },
-    };
-
-    auth.set_agent_identity(AgentIdentityAuthRecord {
-        workspace_id: account_id.to_string(),
-        chatgpt_user_id: stored_identity.chatgpt_user_id.clone(),
-        agent_runtime_id: stored_identity.agent_runtime_id.clone(),
-        agent_private_key: stored_identity.private_key_pkcs8_base64.clone(),
-        registered_at: stored_identity.registered_at.clone(),
-        background_task_id: None,
-    })
-    .expect("store identity");
-
-    stored_identity
-}
-
-fn encrypt_task_id_for_identity(
-    stored_identity: &StoredAgentIdentity,
-    task_id: &str,
-) -> anyhow::Result<String> {
-    let mut rng = crypto_box::aead::OsRng;
-    let public_key = curve25519_secret_key_from_private_key_pkcs8_base64(
-        &stored_identity.private_key_pkcs8_base64,
-    )?
-    .public_key();
-    let ciphertext = public_key
-        .seal(&mut rng, task_id.as_bytes())
-        .map_err(|_| anyhow::anyhow!("failed to encrypt test task id"))?;
-    Ok(BASE64_STANDARD.encode(ciphertext))
-}
-
-fn generate_test_signing_key() -> SigningKey {
-    SigningKey::from_bytes(&[7u8; 32])
-}
-
-async fn mount_human_biscuit(server: &MockServer, chatgpt_base_url: &str, agent_runtime_id: &str) {
-    let biscuit_url = format!(
-        "{}/authenticate_app_v2",
-        chatgpt_base_url.trim_end_matches('/')
-    );
-    let biscuit_path = reqwest::Url::parse(&biscuit_url)
-        .expect("biscuit URL parses")
-        .path()
-        .to_string();
-    let target_url = format!(
-        "{}/v1/agent/{agent_runtime_id}/task/register",
-        chatgpt_base_url.trim_end_matches('/')
-    );
-    Mock::given(method("GET"))
-        .and(path(biscuit_path))
-        .and(header("authorization", "Bearer access-token-account-123"))
-        .and(header("x-original-method", "POST"))
-        .and(header("x-original-url", target_url))
-        .respond_with(
-            ResponseTemplate::new(200).insert_header("x-openai-authorization", "human-biscuit"),
-        )
-        .expect(1)
-        .mount(server)
-        .await;
-}
-
-fn make_chatgpt_auth(account_id: &str, user_id: Option<&str>) -> CodexAuth {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let auth_json = AuthDotJson {
-        auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
-        openai_api_key: None,
-        tokens: Some(TokenData {
-            id_token: IdTokenInfo {
-                email: None,
-                chatgpt_plan_type: None,
-                chatgpt_user_id: user_id.map(ToOwned::to_owned),
-                chatgpt_account_id: Some(account_id.to_string()),
-                chatgpt_account_is_fedramp: false,
-                raw_jwt: fake_id_token(account_id, user_id),
-            },
-            access_token: format!("access-token-{account_id}"),
-            refresh_token: "refresh-token".to_string(),
-            account_id: Some(account_id.to_string()),
-        }),
-        last_refresh: Some(Utc::now()),
-        agent_identity: None,
-    };
-    save_auth(tempdir.path(), &auth_json, AuthCredentialsStoreMode::File).expect("save auth");
-    CodexAuth::from_auth_storage(tempdir.path(), AuthCredentialsStoreMode::File)
-        .expect("load auth")
-        .expect("auth")
-}
-
-fn fake_id_token(account_id: &str, user_id: Option<&str>) -> String {
-    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
-    let payload = serde_json::json!({
-        "https://api.openai.com/auth": {
-            "chatgpt_user_id": user_id,
-            "chatgpt_account_id": account_id,
-        }
-    });
-    let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
-    format!("{header}.{payload}.signature")
 }
 
 #[tokio::test]

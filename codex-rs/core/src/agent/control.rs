@@ -116,7 +116,6 @@ fn keep_forked_rollout_item(item: &RolloutItem) -> bool {
             | ResponseItem::Compaction { .. }
             | ResponseItem::Other,
         ) => false,
-        RolloutItem::SessionState(_) => false,
         RolloutItem::Compacted(_)
         | RolloutItem::EventMsg(_)
         | RolloutItem::SessionMeta(_)

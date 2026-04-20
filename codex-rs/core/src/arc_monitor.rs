@@ -110,42 +110,32 @@ pub(crate) async fn monitor_action(
         },
         None => None,
     };
-    let (authorization_header_value, account_id) = if let Some(token) =
-        read_non_empty_env_var(CODEX_ARC_MONITOR_TOKEN)
-    {
-        (
-            format!("Bearer {token}"),
-            auth.as_ref().and_then(CodexAuth::get_account_id),
-        )
-    } else if let Some(authorization_header_value) =
-        match sess.authorization_header_for_current_agent_task().await {
-            Ok(authorization_header_value) => authorization_header_value,
-            Err(err) => {
-                warn!(
-                    error = %err,
-                    "skipping safety monitor because agent assertion authorization is unavailable"
-                );
+    let (authorization_header_value, account_id) =
+        if let Some(token) = read_non_empty_env_var(CODEX_ARC_MONITOR_TOKEN) {
+            (
+                format!("Bearer {token}"),
+                auth.as_ref().and_then(CodexAuth::get_account_id),
+            )
+        } else {
+            let Some(auth) = auth.as_ref() else {
                 return ArcMonitorOutcome::Ok;
-            }
-        }
-    {
-        (authorization_header_value, None)
-    } else {
-        let Some(auth) = auth.as_ref() else {
-            return ArcMonitorOutcome::Ok;
-        };
-        let token = match auth.get_token() {
-            Ok(token) => token,
-            Err(err) => {
-                warn!(
-                    error = %err,
-                    "skipping safety monitor because auth token is unavailable"
-                );
+            };
+            let Some(auth_manager) = turn_context.auth_manager.as_ref() else {
                 return ArcMonitorOutcome::Ok;
-            }
+            };
+            let Some(authorization_header_value) = auth_manager
+                .chatgpt_authorization_header_for_auth(auth)
+                .await
+            else {
+                return ArcMonitorOutcome::Ok;
+            };
+            let account_id = if authorization_header_value.starts_with("AgentAssertion ") {
+                None
+            } else {
+                auth.get_account_id()
+            };
+            (authorization_header_value, account_id)
         };
-        (format!("Bearer {token}"), auth.get_account_id())
-    };
 
     let url = read_non_empty_env_var(CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE).unwrap_or_else(|| {
         format!(
