@@ -49,6 +49,7 @@ use tracing::warn;
 
 pub(super) const REMOTE_CONTROL_PROTOCOL_VERSION: &str = "2";
 pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
+const REMOTE_CONTROL_FEDRAMP_HEADER: &str = "X-OpenAI-Fedramp";
 const REMOTE_CONTROL_SUBSCRIBE_CURSOR_HEADER: &str = "x-codex-subscribe-cursor";
 const REMOTE_CONTROL_WEBSOCKET_PING_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(10);
@@ -704,6 +705,9 @@ fn build_remote_control_websocket_request(
     )?;
     set_remote_control_header(headers, "authorization", &auth.authorization_header_value)?;
     set_remote_control_header(headers, REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)?;
+    if auth.is_fedramp_account {
+        set_remote_control_header(headers, REMOTE_CONTROL_FEDRAMP_HEADER, "true")?;
+    }
     if let Some(subscribe_cursor) = subscribe_cursor {
         set_remote_control_header(
             headers,
@@ -760,6 +764,7 @@ pub(crate) async fn load_remote_control_auth(
 
     Ok(RemoteControlConnectionAuth {
         authorization_header_value,
+        is_fedramp_account: auth.is_fedramp_account(),
         account_id: auth.get_account_id().ok_or_else(|| {
             io::Error::new(
                 ErrorKind::WouldBlock,
@@ -1080,6 +1085,34 @@ mod tests {
             last_refresh: Some(Utc::now()),
             agent_identity: None,
         }
+    }
+
+    #[test]
+    fn build_remote_control_websocket_request_includes_fedramp_header() {
+        let request = build_remote_control_websocket_request(
+            "ws://127.0.0.1/backend-api/wham/remote/control/server",
+            &RemoteControlEnrollment {
+                account_id: "account_id".to_string(),
+                environment_id: "env_test".to_string(),
+                server_id: "srv_e_test".to_string(),
+                server_name: "test-server".to_string(),
+            },
+            &RemoteControlConnectionAuth {
+                authorization_header_value: "AgentAssertion assertion".to_string(),
+                account_id: "account_id".to_string(),
+                is_fedramp_account: true,
+            },
+            /*subscribe_cursor*/ None,
+        )
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(REMOTE_CONTROL_FEDRAMP_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
+        );
     }
 
     #[tokio::test]

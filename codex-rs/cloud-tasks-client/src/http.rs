@@ -52,6 +52,11 @@ impl HttpClient {
         self
     }
 
+    pub fn with_fedramp_routing_header(mut self) -> Self {
+        self.backend = self.backend.clone().with_fedramp_routing_header();
+        self
+    }
+
     fn tasks_api(&self) -> api::Tasks<'_> {
         api::Tasks::new(self)
     }

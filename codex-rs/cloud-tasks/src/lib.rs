@@ -104,6 +104,9 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
         append_error_log(format!("auth: set ChatGPT-Account-Id header: {acc}"));
         http = http.with_chatgpt_account_id(acc);
     }
+    if auth.is_fedramp_account() {
+        http = http.with_fedramp_routing_header();
+    }
 
     Ok(BackendContext {
         backend: Arc::new(http),

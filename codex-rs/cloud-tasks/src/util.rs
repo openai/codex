@@ -71,8 +71,7 @@ pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<Arc<A
     Some(auth_manager)
 }
 
-/// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
-/// and optional `ChatGPT-Account-Id`.
+/// Build headers for ChatGPT-backed requests.
 pub async fn build_chatgpt_headers() -> HeaderMap {
     use reqwest::header::AUTHORIZATION;
     use reqwest::header::HeaderName;
@@ -108,6 +107,11 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
             && let Ok(hv) = HeaderValue::from_str(&acc)
         {
             headers.insert(name, hv);
+        }
+        if auth.is_fedramp_account()
+            && let Ok(name) = HeaderName::from_bytes(b"X-OpenAI-Fedramp")
+        {
+            headers.insert(name, HeaderValue::from_static("true"));
         }
     }
     headers
