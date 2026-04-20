@@ -836,6 +836,10 @@ impl JsReplManager {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "js_repl kernel initialization must be serialized with kernel state"
+    )]
     pub async fn execute(
         &self,
         session: Arc<Session>,
@@ -1162,6 +1166,10 @@ impl JsReplManager {
         Ok(kernel_path)
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "js_repl stdin writes must be serialized per kernel"
+    )]
     async fn write_message(
         stdin: &Arc<Mutex<ChildStdin>>,
         msg: &HostToKernel,
@@ -1209,6 +1217,10 @@ impl JsReplManager {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "js_repl child shutdown must serialize process inspection and termination"
+    )]
     async fn kill_kernel_child(child: &Arc<Mutex<Child>>, reason: &'static str) {
         let mut guard = child.lock().await;
         let pid = guard.id();
@@ -1532,6 +1544,10 @@ impl JsReplManager {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "nested js_repl tool routing reads through the session-owned manager guard"
+    )]
     async fn run_tool_request(exec: ExecContext, req: RunToolRequest) -> RunToolResult {
         if is_js_repl_internal_tool(&req.tool_name) {
             let error = "js_repl cannot invoke itself".to_string();
