@@ -289,7 +289,10 @@ impl Session {
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
 
-        let queued_response_items = self.take_queued_response_items_for_next_turn().await;
+        let mut queued_response_items = self.take_queued_response_items_for_next_turn().await;
+        if !input.is_empty() {
+            queued_response_items.retain(|item| !crate::goals::is_goal_continuation_item(item));
+        }
         let mailbox_items = self.get_pending_input().await;
         let started_from_goal_continuation = queued_response_items
             .iter()

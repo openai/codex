@@ -6134,6 +6134,44 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
+async fn user_input_turn_drops_queued_goal_continuation() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let queued_goal_continuation = ResponseInputItem::Message {
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "Continue working toward the active thread goal.".to_string(),
+        }],
+    };
+    let queued_user_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued before wake".to_string(),
+        }],
+    };
+    sess.queue_response_items_for_next_turn(vec![
+        queued_goal_continuation,
+        queued_user_item.clone(),
+    ])
+    .await;
+    let input = vec![UserInput::Text {
+        text: "fresh user request".to_string(),
+        text_elements: Vec::new(),
+    }];
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    assert_eq!(sess.get_pending_input().await, vec![queued_user_item]);
+}
+
+#[tokio::test]
 async fn abort_without_registered_task_requeues_startup_pending_input() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let queued_item = ResponseInputItem::Message {
