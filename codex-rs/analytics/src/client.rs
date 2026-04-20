@@ -8,6 +8,7 @@ use crate::facts::AnalyticsJsonRpcError;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::CodexResponsesApiCallFact;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
@@ -212,6 +213,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(
             Box::new(event),
         )));
+    }
+
+    pub fn track_responses_api_call(&self, event: CodexResponsesApiCallFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ResponsesApiCall(Box::new(event)),
+        ));
     }
 
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
