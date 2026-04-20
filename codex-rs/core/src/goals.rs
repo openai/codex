@@ -571,7 +571,7 @@ impl Session {
         let result = self
             .account_thread_goal_progress_inner(turn_context, boundary)
             .await;
-        if clear_terminal_accounting {
+        if result.is_ok() && clear_terminal_accounting {
             turn_context.goal_accounting.clear_completed_this_turn();
             turn_context.goal_accounting.clear_stopped_this_turn();
         }
