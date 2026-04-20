@@ -7511,9 +7511,26 @@ impl ChatWidget {
     fn open_terminal_title_setup(&mut self) {
         let configured_terminal_title_items = self.configured_terminal_title_items();
         self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
+        let mut preview_data = self.status_surface_preview_data();
+        let now = Instant::now();
+        for item in [
+            TerminalTitleItem::Project,
+            TerminalTitleItem::Thread,
+            TerminalTitleItem::GitBranch,
+            TerminalTitleItem::Model,
+            TerminalTitleItem::TaskProgress,
+        ] {
+            let Some(preview_item) = item.preview_item() else {
+                continue;
+            };
+            let Some(value) = self.terminal_title_value_for_item(item, now) else {
+                continue;
+            };
+            preview_data.set_live(preview_item, value);
+        }
         let view = TerminalTitleSetupView::new(
             Some(configured_terminal_title_items.as_slice()),
-            self.status_surface_preview_data(),
+            preview_data,
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));

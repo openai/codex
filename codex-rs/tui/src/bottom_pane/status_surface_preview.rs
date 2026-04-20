@@ -6,6 +6,7 @@ use ratatui::text::Line;
 pub(crate) enum StatusSurfacePreviewItem {
     AppName,
     ProjectName,
+    ProjectRoot,
     CurrentDir,
     Status,
     ThreadTitle,
@@ -31,6 +32,7 @@ impl StatusSurfacePreviewItem {
         match self {
             StatusSurfacePreviewItem::AppName => "codex",
             StatusSurfacePreviewItem::ProjectName => "my-project",
+            StatusSurfacePreviewItem::ProjectRoot => "my-project",
             StatusSurfacePreviewItem::CurrentDir => "~/my-project/subdir",
             StatusSurfacePreviewItem::Status => "Working",
             StatusSurfacePreviewItem::ThreadTitle => "thread title",
@@ -56,6 +58,7 @@ impl StatusSurfacePreviewItem {
         [
             Self::AppName,
             Self::ProjectName,
+            Self::ProjectRoot,
             Self::CurrentDir,
             Self::Status,
             Self::ThreadTitle,
