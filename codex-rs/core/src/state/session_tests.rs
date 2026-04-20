@@ -1,8 +1,8 @@
 use super::*;
-use crate::agent_identity::RegisteredAgentTask;
 use crate::session::tests::make_session_configuration_for_tests;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::SessionAgentTask;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -38,11 +38,8 @@ async fn clear_connector_selection_removes_entries() {
 async fn set_agent_task_persists_plaintext_task_for_session_reuse() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);
-    let agent_task = RegisteredAgentTask {
-        binding_id: "chatgpt-account-account-123".to_string(),
-        chatgpt_account_id: "account-123".to_string(),
-        chatgpt_user_id: Some("user-123".to_string()),
-        agent_runtime_id: "agent_123".to_string(),
+    let agent_task = SessionAgentTask {
+        agent_runtime_id: "agent-123".to_string(),
         task_id: "task_123".to_string(),
         registered_at: "2026-03-23T12:00:00Z".to_string(),
     };
@@ -56,10 +53,7 @@ async fn set_agent_task_persists_plaintext_task_for_session_reuse() {
 async fn clear_agent_task_removes_cached_task() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);
-    let agent_task = RegisteredAgentTask {
-        binding_id: "chatgpt-account-account-123".to_string(),
-        chatgpt_account_id: "account-123".to_string(),
-        chatgpt_user_id: Some("user-123".to_string()),
+    let agent_task = SessionAgentTask {
         agent_runtime_id: "agent_123".to_string(),
         task_id: "task_123".to_string(),
         registered_at: "2026-03-23T12:00:00Z".to_string(),
@@ -87,6 +81,7 @@ async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     });
 
     assert_eq!(
@@ -114,6 +109,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     });
     state.set_rate_limits(RateLimitSnapshot {
         limit_id: None,
@@ -126,6 +122,7 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     });
 
     assert_eq!(
@@ -157,6 +154,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
             balance: Some("50".to_string()),
         }),
         plan_type: Some(codex_protocol::account::PlanType::Plus),
+        rate_limit_reached_type: None,
     });
 
     state.set_rate_limits(RateLimitSnapshot {
@@ -170,6 +168,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
         secondary: None,
         credits: None,
         plan_type: None,
+        rate_limit_reached_type: None,
     });
 
     assert_eq!(
@@ -189,6 +188,7 @@ async fn set_rate_limits_carries_credits_and_plan_type_from_codex_to_codex_other
                 balance: Some("50".to_string()),
             }),
             plan_type: Some(codex_protocol::account::PlanType::Plus),
+            rate_limit_reached_type: None,
         })
     );
 }

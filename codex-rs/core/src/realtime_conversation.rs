@@ -1278,8 +1278,11 @@ async fn handle_realtime_server_event(
             false
         }
         RealtimeEvent::Error(_) => true,
-        RealtimeEvent::SessionUpdated { .. }
-        | RealtimeEvent::InputTranscriptDelta(_)
+        RealtimeEvent::SessionUpdated { session_id, .. } => {
+            info!(realtime_session_id = %session_id, "realtime session updated");
+            false
+        }
+        RealtimeEvent::InputTranscriptDelta(_)
         | RealtimeEvent::InputTranscriptDone(_)
         | RealtimeEvent::OutputTranscriptDelta(_)
         | RealtimeEvent::OutputTranscriptDone(_)

@@ -13,6 +13,7 @@ pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
+use codex_exec_server::Environment;
 use codex_login::token_data::TokenData;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::DiscoverableTool;
@@ -37,6 +38,7 @@ use codex_login::default_client::create_client;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::ToolInfo;
 use codex_mcp::ToolPluginProvenance;
 use codex_mcp::codex_apps_tools_cache_key;
@@ -241,6 +243,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         INITIAL_SUBMIT_ID.to_owned(),
         tx_event,
         SandboxPolicy::new_read_only_policy(),
+        McpRuntimeEnvironment::new(Arc::new(Environment::default()), config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
         codex_apps_tools_cache_key(auth.as_ref()),
         ToolPluginProvenance::default(),
@@ -680,10 +683,10 @@ fn app_tool_policy_from_apps_config(
         });
     let destructive_hint = annotations
         .and_then(|annotations| annotations.destructive_hint)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let open_world_hint = annotations
         .and_then(|annotations| annotations.open_world_hint)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let enabled =
         (destructive_enabled || !destructive_hint) && (open_world_enabled || !open_world_hint);
 

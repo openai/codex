@@ -1,3 +1,4 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::StatusCode;
@@ -20,6 +21,8 @@ use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
+use super::agent_assertion;
+use super::agent_assertion::AgentTaskAuthorizationTarget;
 use super::external_bearer::BearerTokenRefresher;
 use super::revoke::revoke_auth_tokens;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
@@ -1481,6 +1484,43 @@ impl AuthManager {
             .read()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    pub fn chatgpt_agent_task_authorization_header_for_auth(
+        &self,
+        auth: &CodexAuth,
+        target: AgentTaskAuthorizationTarget<'_>,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(record) = self.agent_identity_for_chatgpt_auth(auth)? else {
+            return Ok(None);
+        };
+        agent_assertion::authorization_header_for_agent_task(&record, target).map(Some)
+    }
+
+    fn agent_identity_for_chatgpt_auth(
+        &self,
+        auth: &CodexAuth,
+    ) -> anyhow::Result<Option<AgentIdentityAuthRecord>> {
+        if !auth.is_chatgpt_auth() {
+            return Ok(None);
+        }
+
+        let token_data = auth
+            .get_token_data()
+            .context("ChatGPT token data is not available")?;
+        let workspace_id = self
+            .forced_chatgpt_workspace_id()
+            .filter(|value| !value.is_empty())
+            .or(token_data.account_id.filter(|value| !value.is_empty()));
+
+        let Some(workspace_id) = workspace_id else {
+            return Ok(None);
+        };
+        let Some(record) = auth.get_agent_identity(&workspace_id) else {
+            anyhow::bail!("agent identity is not available for workspace {workspace_id}");
+        };
+
+        Ok(Some(record))
     }
 
     pub fn subscribe_auth_state(&self) -> watch::Receiver<()> {

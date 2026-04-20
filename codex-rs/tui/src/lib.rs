@@ -14,10 +14,8 @@ use crate::legacy_core::config_loader::CloudRequirementsLoader;
 use crate::legacy_core::config_loader::ConfigLoadError;
 use crate::legacy_core::config_loader::LoaderOverrides;
 use crate::legacy_core::config_loader::format_config_error_with_source;
-use crate::legacy_core::find_thread_meta_by_name_str;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::path_utils;
-use crate::legacy_core::read_session_meta_line;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use additional_dirs::add_dir_warning_message;
 use app::App;
@@ -51,6 +49,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TurnContextItem;
+use codex_rollout::find_thread_meta_by_name_str;
+use codex_rollout::read_session_meta_line;
 use codex_rollout::state_db::get_state_db;
 use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
@@ -118,6 +118,8 @@ mod debug_config;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
+mod external_agent_config_migration;
+mod external_agent_config_migration_startup;
 mod external_editor;
 mod file_search;
 mod frames;
@@ -517,6 +519,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 cursor: cursor.clone(),
                 limit: Some(100),
                 sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+                sort_direction: None,
                 model_providers: None,
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
@@ -612,6 +615,7 @@ fn latest_session_lookup_params(
         cursor: None,
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+        sort_direction: None,
         model_providers: if is_remote {
             None
         } else {
@@ -1450,6 +1454,7 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,

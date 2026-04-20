@@ -4,5 +4,9 @@ codex_rust_crate(
     name = "app-server",
     crate_name = "codex_app_server",
     integration_test_timeout = "long",
+    test_shard_counts = {
+        "app-server-all-test": 8,
+        "app-server-unit-tests": 8,
+    },
     test_tags = ["no-sandbox"],
 )

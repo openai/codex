@@ -327,6 +327,10 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    ThreadTurnsList => "thread/turns/list" {
+        params: v2::ThreadTurnsListParams,
+        response: v2::ThreadTurnsListResponse,
+    },
     /// Append raw Responses API items to the thread history without starting a user turn.
     ThreadInjectItems => "thread/inject_items" {
         params: v2::ThreadInjectItemsParams,
@@ -339,6 +343,10 @@ client_request_definitions! {
     MarketplaceAdd => "marketplace/add" {
         params: v2::MarketplaceAddParams,
         response: v2::MarketplaceAddResponse,
+    },
+    MarketplaceRemove => "marketplace/remove" {
+        params: v2::MarketplaceRemoveParams,
+        response: v2::MarketplaceRemoveResponse,
     },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
@@ -518,6 +526,11 @@ client_request_definitions! {
     GetAccountRateLimits => "account/rateLimits/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v2::GetAccountRateLimitsResponse,
+    },
+
+    SendAddCreditsNudgeEmail => "account/sendAddCreditsNudgeEmail" {
+        params: v2::SendAddCreditsNudgeEmailParams,
+        response: v2::SendAddCreditsNudgeEmailResponse,
     },
 
     FeedbackUpload => "feedback/upload" {
@@ -1025,6 +1038,7 @@ server_notification_definitions! {
     /// Deprecated: Use `ContextCompaction` item type instead.
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
+    Warning => "warning" (v2::WarningNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),

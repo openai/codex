@@ -3,10 +3,9 @@
 # Scope: Windows-only linker metadata for the generated `rules_rs` toolchains.
 
 diff --git a/rs/experimental/toolchains/declare_rustc_toolchains.bzl b/rs/experimental/toolchains/declare_rustc_toolchains.bzl
-index 67e491c..3f1cff5 100644
 --- a/rs/experimental/toolchains/declare_rustc_toolchains.bzl
 +++ b/rs/experimental/toolchains/declare_rustc_toolchains.bzl
-@@ -50,6 +50,8 @@ def declare_rustc_toolchains(
+@@ -58,6 +58,8 @@ def declare_rustc_toolchains(
          rust_toolchain(
              name = rust_toolchain_name,
              rust_doc = "{}rustdoc".format(rustc_repo_label),
@@ -15,10 +14,10 @@ index 67e491c..3f1cff5 100644
              rust_std = select(rust_std_select),
              rustc = "{}rustc".format(rustc_repo_label),
              cargo = "{}cargo".format(cargo_repo_label),
-@@ -82,7 +84,20 @@ def declare_rustc_toolchains(
-             stdlib_linkflags = select({
-                 "@platforms//os:freebsd": ["-lexecinfo", "-lpthread"],
-                 "@platforms//os:macos": ["-lSystem", "-lresolv"],
+@@ -104,7 +106,20 @@ def declare_rustc_toolchains(
+                 "@platforms//os:nixos": ["-ldl", "-lpthread"],
+                 "@platforms//os:openbsd": ["-lpthread"],
+                 "@platforms//os:ios": ["-lSystem", "-lobjc", "-Wl,-framework,Security", "-Wl,-framework,Foundation", "-lresolv"],
 -                # TODO: windows
 +                "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm": [
 +                    "advapi32.lib",
@@ -38,17 +37,12 @@ index 67e491c..3f1cff5 100644
              }),
              default_edition = edition,
 diff --git a/rs/private/rustc_repository.bzl b/rs/private/rustc_repository.bzl
-index f4f0286..6558bb2 100644
 --- a/rs/private/rustc_repository.bzl
 +++ b/rs/private/rustc_repository.bzl
-@@ -1,13 +1,28 @@
- load("@rules_rust//rust/platform:triple.bzl", "triple")
- load(
-     "@rules_rust//rust/private:repository_utils.bzl",
-     "BUILD_for_compiler",
+@@ -7,10 +7,24 @@ load(
  )
- load(":rust_repository_utils.bzl", "download_and_extract", "RUST_REPOSITORY_COMMON_ATTR")
- 
+ load(":rust_repository_utils.bzl", "RUST_REPOSITORY_COMMON_ATTR", "download_and_extract")
++
 +_WINDOWS_EXEC_LINKER_BUILD = """
 +filegroup(
 +    name = "rust-lld",
@@ -56,18 +50,17 @@ index f4f0286..6558bb2 100644
 +    visibility = ["//visibility:public"],
 +)
 +"""
-+
+ 
  def _rustc_repository_impl(rctx):
      exec_triple = triple(rctx.attr.triple)
      download_and_extract(rctx, "rustc", "rustc", exec_triple)
--    rctx.file("BUILD.bazel", BUILD_for_compiler(exec_triple))
-+    build_file = BUILD_for_compiler(exec_triple)
+     build_content = [BUILD_for_compiler(exec_triple)]
 +    if exec_triple.system == "windows":
 +        lld_link = rctx.which("lld-link.exe")
 +        if lld_link == None:
 +            fail("lld-link.exe not found on PATH")
 +        rctx.symlink(lld_link, "bin/lld-link.exe")
-+        build_file += _WINDOWS_EXEC_LINKER_BUILD
-+    rctx.file("BUILD.bazel", build_file)
- 
-     return rctx.repo_metadata(reproducible = True)
++        build_content.append(_WINDOWS_EXEC_LINKER_BUILD)
+     if includes_rust_analyzer_proc_macro_srv(rctx.attr.version, rctx.attr.iso_date):
+         build_content.append(BUILD_for_rust_analyzer_proc_macro_srv(exec_triple))
+     rctx.file("BUILD.bazel", "\n".join(build_content))
