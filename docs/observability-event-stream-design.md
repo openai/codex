@@ -86,6 +86,16 @@ The derive crate exists because Rust does not expose struct field attributes at
 runtime. The public API can still re-export the derive from
 `codex-observability` so most callsites only import one crate.
 
+Typed observation events are internal source types, not exported wire schemas.
+Their compatibility boundary is the reducer output: analytics event JSON, OTEL
+exports, rollout trace bundles, or any other persisted/shared destination
+schema. This keeps the event taxonomy easy to rename, split, merge, or reshape
+in the same PR that updates its reducers, while preserving compatibility where
+it matters.
+
+If raw observations are ever persisted or consumed across process/version
+boundaries, they should be treated as versioned schemas instead.
+
 ## Why Not Just OTEL?
 
 An alternative is to emit semantic facts as ordinary `tracing` events and let a
