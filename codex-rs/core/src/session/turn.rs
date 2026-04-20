@@ -1908,7 +1908,11 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                active_tool_argument_diff_consumer = None;
+                if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
+                    && let Some(event) = consumer.flush_pending()
+                {
+                    sess.send_event(&turn_context, event).await;
+                }
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
