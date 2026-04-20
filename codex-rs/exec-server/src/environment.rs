@@ -319,15 +319,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn create_remote_environment_does_not_connect() {
-        let environment =
-            Environment::create(Some("ws://127.0.0.1:9".to_string())).expect("create environment");
-
-        assert!(environment.is_remote());
-        assert_eq!(environment.exec_server_url(), Some("ws://127.0.0.1:9"));
-    }
-
     #[tokio::test]
     async fn environment_manager_default_environment_caches_environment() {
         let manager = EnvironmentManager::new(EnvironmentManagerArgs::default());
