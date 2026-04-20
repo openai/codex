@@ -1,12 +1,11 @@
 ---
 source: tui/src/app.rs
-assertion_line: 11668
 expression: model_migration_copy_to_plain_text(&copy)
 ---
-Introducing GPT-5.4
+**Codex just got an upgrade. Introducing gpt-5.3-codex.**
 
-Codex just got an upgrade with GPT-5.4, our most capable model for professional work. It outperforms prior models while being more token efficient, with notable improvements on long-running tasks, tool calling, computer use, and frontend development.
+Codex is now powered by gpt-5.3-codex, our most capable agentic coding model yet. It's built for long-running, project-scale work, with mid-turn steering + frequent progress updates so you can collaborate while it runs (and it's faster too).
 
-Learn more: https://openai.com/index/introducing-gpt-5-4
+Learn more: https://openai.com/index/introducing-gpt-5-3-codex/
 
-You can always keep using GPT-5.3-Codex if you prefer.
+You can keep using gpt-5.1-codex if you prefer.

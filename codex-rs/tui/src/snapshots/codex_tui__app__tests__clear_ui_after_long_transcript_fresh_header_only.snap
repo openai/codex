@@ -1,6 +1,5 @@
 ---
-source: tui/src/app/tests/clear_ui.rs
-assertion_line: 132
+source: tui/src/app.rs
 expression: rendered
 ---
 ╭─────────────────────────────────────────────╮
