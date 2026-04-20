@@ -121,7 +121,7 @@ async fn tool_call_output_exceeds_limit_truncated_chars_limit() -> Result<()> {
     let server = start_mock_server().await;
 
     // Use a model that exposes the shell_command tool.
-    let mut builder = test_codex().with_model("gpt-5.4");
+    let mut builder = test_codex().with_model("gpt-5.2");
 
     let fixture = builder.build(&server).await?;
 
@@ -596,7 +596,7 @@ async fn byte_policy_marker_reports_bytes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.2").with_config(|config| {
         config.tool_output_token_limit = Some(50); // ~200 byte cap
     });
     let fixture = builder.build(&server).await?;

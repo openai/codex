@@ -119,7 +119,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
-            config.model = Some("gpt-5.4".to_string());
+            config.model = Some("gpt-5.2".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
             config
                 .web_search_mode

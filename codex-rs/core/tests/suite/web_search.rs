@@ -242,7 +242,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
     )
     .expect("write config.toml");
 
-    let mut builder = test_codex().with_model("gpt-5.4").with_home(home);
+    let mut builder = test_codex().with_model("gpt-5.3-codex").with_home(home);
     let test = builder
         .build(&server)
         .await

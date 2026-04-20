@@ -270,7 +270,7 @@ async fn shell_escalated_permissions_rejected_then_ok() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.2");
+    let mut builder = test_codex().with_model("test-shell-json");
     let test = builder.build(&server).await?;
 
     let command = ["/bin/echo", "shell ok"];
