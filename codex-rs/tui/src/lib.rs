@@ -523,7 +523,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
                 cwd: None,
-                use_state_db_only: false,
+                use_state_db_only: true,
                 search_term: Some(name.to_string()),
             })
             .await?;
