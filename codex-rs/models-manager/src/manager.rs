@@ -462,10 +462,14 @@ impl ModelsManager {
                 .chatgpt_authorization_header_for_auth(auth)
                 .await
         {
-            api_auth = Arc::new(AuthorizationHeaderAuthProvider::new(
+            let mut auth_provider = AuthorizationHeaderAuthProvider::new(
                 Some(authorization_header_value),
                 auth.get_account_id(),
-            ));
+            );
+            if auth.is_fedramp_account() {
+                auth_provider = auth_provider.with_fedramp_routing_header();
+            }
+            api_auth = Arc::new(auth_provider);
         }
         let auth_env = collect_auth_env_telemetry(self.provider.info(), codex_api_key_env_enabled);
         let transport = ReqwestTransport::new(build_reqwest_client());

@@ -2032,6 +2032,9 @@ impl CodexMessageProcessor {
         if let Some(account_id) = auth.get_account_id() {
             client = client.with_chatgpt_account_id(account_id);
         }
+        if auth.is_fedramp_account() {
+            client = client.with_fedramp_routing_header();
+        }
 
         let snapshots = client
             .get_rate_limits_many()
