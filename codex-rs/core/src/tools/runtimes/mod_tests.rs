@@ -429,6 +429,97 @@ fn maybe_wrap_shell_lc_with_snapshot_refreshes_codex_proxy_git_ssh_command() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), fresh_command);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_restores_custom_git_ssh_command() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    let stale_command = format!(
+        "{CODEX_PROXY_GIT_SSH_COMMAND_MARKER}ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+    );
+    let custom_command = "ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'";
+    std::fs::write(
+        &snapshot_path,
+        format!(
+            "# Snapshot file\nexport {PROXY_GIT_SSH_COMMAND_ENV_KEY}='{}'\n",
+            shell_single_quote(&stale_command)
+        ),
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        format!("printf '%s' \"${PROXY_GIT_SSH_COMMAND_ENV_KEY}\""),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env(PROXY_GIT_SSH_COMMAND_ENV_KEY, custom_command)
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), custom_command);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_clears_stale_codex_git_ssh_command_without_live_command() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    let stale_command = format!(
+        "{CODEX_PROXY_GIT_SSH_COMMAND_MARKER}ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+    );
+    std::fs::write(
+        &snapshot_path,
+        format!(
+            "# Snapshot file\nexport {PROXY_GIT_SSH_COMMAND_ENV_KEY}='{}'\n",
+            shell_single_quote(&stale_command)
+        ),
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "if [ \"${{{PROXY_GIT_SSH_COMMAND_ENV_KEY}+x}}\" = x ]; then printf 'set'; else printf 'unset'; fi"
+        ),
+    ];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env_remove(PROXY_GIT_SSH_COMMAND_ENV_KEY)
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+}
+
 #[test]
 fn maybe_wrap_shell_lc_with_snapshot_keeps_user_proxy_env_when_proxy_inactive() {
     let dir = tempdir().expect("create temp dir");
