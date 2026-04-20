@@ -2,6 +2,7 @@ mod client;
 mod events;
 mod facts;
 mod reducer;
+mod responses_api;
 
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -39,6 +40,12 @@ pub use facts::TurnSteerRequestError;
 pub use facts::TurnSteerResult;
 pub use facts::TurnTokenUsageFact;
 pub use facts::build_track_events_context;
+pub use responses_api::CodexResponseItemType;
+pub use responses_api::CodexResponsesApiCallFact;
+pub use responses_api::CodexResponsesApiCallStatus;
+pub use responses_api::CodexResponsesApiItemMetadata;
+pub use responses_api::CodexResponsesApiItemPhase;
+pub use responses_api::response_items_metadata;
 
 #[cfg(test)]
 mod analytics_client_tests;
