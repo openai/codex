@@ -344,6 +344,9 @@
             "child_agents_md": {
               "type": "boolean"
             },
+            "chronicle": {
+              "type": "boolean"
+            },
             "code_mode": {
               "type": "boolean"
             },
@@ -2317,6 +2320,9 @@
           "type": "boolean"
         },
         "child_agents_md": {
+          "type": "boolean"
+        },
+        "chronicle": {
           "type": "boolean"
         },
         "code_mode": {
