@@ -34,7 +34,6 @@ pub use crate::tui_keymap::TuiComposerKeymap;
 pub use crate::tui_keymap::TuiEditorKeymap;
 pub use crate::tui_keymap::TuiGlobalKeymap;
 pub use crate::tui_keymap::TuiKeymap;
-pub use crate::tui_keymap::TuiKeymapPreset;
 pub use crate::tui_keymap::TuiListKeymap;
 pub use crate::tui_keymap::TuiOnboardingKeymap;
 pub use crate::tui_keymap::TuiPagerKeymap;

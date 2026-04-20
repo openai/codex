@@ -372,7 +372,7 @@ pub struct Config {
     ///
     /// 1. context table (`tui.keymap.chat`, `tui.keymap.composer`, etc.)
     /// 2. `tui.keymap.global`
-    /// 3. built-in preset defaults (`latest` currently points to `v1`)
+    /// 3. built-in defaults
     pub tui_keymap: TuiKeymap,
 
     /// The absolute directory that should be treated as the current working
