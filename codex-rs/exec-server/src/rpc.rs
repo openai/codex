@@ -266,18 +266,18 @@ impl RpcClient {
         P: Serialize,
         T: DeserializeOwned,
     {
-        // Avoid creating a pending request after the connection is already
-        // known closed.
-        if *self.disconnected_rx.borrow() {
-            return Err(RpcCallError::Closed);
-        }
-
         let request_id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
         let (response_tx, response_rx) = oneshot::channel();
-        self.pending
-            .lock()
-            .await
-            .insert(request_id.clone(), response_tx);
+        {
+            let mut pending = self.pending.lock().await;
+            // Registering the pending request and checking disconnect must be
+            // atomic with the reader's drain_pending path. Otherwise a call
+            // can sneak in after the drain and wait forever.
+            if *self.disconnected_rx.borrow() {
+                return Err(RpcCallError::Closed);
+            }
+            pending.insert(request_id.clone(), response_tx);
+        }
 
         let params = match serde_json::to_value(params) {
             Ok(params) => params,
