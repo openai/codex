@@ -798,13 +798,18 @@ async fn resumed_thread_activates_paused_goal_and_starts_continuation() -> anyho
             source.thread_id,
             "Keep working until the task is done",
             codex_state::ThreadGoalStatus::Paused,
-            None,
+            /*token_budget*/ None,
         )
         .await?;
     manager.remove_thread(&source.thread_id).await;
 
     let resumed = manager
-        .resume_thread_from_rollout(config, source_path, auth_manager, None)
+        .resume_thread_from_rollout(
+            config,
+            source_path,
+            auth_manager,
+            /*parent_trace*/ None,
+        )
         .await
         .expect("resume source thread");
     let goal = state_db
