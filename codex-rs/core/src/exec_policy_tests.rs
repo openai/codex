@@ -1463,8 +1463,12 @@ async fn proposed_execpolicy_amendment_is_present_when_heuristics_allow() {
 async fn proposed_execpolicy_amendment_is_suppressed_when_policy_matches_allow() {
     assert_exec_approval_requirement_for_command(
         ExecApprovalRequirementScenario {
-            policy_src: Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#.to_string()),
-            command: vec!["echo".to_string(), "safe".to_string()],
+            policy_src: Some(r#"prefix_rule(pattern=["python3"], decision="allow")"#.to_string()),
+            command: vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(1)".to_string(),
+            ],
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
