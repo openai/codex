@@ -357,13 +357,11 @@ pub(crate) fn guardian_assessment_action(
             }
         }
         GuardianApprovalRequest::NetworkAccess {
-            id: _,
-            turn_id: _,
             target,
             host,
             protocol,
             port,
-            trigger: _,
+            ..
         } => GuardianAssessmentAction::NetworkAccess {
             target: target.clone(),
             host: host.clone(),

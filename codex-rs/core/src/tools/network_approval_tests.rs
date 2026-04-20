@@ -210,7 +210,10 @@ fn denied_blocked_request(host: &str) -> BlockedRequest {
     })
 }
 
-async fn register_test_call(service: &NetworkApprovalService, registration_id: &str) {
+async fn register_call_with_default_shell_trigger(
+    service: &NetworkApprovalService,
+    registration_id: &str,
+) {
     service
         .register_call(
             registration_id.to_string(),
@@ -265,7 +268,7 @@ async fn active_call_preserves_triggering_command_context() {
 #[tokio::test]
 async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
     let service = NetworkApprovalService::default();
-    register_test_call(&service, "registration-1").await;
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
 
     service
         .record_blocked_request(denied_blocked_request("example.com"))
@@ -282,7 +285,7 @@ async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
 #[tokio::test]
 async fn blocked_request_policy_does_not_override_user_denial_outcome() {
     let service = NetworkApprovalService::default();
-    register_test_call(&service, "registration-1").await;
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
 
     service
         .record_call_outcome("registration-1", NetworkApprovalOutcome::DeniedByUser)
@@ -300,8 +303,8 @@ async fn blocked_request_policy_does_not_override_user_denial_outcome() {
 #[tokio::test]
 async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests() {
     let service = NetworkApprovalService::default();
-    register_test_call(&service, "registration-1").await;
-    register_test_call(&service, "registration-2").await;
+    register_call_with_default_shell_trigger(&service, "registration-1").await;
+    register_call_with_default_shell_trigger(&service, "registration-2").await;
 
     service
         .record_blocked_request(denied_blocked_request("example.com"))
