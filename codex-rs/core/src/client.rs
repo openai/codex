@@ -31,7 +31,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use crate::agent_identity::AgentIdentityManager;
 use crate::agent_identity::RegisteredAgentTask;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
@@ -149,7 +148,6 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
 #[derive(Debug)]
 struct ModelClientState {
-    agent_identity_manager: Option<Arc<AgentIdentityManager>>,
     conversation_id: ThreadId,
     window_generation: AtomicU64,
     installation_id: String,
@@ -306,34 +304,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
-        Self::new_with_agent_identity_manager(
-            auth_manager,
-            /*agent_identity_manager*/ None,
-            conversation_id,
-            installation_id,
-            provider_info,
-            session_source,
-            model_verbosity,
-            enable_request_compression,
-            include_timing_metrics,
-            beta_features_header,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_with_agent_identity_manager(
-        auth_manager: Option<Arc<AuthManager>>,
-        agent_identity_manager: Option<Arc<AgentIdentityManager>>,
-        conversation_id: ThreadId,
-        installation_id: String,
-        provider: ModelProviderInfo,
-        session_source: SessionSource,
-        model_verbosity: Option<VerbosityConfig>,
-        enable_request_compression: bool,
-        include_timing_metrics: bool,
-        beta_features_header: Option<String>,
-    ) -> Self {
-        let model_provider = create_model_provider(provider, auth_manager);
+        let model_provider = create_model_provider(provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
             .as_ref()
@@ -342,7 +313,6 @@ impl ModelClient {
             collect_auth_env_telemetry(model_provider.info(), codex_api_key_env_enabled);
         Self {
             state: Arc::new(ModelClientState {
-                agent_identity_manager,
                 conversation_id,
                 window_generation: AtomicU64::new(0),
                 installation_id,
@@ -711,11 +681,14 @@ impl ModelClient {
     ) -> Result<CurrentClientSetup> {
         let auth = self.state.provider.auth().await;
         let api_provider = self.state.provider.api_provider().await?;
-        let api_auth = match (agent_task, self.state.agent_identity_manager.as_ref()) {
-            (Some(agent_task), Some(agent_identity_manager)) => {
-                if let Some(authorization_header_value) = agent_identity_manager
-                    .authorization_header_for_task(agent_task)
-                    .await
+        let auth_manager = self.state.provider.auth_manager();
+        let api_auth = match (agent_task, auth_manager.as_ref(), auth.as_ref()) {
+            (Some(agent_task), Some(auth_manager), Some(auth)) => {
+                if let Some(authorization_header_value) = auth_manager
+                    .chatgpt_agent_task_authorization_header_for_auth(
+                        auth,
+                        agent_task.authorization_target(),
+                    )
                     .map_err(|err| {
                         CodexErr::Stream(
                             format!("failed to build agent assertion authorization: {err}"),
@@ -732,7 +705,7 @@ impl ModelClient {
                         Some(authorization_header_value),
                         /*account_id*/ None,
                     );
-                    if auth.as_ref().is_some_and(CodexAuth::is_fedramp_account) {
+                    if auth.is_fedramp_account() {
                         auth_provider = auth_provider.with_fedramp_routing_header();
                     }
                     Arc::new(auth_provider)

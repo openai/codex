@@ -664,9 +664,8 @@ impl Session {
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
             thread_store: LocalThreadStore::new(RolloutConfig::from_view(config.as_ref())),
-            model_client: ModelClient::new_with_agent_identity_manager(
+            model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
-                Some(agent_identity_manager),
                 conversation_id,
                 installation_id,
                 session_configuration.provider.clone(),

@@ -146,11 +146,16 @@ impl Session {
             return Ok(None);
         };
 
+        let Some(auth) = self.services.auth_manager.auth().await else {
+            return Ok(None);
+        };
         let authorization_header_value = self
             .services
-            .agent_identity_manager
-            .authorization_header_for_task(&agent_task)
-            .await?;
+            .auth_manager
+            .chatgpt_agent_task_authorization_header_for_auth(
+                &auth,
+                agent_task.authorization_target(),
+            )?;
         if authorization_header_value.is_some() {
             debug!(
                 agent_runtime_id = %agent_task.agent_runtime_id,

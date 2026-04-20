@@ -11,7 +11,6 @@ use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
 use crate::Prompt;
 use crate::ResponseEvent;
-use crate::agent_identity::AgentAssertionEnvelope;
 use crate::agent_identity::AgentIdentityManager;
 use crate::agent_identity::RegisteredAgentTask;
 use crate::agent_identity::StoredAgentIdentity;
@@ -37,6 +36,7 @@ use ed25519_dalek::Signature;
 use ed25519_dalek::Verifier as _;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use serde::Deserialize;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -150,9 +150,8 @@ async fn model_client_with_agent_task(
         task_id: "task-123".to_string(),
         registered_at: "2026-03-23T12:00:00Z".to_string(),
     };
-    let client = ModelClient::new_with_agent_identity_manager(
+    let client = ModelClient::new(
         Some(auth_manager),
-        Some(agent_identity_manager),
         ThreadId::new(),
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
@@ -163,6 +162,14 @@ async fn model_client_with_agent_task(
         /*beta_features_header*/ None,
     );
     (codex_home, client, agent_task, stored_identity)
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentAssertionEnvelope {
+    agent_runtime_id: String,
+    task_id: String,
+    timestamp: String,
+    signature: String,
 }
 
 fn assert_agent_assertion_header(

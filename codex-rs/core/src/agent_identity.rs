@@ -29,11 +29,8 @@ use tracing::warn;
 
 use crate::config::Config;
 
-mod assertion;
 mod task_registration;
 
-#[cfg(test)]
-pub(crate) use assertion::AgentAssertionEnvelope;
 pub(crate) use task_registration::RegisteredAgentTask;
 
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
