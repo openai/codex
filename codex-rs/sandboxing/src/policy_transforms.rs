@@ -45,6 +45,7 @@ pub fn normalize_additional_permissions(
     let file_system = match additional_permissions.file_system {
         Some(file_system) => {
             let mut entries = Vec::with_capacity(file_system.entries.len());
+            let glob_scan_max_depth = file_system.glob_scan_max_depth;
             for entry in file_system.entries {
                 if matches!(&entry.path, FileSystemPath::GlobPattern { .. })
                     && entry.access != FileSystemAccessMode::None
@@ -73,7 +74,10 @@ pub fn normalize_additional_permissions(
                     entries.push(normalized_entry);
                 }
             }
-            let file_system = FileSystemPermissions { entries };
+            let file_system = FileSystemPermissions {
+                entries,
+                glob_scan_max_depth,
+            };
             (!file_system.is_empty()).then_some(file_system)
         }
         None => None,
@@ -114,6 +118,9 @@ pub fn merge_permission_profiles(
             let file_system = match (base.file_system.as_ref(), permissions.file_system.as_ref()) {
                 (Some(base), Some(permissions)) => Some(FileSystemPermissions {
                     entries: merge_permission_entries(&base.entries, &permissions.entries),
+                    glob_scan_max_depth: base
+                        .glob_scan_max_depth
+                        .max(permissions.glob_scan_max_depth),
                 })
                 .filter(|file_system| !file_system.is_empty()),
                 (Some(base), None) => Some(base.clone()),
@@ -144,7 +151,10 @@ pub fn intersect_permission_profiles(
                 .into_iter()
                 .filter(|entry| granted_file_system.entries.contains(entry))
                 .collect();
-            FileSystemPermissions { entries }
+            FileSystemPermissions {
+                entries,
+                glob_scan_max_depth: requested_file_system.glob_scan_max_depth,
+            }
         })
         .filter(|file_system| !file_system.is_empty());
     let network = match (requested.network, granted.network) {

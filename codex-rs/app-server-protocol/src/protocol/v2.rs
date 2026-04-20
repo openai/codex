@@ -1162,6 +1162,9 @@ pub struct AdditionalFileSystemPermissions {
     pub write: Option<Vec<AbsolutePathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub glob_scan_max_depth: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub entries: Option<Vec<FileSystemSandboxEntry>>,
 }
 
@@ -1171,12 +1174,14 @@ impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
             Self {
                 read,
                 write,
+                glob_scan_max_depth: None,
                 entries: None,
             }
         } else {
             Self {
                 read: None,
                 write: None,
+                glob_scan_max_depth: value.glob_scan_max_depth,
                 entries: Some(
                     value
                         .entries
@@ -1191,16 +1196,19 @@ impl From<CoreFileSystemPermissions> for AdditionalFileSystemPermissions {
 
 impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
     fn from(value: AdditionalFileSystemPermissions) -> Self {
-        if let Some(entries) = value.entries {
+        let mut permissions = if let Some(entries) = value.entries {
             Self {
                 entries: entries
                     .into_iter()
                     .map(CoreFileSystemSandboxEntry::from)
                     .collect(),
+                glob_scan_max_depth: None,
             }
         } else {
             CoreFileSystemPermissions::from_read_write_roots(value.read, value.write)
-        }
+        };
+        permissions.glob_scan_max_depth = value.glob_scan_max_depth;
+        permissions
     }
 }
 
@@ -7074,6 +7082,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    glob_scan_max_depth: None,
                     entries: None,
                 }),
             }
@@ -7145,6 +7154,7 @@ mod tests {
                     access: CoreFileSystemAccessMode::None,
                 },
             ],
+            glob_scan_max_depth: Some(2),
         };
 
         let permissions = AdditionalFileSystemPermissions::from(core_permissions.clone());
@@ -7153,6 +7163,7 @@ mod tests {
             AdditionalFileSystemPermissions {
                 read: None,
                 write: None,
+                glob_scan_max_depth: Some(2),
                 entries: Some(vec![
                     FileSystemSandboxEntry {
                         path: FileSystemPath::Special {
@@ -7215,6 +7226,7 @@ mod tests {
                         AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
+                    glob_scan_max_depth: None,
                     entries: None,
                 }),
             }
