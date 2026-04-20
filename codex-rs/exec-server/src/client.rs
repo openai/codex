@@ -376,18 +376,21 @@ impl ExecServerClient {
                                 && let Err(err) =
                                     handle_server_notification(&inner, notification).await
                             {
-                                mark_disconnected(
+                                let message = record_disconnected(
                                     &inner,
                                     format!("exec-server notification handling failed: {err}"),
-                                )
-                                .await;
+                                );
+                                fail_all_sessions(&inner, message).await;
                                 return;
                             }
                         }
                         RpcClientEvent::Disconnected { reason } => {
                             if let Some(inner) = weak.upgrade() {
-                                mark_disconnected(&inner, disconnected_message(reason.as_deref()))
-                                    .await;
+                                let message = record_disconnected(
+                                    &inner,
+                                    disconnected_message(reason.as_deref()),
+                                );
+                                fail_all_sessions(&inner, message).await;
                             }
                             return;
                         }
@@ -436,11 +439,10 @@ impl ExecServerClient {
                 let error = ExecServerError::from(error);
                 if is_transport_closed_error(&error) {
                     // A call can race with disconnect after the preflight
-                    // check. Latch the disconnect once and fail every
-                    // registered process session before returning this call
-                    // error.
+                    // check. Only the reader task drains sessions so queued
+                    // process notifications stay ordered before disconnect.
                     let message = disconnected_message(/*reason*/ None);
-                    let message = mark_disconnected(&self.inner, message).await;
+                    let message = record_disconnected(&self.inner, message);
                     Err(ExecServerError::Disconnected(message))
                 } else {
                     Err(error)
@@ -709,12 +711,11 @@ fn is_transport_closed_error(error: &ExecServerError) -> bool {
     )
 }
 
-async fn mark_disconnected(inner: &Arc<Inner>, message: String) -> String {
-    // The first observer records the canonical disconnect reason and wakes all
-    // sessions. Later observers reuse that message so concurrent tool calls
-    // report one consistent environment failure.
+fn record_disconnected(inner: &Arc<Inner>, message: String) -> String {
+    // The first observer records the canonical disconnect reason. Session
+    // draining stays with the reader task so it can preserve notification
+    // ordering before publishing the terminal failure.
     if let Some(message) = inner.set_disconnected(message.clone()) {
-        fail_all_sessions(inner, message.clone()).await;
         message
     } else {
         inner.disconnected.get().cloned().unwrap_or(message)
