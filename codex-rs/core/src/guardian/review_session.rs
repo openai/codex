@@ -732,6 +732,13 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
+    guardian_config.include_apps_instructions = false;
+    guardian_config
+        .mcp_servers
+        .set(HashMap::new())
+        .map_err(|err| {
+            anyhow::anyhow!("guardian review session could not clear MCP servers: {err}")
+        })?;
     if let Some(live_network_config) = live_network_config
         && guardian_config.permissions.network.is_some()
     {
@@ -751,6 +758,8 @@ pub(crate) fn build_guardian_review_session_config(
         Feature::SpawnCsv,
         Feature::Collab,
         Feature::CodexHooks,
+        Feature::Apps,
+        Feature::Plugins,
         Feature::WebSearchRequest,
         Feature::WebSearchCached,
     ] {
