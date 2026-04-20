@@ -550,15 +550,24 @@ impl SessionState {
         }
     }
 
-    async fn failed_response(
-        &self,
-        after_seq: Option<u64>,
-        max_bytes: Option<usize>,
-    ) -> Option<ReadResponse> {
-        self.failure.lock().await.clone().map(|message| {
-            self.events
-                .read_retained(after_seq, max_bytes, Some(message))
-        })
+    async fn failed_response(&self) -> Option<ReadResponse> {
+        self.failure
+            .lock()
+            .await
+            .clone()
+            .map(|message| self.synthesized_failure(message))
+    }
+
+    fn synthesized_failure(&self, message: String) -> ReadResponse {
+        let next_seq = (*self.wake_tx.borrow()).saturating_add(1);
+        ReadResponse {
+            chunks: Vec::new(),
+            next_seq,
+            exited: true,
+            exit_code: None,
+            closed: true,
+            failure: Some(message),
+        }
     }
 }
 
@@ -581,7 +590,7 @@ impl Session {
         max_bytes: Option<usize>,
         wait_ms: Option<u64>,
     ) -> Result<ReadResponse, ExecServerError> {
-        if let Some(response) = self.state.failed_response(after_seq, max_bytes).await {
+        if let Some(response) = self.state.failed_response().await {
             return Ok(response);
         }
 
@@ -597,42 +606,9 @@ impl Session {
         {
             Ok(response) => Ok(response),
             Err(err) if is_transport_closed_error(&err) => {
-                // Transport close and queued process notifications share the
-                // same connection reader. Subscribe before inspecting local
-                // state so a concurrent drain cannot publish the final failure
-                // between our check and our wait.
-                let mut wake_rx = self.state.subscribe();
-                if let Some(response) = self.state.failed_response(after_seq, max_bytes).await {
-                    return Ok(response);
-                }
-                // The executor can no longer answer read requests, but the
-                // reader task may already have delivered tail output locally.
-                // Return that first instead of synthesizing an early terminal
-                // failure that would make polling clients stop before seeing it.
-                let mut response = self
-                    .state
-                    .events
-                    .read_retained(after_seq, max_bytes, /*failure*/ None);
-                if !response.chunks.is_empty()
-                    || response.exited
-                    || response.closed
-                    || wait_ms.unwrap_or(0) == 0
-                {
-                    return Ok(response);
-                }
-
-                let wait = Duration::from_millis(wait_ms.unwrap_or(0));
-                let _ = timeout(wait, wake_rx.changed()).await;
-                if let Some(failed_response) =
-                    self.state.failed_response(after_seq, max_bytes).await
-                {
-                    return Ok(failed_response);
-                }
-                response = self
-                    .state
-                    .events
-                    .read_retained(after_seq, max_bytes, /*failure*/ None);
-                Ok(response)
+                let message = disconnected_message(/*reason*/ None);
+                self.state.set_failure(message.clone()).await;
+                Ok(self.state.synthesized_failure(message))
             }
             Err(err) => Err(err),
         }

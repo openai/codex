@@ -125,82 +125,6 @@ impl ExecProcessEventLog {
 
         ExecProcessEventReceiver { replay, live_rx }
     }
-
-    /// Builds a polling-style read response from locally retained pushed
-    /// events.
-    ///
-    /// Remote process reads normally go back to the executor. After the
-    /// executor transport closes, the client may still have ordered output,
-    /// exit, and closed notifications queued locally. This lets the polling
-    /// read path surface those retained events before reporting the synthesized
-    /// transport failure.
-    pub(crate) fn read_retained(
-        &self,
-        after_seq: Option<u64>,
-        max_bytes: Option<usize>,
-        failure: Option<String>,
-    ) -> ReadResponse {
-        let after_seq = after_seq.unwrap_or(0);
-        let max_bytes = max_bytes.unwrap_or(usize::MAX);
-        let history = self
-            .inner
-            .history
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut chunks = Vec::new();
-        let mut total_bytes = 0;
-        let mut next_seq = after_seq.saturating_add(1);
-        let mut exited = false;
-        let mut exit_code = None;
-        let mut closed = false;
-
-        for event in history.events.iter() {
-            match event {
-                ExecProcessEvent::Output(chunk) if chunk.seq > after_seq => {
-                    let chunk_len = chunk.chunk.0.len();
-                    if !chunks.is_empty() && total_bytes + chunk_len > max_bytes {
-                        break;
-                    }
-                    total_bytes += chunk_len;
-                    chunks.push(chunk.clone());
-                    next_seq = chunk.seq.saturating_add(1);
-                    if total_bytes >= max_bytes {
-                        break;
-                    }
-                }
-                ExecProcessEvent::Exited {
-                    seq,
-                    exit_code: code,
-                } if *seq > after_seq => {
-                    next_seq = next_seq.max(seq.saturating_add(1));
-                    exited = true;
-                    exit_code = Some(*code);
-                }
-                ExecProcessEvent::Closed { seq } if *seq > after_seq => {
-                    next_seq = next_seq.max(seq.saturating_add(1));
-                    closed = true;
-                }
-                ExecProcessEvent::Output(_)
-                | ExecProcessEvent::Exited { .. }
-                | ExecProcessEvent::Closed { .. }
-                | ExecProcessEvent::Failed(_) => {}
-            }
-        }
-
-        if failure.is_some() {
-            exited = true;
-            closed = true;
-        }
-
-        ReadResponse {
-            chunks,
-            next_seq,
-            exited,
-            exit_code,
-            closed,
-            failure,
-        }
-    }
 }
 
 pub struct ExecProcessEventReceiver {
@@ -272,7 +196,6 @@ mod tests {
     use super::ExecProcessEventLog;
     use crate::protocol::ExecOutputStream;
     use crate::protocol::ProcessOutputChunk;
-    use crate::protocol::ReadResponse;
 
     #[tokio::test]
     async fn event_history_replay_is_bounded_by_retained_bytes() {
@@ -310,48 +233,6 @@ mod tests {
                 },
                 ExecProcessEvent::Closed { seq: 3 },
             ]
-        );
-    }
-
-    #[test]
-    fn event_history_read_retained_returns_tail_before_failure() {
-        let log = ExecProcessEventLog::new(/*event_capacity*/ 8, /*byte_capacity*/ 1024);
-        log.publish(ExecProcessEvent::Output(ProcessOutputChunk {
-            seq: 1,
-            stream: ExecOutputStream::Stdout,
-            chunk: b"already-read".to_vec().into(),
-        }));
-        log.publish(ExecProcessEvent::Output(ProcessOutputChunk {
-            seq: 2,
-            stream: ExecOutputStream::Stdout,
-            chunk: b"tail".to_vec().into(),
-        }));
-        log.publish(ExecProcessEvent::Exited {
-            seq: 3,
-            exit_code: 0,
-        });
-        log.publish(ExecProcessEvent::Closed { seq: 4 });
-
-        let response = log.read_retained(
-            /*after_seq*/ Some(1),
-            /*max_bytes*/ None,
-            /*failure*/ Some("exec-server transport disconnected".to_string()),
-        );
-
-        assert_eq!(
-            response,
-            ReadResponse {
-                chunks: vec![ProcessOutputChunk {
-                    seq: 2,
-                    stream: ExecOutputStream::Stdout,
-                    chunk: b"tail".to_vec().into(),
-                }],
-                next_seq: 5,
-                exited: true,
-                exit_code: Some(0),
-                closed: true,
-                failure: Some("exec-server transport disconnected".to_string()),
-            }
         );
     }
 }
