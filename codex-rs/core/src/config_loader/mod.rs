@@ -54,8 +54,8 @@ pub use codex_config::NetworkDomainPermissionsToml;
 pub use codex_config::NetworkRequirementsToml;
 pub use codex_config::NetworkUnixSocketPermissionToml;
 pub use codex_config::NetworkUnixSocketPermissionsToml;
-pub use codex_config::RequirementSource;
 pub use codex_config::RemoteSandboxConfigToml;
+pub use codex_config::RequirementSource;
 pub use codex_config::ResidencyRequirement;
 pub use codex_config::SandboxModeRequirement;
 pub use codex_config::Sourced;
@@ -123,6 +123,7 @@ pub(crate) async fn first_layer_config_error_from_entries(
 /// associated with it such that `cwd` should be `Some(...)`. Only for
 /// thread-agnostic config loading (e.g., for the app server's `/config`
 /// endpoint) should `cwd` be `None`.
+#[allow(clippy::too_many_arguments)]
 pub async fn load_config_layers_state(
     fs: &dyn ExecutorFileSystem,
     codex_home: &Path,
@@ -131,11 +132,11 @@ pub async fn load_config_layers_state(
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     thread_config_loader: &dyn ThreadConfigLoader,
+    requirements_hostname: Option<&str>,
 ) -> io::Result<ConfigLayerStack> {
     let ignore_user_config = overrides.ignore_user_config;
     let ignore_user_and_project_exec_policy_rules =
         overrides.ignore_user_and_project_exec_policy_rules;
-    let requirements_hostname = overrides.requirements_hostname.clone();
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
@@ -165,7 +166,7 @@ pub async fn load_config_layers_state(
         loaded_config_layers.clone(),
     )
     .await?;
-    config_requirements_toml.apply_remote_sandbox_config(requirements_hostname.as_deref());
+    config_requirements_toml.apply_remote_sandbox_config(requirements_hostname);
 
     let thread_config_context = ThreadConfigContext {
         thread_id: None,

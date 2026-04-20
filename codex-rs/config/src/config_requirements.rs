@@ -620,7 +620,6 @@ pub(crate) fn merge_enablement_settings_descending(
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
-    #[serde(alias = "allowed_sandbox_mode")]
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
@@ -639,7 +638,6 @@ pub struct ConfigRequirementsToml {
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct RemoteSandboxConfigToml {
     pub hostname_pattern: Vec<String>,
-    #[serde(alias = "allowed_sandbox_mode")]
     pub allowed_sandbox_modes: Vec<SandboxModeRequirement>,
 }
 
@@ -1945,7 +1943,7 @@ allowed_approvals_reviewers = ["user"]
         let toml_str = r#"
             [[remote_sandbox_config]]
             hostname_pattern = ["*.org", "runner-??.ci"]
-            allowed_sandbox_mode = ["read-only", "workspace-write"]
+            allowed_sandbox_modes = ["read-only", "workspace-write"]
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
 

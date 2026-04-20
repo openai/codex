@@ -6532,16 +6532,16 @@ impl CodexMessageProcessor {
                     continue;
                 }
             };
-            let mut loader_overrides = LoaderOverrides::default();
-            loader_overrides.requirements_hostname = app_server_requirements_hostname();
+            let requirements_hostname = app_server_requirements_hostname();
             let config_layer_stack = match load_config_layers_state(
                 LOCAL_FS.as_ref(),
                 &self.config.codex_home,
                 Some(cwd_abs.clone()),
                 &cli_overrides,
-                loader_overrides,
+                LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
                 self.thread_config_loader.as_ref(),
+                requirements_hostname.as_deref(),
             )
             .await
             {

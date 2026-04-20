@@ -721,10 +721,7 @@ impl ConfigBuilder {
         };
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
-        let mut loader_overrides = loader_overrides.unwrap_or_default();
-        if requirements_hostname.is_some() {
-            loader_overrides.requirements_hostname = requirements_hostname;
-        }
+        let loader_overrides = loader_overrides.unwrap_or_default();
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
             Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
@@ -741,6 +738,7 @@ impl ConfigBuilder {
             thread_config_loader
                 .as_deref()
                 .unwrap_or(&codex_config::NoopThreadConfigLoader),
+            requirements_hostname.as_deref(),
         )
         .await?;
         let merged_toml = config_layer_stack.effective_config();
@@ -920,6 +918,7 @@ pub async fn load_config_as_toml_with_cli_and_loader_overrides(
         loader_overrides,
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
+        /* requirements_hostname */ None,
     )
     .await?;
 
@@ -1092,6 +1091,7 @@ pub async fn load_global_mcp_servers(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
+        /* requirements_hostname */ None,
     )
     .await?;
     let merged_toml = config_layer_stack.effective_config();

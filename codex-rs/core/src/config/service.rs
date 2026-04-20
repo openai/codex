@@ -438,19 +438,12 @@ impl ConfigService {
             &self.codex_home,
             cwd,
             &self.cli_overrides,
-            self.loader_overrides_with_hostname(),
+            self.loader_overrides.clone(),
             self.cloud_requirements.clone(),
             &codex_config::NoopThreadConfigLoader,
+            self.requirements_hostname.as_deref(),
         )
         .await
-    }
-
-    fn loader_overrides_with_hostname(&self) -> LoaderOverrides {
-        let mut loader_overrides = self.loader_overrides.clone();
-        if self.requirements_hostname.is_some() {
-            loader_overrides.requirements_hostname = self.requirements_hostname.clone();
-        }
-        loader_overrides
     }
 }
 
