@@ -89,6 +89,15 @@ impl CodexThread {
             .await;
     }
 
+    pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
+        self.codex
+            .session
+            .activate_paused_thread_goal_after_resume()
+            .await?;
+        self.continue_active_goal_if_idle().await;
+        Ok(())
+    }
+
     pub async fn apply_goal_set_runtime_effects(
         &self,
         goal_status: ThreadGoalStatus,
