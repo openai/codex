@@ -171,12 +171,12 @@ struct TurnStarted<'a> {
 The derive only exposes metadata. It should not implement analytics mapping,
 trace persistence, redaction, schema generation, or export behavior.
 
-## Callsite API
+## Integration API
 
-Product/runtime code should usually call semantic helper methods rather than
-inline-constructing large observation structs. Direct struct construction is
-fine in tests, very small leaf events, or helper internals, but it should not be
-the normal instrumentation style.
+Product/runtime code should integrate through small semantic helper groups, not
+by spreading raw event construction through the codebase. Direct construction of
+`events::*` structs is fine in tests and inside the helpers, but ordinary
+product callsites should read like the domain action that just happened.
 
 The helper layer should do the tedious, failure-prone work near the callsite:
 extract common IDs, join session/thread/turn context, compute durations,
@@ -186,10 +186,24 @@ can read them, and then emit the typed observation.
 Example shape:
 
 ```rust
-observability.turn().config_resolved(&session, &turn_context, &input).await;
-observability.tool().ended(&invocation, status, &response);
-observability.transport().api_request_completed(&request, &outcome);
+observability.turn().started(&turn, &resolved_config);
+observability.compaction().ended(&run, &outcome);
+observability.features().skill_invoked(&turn, &resolved_skill);
 ```
+
+The important boundary is what the helpers accept. They should take existing
+runtime concepts such as sessions, turns, tool invocations, compaction runs,
+and resolved feature metadata. They should not take analytics facts, OTEL tag
+maps, rollout trace rows, or other destination schemas. If a helper cannot
+produce the needed output without depending on a destination-specific type, the
+event definition or the runtime callsite is not ready yet.
+
+Initial integration should add one narrow helper group at a time. A useful
+vertical slice has:
+
+- one domain helper method at the real product boundary,
+- one canonical event emitted by that helper,
+- one projection test showing how the destination reducer consumes the event.
 
 This mirrors the useful part of the existing systems:
 
