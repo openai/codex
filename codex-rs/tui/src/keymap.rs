@@ -5,7 +5,7 @@
 //!
 //! Key responsibilities:
 //!
-//! 1. Apply deterministic precedence (`context -> global fallback -> preset`).
+//! 1. Apply deterministic precedence (`context -> global fallback -> defaults`).
 //! 2. Parse canonical key spec strings into `KeyBinding` values.
 //! 3. Enforce per-context uniqueness so one key cannot trigger multiple actions
 //!    in the same active scope.
@@ -22,7 +22,6 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use codex_config::types::KeybindingsSpec;
 use codex_config::types::TuiKeymap;
-use codex_config::types::TuiKeymapPreset;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 use std::collections::HashMap;
@@ -33,7 +32,7 @@ use std::collections::HashMap;
 ///
 /// 1. Context-specific binding (`tui.keymap.<context>`).
 /// 2. `tui.keymap.global` for actions that support global fallback.
-/// 3. Built-in preset defaults (`latest` currently points to `v1`).
+/// 3. Built-in defaults.
 ///
 /// This is the only shape UI code should use for dispatch. It represents a
 /// fully resolved snapshot with parsing, fallback, explicit unbinding, and
@@ -170,7 +169,7 @@ pub(crate) fn primary_binding(bindings: &[KeyBinding]) -> Option<KeyBinding> {
 ///
 /// Expands to `resolve_bindings(...)` with:
 /// - configured source: `tui.keymap.<context>.<action>`
-/// - fallback source: the same action from preset defaults
+/// - fallback source: the same action from built-in defaults
 /// - error path: a stable string path for user-facing diagnostics
 ///
 /// This keeps the resolution table concise while guaranteeing path strings
@@ -195,7 +194,7 @@ macro_rules! resolve_local {
 /// Expands to `resolve_bindings_with_global_fallback(...)` with precedence:
 /// 1. `tui.keymap.<context>.<action>`
 /// 2. `tui.keymap.global.<action>`
-/// 3. preset defaults for `<context>.<action>`
+/// 3. built-in defaults for `<context>.<action>`
 ///
 /// Used only for actions that intentionally support global reuse.
 /// Context-local empty lists still count as configured values, so they unbind
@@ -216,10 +215,10 @@ macro_rules! resolve_with_global {
     };
 }
 
-/// Expand one preset-table binding entry into a [`KeyBinding`].
+/// Expand one default-table binding entry into a [`KeyBinding`].
 ///
 /// This is a small declarative layer over `key_hint::{plain, ctrl, alt, shift}`
-/// used by `default_bindings!` so `defaults_v1` stays readable.
+/// used by `default_bindings!` so `built_in_defaults` stays readable.
 ///
 /// Supported forms:
 /// - `plain(<KeyCode>)`
@@ -246,9 +245,9 @@ macro_rules! default_binding {
     };
 }
 
-/// Build a `Vec<KeyBinding>` for preset defaults.
+/// Build a `Vec<KeyBinding>` for built-in defaults.
 ///
-/// This macro is intentionally scoped to built-in keymap presets. Runtime
+/// This macro is intentionally scoped to built-in keymaps. Runtime
 /// config parsing still goes through `parse_bindings(...)` so user errors can
 /// be reported with config-path-aware diagnostics.
 macro_rules! default_bindings {
@@ -258,14 +257,14 @@ macro_rules! default_bindings {
 }
 
 impl RuntimeKeymap {
-    /// Return built-in defaults for the active `latest` preset alias.
+    /// Return built-in defaults.
     ///
     /// This is a convenience for tests and bootstrapping UI state before user
     /// config has been loaded. It should not be used as a fallback after
     /// parsing `TuiKeymap`, because doing so would ignore explicit user
     /// unbindings and conflict diagnostics.
     pub(crate) fn defaults() -> Self {
-        Self::defaults_for_preset(TuiKeymapPreset::Latest)
+        Self::built_in_defaults()
     }
 
     /// Resolve a runtime keymap from config, applying precedence and validation.
@@ -279,7 +278,7 @@ impl RuntimeKeymap {
     /// Calling code should not merge bindings across unrelated contexts before
     /// dispatch, or conflict guarantees from this resolver no longer hold.
     pub(crate) fn from_config(keymap: &TuiKeymap) -> Result<Self, String> {
-        let defaults = Self::defaults_for_preset(keymap.preset);
+        let defaults = Self::built_in_defaults();
 
         let app = AppKeymap {
             open_transcript: resolve_bindings(
@@ -398,18 +397,12 @@ impl RuntimeKeymap {
         Ok(resolved)
     }
 
-    fn defaults_for_preset(preset: TuiKeymapPreset) -> Self {
-        match preset {
-            TuiKeymapPreset::Latest | TuiKeymapPreset::V1 => Self::defaults_v1(),
-        }
-    }
-
-    /// Frozen keymap defaults for preset `v1`.
+    /// Built-in keymap defaults.
     ///
     /// Some actions intentionally include compatibility variants (for example
     /// both `?` and `shift-?`) because terminals disagree on whether SHIFT is
     /// preserved for certain printable/control chords.
-    fn defaults_v1() -> Self {
+    fn built_in_defaults() -> Self {
         Self {
             app: AppKeymap {
                 open_transcript: default_bindings![ctrl(KeyCode::Char('t'))],
@@ -728,13 +721,13 @@ See the Codex keymap documentation for supported actions and examples."
     Ok(())
 }
 
-/// Resolve one action with context -> global -> preset precedence.
+/// Resolve one action with context -> global -> default precedence.
 ///
 /// `path` should be the context-specific config path so parser errors point
 /// users at the override they attempted to set.
 ///
 /// A configured empty list is authoritative: it returns an empty binding set
-/// and does not continue to the global or preset fallback. This is what makes
+/// and does not continue to the global or built-in fallback. This is what makes
 /// explicit unbinding work for globally reusable actions like composer submit.
 fn resolve_bindings_with_global_fallback(
     configured: Option<&KeybindingsSpec>,
@@ -753,7 +746,7 @@ fn resolve_bindings_with_global_fallback(
 
 /// Resolve one action binding in a context without global fallback.
 ///
-/// Missing values inherit from the preset fallback; configured values, including
+/// Missing values inherit from the built-in fallback; configured values, including
 /// empty lists, replace that fallback for the action.
 fn resolve_bindings(
     configured: Option<&KeybindingsSpec>,
@@ -983,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn default_latest_copy_binding_is_ctrl_o() {
+    fn default_copy_binding_is_ctrl_o() {
         let runtime = RuntimeKeymap::defaults();
         assert_eq!(runtime.app.copy, vec![key_hint::ctrl(KeyCode::Char('o'))]);
     }

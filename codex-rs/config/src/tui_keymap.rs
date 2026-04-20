@@ -23,24 +23,6 @@ use serde::Serialize;
 use serde::de::Error as SerdeError;
 use std::collections::BTreeMap;
 
-/// Versioned keymap defaults selected by `[tui.keymap].preset`.
-///
-/// Presets are compatibility contracts rather than user profiles. Existing
-/// preset variants should remain stable once shipped; new default behavior
-/// should be introduced by adding a new preset variant and then deciding
-/// whether `latest` should point at it.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum TuiKeymapPreset {
-    /// Pointer alias to the latest shipped preset.
-    ///
-    /// Today this resolves to `v1`.
-    #[default]
-    Latest,
-    /// Frozen keymap defaults that preserve legacy/current shortcut behavior.
-    V1,
-}
-
 /// Normalized string representation of a single key event (for example `ctrl-a`).
 ///
 /// The parser accepts a small alias set (for example `escape` -> `esc`,
@@ -80,7 +62,7 @@ impl<'de> Deserialize<'de> for KeybindingSpec {
 ///
 /// An empty list explicitly unbinds the action in that scope. Because an
 /// explicit empty list is still a configured value, runtime resolution must not
-/// fall through to global or preset defaults for that action.
+/// fall through to global or built-in defaults for that action.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[serde(untagged)]
 pub enum KeybindingsSpec {
@@ -274,7 +256,7 @@ pub struct TuiOnboardingKeymap {
 /// Raw keymap configuration from `[tui.keymap]`.
 ///
 /// Each context contains action-level overrides. Missing actions inherit from
-/// runtime preset defaults, and selected chat/composer actions can fall back
+/// built-in defaults, and selected chat/composer actions can fall back
 /// through `global` during runtime resolution.
 ///
 /// This type is intentionally a persistence shape, not the structure used by
@@ -285,8 +267,6 @@ pub struct TuiOnboardingKeymap {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiKeymap {
-    #[serde(default)]
-    pub preset: TuiKeymapPreset,
     #[serde(default)]
     pub global: TuiGlobalKeymap,
     #[serde(default)]
