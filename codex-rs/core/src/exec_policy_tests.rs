@@ -437,7 +437,9 @@ async fn ignores_policy_files_when_config_stack_disables_exec_policy_rules() {
     )
     .expect("write policy file");
     let config_stack = config_stack_for_dot_codex_folder(temp_dir.path())
-        .with_user_and_project_exec_policy_rules_ignored(true);
+        .with_user_and_project_exec_policy_rules_ignored(
+            /*ignore_user_and_project_exec_policy_rules*/ true,
+        );
 
     let policy = load_exec_policy(&config_stack)
         .await
@@ -475,7 +477,9 @@ async fn ignore_user_project_rules_keeps_system_policy_files() {
         ConfigRequirementsToml::default(),
     )
     .expect("ConfigLayerStack")
-    .with_user_and_project_exec_policy_rules_ignored(true);
+    .with_user_and_project_exec_policy_rules_ignored(
+        /*ignore_user_and_project_exec_policy_rules*/ true,
+    );
 
     let policy = load_exec_policy(&config_stack)
         .await
