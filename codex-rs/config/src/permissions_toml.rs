@@ -159,9 +159,15 @@ pub struct NetworkToml {
     pub domains: Option<NetworkDomainPermissionsToml>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
-    pub mitm: Option<bool>,
+    pub mitm: Option<NetworkMitmToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkMitmToml {
+    pub enabled: Option<bool>,
     #[schemars(with = "Option<Vec<MitmHookConfigSchema>>")]
-    pub mitm_hooks: Option<Vec<MitmHookConfig>>,
+    pub hooks: Option<Vec<MitmHookConfig>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -263,11 +269,13 @@ impl NetworkToml {
         if let Some(allow_local_binding) = self.allow_local_binding {
             config.network.allow_local_binding = allow_local_binding;
         }
-        if let Some(mitm) = self.mitm {
-            config.network.mitm = mitm;
-        }
-        if let Some(mitm_hooks) = self.mitm_hooks.as_ref() {
-            config.network.mitm_hooks = mitm_hooks.clone();
+        if let Some(mitm) = self.mitm.as_ref() {
+            if let Some(enabled) = mitm.enabled {
+                config.network.mitm = enabled;
+            }
+            if let Some(hooks) = mitm.hooks.as_ref() {
+                config.network.mitm_hooks = hooks.clone();
+            }
         }
     }
 

@@ -216,7 +216,6 @@ export type { NetworkAccess } from "./NetworkAccess";
 export type { NetworkApprovalContext } from "./NetworkApprovalContext";
 export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
 export type { NetworkDomainPermission } from "./NetworkDomainPermission";
-export type { NetworkMitmRequirements } from "./NetworkMitmRequirements";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction";
 export type { NetworkRequirements } from "./NetworkRequirements";

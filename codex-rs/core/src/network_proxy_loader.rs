@@ -1,6 +1,5 @@
 use crate::config::find_codex_home;
 use crate::config::resolve_permission_profile;
-use crate::config::validate_mitm_feature_gate;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
@@ -72,8 +71,11 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
         );
     }
 
-    let state = build_config_state_from_layers(&config_layer_stack, &exec_policy)?;
+    let config = config_from_layers(&config_layer_stack, &exec_policy)?;
+
+    let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
     let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
+    let state = build_config_state(config, constraints)?;
     Ok((state, layer_mtimes))
 }
 
@@ -216,26 +218,6 @@ fn config_from_layers(
     }
     apply_exec_policy_network_rules(&mut config, exec_policy);
     Ok(config)
-}
-
-fn build_config_state_from_layers(
-    layers: &ConfigLayerStack,
-    exec_policy: &codex_execpolicy::Policy,
-) -> Result<ConfigState> {
-    let config = config_from_layers(layers, exec_policy)?;
-    validate_mitm_feature_gate(&config, mitm_enabled_from_network_requirements(layers))?;
-    let constraints = enforce_trusted_constraints(layers, &config)?;
-    build_config_state(config, constraints).context("failed to build network proxy state")
-}
-
-fn mitm_enabled_from_network_requirements(layers: &ConfigLayerStack) -> bool {
-    layers
-        .requirements()
-        .network
-        .as_ref()
-        .and_then(|network| network.value.mitm.as_ref())
-        .and_then(|mitm| mitm.enabled)
-        .unwrap_or(false)
 }
 
 fn apply_exec_policy_network_rules(

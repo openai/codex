@@ -1,12 +1,5 @@
 use super::*;
 
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
-use crate::config_loader::RequirementSource;
-use crate::config_loader::Sourced;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
@@ -119,15 +112,17 @@ default_permissions = "workspace"
 
 [permissions.workspace.network]
 mode = "limited"
-mitm = false
 
 [permissions.workspace.network.domains]
 "lower.example.com" = "allow"
 
-[[permissions.workspace.network.mitm_hooks]]
+[permissions.workspace.network.mitm]
+enabled = false
+
+[[permissions.workspace.network.mitm.hooks]]
 host = "lower.example.com"
 
-[permissions.workspace.network.mitm_hooks.match]
+[permissions.workspace.network.mitm.hooks.match]
 methods = ["POST"]
 path_prefixes = ["/repos/openai/"]
 "#,
@@ -139,15 +134,17 @@ default_permissions = "workspace"
 
 [permissions.workspace.network]
 mode = "full"
-mitm = true
 
 [permissions.workspace.network.domains]
 "higher.example.com" = "allow"
 
-[[permissions.workspace.network.mitm_hooks]]
+[permissions.workspace.network.mitm]
+enabled = true
+
+[[permissions.workspace.network.mitm.hooks]]
 host = "api.github.com"
 
-[permissions.workspace.network.mitm_hooks.match]
+[permissions.workspace.network.mitm.hooks.match]
 methods = ["PUT"]
 path_prefixes = ["/repos/openai/"]
 "#,
@@ -323,80 +320,4 @@ default_permissions = "workspace"
         constraints.denied_domains,
         Some(vec!["blocked.example.com".to_string()])
     );
-}
-
-fn stack_with_user_config(config: toml::Value) -> ConfigLayerStack {
-    stack_with_user_config_and_requirements(config, ConfigRequirements::default())
-}
-
-fn stack_with_user_config_and_requirements(
-    config: toml::Value,
-    requirements: ConfigRequirements,
-) -> ConfigLayerStack {
-    ConfigLayerStack::new(
-        vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: "/tmp/config.toml".try_into().expect("absolute path"),
-            },
-            config,
-        )],
-        requirements,
-        ConfigRequirementsToml::default(),
-    )
-    .expect("config stack should build")
-}
-
-#[test]
-fn build_config_state_from_layers_rejects_mitm_when_requirement_is_absent() {
-    let layers = stack_with_user_config(
-        toml::from_str(
-            r#"
-default_permissions = "workspace"
-
-[permissions.workspace.network]
-mitm = true
-"#,
-        )
-        .expect("config should parse"),
-    );
-
-    match build_config_state_from_layers(&layers, &Policy::empty()) {
-        Ok(_) => panic!("MITM should be gated"),
-        Err(err) => {
-            assert!(
-                err.to_string().contains("network MITM settings are configured, but `experimental_network.mitm.enabled = true` is not enabled in managed requirements")
-            );
-        }
-    }
-}
-
-#[test]
-fn mitm_enabled_from_network_requirements_allows_mitm_config() {
-    let layers = stack_with_user_config_and_requirements(
-        toml::from_str(
-            r#"
-default_permissions = "workspace"
-
-[permissions.workspace.network]
-mitm = true
-"#,
-        )
-        .expect("config should parse"),
-        ConfigRequirements {
-            network: Some(Sourced::new(
-                crate::config_loader::NetworkConstraints {
-                    mitm: Some(crate::config_loader::NetworkMitmRequirementsToml {
-                        enabled: Some(true),
-                    }),
-                    ..Default::default()
-                },
-                RequirementSource::CloudRequirements,
-            )),
-            ..Default::default()
-        },
-    );
-
-    let config = config_from_layers(&layers, &Policy::empty()).expect("config should load");
-    validate_mitm_feature_gate(&config, mitm_enabled_from_network_requirements(&layers))
-        .expect("managed network MITM requirement should enable MITM config");
 }

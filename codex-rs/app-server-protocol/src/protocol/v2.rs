@@ -901,7 +901,6 @@ pub struct ConfigRequirements {
 #[ts(export_to = "v2/")]
 pub struct NetworkRequirements {
     pub enabled: Option<bool>,
-    pub mitm: Option<NetworkMitmRequirements>,
     pub http_port: Option<u16>,
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
@@ -921,13 +920,6 @@ pub struct NetworkRequirements {
     /// Legacy compatibility view derived from `unix_sockets`.
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct NetworkMitmRequirements {
-    pub enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -8363,7 +8355,6 @@ mod tests {
             requirements,
             NetworkRequirements {
                 enabled: None,
-                mitm: None,
                 http_port: None,
                 socks_port: None,
                 allow_upstream_proxy: None,
@@ -8384,9 +8375,6 @@ mod tests {
     fn network_requirements_serializes_canonical_and_legacy_fields() {
         let requirements = NetworkRequirements {
             enabled: Some(true),
-            mitm: Some(NetworkMitmRequirements {
-                enabled: Some(true),
-            }),
             http_port: Some(8080),
             socks_port: Some(1080),
             allow_upstream_proxy: Some(false),
@@ -8420,9 +8408,6 @@ mod tests {
             serde_json::to_value(requirements).expect("network requirements should serialize"),
             json!({
                 "enabled": true,
-                "mitm": {
-                    "enabled": true
-                },
                 "httpPort": 8080,
                 "socksPort": 1080,
                 "allowUpstreamProxy": false,

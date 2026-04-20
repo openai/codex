@@ -38,43 +38,6 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
 }
 
 #[test]
-fn constructor_rejects_mitm_without_managed_network_requirement() {
-    let mut config = NetworkProxyConfig::default();
-    config.network.mitm = true;
-
-    let err = NetworkProxySpec::from_config_and_constraints(
-        config,
-        /*requirements*/ None,
-        &SandboxPolicy::new_read_only_policy(),
-    )
-    .expect_err("MITM should be gated at construction");
-
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(
-        err.to_string()
-            .contains("network MITM settings are configured, but `experimental_network.mitm.enabled = true` is not enabled in managed requirements")
-    );
-}
-
-#[test]
-fn constructor_allows_mitm_with_managed_network_requirement() {
-    let mut config = NetworkProxyConfig::default();
-    config.network.mitm = true;
-
-    NetworkProxySpec::from_config_and_constraints(
-        config,
-        Some(NetworkConstraints {
-            mitm: Some(crate::config_loader::NetworkMitmRequirementsToml {
-                enabled: Some(true),
-            }),
-            ..Default::default()
-        }),
-        &SandboxPolicy::new_read_only_policy(),
-    )
-    .expect("managed network MITM requirement should enable MITM config");
-}
-
-#[test]
 fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
     let mut config = NetworkProxyConfig::default();
     config

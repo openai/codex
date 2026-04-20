@@ -14,7 +14,6 @@ use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::NetworkDomainPermission;
-use codex_app_server_protocol::NetworkMitmRequirements;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
@@ -438,9 +437,6 @@ fn map_network_requirements_to_api(
 
     NetworkRequirements {
         enabled: network.enabled,
-        mitm: network.mitm.map(|mitm| NetworkMitmRequirements {
-            enabled: mitm.enabled,
-        }),
         http_port: network.http_port,
         socks_port: network.socks_port,
         allow_upstream_proxy: network.allow_upstream_proxy,
@@ -526,7 +522,6 @@ mod tests {
     use codex_analytics::AnalyticsEventsClient;
     use codex_core::config_loader::NetworkDomainPermissionToml as CoreNetworkDomainPermissionToml;
     use codex_core::config_loader::NetworkDomainPermissionsToml as CoreNetworkDomainPermissionsToml;
-    use codex_core::config_loader::NetworkMitmRequirementsToml as CoreNetworkMitmRequirementsToml;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
     use codex_core::config_loader::NetworkUnixSocketPermissionToml as CoreNetworkUnixSocketPermissionToml;
     use codex_core::config_loader::NetworkUnixSocketPermissionsToml as CoreNetworkUnixSocketPermissionsToml;
@@ -584,9 +579,6 @@ mod tests {
             enforce_residency: Some(CoreResidencyRequirement::Us),
             network: Some(CoreNetworkRequirementsToml {
                 enabled: Some(true),
-                mitm: Some(CoreNetworkMitmRequirementsToml {
-                    enabled: Some(true),
-                }),
                 http_port: Some(8080),
                 socks_port: Some(1080),
                 allow_upstream_proxy: Some(false),
@@ -655,9 +647,6 @@ mod tests {
             mapped.network,
             Some(NetworkRequirements {
                 enabled: Some(true),
-                mitm: Some(NetworkMitmRequirements {
-                    enabled: Some(true),
-                }),
                 http_port: Some(8080),
                 socks_port: Some(1080),
                 allow_upstream_proxy: Some(false),
@@ -695,7 +684,6 @@ mod tests {
             enforce_residency: None,
             network: Some(CoreNetworkRequirementsToml {
                 enabled: None,
-                mitm: None,
                 http_port: None,
                 socks_port: None,
                 allow_upstream_proxy: None,
@@ -720,7 +708,6 @@ mod tests {
             mapped.network,
             Some(NetworkRequirements {
                 enabled: None,
-                mitm: None,
                 http_port: None,
                 socks_port: None,
                 allow_upstream_proxy: None,

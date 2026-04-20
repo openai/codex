@@ -34,20 +34,6 @@ pub struct StartedNetworkProxy {
     _handle: NetworkProxyHandle,
 }
 
-pub(crate) fn validate_mitm_feature_gate(
-    config: &NetworkProxyConfig,
-    mitm_enabled: bool,
-) -> std::io::Result<()> {
-    let uses_mitm = config.network.mitm || !config.network.mitm_hooks.is_empty();
-    if uses_mitm && !mitm_enabled {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "network MITM settings are configured, but `experimental_network.mitm.enabled = true` is not enabled in managed requirements",
-        ));
-    }
-    Ok(())
-}
-
 impl StartedNetworkProxy {
     fn new(proxy: NetworkProxy, handle: NetworkProxyHandle) -> Self {
         Self {
@@ -105,15 +91,6 @@ impl NetworkProxySpec {
         requirements: Option<NetworkConstraints>,
         sandbox_policy: &SandboxPolicy,
     ) -> std::io::Result<Self> {
-        validate_mitm_feature_gate(
-            &config,
-            requirements.as_ref().is_some_and(|req| {
-                req.mitm
-                    .as_ref()
-                    .and_then(|mitm| mitm.enabled)
-                    .unwrap_or(false)
-            }),
-        )?;
         let base_config = config.clone();
         let hard_deny_allowlist_misses = requirements
             .as_ref()

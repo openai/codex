@@ -49,7 +49,6 @@ pub use codex_config::McpServerRequirement;
 pub use codex_config::NetworkConstraints;
 pub use codex_config::NetworkDomainPermissionToml;
 pub use codex_config::NetworkDomainPermissionsToml;
-pub use codex_config::NetworkMitmRequirementsToml;
 pub use codex_config::NetworkRequirementsToml;
 pub use codex_config::NetworkUnixSocketPermissionToml;
 pub use codex_config::NetworkUnixSocketPermissionsToml;
