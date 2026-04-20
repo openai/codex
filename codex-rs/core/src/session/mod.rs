@@ -293,7 +293,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
-use codex_mcp::with_codex_apps_mcp;
+use codex_mcp::with_codex_apps_mcp_with_authorization_header;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
@@ -897,7 +897,10 @@ impl Session {
         let Some(started_proxy) = self.services.network_proxy.as_ref() else {
             return;
         };
-        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let Ok(_refresh_guard) = self.managed_network_proxy_refresh_lock.acquire().await else {
+            error!("managed network proxy refresh semaphore closed");
+            return;
+        };
         let session_configuration = {
             let state = self.state.lock().await;
             state.session_configuration.clone()
@@ -1675,7 +1678,11 @@ impl Session {
         amendment: &NetworkPolicyAmendment,
         network_approval_context: &NetworkApprovalContext,
     ) -> anyhow::Result<()> {
-        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let _refresh_guard = self
+            .managed_network_proxy_refresh_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("managed network proxy refresh semaphore closed"))?;
         let host =
             Self::validated_network_policy_amendment_host(amendment, network_approval_context)?;
         let codex_home = self
@@ -2343,28 +2350,30 @@ impl Session {
                 developer_sections.push(apps_section);
             }
         }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        let rendered_skills = render_skills_section(
-            &implicit_skills,
-            default_skill_metadata_budget(turn_context.model_info.context_window),
-            SkillRenderSideEffects::ThreadStart {
-                session_telemetry: &self.services.session_telemetry,
-            },
-        );
-        if let Some(rendered_skills) = rendered_skills {
-            if rendered_skills.emit_warning {
-                self.send_event_raw(Event {
-                    id: String::new(),
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
-                    }),
-                })
-                .await;
+        if turn_context.config.include_skill_instructions {
+            let implicit_skills = turn_context
+                .turn_skills
+                .outcome
+                .allowed_skills_for_implicit_invocation();
+            let rendered_skills = render_skills_section(
+                &implicit_skills,
+                default_skill_metadata_budget(turn_context.model_info.context_window),
+                SkillRenderSideEffects::ThreadStart {
+                    session_telemetry: &self.services.session_telemetry,
+                },
+            );
+            if let Some(rendered_skills) = rendered_skills {
+                if rendered_skills.emit_warning {
+                    self.send_event_raw(Event {
+                        id: String::new(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
+                        }),
+                    })
+                    .await;
+                }
+                developer_sections.push(rendered_skills.text);
             }
-            developer_sections.push(rendered_skills.text);
         }
         let loaded_plugins = self
             .services
@@ -2789,6 +2798,14 @@ impl Session {
             .lock()
             .await
             .set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
+    }
+
+    pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {
+        let turn_state = self.turn_state_for_sub_id(sub_id).await;
+        let Some(turn_state) = turn_state else {
+            return;
+        };
+        turn_state.lock().await.has_memory_citation = true;
     }
 
     async fn turn_state_for_sub_id(

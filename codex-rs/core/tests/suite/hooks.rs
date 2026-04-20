@@ -1018,7 +1018,7 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
         start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
 
     let mut builder = test_codex()
-        .with_model("gpt-5.1")
+        .with_model("gpt-5.4")
         .with_pre_build_hook(|home| {
             if let Err(error) =
                 write_user_prompt_submit_hook(home, "blocked queued prompt", BLOCKED_PROMPT_CONTEXT)

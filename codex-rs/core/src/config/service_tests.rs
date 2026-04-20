@@ -62,7 +62,7 @@ X-Doc = "42"
 async fn write_value_preserves_comments_and_order() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let original = r#"# Codex user configuration
-model = "gpt-5"
+model = "gpt-5.2"
 approval_policy = "on-request"
 
 [notice]
@@ -88,7 +88,7 @@ unified_exec = true
 
     let updated = std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
     let expected = r#"# Codex user configuration
-model = "gpt-5"
+model = "gpt-5.2"
 approval_policy = "on-request"
 
 [notice]
@@ -390,7 +390,7 @@ async fn version_conflict_rejected() {
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "model".to_string(),
-            value: serde_json::json!("gpt-5"),
+            value: serde_json::json!("gpt-5.2"),
             merge_strategy: MergeStrategy::Replace,
             expected_version: Some("sha256:bogus".to_string()),
         })
