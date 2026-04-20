@@ -332,8 +332,20 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
+            let authorization_header_value = match auth.as_ref() {
+                Some(auth) => {
+                    auth_manager_clone
+                        .chatgpt_authorization_header_for_auth(auth)
+                        .await
+                }
+                None => None,
+            };
             let mcp_servers = mcp_manager_for_mcp
-                .effective_servers(&config_for_mcp, auth.as_ref())
+                .effective_servers_with_authorization_header(
+                    &config_for_mcp,
+                    auth.as_ref(),
+                    authorization_header_value.as_deref(),
+                )
                 .await;
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
