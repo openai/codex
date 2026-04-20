@@ -728,10 +728,14 @@ impl ModelClient {
                         task_id = %agent_task.task_id,
                         "using agent assertion authorization for downstream request"
                     );
-                    Arc::new(AuthorizationHeaderAuthProvider::new(
+                    let mut auth_provider = AuthorizationHeaderAuthProvider::new(
                         Some(authorization_header_value),
                         /*account_id*/ None,
-                    ))
+                    );
+                    if auth.as_ref().is_some_and(CodexAuth::is_fedramp_account) {
+                        auth_provider = auth_provider.with_fedramp_routing_header();
+                    }
+                    Arc::new(auth_provider)
                 } else {
                     self.state.provider.api_auth().await?
                 }

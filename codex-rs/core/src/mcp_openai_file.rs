@@ -125,10 +125,14 @@ async fn build_uploaded_local_argument_value(
         .await
         .map_err(|error| format!("failed to build agent assertion authorization: {error}"))?
     {
-        Box::new(AuthorizationHeaderAuthProvider::new(
+        let mut auth_provider = AuthorizationHeaderAuthProvider::new(
             Some(authorization_header_value),
             /*account_id*/ None,
-        ))
+        );
+        if auth.is_fedramp_account() {
+            auth_provider = auth_provider.with_fedramp_routing_header();
+        }
+        Box::new(auth_provider)
     } else {
         let token_data = auth
             .get_token_data()

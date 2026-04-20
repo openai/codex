@@ -43,6 +43,7 @@ impl AuthProvider for BearerAuthProvider {
 pub struct AuthorizationHeaderAuthProvider {
     pub authorization_header_value: Option<String>,
     pub account_id: Option<String>,
+    pub is_fedramp_account: bool,
 }
 
 impl AuthorizationHeaderAuthProvider {
@@ -50,6 +51,7 @@ impl AuthorizationHeaderAuthProvider {
         Self {
             authorization_header_value,
             account_id,
+            is_fedramp_account: false,
         }
     }
 
@@ -57,7 +59,13 @@ impl AuthorizationHeaderAuthProvider {
         Self {
             authorization_header_value: authorization_header_value.map(str::to_string),
             account_id: account_id.map(str::to_string),
+            is_fedramp_account: false,
         }
+    }
+
+    pub fn with_fedramp_routing_header(mut self) -> Self {
+        self.is_fedramp_account = true;
+        self
     }
 }
 
@@ -72,6 +80,9 @@ impl AuthProvider for AuthorizationHeaderAuthProvider {
             && let Ok(header) = HeaderValue::from_str(account_id)
         {
             let _ = headers.insert("ChatGPT-Account-ID", header);
+        }
+        if self.is_fedramp_account {
+            let _ = headers.insert("X-OpenAI-Fedramp", HeaderValue::from_static("true"));
         }
     }
 }
@@ -166,6 +177,25 @@ mod tests {
                 attached: true,
                 name: Some("authorization"),
             }
+        );
+    }
+
+    #[test]
+    fn authorization_header_auth_provider_adds_fedramp_routing_header_when_enabled() {
+        let auth = AuthorizationHeaderAuthProvider::for_test(
+            Some("AgentAssertion opaque-token"),
+            Some("workspace-123"),
+        )
+        .with_fedramp_routing_header();
+        let mut headers = HeaderMap::new();
+
+        auth.add_auth_headers(&mut headers);
+
+        assert_eq!(
+            headers
+                .get("X-OpenAI-Fedramp")
+                .and_then(|value| value.to_str().ok()),
+            Some("true")
         );
     }
 }
