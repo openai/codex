@@ -41,7 +41,7 @@ archived?: boolean | null,
  * Optional cwd filter or filters; when set, only threads whose session cwd
  * exactly matches one of these paths are returned.
  */
-cwd?: string | Array<string>,
+cwd?: string | Array<string> | null,
 /**
  * If true, return from the state DB without scanning JSONL rollouts to
  * repair thread metadata. Omitted or false preserves scan-and-repair

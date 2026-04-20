@@ -3594,7 +3594,7 @@ pub struct ThreadListParams {
     pub archived: Option<bool>,
     /// Optional cwd filter or filters; when set, only threads whose session cwd
     /// exactly matches one of these paths are returned.
-    #[ts(optional = nullable, type = "string | Array<string>")]
+    #[ts(optional = nullable, type = "string | Array<string> | null")]
     pub cwd: Option<ThreadListCwdFilter>,
     /// If true, return from the state DB without scanning JSONL rollouts to
     /// repair thread metadata. Omitted or false preserves scan-and-repair
