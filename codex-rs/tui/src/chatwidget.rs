@@ -2053,7 +2053,7 @@ impl ChatWidget {
         self.on_session_configured_with_display_and_fork_parent_title(
             event,
             SessionConfiguredDisplay::Normal,
-            None,
+            /*fork_parent_title*/ None,
         );
     }
 
