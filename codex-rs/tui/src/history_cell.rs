@@ -497,7 +497,11 @@ impl HistoryCell for AgentMessageCell {
 /// After a stream finalizes, the `ConsolidateAgentMessage` handler in `App`
 /// replaces the contiguous run of `AgentMessageCell`s with a single
 /// `AgentMarkdownCell`. On terminal resize, `display_lines(width)` re-renders
-/// from source via `append_markdown_agent`.
+/// from source via `append_markdown_agent`, producing correctly-sized tables
+/// with box-drawing borders.
+///
+/// Uses `prefix_lines` (not `word_wrap_lines`) so table rows with box-drawing
+/// characters pass through without re-wrapping.
 #[derive(Debug)]
 pub(crate) struct AgentMarkdownCell {
     markdown_source: String,
@@ -524,16 +528,63 @@ impl HistoryCell for AgentMarkdownCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
         // Re-render markdown from source at the current width. Reserve 2 columns for the "• " /
         // " " prefix prepended below.
-        crate::markdown::append_markdown(
+        crate::markdown::append_markdown_agent_with_cwd(
             &self.markdown_source,
             Some(wrap_width),
             Some(self.cwd.as_path()),
             &mut lines,
         );
+        // Use prefix_lines (not word_wrap_lines) so table rows with box-drawing
+        // characters are not broken by word-wrapping. The markdown renderer
+        // already output to wrap_width.
         prefix_lines(lines, "• ".dim(), "  ".into())
     }
 }
 
+/// Transient active-cell representation of the mutable tail of an agent stream.
+///
+/// During streaming, lines that have not yet been committed to scrollback (because they belong to
+/// an in-progress table or are the last incomplete line) are displayed via this cell in the
+/// `active_cell` slot.  It is replaced on every delta and cleared when the stream finalizes.
+///
+/// Unlike `AgentMessageCell`, this cell is never committed to the transcript. It exists only as a
+/// live preview of content that will eventually be emitted as stable `AgentMessageCell`s or
+/// consolidated into an `AgentMarkdownCell`.
+#[derive(Debug)]
+pub(crate) struct StreamingAgentTailCell {
+    lines: Vec<Line<'static>>,
+    is_first_line: bool,
+}
+
+impl StreamingAgentTailCell {
+    pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
+        Self {
+            lines,
+            is_first_line,
+        }
+    }
+}
+
+impl HistoryCell for StreamingAgentTailCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        // Tail lines are already rendered at the controller's current stream width.
+        // Re-wrapping them here can split table borders and produce malformed
+        // in-flight table rows.
+        prefix_lines(
+            self.lines.clone(),
+            if self.is_first_line {
+                "• ".dim()
+            } else {
+                "  ".into()
+            },
+            "  ".into(),
+        )
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        !self.is_first_line
+    }
+}
 #[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
@@ -2918,7 +2969,6 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
-    use crate::legacy_core::config::Config;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::wrapping::word_wrap_lines;
     use codex_config::types::McpServerConfig;
@@ -4917,28 +4967,47 @@ mod tests {
     }
 
     #[test]
-    fn agent_markdown_cell_renders_source_at_different_widths() {
-        let source =
-            "A long agent message that should wrap differently when the terminal width changes.\n";
+    fn agent_markdown_cell_renders_table_at_different_widths() {
+        let source = "| Name | Role |\n|------|------|\n| Alice | Engineer |\n| Bob | Designer |\n";
         let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
 
+        // At width 80 the table should render with box-drawing characters.
         let lines_80 = render_lines(&cell.display_lines(/*width*/ 80));
         assert!(
-            lines_80.first().is_some_and(|line| line.starts_with("• ")),
+            lines_80.iter().any(|l| l.contains('┌')),
+            "expected box-drawing table at width 80: {lines_80:?}"
+        );
+        // Verify the "• " leader is present on the first line.
+        assert!(
+            lines_80[0].starts_with("• "),
             "first line should start with bullet prefix: {:?}",
             lines_80[0]
         );
 
-        let lines_32 = render_lines(&cell.display_lines(/*width*/ 32));
+        // At width 40 the table should also render correctly (re-rendered from
+        // source, not just word-wrapped).
+        let lines_40 = render_lines(&cell.display_lines(/*width*/ 40));
         assert!(
-            lines_32.len() > lines_80.len(),
-            "narrower width should produce more wrapped lines: {lines_32:?}",
+            lines_40.iter().any(|l| l.contains('┌')),
+            "expected box-drawing table at width 40: {lines_40:?}"
         );
+
+        // Verify table borders are intact (not broken by naive word-wrapping).
+        // Every line with a box char should have matching left/right borders.
+        for line in &lines_40 {
+            let trimmed = line.trim();
+            if trimmed.starts_with('│') {
+                assert!(
+                    trimmed.ends_with('│'),
+                    "table row should have matching right border: {line:?}"
+                );
+            }
+        }
     }
 
     #[test]
     fn agent_markdown_cell_narrow_width_shows_prefix_only() {
-        let source = "narrow width coverage\n";
+        let source = "| Name | Role |\n|------|------|\n| Alice | Engineer |\n";
         let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
 
         let lines = render_lines(&cell.display_lines(/*width*/ 2));
@@ -4964,8 +5033,7 @@ mod tests {
             /*transcript_only*/ false,
         );
         let agent_markdown_cell =
-            AgentMarkdownCell::new("tiny width agent markdown line\n".to_string(), &test_cwd());
-
+            AgentMarkdownCell::new("| A | B |\n|---|---|\n| x | y |\n".to_string(), &test_cwd());
         for width in 1..=4 {
             assert!(
                 !user_cell.display_lines(width).is_empty(),
@@ -5027,11 +5095,11 @@ mod tests {
     #[test]
     fn agent_markdown_cell_survives_insert_history_rewrap() {
         let source = "\
-  Canary rollout remained at limited traffic longer than planned because p95
-  latency briefly regressed during cold-cache periods.
-  Regional expansion succeeded with stable error rates, though internal
-  analytics lagged temporarily.
-  ";
+  | Milestone | Target Date | Outcome | Extended Context |
+  |-----------|-------------|---------|------------------|
+  | Canary Rollout | 2026-01-15 | Completed | Canary remained at limited traffic longer than planned because p95 latency briefly regressed during
+  cold-cache periods |
+  | Regional Expansion | 2026-01-29 | Completed | Expansion succeeded with stable error rates, though internal analytics lagged temporarily |  ";
         let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
         let width: u16 = 80;
         let lines = cell.display_lines(width);
@@ -5047,6 +5115,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn agent_markdown_cell_table_fits_within_narrow_width() {
+        let source = "\
+  | Milestone | Target Date | Outcome | Extended Context |
+  |-----------|-------------|---------|------------------|
+  | Canary Rollout | 2026-01-15 | Completed | Canary remained at limited traffic longer than planned because p95 latency briefly regressed during
+  cold-cache periods |
+  | Regional Expansion | 2026-01-29 | Completed | Expansion succeeded with stable error rates, though internal analytics lagged temporarily |
+  | Legacy Decommission | 2026-02-10 | In Progress | Most legacy jobs are drained, but final shutdown is blocked by one compliance export workflow |
+  ";
+        let cell = AgentMarkdownCell::new(source.to_string(), &test_cwd());
+
+        // Render at a narrow width (simulating terminal resize).
+        let narrow_width: u16 = 80;
+        let lines = cell.display_lines(narrow_width);
+        let rendered = render_lines(&lines);
+
+        // Every rendered line must fit within the target width.
+        for line in &rendered {
+            let display_width = unicode_width::UnicodeWidthStr::width(line.as_str());
+            assert!(
+                display_width <= narrow_width as usize,
+                "line exceeds width {narrow_width}: ({display_width} chars) {line:?}"
+            );
+        }
+
+        // Table should still have box-drawing characters.
+        assert!(
+            rendered.iter().any(|l| l.contains('┌')),
+            "expected box-drawing table: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn streaming_agent_tail_cell_does_not_rewrap_table_rows() {
+        let source = "\
+| # | Type | Example | Details | Score |\n\
+| --- | --- | --- | --- | --- |\n\
+| 5 | URL link | Rust (https://www.rust-lang.org) | external | 93 |\n\
+| 6 | GitHub link | Repo (https://github.com/openai) | external | 89 |\n";
+        let mut rendered_lines = Vec::new();
+        crate::markdown::append_markdown_agent(
+            source,
+            /*width*/ Some(120),
+            &mut rendered_lines,
+        );
+        let cell = StreamingAgentTailCell::new(rendered_lines, true);
+        let lines = render_lines(&cell.display_lines(72));
+
+        // Ensure wrapped spillover lines were not introduced by a second wrap pass.
+        for line in &lines {
+            let content = line.chars().skip(2).collect::<String>();
+            let trimmed = content.trim();
+            if trimmed.starts_with('│') {
+                assert!(
+                    trimmed.ends_with('│'),
+                    "table row should preserve right border while streaming: {line:?}",
+                );
+            }
+        }
+    }
     /// Simulate the consolidation backward-walk logic from `App::handle_event`
     /// to verify it correctly identifies and replaces `AgentMessageCell` runs.
     #[test]

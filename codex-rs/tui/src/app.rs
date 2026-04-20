@@ -173,6 +173,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use uuid::Uuid;
+mod agent_message_consolidation;
 mod agent_navigation;
 mod app_server_adapter;
 pub(crate) mod app_server_requests;
@@ -4610,38 +4611,19 @@ impl App {
                     tui.terminal.last_known_screen_size.width,
                 );
             }
-            AppEvent::ConsolidateAgentMessage { source, cwd } => {
-                // Walk backward to find the contiguous run of streaming AgentMessageCells that
-                // belong to the just-finalized stream
-                let end = self.transcript_cells.len();
-                tracing::debug!(
-                    "ConsolidateAgentMessage: transcript_cells.len()={end}, source_len={}",
-                    source.len()
-                );
-                let start =
-                    trailing_run_start::<history_cell::AgentMessageCell>(&self.transcript_cells);
-                if start < end {
-                    tracing::debug!(
-                        "ConsolidateAgentMessage: replacing cells [{start}..{end}] with AgentMarkdownCell"
-                    );
-                    let consolidated: Arc<dyn HistoryCell> =
-                        Arc::new(history_cell::AgentMarkdownCell::new(source, &cwd));
-                    self.transcript_cells
-                        .splice(start..end, std::iter::once(consolidated.clone()));
-
-                    // Keep the transcript overlay in sync.
-                    if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                        t.consolidate_cells(start..end, consolidated.clone());
-                        tui.frame_requester().schedule_frame();
-                    }
-
-                    self.maybe_finish_stream_reflow(tui);
-                } else {
-                    tracing::debug!(
-                        "ConsolidateAgentMessage: no cells to consolidate(start={start}, end={end})",
-                    );
-                    self.maybe_finish_stream_reflow(tui);
-                }
+            AppEvent::ConsolidateAgentMessage {
+                source,
+                cwd,
+                scrollback_reflow,
+                deferred_history_cell,
+            } => {
+                self.handle_consolidate_agent_message(
+                    tui,
+                    source,
+                    cwd,
+                    scrollback_reflow,
+                    deferred_history_cell,
+                )?;
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 let end = self.transcript_cells.len();
