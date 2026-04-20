@@ -471,6 +471,14 @@ impl Session {
         };
 
         if let Some((tasks, turn_state)) = active_turn {
+            let startup_pending_input = if tasks.is_empty() {
+                turn_state.lock().await.take_pending_input()
+            } else {
+                Vec::new()
+            };
+            self.queue_response_items_for_next_turn(startup_pending_input)
+                .await;
+
             for task in tasks {
                 self.handle_task_abort(task, reason.clone()).await;
             }

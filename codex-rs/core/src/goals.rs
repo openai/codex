@@ -884,6 +884,7 @@ impl Session {
             .pause_active_thread_goal(self.conversation_id)
             .await?
         else {
+            self.clear_queued_goal_continuations_for_next_turn().await;
             return Ok(());
         };
         self.clear_queued_goal_continuations_for_next_turn().await;

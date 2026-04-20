@@ -56,6 +56,7 @@ use crate::RolloutRecorderParams;
 use crate::goals::SetGoalRequest;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::state::ActiveTurn;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -6126,6 +6127,35 @@ async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
 }
 
 #[tokio::test]
+async fn abort_without_registered_task_requeues_startup_pending_input() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+    let queued_item = ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "startup pending input".to_string(),
+        }],
+    };
+
+    {
+        let mut active = sess.active_turn.lock().await;
+        let turn = active.get_or_insert_with(ActiveTurn::default);
+        turn.turn_state
+            .lock()
+            .await
+            .push_pending_input(queued_item.clone());
+    }
+
+    sess.abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+        .await;
+
+    assert!(!sess.has_active_turn().await);
+    assert_eq!(
+        sess.take_queued_response_items_for_next_turn().await,
+        vec![queued_item]
+    );
+}
+
+#[tokio::test]
 async fn interrupt_clears_only_queued_goal_continuations_for_next_turn() -> anyhow::Result<()> {
     let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
@@ -6332,6 +6362,55 @@ async fn interrupt_without_active_turn_pauses_active_goal() -> anyhow::Result<()
         goal.status
     );
     assert!(!sess.has_queued_response_items_for_next_turn().await);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn idle_interrupt_clears_stale_continuation_when_goal_already_paused() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.queue_goal_continuation_if_active().await;
+    assert!(
+        sess.has_queued_response_items_for_next_turn().await,
+        "active goal should queue a continuation"
+    );
+
+    let state_db = sess
+        .thread_goal_state_db
+        .lock()
+        .await
+        .clone()
+        .expect("goal state DB should be initialized");
+    state_db
+        .update_thread_goal(
+            sess.conversation_id,
+            codex_state::ThreadGoalUpdate {
+                status: Some(codex_state::ThreadGoalStatus::Paused),
+                token_budget: None,
+            },
+        )
+        .await?;
+
+    sess.interrupt_task().await;
+
+    assert!(
+        !sess.has_queued_response_items_for_next_turn().await,
+        "idle interrupt should clear stale continuations even when the pause no-ops"
+    );
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after idle interrupt");
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
 
     Ok(())
 }
