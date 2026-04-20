@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 
 #[derive(Clone)]
 pub(crate) struct BearerTokenRefresher {
@@ -34,8 +35,26 @@ impl ExternalAuth for BearerTokenRefresher {
     }
 
     async fn resolve(&self) -> io::Result<Option<ExternalAuthTokens>> {
-        let access_token = {
-            let mut cached = self.state.cached_token.lock().await;
+        if let Some(cached_token) = self.state.cached_token.lock().await.as_ref() {
+            let should_use_cached_token = match self.state.config.refresh_interval() {
+                Some(refresh_interval) => cached_token.fetched_at.elapsed() < refresh_interval,
+                None => true,
+            };
+            if should_use_cached_token {
+                return Ok(Some(ExternalAuthTokens::access_token_only(
+                    cached_token.access_token.clone(),
+                )));
+            }
+        }
+
+        let _refresh_guard = self
+            .state
+            .refresh_lock
+            .acquire()
+            .await
+            .map_err(|_| io::Error::other("external bearer token refresh semaphore closed"))?;
+        {
+            let cached = self.state.cached_token.lock().await;
             if let Some(cached_token) = cached.as_ref() {
                 let should_use_cached_token = match self.state.config.refresh_interval() {
                     Some(refresh_interval) => cached_token.fetched_at.elapsed() < refresh_interval,
@@ -47,14 +66,14 @@ impl ExternalAuth for BearerTokenRefresher {
                     )));
                 }
             }
+        }
 
-            let access_token = run_provider_auth_command(&self.state.config).await?;
-            *cached = Some(CachedExternalBearerToken {
-                access_token: access_token.clone(),
-                fetched_at: Instant::now(),
-            });
-            access_token
-        };
+        let access_token = run_provider_auth_command(&self.state.config).await?;
+        let mut cached = self.state.cached_token.lock().await;
+        *cached = Some(CachedExternalBearerToken {
+            access_token: access_token.clone(),
+            fetched_at: Instant::now(),
+        });
         Ok(Some(ExternalAuthTokens::access_token_only(access_token)))
     }
 
@@ -62,6 +81,12 @@ impl ExternalAuth for BearerTokenRefresher {
         &self,
         _context: ExternalAuthRefreshContext,
     ) -> io::Result<ExternalAuthTokens> {
+        let _refresh_guard = self
+            .state
+            .refresh_lock
+            .acquire()
+            .await
+            .map_err(|_| io::Error::other("external bearer token refresh semaphore closed"))?;
         let access_token = run_provider_auth_command(&self.state.config).await?;
         let mut cached = self.state.cached_token.lock().await;
         *cached = Some(CachedExternalBearerToken {
@@ -82,6 +107,7 @@ impl fmt::Debug for BearerTokenRefresher {
 struct ExternalBearerAuthState {
     config: ModelProviderAuthInfo,
     cached_token: Mutex<Option<CachedExternalBearerToken>>,
+    refresh_lock: Semaphore,
 }
 
 impl ExternalBearerAuthState {
@@ -89,6 +115,7 @@ impl ExternalBearerAuthState {
         Self {
             config,
             cached_token: Mutex::new(None),
+            refresh_lock: Semaphore::new(1),
         }
     }
 }
