@@ -1480,6 +1480,36 @@ async fn proposed_execpolicy_amendment_is_suppressed_when_policy_matches_allow()
 }
 
 #[tokio::test]
+async fn allow_rule_does_not_bypass_sandbox_when_deny_read_paths_exist() {
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some(r#"prefix_rule(pattern=["echo"], decision="allow")"#.to_string()),
+            command: vec!["echo".to_string(), "safe".to_string()],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: AbsolutePathBuf::from_absolute_path(PathBuf::from(
+                            host_absolute_path(&["secret"]),
+                        ))
+                        .expect("absolute path"),
+                    },
+                    access: FileSystemAccessMode::None,
+                },
+            ]),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn multi_segment_shell_requires_policy_allow_for_every_segment_to_bypass_sandbox() {
     let policy_src = r#"
 prefix_rule(pattern=["cat"], decision="allow")

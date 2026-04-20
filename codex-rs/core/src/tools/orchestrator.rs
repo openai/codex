@@ -186,12 +186,7 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let has_managed_network_requirements = turn_ctx
-            .config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some();
+        let managed_network_active = turn_ctx.network.is_some();
         let initial_sandbox =
             match tool.sandbox_mode_for_first_attempt(req, &turn_ctx.file_system_sandbox_policy) {
                 SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
@@ -200,7 +195,7 @@ impl ToolOrchestrator {
                     turn_ctx.network_sandbox_policy,
                     tool.sandbox_preference(),
                     turn_ctx.windows_sandbox_level,
-                    has_managed_network_requirements,
+                    managed_network_active,
                 ),
             };
 
