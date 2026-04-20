@@ -17,6 +17,7 @@ mod external_agent_config;
 mod fs;
 mod initialize;
 mod marketplace_add;
+mod marketplace_remove;
 mod mcp_resource;
 mod mcp_server_elicitation;
 mod mcp_server_status;

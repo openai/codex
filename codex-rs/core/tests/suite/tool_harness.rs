@@ -51,7 +51,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_model("gpt-5");
+    let mut builder = test_codex().with_model("test-local-shell-json");
     let TestCodex {
         codex,
         cwd,
