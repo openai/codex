@@ -192,12 +192,19 @@ pub async fn load_config_layers_state(
         .await?;
     layers.push(system_layer);
 
-    // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
-    // exists, but is malformed, then this error should be propagated to the
-    // user.
+    // Add a layer for $CODEX_HOME/config.toml so folder-derived resources such
+    // as rules/ can still be discovered. When user config is ignored, preserve
+    // the layer metadata without reading config.toml.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
-    if !ignore_user_config {
-        let user_layer = load_config_toml_for_required_layer(fs, &user_file, |config_toml| {
+    let user_layer = if ignore_user_config {
+        ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: user_file.clone(),
+            },
+            TomlValue::Table(toml::map::Map::new()),
+        )
+    } else {
+        load_config_toml_for_required_layer(fs, &user_file, |config_toml| {
             ConfigLayerEntry::new(
                 ConfigLayerSource::User {
                     file: user_file.clone(),
@@ -205,9 +212,9 @@ pub async fn load_config_layers_state(
                 config_toml,
             )
         })
-        .await?;
-        layers.push(user_layer);
-    }
+        .await?
+    };
+    layers.push(user_layer);
 
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());

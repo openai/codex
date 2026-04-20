@@ -6,7 +6,6 @@ use crate::config::ConstraintError;
 use crate::config_loader::CloudRequirementsLoadError;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
@@ -15,7 +14,6 @@ use crate::config_loader::FilesystemDenyReadPattern;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
-use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
@@ -114,7 +112,7 @@ async fn returns_config_error_for_invalid_user_config_toml() {
 }
 
 #[tokio::test]
-async fn ignore_user_config_skips_codex_home_config_toml() -> std::io::Result<()> {
+async fn ignore_user_config_keeps_empty_user_layer() -> std::io::Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(
         tmp.path().join(CONFIG_TOML_FILE),
@@ -136,14 +134,13 @@ async fn ignore_user_config_skips_codex_home_config_toml() -> std::io::Result<()
     )
     .await?;
 
-    assert!(
-        layers
-            .get_layers(
-                ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                /*include_disabled*/ true,
-            )
-            .iter()
-            .all(|layer| !matches!(layer.name, ConfigLayerSource::User { .. }))
+    let user_layer = layers
+        .get_user_layer()
+        .expect("expected a user layer even when CODEX_HOME/config.toml is ignored");
+    assert_eq!(
+        user_layer.config,
+        TomlValue::Table(toml::map::Map::new()),
+        "expected ignored user config to preserve only layer metadata"
     );
     assert_eq!(layers.effective_config().get("model"), None);
     Ok(())

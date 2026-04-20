@@ -6,9 +6,11 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::config_loader::LoaderOverrides;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::CONFIG_TOML_FILE;
 use codex_config::RequirementsExecPolicy;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
@@ -636,6 +638,45 @@ fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
     ];
 
     assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+}
+
+#[tokio::test]
+async fn ignore_user_config_keeps_user_policy_files() -> std::io::Result<()> {
+    let temp = tempdir()?;
+    let codex_home = temp.path().join("home_ignore_user_config");
+    let rules_dir = codex_home.join(RULES_DIR_NAME);
+    fs::create_dir_all(&rules_dir)?;
+    fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        "model = \"from-user-config\"\ninvalid = [",
+    )?;
+    fs::write(
+        rules_dir.join("deny-curl.rules"),
+        r#"prefix_rule(pattern=["curl"], decision="forbidden")"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(temp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides {
+            ignore_user_config: true,
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    let policy = load_exec_policy(&config.config_layer_stack)
+        .await
+        .map_err(std::io::Error::other)?;
+
+    assert_eq!(
+        policy
+            .check_multiple([vec!["curl".to_string()]].iter(), &|_| Decision::Allow)
+            .decision,
+        Decision::Forbidden,
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
