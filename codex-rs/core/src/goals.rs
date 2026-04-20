@@ -905,6 +905,78 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn activate_paused_thread_goal_after_resume(&self) -> anyhow::Result<bool> {
+        if !self.enabled(Feature::Goals) {
+            return Ok(false);
+        }
+
+        let _continuation_guard = self.goal_continuation_lock.lock().await;
+        let Some(state_db) = self.state_db_for_thread_goals().await? else {
+            return Ok(false);
+        };
+        let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
+            self.thread_goal_may_exist.store(false, Ordering::SeqCst);
+            *self.thread_goal_cache.lock().await = None;
+            self.thread_goal_wall_clock_accounting
+                .clear_active_goal()
+                .await;
+            return Ok(false);
+        };
+        if goal.status != codex_state::ThreadGoalStatus::Paused {
+            let goal_created_at_ms = goal.created_at.timestamp_millis();
+            let is_active = goal.status == codex_state::ThreadGoalStatus::Active;
+            let goal = protocol_goal_from_state(goal);
+            self.thread_goal_may_exist.store(true, Ordering::SeqCst);
+            *self.thread_goal_cache.lock().await = Some(goal);
+            if is_active {
+                self.thread_goal_wall_clock_accounting
+                    .mark_active_goal(goal_created_at_ms)
+                    .await;
+            } else {
+                self.thread_goal_wall_clock_accounting
+                    .clear_active_goal()
+                    .await;
+            }
+            return Ok(false);
+        }
+
+        let Some(goal) = state_db
+            .update_thread_goal(
+                self.conversation_id,
+                codex_state::ThreadGoalUpdate {
+                    status: Some(codex_state::ThreadGoalStatus::Active),
+                    token_budget: None,
+                },
+            )
+            .await?
+        else {
+            self.thread_goal_may_exist.store(false, Ordering::SeqCst);
+            *self.thread_goal_cache.lock().await = None;
+            self.thread_goal_wall_clock_accounting
+                .clear_active_goal()
+                .await;
+            return Ok(false);
+        };
+        let goal_created_at_ms = goal.created_at.timestamp_millis();
+        let goal = protocol_goal_from_state(goal);
+        self.thread_goal_may_exist.store(true, Ordering::SeqCst);
+        *self.thread_goal_cache.lock().await = Some(goal.clone());
+        self.thread_goal_wall_clock_accounting
+            .mark_active_goal(goal_created_at_ms)
+            .await;
+        self.clear_queued_goal_continuations_for_next_turn().await;
+        self.send_event_raw(Event {
+            id: uuid::Uuid::new_v4().to_string(),
+            msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
+                thread_id: self.conversation_id,
+                turn_id: None,
+                goal,
+            }),
+        })
+        .await;
+        Ok(true)
+    }
+
     pub(crate) async fn queue_goal_continuation_if_active(self: &Arc<Self>) {
         let _continuation_guard = self.goal_continuation_lock.lock().await;
         let Some(items) = self.goal_continuation_items_if_active().await else {
