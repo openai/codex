@@ -20,6 +20,7 @@ use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
+use crate::responses_api::CodexResponsesApiCallFact;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::InitializeParams;
@@ -223,6 +224,12 @@ impl AnalyticsEventsClient {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(
             Box::new(event),
         )));
+    }
+
+    pub fn track_responses_api_call(&self, event: CodexResponsesApiCallFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ResponsesApiCall(Box::new(event)),
+        ));
     }
 
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
