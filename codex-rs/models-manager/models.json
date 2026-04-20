@@ -24,7 +24,7 @@
       "slug": "gpt-5.4",
       "display_name": "gpt-5.4",
       "description": "Latest frontier agentic coding model.",
-      "default_reasoning_level": "xhigh",
+      "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
           "effort": "low",
