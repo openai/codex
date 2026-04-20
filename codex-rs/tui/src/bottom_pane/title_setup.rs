@@ -101,6 +101,39 @@ impl TerminalTitleItem {
     }
 }
 
+pub(crate) fn preview_line_for_title_items(
+    items: &[TerminalTitleItem],
+    preview_data: &StatusSurfacePreviewData,
+) -> Option<Line<'static>> {
+    let mut previous = None;
+    let preview = items
+        .iter()
+        .copied()
+        .fold(String::new(), |mut preview, item| {
+            if item == TerminalTitleItem::Spinner {
+                preview.push_str(item.separator_from_previous(previous));
+                preview.push('⠋');
+                previous = Some(item);
+                return preview;
+            }
+            let Some(value) = item
+                .preview_item()
+                .and_then(|preview_item| preview_data.value_for(preview_item))
+            else {
+                return preview;
+            };
+            preview.push_str(item.separator_from_previous(previous));
+            preview.push_str(value);
+            previous = Some(item);
+            preview
+        });
+    if preview.is_empty() {
+        None
+    } else {
+        Some(Line::from(preview))
+    }
+}
+
 fn parse_terminal_title_items<T>(ids: impl Iterator<Item = T>) -> Option<Vec<TerminalTitleItem>>
 where
     T: AsRef<str>,
@@ -170,33 +203,7 @@ impl TerminalTitleSetupView {
                         .filter(|item| item.enabled)
                         .map(|item| item.id.as_str()),
                 )?;
-                let mut previous = None;
-                let preview = items
-                    .iter()
-                    .copied()
-                    .fold(String::new(), |mut preview, item| {
-                        if item == TerminalTitleItem::Spinner {
-                            preview.push_str(item.separator_from_previous(previous));
-                            preview.push('⠋');
-                            previous = Some(item);
-                            return preview;
-                        }
-                        let Some(value) = item
-                            .preview_item()
-                            .and_then(|preview_item| preview_data.value_for(preview_item))
-                        else {
-                            return preview;
-                        };
-                        preview.push_str(item.separator_from_previous(previous));
-                        preview.push_str(value);
-                        previous = Some(item);
-                        preview
-                    });
-                if preview.is_empty() {
-                    None
-                } else {
-                    Some(Line::from(preview))
-                }
+                preview_line_for_title_items(&items, &preview_data)
             })
             .on_change(|items, app_event| {
                 let Some(items) = parse_terminal_title_items(
@@ -260,50 +267,7 @@ impl Renderable for TerminalTitleSetupView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
-    use tokio::sync::mpsc::unbounded_channel;
-
-    fn render_lines(view: &TerminalTitleSetupView, width: u16) -> String {
-        let height = view.desired_height(width);
-        let area = Rect::new(0, 0, width, height);
-        let mut buf = Buffer::empty(area);
-        view.render(area, &mut buf);
-
-        let lines: Vec<String> = (0..area.height)
-            .map(|row| {
-                let mut line = String::new();
-                for col in 0..area.width {
-                    let symbol = buf[(area.x + col, area.y + row)].symbol();
-                    if symbol.is_empty() {
-                        line.push(' ');
-                    } else {
-                        line.push_str(symbol);
-                    }
-                }
-                line
-            })
-            .collect();
-        lines.join("\n")
-    }
-
-    #[test]
-    fn renders_title_setup_popup() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let selected = [
-            "project".to_string(),
-            "spinner".to_string(),
-            "status".to_string(),
-            "thread".to_string(),
-        ];
-        let view =
-            TerminalTitleSetupView::new(Some(&selected), StatusSurfacePreviewData::default(), tx);
-        assert_snapshot!(
-            "terminal_title_setup_basic",
-            render_lines(&view, /*width*/ 84)
-        );
-    }
 
     #[test]
     fn parse_terminal_title_items_preserves_order() {

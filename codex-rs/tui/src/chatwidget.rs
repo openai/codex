@@ -7511,6 +7511,22 @@ impl ChatWidget {
     fn open_terminal_title_setup(&mut self) {
         let configured_terminal_title_items = self.configured_terminal_title_items();
         self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
+        let view = TerminalTitleSetupView::new(
+            Some(configured_terminal_title_items.as_slice()),
+            self.terminal_title_preview_data(),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn status_surface_preview_data(&mut self) -> StatusSurfacePreviewData {
+        StatusSurfacePreviewData::from_iter(StatusSurfacePreviewItem::iter().filter_map(|item| {
+            self.status_surface_preview_value_for_item(item)
+                .map(|value| (item, value))
+        }))
+    }
+
+    fn terminal_title_preview_data(&mut self) -> StatusSurfacePreviewData {
         let mut preview_data = self.status_surface_preview_data();
         let now = Instant::now();
         for item in [
@@ -7528,19 +7544,7 @@ impl ChatWidget {
             };
             preview_data.set_live(preview_item, value);
         }
-        let view = TerminalTitleSetupView::new(
-            Some(configured_terminal_title_items.as_slice()),
-            preview_data,
-            self.app_event_tx.clone(),
-        );
-        self.bottom_pane.show_view(Box::new(view));
-    }
-
-    fn status_surface_preview_data(&mut self) -> StatusSurfacePreviewData {
-        StatusSurfacePreviewData::from_iter(StatusSurfacePreviewItem::iter().filter_map(|item| {
-            self.status_surface_preview_value_for_item(item)
-                .map(|value| (item, value))
-        }))
+        preview_data
     }
 
     fn open_theme_picker(&mut self) {
