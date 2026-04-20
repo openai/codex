@@ -41,6 +41,7 @@ codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp = { workspace = true }
+codex-mcp-tool-approval-templates = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
 ed25519-dalek = { workspace = true }

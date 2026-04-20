@@ -42,6 +42,7 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
+    "mcp-tool-approval-templates",
     "codex-mcp",
     "mcp-server",
     "model-provider-info",
@@ -147,6 +148,7 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-mcp-tool-approval-templates = { path = "mcp-tool-approval-templates" }
 codex-mcp = { path = "codex-mcp" }
 codex-mcp-server = { path = "mcp-server" }
 codex-model-provider-info = { path = "model-provider-info" }
