@@ -6466,6 +6466,7 @@ enabled = true
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 hide_spawn_agent_metadata = true
+subagent_mcp_mode = "inherit_parent"
 "#,
     )?;
 
@@ -6482,6 +6483,10 @@ hide_spawn_agent_metadata = true
         Some("Custom delegation guidance.")
     );
     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
+    assert_eq!(
+        config.multi_agent_v2.subagent_mcp_mode,
+        codex_features::SubagentMcpMode::InheritParent
+    );
 
     Ok(())
 }
@@ -6497,11 +6502,13 @@ async fn profile_multi_agent_v2_config_overrides_base() -> std::io::Result<()> {
 usage_hint_enabled = true
 usage_hint_text = "base hint"
 hide_spawn_agent_metadata = true
+subagent_mcp_mode = "disabled"
 
 [profiles.no_hint.features.multi_agent_v2]
 usage_hint_enabled = false
 usage_hint_text = "profile hint"
 hide_spawn_agent_metadata = false
+subagent_mcp_mode = "inherit_parent"
 "#,
     )?;
 
@@ -6517,6 +6524,10 @@ hide_spawn_agent_metadata = false
         Some("profile hint")
     );
     assert!(!config.multi_agent_v2.hide_spawn_agent_metadata);
+    assert_eq!(
+        config.multi_agent_v2.subagent_mcp_mode,
+        codex_features::SubagentMcpMode::InheritParent
+    );
 
     Ok(())
 }

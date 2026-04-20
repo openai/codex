@@ -2,6 +2,8 @@ use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
+use codex_features::SubagentMcpMode;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
@@ -31,6 +33,43 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 use tokio::time::timeout;
+
+#[tokio::test]
+async fn delegate_mcp_inherit_parent_only_applies_to_thread_spawn_sources() {
+    let (parent_session, _parent_ctx, _rx_evt) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let mut config = (*parent_session.get_config().await).clone();
+    config.multi_agent_v2.subagent_mcp_mode = SubagentMcpMode::InheritParent;
+
+    let thread_spawn_mode = mcp_startup_mode_for_subagent_source(
+        &config,
+        &parent_session,
+        &SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        },
+    );
+    let review_mode =
+        mcp_startup_mode_for_subagent_source(&config, &parent_session, &SubAgentSource::Review);
+    let other_mode = mcp_startup_mode_for_subagent_source(
+        &config,
+        &parent_session,
+        &SubAgentSource::Other("guardian".to_string()),
+    );
+
+    match thread_spawn_mode {
+        McpStartupMode::Inherit(manager) => assert!(Arc::ptr_eq(
+            &manager,
+            &parent_session.services.mcp_connection_manager
+        )),
+        _ => panic!("thread-spawned delegates should inherit the parent MCP manager"),
+    }
+    assert!(matches!(review_mode, McpStartupMode::Disabled));
+    assert!(matches!(other_mode, McpStartupMode::Disabled));
+}
 
 #[tokio::test]
 async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {

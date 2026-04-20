@@ -17,6 +17,7 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 pub use feature_configs::MultiAgentV2ConfigToml;
+pub use feature_configs::SubagentMcpMode;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 

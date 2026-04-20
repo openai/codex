@@ -1074,6 +1074,9 @@
         "hide_spawn_agent_metadata": {
           "type": "boolean"
         },
+        "subagent_mcp_mode": {
+          "$ref": "#/definitions/SubagentMcpMode"
+        },
         "usage_hint_enabled": {
           "type": "boolean"
         },
@@ -1833,6 +1836,31 @@
         }
       },
       "type": "object"
+    },
+    "SubagentMcpMode": {
+      "oneOf": [
+        {
+          "description": "Sub-agents create their own MCP clients and server processes.",
+          "enum": [
+            "fresh"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Sub-agents reuse the parent thread's MCP connection manager without owning refresh or policy state; parentless sub-agents skip MCP startup.",
+          "enum": [
+            "inherit_parent"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Sub-agents skip MCP startup and ignore configured MCP servers.",
+          "enum": [
+            "disabled"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ToolSuggestConfig": {
       "additionalProperties": false,

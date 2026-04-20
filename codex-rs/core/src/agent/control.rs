@@ -8,6 +8,7 @@ use crate::codex_thread::ThreadConfigSnapshot;
 use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
 use crate::rollout::RolloutRecorder;
+use crate::session::McpStartupMode;
 use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
@@ -15,6 +16,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
+use codex_features::SubagentMcpMode;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -192,6 +194,9 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
             .await;
+        let mcp_startup_mode = self
+            .mcp_startup_mode_for_source(&state, session_source.as_ref(), &config)
+            .await;
         let (session_source, mut agent_metadata) = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -225,6 +230,7 @@ impl AgentControl {
                     &options,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
+                    mcp_startup_mode,
                 )
                 .await?
             }
@@ -238,6 +244,7 @@ impl AgentControl {
                         /*metrics_service_name*/ None,
                         inherited_shell_snapshot,
                         inherited_exec_policy,
+                        mcp_startup_mode,
                     )
                     .await?
             }
@@ -332,6 +339,7 @@ impl AgentControl {
         options: &SpawnAgentOptions,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        mcp_startup_mode: McpStartupMode,
     ) -> CodexResult<crate::thread_manager::NewThread> {
         if options.fork_parent_spawn_call_id.is_none() {
             return Err(CodexErr::Fatal(
@@ -397,6 +405,7 @@ impl AgentControl {
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                mcp_startup_mode,
             )
             .await
     }
@@ -525,6 +534,9 @@ impl AgentControl {
         let inherited_exec_policy = self
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
+        let mcp_startup_mode = self
+            .mcp_startup_mode_for_source(&state, Some(&session_source), &config)
+            .await;
         let rollout_path =
             match find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
                 .await?
@@ -546,6 +558,7 @@ impl AgentControl {
                 session_source,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
+                mcp_startup_mode,
             )
             .await?;
         let mut agent_metadata = agent_metadata;
@@ -1054,6 +1067,41 @@ impl AgentControl {
         Some(Arc::clone(
             &parent_thread.codex.session.services.exec_policy,
         ))
+    }
+
+    async fn mcp_startup_mode_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+        child_config: &crate::config::Config,
+    ) -> McpStartupMode {
+        let Some(SessionSource::SubAgent(subagent_source)) = session_source else {
+            return McpStartupMode::Fresh;
+        };
+
+        match (
+            child_config.multi_agent_v2.subagent_mcp_mode,
+            subagent_source,
+        ) {
+            (SubagentMcpMode::Fresh, _) => McpStartupMode::Fresh,
+            (SubagentMcpMode::Disabled, _) => McpStartupMode::Disabled,
+            (
+                SubagentMcpMode::InheritParent,
+                SubAgentSource::ThreadSpawn {
+                    parent_thread_id, ..
+                },
+            ) => state
+                .get_thread(*parent_thread_id)
+                .await
+                .ok()
+                .map(|parent_thread| {
+                    McpStartupMode::Inherit(Arc::clone(
+                        &parent_thread.codex.session.services.mcp_connection_manager,
+                    ))
+                })
+                .unwrap_or(McpStartupMode::Disabled),
+            (SubagentMcpMode::InheritParent, _) => McpStartupMode::Disabled,
+        }
     }
 
     async fn open_thread_spawn_children(

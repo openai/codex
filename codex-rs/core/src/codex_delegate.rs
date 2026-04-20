@@ -44,6 +44,7 @@ use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::session::Codex;
 use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
+use crate::session::McpStartupMode;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
@@ -74,6 +75,8 @@ pub(crate) async fn run_codex_thread_interactive(
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let mcp_startup_mode =
+        mcp_startup_mode_for_subagent_source(&config, &parent_session, &subagent_source);
 
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
@@ -95,6 +98,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_shell_snapshot: None,
         user_shell_override: None,
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
+        mcp_startup_mode,
         parent_trace: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
     }))
@@ -151,6 +155,21 @@ pub(crate) async fn run_codex_thread_interactive(
         session: Arc::clone(&codex.session),
         session_loop_termination: codex.session_loop_termination.clone(),
     })
+}
+
+fn mcp_startup_mode_for_subagent_source(
+    config: &Config,
+    parent_session: &Arc<Session>,
+    subagent_source: &SubAgentSource,
+) -> McpStartupMode {
+    match (config.multi_agent_v2.subagent_mcp_mode, subagent_source) {
+        (codex_features::SubagentMcpMode::Fresh, _) => McpStartupMode::Fresh,
+        (codex_features::SubagentMcpMode::Disabled, _) => McpStartupMode::Disabled,
+        (codex_features::SubagentMcpMode::InheritParent, SubAgentSource::ThreadSpawn { .. }) => {
+            McpStartupMode::Inherit(Arc::clone(&parent_session.services.mcp_connection_manager))
+        }
+        (codex_features::SubagentMcpMode::InheritParent, _) => McpStartupMode::Disabled,
+    }
 }
 
 /// Convenience wrapper for one-time use with an initial prompt.

@@ -350,6 +350,7 @@ enabled = true
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 hide_spawn_agent_metadata = true
+subagent_mcp_mode = "inherit_parent"
 "#,
     )
     .expect("features table should deserialize");
@@ -365,6 +366,7 @@ hide_spawn_agent_metadata = true
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
             hide_spawn_agent_metadata: Some(true),
+            subagent_mcp_mode: Some(crate::SubagentMcpMode::InheritParent),
         }))
     );
 }
@@ -396,6 +398,7 @@ usage_hint_enabled = false
             usage_hint_enabled: Some(false),
             usage_hint_text: None,
             hide_spawn_agent_metadata: None,
+            subagent_mcp_mode: None,
         }))
     );
 }

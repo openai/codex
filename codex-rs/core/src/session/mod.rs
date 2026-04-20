@@ -387,9 +387,18 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
+    pub(crate) mcp_startup_mode: McpStartupMode,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) enum McpStartupMode {
+    #[default]
+    Fresh,
+    Inherit(Arc<RwLock<McpConnectionManager>>),
+    Disabled,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -441,6 +450,7 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
             inherited_exec_policy,
+            mcp_startup_mode,
             parent_trace: _,
             analytics_events_client,
         } = args;
@@ -638,6 +648,7 @@ impl Codex {
             skills_watcher,
             agent_control,
             environment,
+            mcp_startup_mode,
             analytics_events_client,
         )
         .await

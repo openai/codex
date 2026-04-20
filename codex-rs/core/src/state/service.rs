@@ -33,6 +33,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
+    pub(crate) mcp_connection_manager_mode: McpConnectionManagerMode,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -65,4 +66,25 @@ pub(crate) struct SessionServices {
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) environment: Option<Arc<Environment>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum McpConnectionManagerMode {
+    Owned,
+    Inherited,
+    Disabled,
+}
+
+impl McpConnectionManagerMode {
+    pub(crate) fn allows_refresh(self) -> bool {
+        matches!(self, Self::Owned)
+    }
+
+    pub(crate) fn owns_policy_state(self) -> bool {
+        matches!(self, Self::Owned | Self::Disabled)
+    }
+
+    pub(crate) fn can_install_mcp_dependencies(self) -> bool {
+        matches!(self, Self::Owned)
+    }
 }

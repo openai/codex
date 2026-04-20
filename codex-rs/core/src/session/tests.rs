@@ -39,6 +39,7 @@ use tracing::Span;
 use crate::RolloutRecorderParams;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
+use crate::state::McpConnectionManagerMode;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -2806,6 +2807,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
                 .await
                 .expect("create environment"),
         )),
+        McpStartupMode::Fresh,
         /*analytics_events_client*/ None,
     )
     .await;
@@ -2913,6 +2915,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             &config.permissions.approval_policy,
             &config.permissions.sandbox_policy,
         ))),
+        mcp_connection_manager_mode: McpConnectionManagerMode::Owned,
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -3128,6 +3131,7 @@ async fn make_session_with_config_and_rx(
                 .await
                 .expect("create environment"),
         )),
+        McpStartupMode::Fresh,
         /*analytics_events_client*/ None,
     )
     .await?;
@@ -3876,6 +3880,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             &config.permissions.approval_policy,
             &config.permissions.sandbox_policy,
         ))),
+        mcp_connection_manager_mode: McpConnectionManagerMode::Owned,
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
@@ -4074,6 +4079,65 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     );
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
+}
+
+#[tokio::test]
+async fn inherited_mcp_manager_sessions_skip_refresh() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    session.services.mcp_connection_manager_mode = McpConnectionManagerMode::Inherited;
+    let old_token = session.mcp_startup_cancellation_token().await;
+    assert!(!old_token.is_cancelled());
+
+    let mcp_oauth_credentials_store_mode =
+        serde_json::to_value(OAuthCredentialsStoreMode::Auto).expect("serialize store mode");
+    let refresh_config = McpServerRefreshConfig {
+        mcp_servers: json!({}),
+        mcp_oauth_credentials_store_mode,
+    };
+    {
+        let mut guard = session.pending_mcp_server_refresh_config.lock().await;
+        *guard = Some(refresh_config);
+    }
+
+    session
+        .refresh_mcp_servers_if_requested(&turn_context)
+        .await;
+
+    assert!(!old_token.is_cancelled());
+    assert!(
+        session
+            .pending_mcp_server_refresh_config
+            .lock()
+            .await
+            .is_none()
+    );
+    let new_token = session.mcp_startup_cancellation_token().await;
+    assert!(!new_token.is_cancelled());
+}
+
+#[tokio::test]
+async fn non_owning_mcp_manager_sessions_skip_immediate_refresh() {
+    for mode in [
+        McpConnectionManagerMode::Inherited,
+        McpConnectionManagerMode::Disabled,
+    ] {
+        let (mut session, turn_context) = make_session_and_context().await;
+        session.services.mcp_connection_manager_mode = mode;
+        let old_token = session.mcp_startup_cancellation_token().await;
+        assert!(!old_token.is_cancelled());
+
+        session
+            .refresh_mcp_servers_now(
+                &turn_context,
+                HashMap::new(),
+                OAuthCredentialsStoreMode::Auto,
+            )
+            .await;
+
+        assert!(!old_token.is_cancelled());
+        let new_token = session.mcp_startup_cancellation_token().await;
+        assert!(!new_token.is_cancelled());
+    }
 }
 
 #[tokio::test]

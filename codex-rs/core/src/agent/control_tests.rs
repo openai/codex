@@ -6,8 +6,10 @@ use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
+use crate::state::McpConnectionManagerMode;
 use assert_matches::assert_matches;
 use codex_features::Feature;
+use codex_features::SubagentMcpMode;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
@@ -590,6 +592,156 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
+}
+
+#[tokio::test]
+async fn subagent_mcp_mode_does_not_affect_root_thread_startup() {
+    let harness = AgentControlHarness::new().await;
+    let mut config = harness.config.clone();
+    config.multi_agent_v2.subagent_mcp_mode = SubagentMcpMode::Disabled;
+
+    let thread_id = harness
+        .control
+        .spawn_agent(
+            config,
+            text_input("root task"),
+            /*session_source*/ None,
+        )
+        .await
+        .expect("spawn_agent should succeed");
+    let thread = harness
+        .manager
+        .get_thread(thread_id)
+        .await
+        .expect("thread should be registered");
+
+    assert_eq!(
+        thread.codex.session.services.mcp_connection_manager_mode,
+        McpConnectionManagerMode::Owned
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_can_inherit_parent_mcp_connection_manager() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let mut config = harness.config.clone();
+    config.multi_agent_v2.subagent_mcp_mode = SubagentMcpMode::InheritParent;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            config,
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("spawn_agent should succeed");
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+
+    assert!(Arc::ptr_eq(
+        &parent_thread.codex.session.services.mcp_connection_manager,
+        &child_thread.codex.session.services.mcp_connection_manager,
+    ));
+    assert_eq!(
+        parent_thread
+            .codex
+            .session
+            .services
+            .mcp_connection_manager_mode,
+        McpConnectionManagerMode::Owned
+    );
+    assert_eq!(
+        child_thread
+            .codex
+            .session
+            .services
+            .mcp_connection_manager_mode,
+        McpConnectionManagerMode::Inherited
+    );
+}
+
+#[tokio::test]
+async fn spawn_agent_disabled_mcp_mode_does_not_inherit_parent_manager() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let mut config = harness.config.clone();
+    config.multi_agent_v2.subagent_mcp_mode = SubagentMcpMode::Disabled;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            config,
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("spawn_agent should succeed");
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+
+    assert!(!Arc::ptr_eq(
+        &parent_thread.codex.session.services.mcp_connection_manager,
+        &child_thread.codex.session.services.mcp_connection_manager,
+    ));
+    assert_eq!(
+        child_thread
+            .codex
+            .session
+            .services
+            .mcp_connection_manager_mode,
+        McpConnectionManagerMode::Disabled
+    );
+}
+
+#[tokio::test]
+async fn parentless_subagent_source_disables_mcp_when_inherit_parent_is_requested() {
+    let harness = AgentControlHarness::new().await;
+    let mut config = harness.config.clone();
+    config.multi_agent_v2.subagent_mcp_mode = SubagentMcpMode::InheritParent;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            config,
+            text_input("memory consolidation task"),
+            Some(SessionSource::SubAgent(SubAgentSource::MemoryConsolidation)),
+        )
+        .await
+        .expect("spawn_agent should succeed");
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+
+    assert_eq!(
+        child_thread
+            .codex
+            .session
+            .services
+            .mcp_connection_manager_mode,
+        McpConnectionManagerMode::Disabled
+    );
 }
 
 #[tokio::test]

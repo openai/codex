@@ -227,6 +227,13 @@ impl Session {
         let Some(refresh_config) = refresh_config else {
             return;
         };
+        if !self.services.mcp_connection_manager_mode.allows_refresh() {
+            debug!(
+                mode = ?self.services.mcp_connection_manager_mode,
+                "skipping MCP server refresh for non-owning session"
+            );
+            return;
+        }
 
         let McpServerRefreshConfig {
             mcp_servers,
@@ -261,6 +268,13 @@ impl Session {
         mcp_servers: HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
     ) {
+        if !self.services.mcp_connection_manager_mode.allows_refresh() {
+            debug!(
+                mode = ?self.services.mcp_connection_manager_mode,
+                "skipping immediate MCP server refresh for non-owning session"
+            );
+            return;
+        }
         self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode)
             .await;
     }

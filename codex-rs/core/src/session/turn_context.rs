@@ -513,6 +513,10 @@ impl Session {
         final_output_json_schema: Option<Option<Value>>,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
+        if self
+            .services
+            .mcp_connection_manager_mode
+            .owns_policy_state()
         {
             let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);

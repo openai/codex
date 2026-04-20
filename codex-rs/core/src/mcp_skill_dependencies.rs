@@ -13,6 +13,7 @@ use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::perform_oauth_login;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 use tracing::warn;
 
 use crate::SkillMetadata;
@@ -35,6 +36,18 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
     cancellation_token: &CancellationToken,
     mentioned_skills: &[SkillMetadata],
 ) {
+    if !sess
+        .services
+        .mcp_connection_manager_mode
+        .can_install_mcp_dependencies()
+    {
+        debug!(
+            mode = ?sess.services.mcp_connection_manager_mode,
+            "skipping skill MCP dependency prompt for non-owning session"
+        );
+        return;
+    }
+
     let originator_value = originator().value;
     if !is_first_party_originator(originator_value.as_str()) {
         // Only support first-party clients for now.
@@ -78,6 +91,18 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     config: &crate::config::Config,
     mentioned_skills: &[SkillMetadata],
 ) {
+    if !sess
+        .services
+        .mcp_connection_manager_mode
+        .can_install_mcp_dependencies()
+    {
+        debug!(
+            mode = ?sess.services.mcp_connection_manager_mode,
+            "skipping skill MCP dependency install for non-owning session"
+        );
+        return;
+    }
+
     if mentioned_skills.is_empty()
         || !config
             .features
@@ -467,4 +492,67 @@ fn collect_missing_mcp_dependencies(
     }
 
     missing
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skills::model::SkillDependencies;
+    use crate::state::McpConnectionManagerMode;
+    use codex_protocol::protocol::SkillScope;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
+
+    fn skill_with_mcp_dependency() -> SkillMetadata {
+        SkillMetadata {
+            name: "needs-mcp".to_string(),
+            description: "test skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: Some(SkillDependencies {
+                tools: vec![SkillToolDependency {
+                    r#type: "mcp".to_string(),
+                    value: "dep-server".to_string(),
+                    description: None,
+                    transport: Some("streamable_http".to_string()),
+                    command: None,
+                    url: Some("https://example.invalid/mcp".to_string()),
+                }],
+            }),
+            policy: None,
+            path_to_skills_md: test_path_buf("/tmp/needs-mcp/SKILL.md").abs(),
+            scope: SkillScope::User,
+        }
+    }
+
+    #[tokio::test]
+    async fn non_owning_sessions_skip_skill_mcp_dependency_install() {
+        for mode in [
+            McpConnectionManagerMode::Inherited,
+            McpConnectionManagerMode::Disabled,
+        ] {
+            let (mut session, turn_context) =
+                crate::session::tests::make_session_and_context().await;
+            session.services.mcp_connection_manager_mode = mode;
+            std::fs::create_dir_all(&turn_context.config.codex_home)
+                .expect("create temp codex home");
+            let config_path = turn_context.config.codex_home.join("config.toml");
+            assert!(!config_path.exists());
+            let old_token = session.mcp_startup_cancellation_token().await;
+
+            maybe_install_mcp_dependencies(
+                &session,
+                &turn_context,
+                turn_context.config.as_ref(),
+                &[skill_with_mcp_dependency()],
+            )
+            .await;
+
+            assert!(
+                !config_path.exists(),
+                "non-owning sessions must not write global MCP config in {mode:?} mode"
+            );
+            assert!(!old_token.is_cancelled());
+        }
+    }
 }

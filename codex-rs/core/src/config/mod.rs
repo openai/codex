@@ -56,6 +56,7 @@ use codex_features::FeatureToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_features::MultiAgentV2ConfigToml;
+use codex_features::SubagentMcpMode;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_mcp::McpConfig;
@@ -602,6 +603,7 @@ pub struct MultiAgentV2Config {
     pub usage_hint_enabled: bool,
     pub usage_hint_text: Option<String>,
     pub hide_spawn_agent_metadata: bool,
+    pub subagent_mcp_mode: SubagentMcpMode,
 }
 
 impl Default for MultiAgentV2Config {
@@ -610,6 +612,7 @@ impl Default for MultiAgentV2Config {
             usage_hint_enabled: true,
             usage_hint_text: None,
             hide_spawn_agent_metadata: false,
+            subagent_mcp_mode: SubagentMcpMode::Fresh,
         }
     }
 }
@@ -1399,11 +1402,16 @@ fn resolve_multi_agent_v2_config(
         .and_then(|config| config.hide_spawn_agent_metadata)
         .or_else(|| base.and_then(|config| config.hide_spawn_agent_metadata))
         .unwrap_or(default.hide_spawn_agent_metadata);
+    let subagent_mcp_mode = profile
+        .and_then(|config| config.subagent_mcp_mode)
+        .or_else(|| base.and_then(|config| config.subagent_mcp_mode))
+        .unwrap_or(default.subagent_mcp_mode);
 
     MultiAgentV2Config {
         usage_hint_enabled,
         usage_hint_text,
         hide_spawn_agent_metadata,
+        subagent_mcp_mode,
     }
 }
 

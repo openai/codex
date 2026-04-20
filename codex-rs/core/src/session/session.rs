@@ -1,4 +1,5 @@
 use super::*;
+use crate::state::McpConnectionManagerMode;
 
 /// Context for an initialized model agent
 ///
@@ -223,6 +224,7 @@ impl Session {
         skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
         environment: Option<Arc<Environment>>,
+        mcp_startup_mode: McpStartupMode,
         analytics_events_client: Option<AnalyticsEventsClient>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -626,10 +628,20 @@ impl Session {
             // before any MCP-related events. It is reasonable to consider
             // changing this to use Option or OnceCell, though the current
             // setup is straightforward enough and performs well.
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
-                &config.permissions.approval_policy,
-                &config.permissions.sandbox_policy,
-            ))),
+            mcp_connection_manager: match &mcp_startup_mode {
+                McpStartupMode::Inherit(manager) => Arc::clone(manager),
+                McpStartupMode::Fresh | McpStartupMode::Disabled => {
+                    Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+                        &config.permissions.approval_policy,
+                        &config.permissions.sandbox_policy,
+                    )))
+                }
+            },
+            mcp_connection_manager_mode: match &mcp_startup_mode {
+                McpStartupMode::Fresh => McpConnectionManagerMode::Owned,
+                McpStartupMode::Inherit(_) => McpConnectionManagerMode::Inherited,
+                McpStartupMode::Disabled => McpConnectionManagerMode::Disabled,
+            },
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
@@ -756,43 +768,46 @@ impl Session {
         required_mcp_servers.sort();
         let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
         let required_mcp_server_count = required_mcp_servers.len();
-        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
-        {
-            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-            cancel_guard.cancel();
-            *cancel_guard = CancellationToken::new();
-        }
-        let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            auth_statuses.clone(),
-            &session_configuration.approval_policy,
-            INITIAL_SUBMIT_ID.to_owned(),
-            tx_event.clone(),
-            session_configuration.sandbox_policy.get().clone(),
-            config.codex_home.to_path_buf(),
-            codex_apps_tools_cache_key(auth),
-            tool_plugin_provenance,
-        )
-        .instrument(info_span!(
-            "session_init.mcp_manager_init",
-            otel.name = "session_init.mcp_manager_init",
-            session_init.enabled_mcp_server_count = enabled_mcp_server_count,
-            session_init.required_mcp_server_count = required_mcp_server_count,
-        ))
-        .await;
-        {
-            let mut manager_guard = sess.services.mcp_connection_manager.write().await;
-            *manager_guard = mcp_connection_manager;
-        }
-        {
-            let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
-            if cancel_guard.is_cancelled() {
-                cancel_token.cancel();
+        if matches!(mcp_startup_mode, McpStartupMode::Fresh) {
+            let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref()).await;
+            {
+                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+                cancel_guard.cancel();
+                *cancel_guard = CancellationToken::new();
             }
-            *cancel_guard = cancel_token;
+            let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+                &mcp_servers,
+                config.mcp_oauth_credentials_store_mode,
+                auth_statuses.clone(),
+                &session_configuration.approval_policy,
+                INITIAL_SUBMIT_ID.to_owned(),
+                tx_event.clone(),
+                session_configuration.sandbox_policy.get().clone(),
+                config.codex_home.to_path_buf(),
+                codex_apps_tools_cache_key(auth),
+                tool_plugin_provenance,
+            )
+            .instrument(info_span!(
+                "session_init.mcp_manager_init",
+                otel.name = "session_init.mcp_manager_init",
+                session_init.enabled_mcp_server_count = enabled_mcp_server_count,
+                session_init.required_mcp_server_count = required_mcp_server_count,
+            ))
+            .await;
+            {
+                let mut manager_guard = sess.services.mcp_connection_manager.write().await;
+                *manager_guard = mcp_connection_manager;
+            }
+            {
+                let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
+                if cancel_guard.is_cancelled() {
+                    cancel_token.cancel();
+                }
+                *cancel_guard = cancel_token;
+            }
         }
-        if !required_mcp_servers.is_empty() {
+        if !required_mcp_servers.is_empty() && !matches!(mcp_startup_mode, McpStartupMode::Disabled)
+        {
             let failures = sess
                 .services
                 .mcp_connection_manager
