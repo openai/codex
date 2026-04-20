@@ -42,7 +42,6 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
-use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
 use crate::legacy_core::lookup_message_history_entry;
 use crate::legacy_core::plugins::PluginsManager;
 #[cfg(target_os = "windows")]
@@ -110,6 +109,7 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_exec_server::EnvironmentManager;
@@ -9665,6 +9665,7 @@ guardian_approval = true
             file_system: Some(AdditionalFileSystemPermissions {
                 read: Some(vec![test_absolute_path("/tmp/read-only")]),
                 write: Some(vec![test_absolute_path("/tmp/write")]),
+                entries: None,
             }),
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
@@ -9697,10 +9698,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![test_absolute_path("/tmp/read-only")]),
+                    Some(vec![test_absolute_path("/tmp/write")]),
+                )),
             })
         );
         assert_eq!(
@@ -9772,6 +9773,7 @@ guardian_approval = true
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![test_absolute_path("/tmp/read-only")]),
                         write: Some(vec![test_absolute_path("/tmp/write")]),
+                        entries: None,
                     }),
                 },
             },
@@ -9793,10 +9795,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![test_absolute_path("/tmp/read-only")]),
+                    Some(vec![test_absolute_path("/tmp/write")]),
+                )),
             }
         );
     }

@@ -173,7 +173,11 @@ impl Session {
             return Ok(Some(agent_task));
         }
 
-        let _guard = self.agent_task_registration_lock.lock().await;
+        let _guard = self
+            .agent_task_registration_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("agent task registration semaphore closed"))?;
         if let Some(agent_task) = self.cached_agent_task_for_current_identity().await {
             return Ok(Some(agent_task));
         }

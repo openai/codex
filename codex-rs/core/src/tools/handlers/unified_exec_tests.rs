@@ -188,10 +188,10 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
     assert_eq!(
         args.additional_permissions,
         Some(PermissionProfile {
-            file_system: Some(FileSystemPermissions {
-                read: None,
-                write: Some(vec![expected_write.abs()]),
-            }),
+            file_system: Some(FileSystemPermissions::from_read_write_roots(
+                /*read*/ None,
+                Some(vec![expected_write.abs()]),
+            )),
             ..Default::default()
         })
     );
