@@ -570,11 +570,12 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
 fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
     let content = "prefix ".repeat(200) + &" suffix".repeat(200);
 
-    let truncated = guardian_truncate_text(&content, /*token_cap*/ 20);
+    let (truncated, was_truncated) = guardian_truncate_text(&content, /*token_cap*/ 20);
 
     assert!(truncated.starts_with("prefix"));
     assert!(truncated.contains("<truncated omitted_approx_tokens=\""));
     assert!(truncated.ends_with("suffix"));
+    assert!(was_truncated);
 }
 
 #[test]
@@ -587,11 +588,29 @@ fn format_guardian_action_pretty_truncates_large_string_fields() -> serde_json::
         patch: patch.clone(),
     };
 
-    let rendered = format_guardian_action_pretty(&action)?;
+    let rendered = format_guardian_action_pretty_with_truncation(&action)?;
 
-    assert!(rendered.contains("\"tool\": \"apply_patch\""));
-    assert!(rendered.contains("<truncated omitted_approx_tokens="));
-    assert!(rendered.len() < patch.len());
+    assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
+    assert!(rendered.text.contains("<truncated omitted_approx_tokens="));
+    assert!(rendered.text.len() < patch.len());
+    assert!(rendered.truncated);
+    Ok(())
+}
+
+#[test]
+fn format_guardian_action_pretty_reports_no_truncation_for_small_payload() -> serde_json::Result<()>
+{
+    let action = GuardianApprovalRequest::ApplyPatch {
+        id: "patch-1".to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+        files: Vec::new(),
+        patch: "line\n".to_string(),
+    };
+
+    let rendered = format_guardian_action_pretty_with_truncation(&action)?;
+
+    assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
+    assert!(!rendered.truncated);
     Ok(())
 }
 
@@ -922,14 +941,44 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     .await;
     let GuardianReviewSessionResult {
         outcome: GuardianReviewOutcome::Completed(assessment),
-        ..
+        metadata,
     } = outcome
     else {
         panic!("expected guardian assessment");
     };
+    let metadata = metadata.expect("guardian session metadata");
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
-
+    assert_ne!(
+        metadata.guardian_thread_id,
+        session.conversation_id.to_string()
+    );
+    ThreadId::from_string(&metadata.guardian_thread_id)
+        .expect("guardian thread id should be a valid UUID");
+    assert!(matches!(
+        metadata.guardian_session_kind,
+        codex_analytics::GuardianReviewSessionKind::TrunkNew
+    ));
     let request = request_log.single_request();
+    let request_body = request.body_json();
+    let request_model = request_body
+        .get("model")
+        .and_then(|value| value.as_str())
+        .expect("guardian request should include a model");
+    let request_reasoning_effort = request_body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|value| value.as_str());
+    assert_eq!(metadata.guardian_model.as_str(), request_model);
+    assert_eq!(
+        metadata.guardian_reasoning_effort.as_deref(),
+        request_reasoning_effort
+    );
+    assert!(!metadata.had_prior_review_context);
+    assert!(
+        metadata.time_to_first_token_ms.is_some(),
+        "guardian review metadata should capture TTFT when the nested turn completes"
+    );
+
     let mut settings = Settings::clone_current();
     settings.set_snapshot_path("snapshots");
     settings.set_prepend_module_to_snapshot(false);
@@ -1135,28 +1184,60 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 
     let GuardianReviewSessionResult {
         outcome: GuardianReviewOutcome::Completed(first_assessment),
-        ..
+        metadata: first_metadata,
     } = first_outcome
     else {
         panic!("expected first guardian assessment");
     };
+    let first_metadata = first_metadata.expect("first guardian session metadata");
     let GuardianReviewSessionResult {
         outcome: GuardianReviewOutcome::Completed(second_assessment),
-        ..
+        metadata: second_metadata,
     } = second_outcome
     else {
         panic!("expected second guardian assessment");
     };
+    let second_metadata = second_metadata.expect("second guardian session metadata");
     let GuardianReviewSessionResult {
         outcome: GuardianReviewOutcome::Completed(third_assessment),
-        ..
+        metadata: third_metadata,
     } = third_outcome
     else {
         panic!("expected third guardian assessment");
     };
+    let third_metadata = third_metadata.expect("third guardian session metadata");
     assert_eq!(first_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(second_assessment.outcome, GuardianAssessmentOutcome::Allow);
     assert_eq!(third_assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert!(matches!(
+        first_metadata.guardian_session_kind,
+        codex_analytics::GuardianReviewSessionKind::TrunkNew
+    ));
+    assert!(matches!(
+        second_metadata.guardian_session_kind,
+        codex_analytics::GuardianReviewSessionKind::TrunkReused
+    ));
+    assert!(matches!(
+        third_metadata.guardian_session_kind,
+        codex_analytics::GuardianReviewSessionKind::TrunkReused
+    ));
+    ThreadId::from_string(&first_metadata.guardian_thread_id)
+        .expect("first guardian thread id should be a valid UUID");
+    ThreadId::from_string(&second_metadata.guardian_thread_id)
+        .expect("second guardian thread id should be a valid UUID");
+    ThreadId::from_string(&third_metadata.guardian_thread_id)
+        .expect("third guardian thread id should be a valid UUID");
+    assert!(!first_metadata.had_prior_review_context);
+    assert!(second_metadata.had_prior_review_context);
+    assert!(third_metadata.had_prior_review_context);
+    assert_eq!(
+        first_metadata.guardian_thread_id,
+        second_metadata.guardian_thread_id
+    );
+    assert_eq!(
+        second_metadata.guardian_thread_id,
+        third_metadata.guardian_thread_id
+    );
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 3);
