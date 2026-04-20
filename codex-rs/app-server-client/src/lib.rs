@@ -73,7 +73,6 @@ pub mod legacy_core {
     pub use codex_core::grant_read_root_non_elevated;
     pub use codex_core::lookup_message_history_entry;
     pub use codex_core::message_history_metadata;
-    pub use codex_core::path_utils;
     pub use codex_core::web_search_detail;
 
     pub mod config {
@@ -82,10 +81,6 @@ pub mod legacy_core {
         pub mod edit {
             pub use codex_core::config::edit::*;
         }
-    }
-
-    pub mod config_loader {
-        pub use codex_core::config_loader::*;
     }
 
     pub mod connectors {
