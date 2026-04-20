@@ -4468,7 +4468,6 @@ fn seed_stored_identity(
         agent_runtime_id: stored_identity.agent_runtime_id.clone(),
         agent_private_key: stored_identity.private_key_pkcs8_base64.clone(),
         registered_at: stored_identity.registered_at.clone(),
-        background_task_id: None,
     })
     .expect("store identity");
 

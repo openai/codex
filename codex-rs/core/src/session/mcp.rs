@@ -190,20 +190,7 @@ impl Session {
             .mcp_manager
             .tool_plugin_provenance(config.as_ref())
             .await;
-        let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-            self.services
-                .auth_manager
-                .chatgpt_authorization_header_for_auth(auth)
-                .await
-        } else {
-            None
-        };
-        let mcp_servers = with_codex_apps_mcp_with_authorization_header(
-            mcp_servers,
-            auth.as_ref(),
-            &mcp_config,
-            background_authorization_header_value.as_deref(),
-        );
+        let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;

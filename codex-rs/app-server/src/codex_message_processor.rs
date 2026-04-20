@@ -286,9 +286,9 @@ use codex_login::run_login_server;
 use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
-use codex_mcp::collect_mcp_server_status_snapshot_with_detail_and_authorization_header;
+use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
 use codex_mcp::discover_supported_scopes;
-use codex_mcp::effective_mcp_servers_with_authorization_header;
+use codex_mcp::effective_mcp_servers;
 use codex_mcp::resolve_oauth_scopes;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
@@ -5655,8 +5655,7 @@ impl CodexMessageProcessor {
         let mcp_config = config
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
-        let auth_manager = Arc::clone(&self.auth_manager);
-        let auth = auth_manager.auth().await;
+        let auth = self.auth_manager.auth().await;
         let runtime_environment = match self.thread_manager.environment_manager().current().await {
             Ok(Some(environment)) => {
                 // Status listing has no turn cwd. This fallback is used only
@@ -5681,111 +5680,120 @@ impl CodexMessageProcessor {
         };
 
         tokio::spawn(async move {
-            let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
-                McpServerStatusDetail::Full => McpSnapshotDetail::Full,
-                McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
-            };
-
-            let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
-                auth_manager
-                    .chatgpt_authorization_header_for_auth(auth)
-                    .await
-            } else {
-                None
-            };
-            let snapshot = collect_mcp_server_status_snapshot_with_detail_and_authorization_header(
-                &mcp_config,
-                auth.as_ref(),
-                request.request_id.to_string(),
+            Self::list_mcp_server_status_task(
+                outgoing,
+                request,
+                params,
+                config,
+                mcp_config,
+                auth,
                 runtime_environment,
-                detail,
-                background_authorization_header_value.as_deref(),
             )
             .await;
-
-            let effective_servers = effective_mcp_servers_with_authorization_header(
-                &mcp_config,
-                auth.as_ref(),
-                background_authorization_header_value.as_deref(),
-            );
-            let McpServerStatusSnapshot {
-                tools_by_server,
-                resources,
-                resource_templates,
-                auth_statuses,
-            } = snapshot;
-
-            let mut server_names: Vec<String> = config
-                .mcp_servers
-                .keys()
-                .cloned()
-                // Include built-in/plugin MCP servers that are present in the
-                // effective runtime config even when they are not user-declared in
-                // `config.mcp_servers`.
-                .chain(effective_servers.keys().cloned())
-                .chain(auth_statuses.keys().cloned())
-                .chain(resources.keys().cloned())
-                .chain(resource_templates.keys().cloned())
-                .collect();
-            server_names.sort();
-            server_names.dedup();
-
-            let total = server_names.len();
-            let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
-            let effective_limit = limit.min(total);
-            let start = match params.cursor {
-                Some(cursor) => match cursor.parse::<usize>() {
-                    Ok(idx) => idx,
-                    Err(_) => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!("invalid cursor: {cursor}"),
-                            data: None,
-                        };
-                        outgoing.send_error(request, error).await;
-                        return;
-                    }
-                },
-                None => 0,
-            };
-
-            if start > total {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("cursor {start} exceeds total MCP servers {total}"),
-                    data: None,
-                };
-                outgoing.send_error(request, error).await;
-                return;
-            }
-
-            let end = start.saturating_add(effective_limit).min(total);
-
-            let data: Vec<McpServerStatus> = server_names[start..end]
-                .iter()
-                .map(|name| McpServerStatus {
-                    name: name.clone(),
-                    tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                    resources: resources.get(name).cloned().unwrap_or_default(),
-                    resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
-                    auth_status: auth_statuses
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(CoreMcpAuthStatus::Unsupported)
-                        .into(),
-                })
-                .collect();
-
-            let next_cursor = if end < total {
-                Some(end.to_string())
-            } else {
-                None
-            };
-
-            let response = ListMcpServerStatusResponse { data, next_cursor };
-
-            outgoing.send_response(request, response).await;
         });
+    }
+
+    async fn list_mcp_server_status_task(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_id: ConnectionRequestId,
+        params: ListMcpServerStatusParams,
+        config: Config,
+        mcp_config: codex_mcp::McpConfig,
+        auth: Option<CodexAuth>,
+        runtime_environment: McpRuntimeEnvironment,
+    ) {
+        let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
+            McpServerStatusDetail::Full => McpSnapshotDetail::Full,
+            McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
+        };
+
+        let snapshot = collect_mcp_server_status_snapshot_with_detail(
+            &mcp_config,
+            auth.as_ref(),
+            request_id.request_id.to_string(),
+            runtime_environment,
+            detail,
+        )
+        .await;
+
+        let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
+        let McpServerStatusSnapshot {
+            tools_by_server,
+            resources,
+            resource_templates,
+            auth_statuses,
+        } = snapshot;
+
+        let mut server_names: Vec<String> = config
+            .mcp_servers
+            .keys()
+            .cloned()
+            // Include built-in/plugin MCP servers that are present in the
+            // effective runtime config even when they are not user-declared in
+            // `config.mcp_servers`.
+            .chain(effective_servers.keys().cloned())
+            .chain(auth_statuses.keys().cloned())
+            .chain(resources.keys().cloned())
+            .chain(resource_templates.keys().cloned())
+            .collect();
+        server_names.sort();
+        server_names.dedup();
+
+        let total = server_names.len();
+        let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = limit.min(total);
+        let start = match params.cursor {
+            Some(cursor) => match cursor.parse::<usize>() {
+                Ok(idx) => idx,
+                Err(_) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid cursor: {cursor}"),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            },
+            None => 0,
+        };
+
+        if start > total {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("cursor {start} exceeds total MCP servers {total}"),
+                data: None,
+            };
+            outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+
+        let data: Vec<McpServerStatus> = server_names[start..end]
+            .iter()
+            .map(|name| McpServerStatus {
+                name: name.clone(),
+                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                resources: resources.get(name).cloned().unwrap_or_default(),
+                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
+                auth_status: auth_statuses
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                    .into(),
+            })
+            .collect();
+
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
+
+        let response = ListMcpServerStatusResponse { data, next_cursor };
+
+        outgoing.send_response(request_id, response).await;
     }
 
     async fn read_mcp_resource(
