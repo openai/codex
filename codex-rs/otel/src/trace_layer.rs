@@ -7,6 +7,7 @@
 use crate::OtelProvider;
 use opentelemetry_sdk::trace::Tracer;
 use std::any::TypeId;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -21,6 +22,10 @@ use tracing_subscriber::registry::LookupSpan;
 
 type TraceLayer<S> = tracing_opentelemetry::OpenTelemetryLayer<S, Tracer>;
 type ReplaceProviderFn = dyn Fn(Option<&OtelProvider>) + Send + Sync;
+
+thread_local! {
+    static ENTERED_SPANS: RefCell<Vec<Id>> = const { RefCell::new(Vec::new()) };
+}
 
 #[derive(Clone, Default)]
 pub struct OtelTraceLayer<S> {
@@ -108,7 +113,6 @@ where
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 state.current = None;
                 state.retired.clear();
-                state.active_spans.clear();
             }),
         };
         (layer, handle)
@@ -204,16 +208,24 @@ where
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
         if let Some(layer) = self.layer_for_span(id) {
             layer.on_enter(id, ctx);
+            ENTERED_SPANS.with(|spans| spans.borrow_mut().push(id.clone()));
         }
     }
 
     fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
         if let Some(layer) = self.layer_for_span(id) {
             layer.on_exit(id, ctx);
+            ENTERED_SPANS.with(|spans| {
+                let mut spans = spans.borrow_mut();
+                if let Some(position) = spans.iter().rposition(|entered_id| entered_id == id) {
+                    spans.remove(position);
+                }
+            });
         }
     }
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
+        ENTERED_SPANS.with(|spans| spans.borrow_mut().retain(|entered_id| entered_id != &id));
         if let Some(layer) = self.remove_span_layer(&id) {
             layer.on_close(id, ctx);
         }
@@ -230,6 +242,13 @@ where
                 state.active_spans.insert(new.clone(), layer);
             }
         }
+        ENTERED_SPANS.with(|spans| {
+            for entered_id in spans.borrow_mut().iter_mut() {
+                if entered_id == old {
+                    *entered_id = new.clone();
+                }
+            }
+        });
     }
 
     unsafe fn downcast_raw(&self, id: TypeId) -> Option<*const ()> {
@@ -237,11 +256,34 @@ where
             .state
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let layer = state
-            .current
-            .clone()
-            .or_else(|| state.active_spans.values().next().cloned())
-            .or_else(|| state.retired.last().cloned())?;
+        let entered_layer = ENTERED_SPANS.with(|spans| {
+            spans
+                .borrow()
+                .iter()
+                .rev()
+                .find_map(|id| state.active_spans.get(id).cloned())
+        });
+        let layer = entered_layer.or_else(|| {
+            let mut active_layers = Vec::new();
+            for layer in state.active_spans.values() {
+                if !active_layers
+                    .iter()
+                    .any(|active| Arc::ptr_eq(active, layer))
+                {
+                    active_layers.push(Arc::clone(layer));
+                }
+            }
+            if active_layers.len() == 1 {
+                active_layers.pop()
+            } else {
+                None
+            }
+        })?;
+
+        // SAFETY: the selected layer is owned by `active_spans`, and tracing
+        // keeps that span alive while `OpenTelemetrySpanExt` performs its
+        // downcast. The entered span stack is maintained by this layer rather
+        // than `Span::current()` so downcasting never re-enters tracing.
         unsafe { Layer::<S>::downcast_raw(layer.as_ref(), id) }
     }
 }
@@ -285,6 +327,7 @@ mod tests {
     use super::*;
     use crate::OtelProvider;
     use crate::current_span_trace_id;
+    use crate::span_w3c_trace_context;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::error::OTelSdkResult;
     use opentelemetry_sdk::trace::SdkTracerProvider;
@@ -416,6 +459,50 @@ mod tests {
         let after_disable = current_span_trace_id().expect("trace id after disable");
 
         assert_eq!(after_disable, before_disable);
+    }
+
+    #[test]
+    fn downcast_uses_original_layer_after_provider_replacement() {
+        let (first_provider, first_spans) = provider_with_tracer("first");
+        let (second_provider, second_spans) = provider_with_tracer("second");
+        let (layer, handle) = OtelTraceLayer::from_provider(Some(&first_provider));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let span = trace_span!("old_span");
+        handle.replace_provider(Some(&second_provider));
+        let trace = span_w3c_trace_context(&span).expect("trace context after replacement");
+        drop(span);
+
+        assert!(trace.traceparent.is_some());
+        assert_eq!(
+            first_spans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
+        assert_eq!(
+            second_spans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn downcast_keeps_active_span_layer_after_shutdown() {
+        let (provider, _spans) = provider_with_tracer("first");
+        let (layer, handle) = OtelTraceLayer::from_provider(Some(&provider));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let span = trace_span!("old_span");
+        handle.shutdown();
+        let trace = span_w3c_trace_context(&span).expect("trace context after shutdown");
+
+        assert!(trace.traceparent.is_some());
     }
 
     #[test]
