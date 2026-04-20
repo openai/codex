@@ -199,10 +199,7 @@ impl ToolHandler for UnifiedExecHandler {
         let response = match tool_name.name.as_str() {
             "exec_command" => {
                 let selector: ToolEnvironmentArgs = parse_arguments(&arguments)?;
-                let requested_environment_id = if context
-                    .turn
-                    .features
-                    .enabled(Feature::MultiEnvironmentTools)
+                let requested_environment_id = if context.turn.tools_config.multi_environment_tools
                 {
                     selector.environment_id.as_deref()
                 } else {
@@ -243,8 +240,7 @@ impl ToolHandler for UnifiedExecHandler {
                     turn.tools_config.allow_login_shell,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
-                let command_for_display =
-                    codex_shell_command::parse_command::shlex_join(&command);
+                let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
                 let ExecCommandArgs {
                     workdir,

@@ -10,6 +10,14 @@ pub(super) fn image_generation_tool_auth_allowed(auth_manager: Option<&AuthManag
     )
 }
 
+fn multi_environment_tools_enabled(
+    features: &codex_features::Features,
+    environments: Option<&[TurnEnvironment]>,
+) -> bool {
+    features.enabled(codex_features::Feature::MultiEnvironmentTools)
+        && environments.is_some_and(|environments| !environments.is_empty())
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
@@ -155,6 +163,8 @@ impl TurnContext {
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
+        let multi_environment_tools =
+            multi_environment_tools_enabled(&features, self.environments.as_deref());
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             available_models: &models_manager
@@ -173,6 +183,7 @@ impl TurnContext {
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_has_environment(self.tools_config.has_environment)
+        .with_multi_environment_tools(multi_environment_tools)
         .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
@@ -279,13 +290,6 @@ impl TurnContext {
         )
     }
 
-    pub(crate) fn file_system_sandbox_context(
-        &self,
-        additional_permissions: Option<PermissionProfile>,
-    ) -> FileSystemSandboxContext {
-        self.file_system_sandbox_context_for_cwd(&self.cwd, additional_permissions)
-    }
-
     pub(crate) fn file_system_sandbox_context_for_cwd(
         &self,
         cwd: &AbsolutePathBuf,
@@ -330,6 +334,15 @@ impl TurnContext {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
             cwd: self.cwd.to_path_buf(),
+            environments: self.environments.as_ref().map(|environments| {
+                environments
+                    .iter()
+                    .map(|environment| TurnEnvironmentSelection {
+                        environment_id: environment.environment_id.clone(),
+                        cwd: environment.cwd.clone(),
+                    })
+                    .collect()
+            }),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
@@ -449,6 +462,8 @@ impl Session {
         let session_source = session_configuration.session_source.clone();
         let image_generation_tool_auth_allowed =
             image_generation_tool_auth_allowed(auth_manager.as_deref());
+        let multi_environment_tools =
+            multi_environment_tools_enabled(&per_turn_config.features, environments.as_deref());
         let auth_manager_for_context = auth_manager.clone();
         let provider_for_context = create_model_provider(provider, auth_manager);
         let session_telemetry_for_context = session_telemetry;
@@ -470,6 +485,7 @@ impl Session {
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_has_environment(environment.is_some())
+        .with_multi_environment_tools(multi_environment_tools)
         .with_spawn_agent_usage_hint(per_turn_config.multi_agent_v2.usage_hint_enabled)
         .with_spawn_agent_usage_hint_text(per_turn_config.multi_agent_v2.usage_hint_text.clone())
         .with_hide_spawn_agent_metadata(per_turn_config.multi_agent_v2.hide_spawn_agent_metadata)

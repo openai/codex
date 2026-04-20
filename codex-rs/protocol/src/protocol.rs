@@ -103,7 +103,7 @@ pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: AbsolutePathBuf,
@@ -2932,6 +2932,8 @@ pub struct TurnContextItem {
     pub trace_id: Option<String>,
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environments: Option<Vec<TurnEnvironmentSelection>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
@@ -5082,8 +5084,54 @@ mod tests {
         }))?;
 
         assert_eq!(item.trace_id, None);
+        assert_eq!(item.environments, None);
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
+        Ok(())
+    }
+
+    #[test]
+    fn turn_context_item_serializes_environments_when_present() -> Result<()> {
+        let item = TurnContextItem {
+            turn_id: None,
+            trace_id: None,
+            cwd: test_path_buf("/tmp/primary"),
+            environments: Some(vec![
+                TurnEnvironmentSelection {
+                    environment_id: "remote".to_string(),
+                    cwd: test_path_buf("/tmp/primary").abs(),
+                },
+                TurnEnvironmentSelection {
+                    environment_id: "local".to_string(),
+                    cwd: test_path_buf("/tmp/local").abs(),
+                },
+            ]),
+            current_date: None,
+            timezone: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            network: None,
+            file_system_sandbox_policy: None,
+            model: "gpt-5".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            realtime_active: None,
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+
+        let value = serde_json::to_value(item)?;
+        assert_eq!(
+            value["environments"],
+            json!([
+                { "environment_id": "remote", "cwd": "/tmp/primary" },
+                { "environment_id": "local", "cwd": "/tmp/local" },
+            ])
+        );
         Ok(())
     }
 
@@ -5093,6 +5141,7 @@ mod tests {
             turn_id: None,
             trace_id: None,
             cwd: test_path_buf("/tmp"),
+            environments: None,
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,

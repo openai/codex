@@ -272,6 +272,11 @@ impl ToolsConfig {
         self
     }
 
+    pub fn with_multi_environment_tools(mut self, multi_environment_tools: bool) -> Self {
+        self.multi_environment_tools = multi_environment_tools;
+        self
+    }
+
     pub fn with_unified_exec_shell_mode(
         mut self,
         unified_exec_shell_mode: UnifiedExecShellMode,

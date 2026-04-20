@@ -1,3 +1,4 @@
+use crate::ApplyPatchToolOptions;
 use crate::CommandToolOptions;
 use crate::REQUEST_USER_INPUT_TOOL_NAME;
 use crate::ResponsesApiNamespace;
@@ -317,14 +318,18 @@ pub fn build_tool_registry_plan(
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
                 plan.push_spec(
-                    create_apply_patch_freeform_tool(),
+                    create_apply_patch_freeform_tool(ApplyPatchToolOptions {
+                        multi_environment_tools: config.multi_environment_tools,
+                    }),
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
             }
             ApplyPatchToolType::Function => {
                 plan.push_spec(
-                    create_apply_patch_json_tool(),
+                    create_apply_patch_json_tool(ApplyPatchToolOptions {
+                        multi_environment_tools: config.multi_environment_tools,
+                    }),
                     /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
@@ -384,6 +389,7 @@ pub fn build_tool_registry_plan(
         plan.push_spec(
             create_view_image_tool(ViewImageToolOptions {
                 can_request_original_image_detail: config.can_request_original_image_detail,
+                multi_environment_tools: config.multi_environment_tools,
             }),
             /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,

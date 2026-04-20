@@ -90,7 +90,9 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_write_stdin_tool(),
         create_update_plan_tool(),
         request_user_input_tool_spec(/*default_mode_request_user_input*/ false),
-        create_apply_patch_freeform_tool(),
+        create_apply_patch_freeform_tool(ApplyPatchToolOptions {
+            multi_environment_tools: false,
+        }),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
             filters: None,
@@ -101,6 +103,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_image_generation_tool("png"),
         create_view_image_tool(ViewImageToolOptions {
             can_request_original_image_detail: config.can_request_original_image_detail,
+            multi_environment_tools: false,
         }),
     ] {
         expected.insert(spec.name().to_string(), spec);
@@ -431,6 +434,37 @@ fn view_image_tool_includes_detail_with_original_detail_support() {
     );
     assert!(description.contains("only supported value is `original`"));
     assert!(description.contains("omit this field for default resized behavior"));
+}
+
+#[test]
+fn view_image_tool_includes_environment_id_when_multi_environment_tools_enabled() {
+    let mut model_info = model_info();
+    model_info.supports_image_detail_original = false;
+    let mut features = Features::with_defaults();
+    features.enable(Feature::MultiEnvironmentTools);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(
+        &tools_config,
+        /*mcp_tools*/ None,
+        /*deferred_mcp_tools*/ None,
+        &[],
+    );
+    let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+        panic!("view_image should be a function tool");
+    };
+    let (properties, _) = expect_object_schema(parameters);
+    assert!(properties.contains_key("environment_id"));
 }
 
 #[test]

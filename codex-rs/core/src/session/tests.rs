@@ -1733,10 +1733,15 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
 async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_model = "forked-rollout-model";
+    let previous_environments = vec![codex_protocol::protocol::TurnEnvironmentSelection {
+        environment_id: "local".to_string(),
+        cwd: test_path_buf("/tmp/forked-local").abs(),
+    }];
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         trace_id: turn_context.trace_id.clone(),
         cwd: turn_context.cwd.to_path_buf(),
+        environments: Some(previous_environments.clone()),
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
@@ -1797,6 +1802,15 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
             model: previous_model.to_string(),
             realtime_active: Some(turn_context.realtime_active),
         })
+    );
+    assert_eq!(
+        session
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .environment_selections,
+        Some(previous_environments)
     );
     assert_eq!(history.raw_items(), &[]);
     assert_eq!(
@@ -3974,6 +3988,14 @@ async fn turn_environment_selection_sets_primary_environment() {
             .resolve_path_for_environment(&primary_environment, Some("relative/path".to_string())),
         selected_cwd.join("relative/path")
     );
+
+    assert_eq!(
+        turn_context.to_turn_context_item().environments,
+        Some(vec![codex_protocol::protocol::TurnEnvironmentSelection {
+            environment_id: "local".to_string(),
+            cwd: selected_cwd,
+        }])
+    );
 }
 
 #[tokio::test]
@@ -4028,6 +4050,20 @@ async fn multiple_turn_environment_selections_use_first_as_primary_environment()
         .environment_for_tool(Some("local"))
         .expect("tool environment should resolve by id");
     assert_eq!(tool_environment.cwd, first_cwd);
+
+    assert_eq!(
+        turn_context.to_turn_context_item().environments,
+        Some(vec![
+            codex_protocol::protocol::TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: first_cwd,
+            },
+            codex_protocol::protocol::TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: second_cwd,
+            },
+        ])
+    );
 }
 
 #[tokio::test]
@@ -4094,6 +4130,58 @@ async fn primary_environment_falls_back_to_compatibility_projection() {
             .resolve_path_for_environment(&primary_environment, Some("relative/path".to_string())),
         turn_context.cwd.join("relative/path")
     );
+}
+
+#[tokio::test]
+async fn multi_environment_feature_without_selections_uses_single_environment_behavior() {
+    let (_session, turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| config.features.enable(Feature::MultiEnvironmentTools),
+    )
+    .await;
+
+    assert!(
+        turn_context
+            .features
+            .enabled(Feature::MultiEnvironmentTools)
+    );
+    assert!(turn_context.environments.is_none());
+    assert!(!turn_context.tools_config.multi_environment_tools);
+    assert_eq!(turn_context.to_turn_context_item().environments, None);
+
+    let primary_environment = turn_context
+        .primary_environment()
+        .expect("primary environment should resolve from compatibility fields");
+    assert_eq!(primary_environment.environment_id, None);
+    assert_eq!(primary_environment.cwd, turn_context.cwd);
+}
+
+#[tokio::test]
+async fn multi_environment_tools_enable_only_with_feature_and_selection() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| config.features.enable(Feature::MultiEnvironmentTools),
+    )
+    .await;
+    let selected_cwd =
+        AbsolutePathBuf::try_from(session.get_config().await.cwd.as_path().join("selected"))
+            .expect("absolute path");
+
+    let turn_context = session
+        .new_turn_with_sub_id(
+            "sub-1".to_string(),
+            SessionSettingsUpdate::default(),
+            Some(vec![codex_protocol::protocol::TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: selected_cwd,
+            }]),
+        )
+        .await
+        .expect("turn should start");
+
+    assert!(turn_context.tools_config.multi_environment_tools);
 }
 
 #[tokio::test]
