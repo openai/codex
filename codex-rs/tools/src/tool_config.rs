@@ -97,6 +97,7 @@ pub struct ToolsConfig {
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
+    pub multi_environment_tools: bool,
     pub code_mode_enabled: bool,
     pub code_mode_only_enabled: bool,
     pub js_repl_enabled: bool,
@@ -161,6 +162,7 @@ impl ToolsConfig {
             && supports_image_generation(model_info);
         let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
         let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
+        let multi_environment_tools = features.enabled(Feature::MultiEnvironmentTools);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
                 ShellCommandBackendConfig::ZshFork
@@ -218,6 +220,7 @@ impl ToolsConfig {
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
+            multi_environment_tools,
             code_mode_enabled: include_code_mode,
             code_mode_only_enabled: include_code_mode_only,
             js_repl_enabled: include_js_repl,

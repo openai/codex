@@ -753,6 +753,8 @@ impl UnifiedExecProcessManager {
             command: request.command.clone(),
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
+            environment_id: request.environment_id.clone(),
+            environment: Arc::clone(&request.environment),
             cwd,
             env,
             exec_server_env_config: Some(exec_server_env_config),

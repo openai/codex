@@ -181,6 +181,7 @@ impl AppCommand {
     ) -> Self {
         Self(Op::OverrideTurnContext {
             cwd,
+            environments: None,
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -314,6 +315,7 @@ impl AppCommand {
             },
             Op::OverrideTurnContext {
                 cwd,
+                environments: _,
                 approval_policy,
                 approvals_reviewer,
                 sandbox_policy,

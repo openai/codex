@@ -33,6 +33,24 @@ pub(crate) struct TurnEnvironment {
     pub(crate) cwd: AbsolutePathBuf,
 }
 
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct SelectedTurnEnvironment {
+    pub(crate) environment_id: Option<String>,
+    pub(crate) environment: Arc<Environment>,
+    pub(crate) cwd: AbsolutePathBuf,
+}
+
+impl TurnEnvironment {
+    fn selected(&self) -> SelectedTurnEnvironment {
+        SelectedTurnEnvironment {
+            environment_id: Some(self.environment_id.clone()),
+            environment: Arc::clone(&self.environment),
+            cwd: self.cwd.clone(),
+        }
+    }
+}
+
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub(crate) struct TurnContext {
@@ -216,14 +234,67 @@ impl TurnContext {
             .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn primary_environment(&self) -> Option<SelectedTurnEnvironment> {
+        self.environments
+            .as_ref()
+            .and_then(|environments| environments.first())
+            .map(TurnEnvironment::selected)
+            .or_else(|| {
+                self.environment
+                    .as_ref()
+                    .map(|environment| SelectedTurnEnvironment {
+                        environment_id: None,
+                        environment: Arc::clone(environment),
+                        cwd: self.cwd.clone(),
+                    })
+            })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn environment_for_tool(
+        &self,
+        environment_id: Option<&str>,
+    ) -> Option<SelectedTurnEnvironment> {
+        match environment_id {
+            Some(environment_id) => self
+                .environments
+                .as_ref()?
+                .iter()
+                .find(|environment| environment.environment_id == environment_id)
+                .map(TurnEnvironment::selected),
+            None => self.primary_environment(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn resolve_path_for_environment(
+        &self,
+        environment: &SelectedTurnEnvironment,
+        path: Option<String>,
+    ) -> AbsolutePathBuf {
+        path.as_ref().map_or_else(
+            || environment.cwd.clone(),
+            |path| environment.cwd.join(path),
+        )
+    }
+
     pub(crate) fn file_system_sandbox_context(
         &self,
         additional_permissions: Option<PermissionProfile>,
     ) -> FileSystemSandboxContext {
+        self.file_system_sandbox_context_for_cwd(&self.cwd, additional_permissions)
+    }
+
+    pub(crate) fn file_system_sandbox_context_for_cwd(
+        &self,
+        cwd: &AbsolutePathBuf,
+        additional_permissions: Option<PermissionProfile>,
+    ) -> FileSystemSandboxContext {
         FileSystemSandboxContext {
             sandbox_policy: self.sandbox_policy.get().clone(),
-            sandbox_policy_cwd: Some(self.cwd.clone()),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
+            sandbox_policy_cwd: Some(cwd.clone()),
+            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(cwd),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
                 .config
@@ -234,15 +305,16 @@ impl TurnContext {
         }
     }
 
-    fn non_legacy_file_system_sandbox_policy(&self) -> Option<FileSystemSandboxPolicy> {
+    fn non_legacy_file_system_sandbox_policy(
+        &self,
+        cwd: &AbsolutePathBuf,
+    ) -> Option<FileSystemSandboxPolicy> {
         // Omit the derived split filesystem policy when it is equivalent to
         // the legacy sandbox policy. This keeps turn-context payloads stable
         // while both fields exist; once callers consume only the split policy,
         // this comparison and the legacy projection should go away.
-        let legacy_file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-            self.sandbox_policy.get(),
-            &self.cwd,
-        );
+        let legacy_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(self.sandbox_policy.get(), cwd);
         (self.file_system_sandbox_policy != legacy_file_system_sandbox_policy)
             .then(|| self.file_system_sandbox_policy.clone())
     }
@@ -263,7 +335,7 @@ impl TurnContext {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
-            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(),
+            file_system_sandbox_policy: self.non_legacy_file_system_sandbox_policy(&self.cwd),
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),

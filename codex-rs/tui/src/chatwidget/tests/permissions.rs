@@ -629,6 +629,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         op,
         Op::OverrideTurnContext {
             cwd: None,
+            environments: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),

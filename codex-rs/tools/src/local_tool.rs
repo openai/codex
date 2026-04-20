@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 pub struct CommandToolOptions {
     pub allow_login_shell: bool,
     pub exec_permission_approvals_enabled: bool,
+    pub multi_environment_tools: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +61,14 @@ pub fn create_exec_command_tool(options: CommandToolOptions) -> ToolSpec {
             "login".to_string(),
             JsonSchema::boolean(Some(
                 "Whether to run the shell with -l/-i semantics. Defaults to true.".to_string(),
+            )),
+        );
+    }
+    if options.multi_environment_tools {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional selected environment id to run the command in; omit to use the primary environment.".to_string(),
             )),
         );
     }
