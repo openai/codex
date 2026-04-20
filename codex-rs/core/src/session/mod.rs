@@ -2793,6 +2793,14 @@ impl Session {
             .set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }
 
+    pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {
+        let turn_state = self.turn_state_for_sub_id(sub_id).await;
+        let Some(turn_state) = turn_state else {
+            return;
+        };
+        turn_state.lock().await.has_memory_citation = true;
+    }
+
     async fn turn_state_for_sub_id(
         &self,
         sub_id: &str,
