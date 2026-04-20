@@ -1380,6 +1380,70 @@ impl From<FileSystemSandboxEntry> for CoreFileSystemSandboxEntry {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PermissionProfileFileSystemPermissions {
+    pub entries: Vec<FileSystemSandboxEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub glob_scan_max_depth: Option<usize>,
+}
+
+impl From<CoreFileSystemPermissions> for PermissionProfileFileSystemPermissions {
+    fn from(value: CoreFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(FileSystemSandboxEntry::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
+
+impl From<PermissionProfileFileSystemPermissions> for CoreFileSystemPermissions {
+    fn from(value: PermissionProfileFileSystemPermissions) -> Self {
+        Self {
+            entries: value
+                .entries
+                .into_iter()
+                .map(CoreFileSystemSandboxEntry::from)
+                .collect(),
+            glob_scan_max_depth: value.glob_scan_max_depth,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfile {
+    pub network: Option<AdditionalNetworkPermissions>,
+    pub file_system: Option<PermissionProfileFileSystemPermissions>,
+}
+
+impl From<CorePermissionProfile> for PermissionProfile {
+    fn from(value: CorePermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value
+                .file_system
+                .map(PermissionProfileFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<PermissionProfile> for CorePermissionProfile {
+    fn from(value: PermissionProfile) -> Self {
+        Self {
+            network: value.network.map(CoreNetworkPermissions::from),
+            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
@@ -2963,6 +3027,7 @@ pub struct ThreadStartResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3052,6 +3117,7 @@ pub struct ThreadResumeResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -3132,6 +3198,7 @@ pub struct ThreadForkResponse {
     /// Reviewer currently used for approval requests on this thread.
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
+    pub permission_profile: PermissionProfile,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
@@ -7178,6 +7245,38 @@ mod tests {
                         access: FileSystemAccessMode::None,
                     },
                 ]),
+            }
+        );
+        assert_eq!(
+            CoreFileSystemPermissions::from(permissions),
+            core_permissions
+        );
+    }
+
+    #[test]
+    fn permission_profile_file_system_permissions_preserves_glob_scan_depth() {
+        let core_permissions = CoreFileSystemPermissions {
+            entries: vec![CoreFileSystemSandboxEntry {
+                path: CoreFileSystemPath::GlobPattern {
+                    pattern: "**/*.env".to_string(),
+                },
+                access: CoreFileSystemAccessMode::None,
+            }],
+            glob_scan_max_depth: Some(2),
+        };
+
+        let permissions = PermissionProfileFileSystemPermissions::from(core_permissions.clone());
+
+        assert_eq!(
+            permissions,
+            PermissionProfileFileSystemPermissions {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: "**/*.env".to_string(),
+                    },
+                    access: FileSystemAccessMode::None,
+                }],
+                glob_scan_max_depth: Some(2),
             }
         );
         assert_eq!(
