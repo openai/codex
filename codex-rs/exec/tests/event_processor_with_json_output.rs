@@ -6,7 +6,6 @@ use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus as ApiCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
-use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileUpdateChange as ApiFileUpdateChange;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -809,122 +808,17 @@ fn file_change_completion_maps_change_kinds() {
                             ExecFileUpdateChange {
                                 path: "a/added.txt".to_string(),
                                 kind: PatchChangeKind::Add,
-                                diff: String::new(),
                             },
                             ExecFileUpdateChange {
                                 path: "b/deleted.txt".to_string(),
                                 kind: PatchChangeKind::Delete,
-                                diff: String::new(),
                             },
                             ExecFileUpdateChange {
                                 path: "c/modified.txt".to_string(),
                                 kind: PatchChangeKind::Update,
-                                diff: "@@ -1 +1 @@".to_string(),
                             },
                         ],
                         status: PatchApplyStatus::Completed,
-                    }),
-                },
-            })],
-            status: CodexStatus::Running,
-        }
-    );
-}
-
-#[test]
-fn file_change_progress_stream_maps_to_exec_item_events() {
-    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
-
-    let delta_1 = processor.collect_thread_events(ServerNotification::FileChangePatchUpdated(
-        FileChangePatchUpdatedNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            item_id: "patch-1".to_string(),
-            changes: vec![ApiFileUpdateChange {
-                path: "a/added.txt".to_string(),
-                kind: ApiPatchChangeKind::Add,
-                diff: "hello".to_string(),
-            }],
-        },
-    ));
-    let delta_2 = processor.collect_thread_events(ServerNotification::FileChangePatchUpdated(
-        FileChangePatchUpdatedNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            item_id: "patch-1".to_string(),
-            changes: vec![ApiFileUpdateChange {
-                path: "a/added.txt".to_string(),
-                kind: ApiPatchChangeKind::Add,
-                diff: "hello\nworld".to_string(),
-            }],
-        },
-    ));
-    let file_change_started =
-        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
-            item: ThreadItem::FileChange {
-                id: "patch-1".to_string(),
-                changes: vec![ApiFileUpdateChange {
-                    path: "a/added.txt".to_string(),
-                    kind: ApiPatchChangeKind::Add,
-                    diff: String::new(),
-                }],
-                status: ApiPatchApplyStatus::InProgress,
-            },
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-        }));
-
-    assert_eq!(
-        delta_1,
-        CollectedThreadEvents {
-            events: vec![ThreadEvent::ItemUpdated(ItemUpdatedEvent {
-                item: ExecThreadItem {
-                    id: "item_0".to_string(),
-                    details: ThreadItemDetails::FileChange(FileChangeItem {
-                        changes: vec![ExecFileUpdateChange {
-                            path: "a/added.txt".to_string(),
-                            kind: PatchChangeKind::Add,
-                            diff: "hello".to_string(),
-                        }],
-                        status: PatchApplyStatus::InProgress,
-                    }),
-                },
-            })],
-            status: CodexStatus::Running,
-        }
-    );
-    assert_eq!(
-        delta_2,
-        CollectedThreadEvents {
-            events: vec![ThreadEvent::ItemUpdated(ItemUpdatedEvent {
-                item: ExecThreadItem {
-                    id: "item_0".to_string(),
-                    details: ThreadItemDetails::FileChange(FileChangeItem {
-                        changes: vec![ExecFileUpdateChange {
-                            path: "a/added.txt".to_string(),
-                            kind: PatchChangeKind::Add,
-                            diff: "hello\nworld".to_string(),
-                        }],
-                        status: PatchApplyStatus::InProgress,
-                    }),
-                },
-            })],
-            status: CodexStatus::Running,
-        }
-    );
-    assert_eq!(
-        file_change_started,
-        CollectedThreadEvents {
-            events: vec![ThreadEvent::ItemUpdated(ItemUpdatedEvent {
-                item: ExecThreadItem {
-                    id: "item_0".to_string(),
-                    details: ThreadItemDetails::FileChange(FileChangeItem {
-                        changes: vec![ExecFileUpdateChange {
-                            path: "a/added.txt".to_string(),
-                            kind: PatchChangeKind::Add,
-                            diff: String::new(),
-                        }],
-                        status: PatchApplyStatus::InProgress,
                     }),
                 },
             })],
@@ -963,7 +857,6 @@ fn file_change_declined_maps_to_failed_status() {
                         changes: vec![ExecFileUpdateChange {
                             path: "file.txt".to_string(),
                             kind: PatchChangeKind::Update,
-                            diff: "@@ -1 +1 @@".to_string(),
                         }],
                         status: PatchApplyStatus::Failed,
                     }),
