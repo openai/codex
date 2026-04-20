@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
 use crate::memories::citations::parse_memory_citation;
+use crate::memories::citations::thread_ids_from_memory_citation;
 use crate::parse_turn_item;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -183,11 +184,7 @@ async fn record_stage1_output_usage_and_detect_memory_citation(
     let Some(memory_citation) = parse_memory_citation(citations) else {
         return false;
     };
-    let thread_ids = memory_citation
-        .rollout_ids
-        .iter()
-        .filter_map(|id| codex_protocol::ThreadId::try_from(id.as_str()).ok())
-        .collect::<Vec<_>>();
+    let thread_ids = thread_ids_from_memory_citation(&memory_citation);
     if thread_ids.is_empty() {
         return true;
     }
