@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -72,6 +73,7 @@ use crate::status::RateLimitWindowDisplay;
 use crate::status::StatusAccountDisplay;
 use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
+use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
@@ -221,6 +223,7 @@ use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
+use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::Multiplexer;
@@ -321,6 +324,7 @@ use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::MemoriesSettingsView;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
+use crate::bottom_pane::QueuedInputAction;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -380,6 +384,7 @@ use self::plan_implementation::PLAN_IMPLEMENTATION_TITLE;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
+mod side;
 mod status_surfaces;
 use self::status_surfaces::CachedProjectRootName;
 use self::status_surfaces::TerminalTitleStatusKind;
@@ -880,7 +885,12 @@ pub(crate) struct ChatWidget {
     last_turn_id: Option<String>,
     budget_limited_turn_ids: HashSet<String>,
     thread_name: Option<String>,
+    thread_rename_block_message: Option<String>,
+    active_side_conversation: bool,
+    normal_placeholder_text: String,
+    side_placeholder_text: String,
     forked_from: Option<ThreadId>,
+    interrupted_turn_notice_mode: InterruptedTurnNoticeMode,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -893,13 +903,15 @@ pub(crate) struct ChatWidget {
     // history has been rendered so resumed/forked prompts keep chronological
     // order.
     suppress_initial_user_message_submit: bool,
-    // User messages queued while a turn is in progress.
-    queued_user_messages: VecDeque<UserMessage>,
+    // User inputs queued while a turn is in progress.
+    queued_user_messages: VecDeque<QueuedUserMessage>,
     // History records for queued user messages. Slash commands such as `/goal`
     // can render history that differs from the text submitted to core, so this
     // stays in lockstep with `queued_user_messages`, with missing entries
     // treated as user-message text.
     queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
+    // A user turn has been submitted to core, but `TurnStarted` has not arrived yet.
+    user_turn_pending_start: bool,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
     // History records for rejected steers. Slash commands such as `/goal` can
@@ -1079,6 +1091,51 @@ struct UserMessageHistoryOverride {
     text_elements: Vec<TextElement>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellEscapePolicy {
+    Allow,
+    Disallow,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct QueuedUserMessage {
+    user_message: UserMessage,
+    action: QueuedInputAction,
+}
+
+impl QueuedUserMessage {
+    fn new(user_message: UserMessage, action: QueuedInputAction) -> Self {
+        Self {
+            user_message,
+            action,
+        }
+    }
+
+    fn into_user_message(self) -> UserMessage {
+        self.user_message
+    }
+}
+
+impl From<UserMessage> for QueuedUserMessage {
+    fn from(user_message: UserMessage) -> Self {
+        Self::new(user_message, QueuedInputAction::Plain)
+    }
+}
+
+impl Deref for QueuedUserMessage {
+    type Target = UserMessage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.user_message
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueDrain {
+    Continue,
+    Stop,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 struct ThreadComposerState {
     text: String,
@@ -1107,8 +1164,9 @@ pub(crate) struct ThreadInputState {
     pending_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     rejected_steers_queue: VecDeque<UserMessage>,
     rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
-    queued_user_messages: VecDeque<UserMessage>,
+    queued_user_messages: VecDeque<QueuedUserMessage>,
     queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
+    user_turn_pending_start: bool,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -1145,6 +1203,13 @@ struct PendingSteer {
     user_message: UserMessage,
     history_record: UserMessageHistoryRecord,
     compare_key: PendingSteerCompareKey,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum InterruptedTurnNoticeMode {
+    #[default]
+    Default,
+    Suppress,
 }
 
 pub(crate) fn create_initial_user_message(
@@ -1470,6 +1535,12 @@ fn merge_user_messages_with_history_record(
 pub(crate) enum ReplayKind {
     ResumeInitialMessages,
     ThreadSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionConfiguredDisplay {
+    Normal,
+    SideConversation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2173,6 +2244,14 @@ impl ChatWidget {
 
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
+        self.on_session_configured_with_display(event, SessionConfiguredDisplay::Normal);
+    }
+
+    fn on_session_configured_with_display(
+        &mut self,
+        event: codex_protocol::protocol::SessionConfiguredEvent,
+        display: SessionConfiguredDisplay,
+    ) {
         self.last_agent_markdown = None;
         self.saw_copy_source_this_turn = false;
         self.bottom_pane
@@ -2232,24 +2311,34 @@ impl ChatWidget {
         self.sync_plugins_command_enabled();
         self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
-        let startup_tooltip_override = self.startup_tooltip_override.take();
-        let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
-        #[cfg(test)]
-        let initial_messages = event.initial_messages.clone();
-        let session_info_cell = history_cell::new_session_info(
-            &self.config,
-            &model_for_header,
-            event,
-            self.show_welcome_banner,
-            startup_tooltip_override,
-            self.plan_type,
-            show_fast_status,
-        );
-        self.apply_session_info_cell(session_info_cell);
+        if display == SessionConfiguredDisplay::Normal {
+            let startup_tooltip_override = self.startup_tooltip_override.take();
+            let show_fast_status =
+                self.should_show_fast_status(&model_for_header, event.service_tier);
+            #[cfg(test)]
+            let initial_messages = event.initial_messages.clone();
+            let session_info_cell = history_cell::new_session_info(
+                &self.config,
+                &model_for_header,
+                event,
+                self.show_welcome_banner,
+                startup_tooltip_override,
+                self.plan_type,
+                show_fast_status,
+            );
+            self.apply_session_info_cell(session_info_cell);
 
-        #[cfg(test)]
-        if let Some(messages) = initial_messages {
-            self.replay_initial_messages(messages);
+            #[cfg(test)]
+            if let Some(messages) = initial_messages {
+                self.replay_initial_messages(messages);
+            }
+        } else if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::SessionHeaderHistoryCell>())
+        {
+            self.active_cell = None;
+            self.bump_active_cell_revision();
         }
         self.saw_copy_source_this_turn = false;
         self.refresh_skills_for_current_cwd(/*force_reload*/ true);
@@ -2263,7 +2352,9 @@ impl ChatWidget {
                 self.submit_user_message(user_message);
             }
         }
-        if let Some(forked_from_id) = forked_from_id {
+        if display == SessionConfiguredDisplay::Normal
+            && let Some(forked_from_id) = forked_from_id
+        {
             self.emit_forked_thread_event(forked_from_id);
         }
         if !self.suppress_session_configured_redraw {
@@ -2286,7 +2377,15 @@ impl ChatWidget {
         self.on_session_configured(thread_session_state_to_legacy_event(session));
     }
 
-    fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
+    pub(crate) fn handle_side_thread_session(&mut self, session: ThreadSessionState) {
+        self.instruction_source_paths = session.instruction_source_paths.clone();
+        self.on_session_configured_with_display(
+            thread_session_state_to_legacy_event(session),
+            SessionConfiguredDisplay::SideConversation,
+        );
+    }
+
+    fn emit_forked_thread_event(&mut self, forked_from_id: ThreadId) {
         let app_event_tx = self.app_event_tx.clone();
         let codex_home = self.config.codex_home.clone();
         tokio::spawn(async move {
@@ -2318,9 +2417,7 @@ impl ChatWidget {
             };
 
             match find_thread_name_by_id(&codex_home, &forked_from_id).await {
-                Ok(Some(name)) if !name.trim().is_empty() => {
-                    send_name_and_id(name);
-                }
+                Ok(Some(name)) if !name.trim().is_empty() => send_name_and_id(name),
                 Ok(_) => send_id_only(),
                 Err(err) => {
                     tracing::warn!("Failed to read forked thread name: {err}");
@@ -2340,6 +2437,7 @@ impl ChatWidget {
             self.refresh_terminal_title();
             self.refresh_status_surfaces();
             self.request_redraw();
+            self.maybe_send_next_queued_input();
         }
     }
 
@@ -2532,6 +2630,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.user_turn_pending_start = false;
         self.agent_turn_running = true;
         self.goal_status_active_turn_started_at = Some(Instant::now());
         self.turn_sleep_inhibitor
@@ -2627,6 +2726,7 @@ impl ChatWidget {
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
+        self.user_turn_pending_start = false;
         self.agent_turn_running = false;
         self.goal_status_active_turn_started_at = None;
         self.turn_sleep_inhibitor
@@ -2692,22 +2792,55 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
+        let context_usage_label = self.plan_implementation_context_usage_label();
 
         self.bottom_pane
             .show_selection_view(plan_implementation::selection_view_params(
                 default_mask,
                 self.latest_proposed_plan_markdown.as_deref(),
+                context_usage_label.as_deref(),
             ));
         self.notify(Notification::PlanModePrompt {
             title: PLAN_IMPLEMENTATION_TITLE.to_string(),
         });
     }
 
+    /// Returns a context-used label for the plan implementation prompt.
+    ///
+    /// The footer reports context remaining because it is ambient status, but
+    /// this prompt is asking whether to discard prior conversation state before
+    /// implementing a plan. Reporting used context makes the cleanup tradeoff
+    /// explicit. A fully fresh or unknown context window returns no label so
+    /// the clear-context option does not imply urgency without evidence.
+    fn plan_implementation_context_usage_label(&self) -> Option<String> {
+        let info = self.token_info.as_ref()?;
+        let percent = self.context_remaining_percent(info);
+
+        let used_tokens = self.context_used_tokens(info, percent.is_some());
+        if let Some(percent) = percent {
+            let used_percent = 100 - percent.clamp(0, 100);
+            if used_percent <= 0 {
+                return None;
+            }
+            return Some(format!("{used_percent}% used"));
+        }
+
+        if let Some(tokens) = used_tokens
+            && tokens > 0
+        {
+            return Some(format!("{} used", format_tokens_compact(tokens)));
+        }
+
+        None
+    }
+
     fn has_queued_follow_up_messages(&self) -> bool {
         !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
     }
 
-    fn pop_next_queued_user_message(&mut self) -> Option<(UserMessage, UserMessageHistoryRecord)> {
+    fn pop_next_queued_user_message(
+        &mut self,
+    ) -> Option<(QueuedUserMessage, UserMessageHistoryRecord)> {
         if self.rejected_steers_queue.is_empty() {
             self.queued_user_messages.pop_front().map(|user_message| {
                 let history_record = self
@@ -2726,12 +2859,13 @@ impl ChatWidget {
                 rejected_messages.len(),
                 UserMessageHistoryRecord::UserMessageText,
             );
-            Some(merge_user_messages_with_history_record(
+            let (message, history_record) = merge_user_messages_with_history_record(
                 rejected_messages
                     .into_iter()
                     .zip(history_records)
                     .collect::<Vec<_>>(),
-            ))
+            );
+            Some((QueuedUserMessage::from(message), history_record))
         }
     }
 
@@ -2741,7 +2875,10 @@ impl ChatWidget {
                 .queued_user_message_history_records
                 .pop_back()
                 .unwrap_or(UserMessageHistoryRecord::UserMessageText);
-            Some(user_message_for_restore(user_message, &history_record))
+            Some(user_message_for_restore(
+                user_message.into_user_message(),
+                &history_record,
+            ))
         } else {
             let user_message = self.rejected_steers_queue.pop_back()?;
             let history_record = self
@@ -3042,6 +3179,7 @@ impl ChatWidget {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
+        self.user_turn_pending_start = false;
         self.agent_turn_running = false;
         self.goal_status_active_turn_started_at = None;
         self.turn_sleep_inhibitor
@@ -3365,7 +3503,9 @@ impl ChatWidget {
         self.finalize_turn();
         let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
         self.submit_pending_steers_after_interrupt = false;
-        if reason != TurnAbortReason::ReviewEnded {
+        if reason != TurnAbortReason::ReviewEnded
+            && self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress
+        {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
                     "Model interrupted to submit steer instructions.".to_owned(),
@@ -3453,7 +3593,9 @@ impl ChatWidget {
             queued_messages
                 .into_iter()
                 .zip(queued_history_records.iter())
-                .map(|(message, history_record)| user_message_for_restore(message, history_record)),
+                .map(|(message, history_record)| {
+                    user_message_for_restore(message.into_user_message(), history_record)
+                }),
         );
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
@@ -3465,7 +3607,7 @@ impl ChatWidget {
         Some(merge_user_messages(to_merge))
     }
 
-    fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
+    pub(crate) fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
         let UserMessage {
             text,
             local_images,
@@ -3508,6 +3650,7 @@ impl ChatWidget {
             rejected_steer_history_records: self.rejected_steer_history_records.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
             queued_user_message_history_records: self.queued_user_message_history_records.clone(),
+            user_turn_pending_start: self.user_turn_pending_start,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3523,6 +3666,7 @@ impl ChatWidget {
             self.agent_turn_running = input_state.agent_turn_running;
             self.goal_status_active_turn_started_at =
                 self.agent_turn_running.then_some(Instant::now());
+            self.user_turn_pending_start = input_state.user_turn_pending_start;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             if let Some(composer) = input_state.composer {
@@ -3585,6 +3729,7 @@ impl ChatWidget {
         } else {
             self.agent_turn_running = false;
             self.goal_status_active_turn_started_at = None;
+            self.user_turn_pending_start = false;
             self.pending_steers.clear();
             self.rejected_steers_queue.clear();
             self.rejected_steer_history_records.clear();
@@ -4742,6 +4887,7 @@ impl ChatWidget {
         let parsed = self.annotate_skill_reads_in_parsed_cmd(parsed);
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
+        let is_user_shell = source == ExecCommandSource::UserShell;
         let end_target = match self.active_cell.as_ref() {
             Some(cell) => match cell.as_any().downcast_ref::<ExecCell>() {
                 Some(exec_cell)
@@ -4835,6 +4981,9 @@ impl ChatWidget {
         }
         // Mark that actual work was done (command executed)
         self.had_work_activity = true;
+        if is_user_shell {
+            self.maybe_send_next_queued_input();
+        }
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -5103,6 +5252,8 @@ impl ChatWidget {
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
+        let side_placeholder =
+            SIDE_PLACEHOLDERS[rng.random_range(0..SIDE_PLACEHOLDERS.len())].to_string();
 
         let model_override = model.as_deref();
         let model_for_header = model
@@ -5138,7 +5289,7 @@ impl ChatWidget {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
-                placeholder_text: placeholder,
+                placeholder_text: placeholder.clone(),
                 disable_paste_burst: config.disable_paste_burst,
                 animations_enabled: config.animations,
                 skills: None,
@@ -5209,9 +5360,15 @@ impl ChatWidget {
             last_turn_id: None,
             budget_limited_turn_ids: HashSet::new(),
             thread_name: None,
+            thread_rename_block_message: None,
+            active_side_conversation: false,
+            normal_placeholder_text: placeholder,
+            side_placeholder_text: side_placeholder,
             forked_from: None,
+            interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
             queued_user_messages: VecDeque::new(),
             queued_user_message_history_records: VecDeque::new(),
+            user_turn_pending_start: false,
             rejected_steers_queue: VecDeque::new(),
             rejected_steer_history_records: VecDeque::new(),
             pending_steers: VecDeque::new(),
@@ -5405,70 +5562,77 @@ impl ChatWidget {
             {
                 self.cycle_collaboration_mode();
             }
-            _ => match self.bottom_pane.handle_key_event(key_event) {
-                InputResult::Submitted {
-                    text,
-                    text_elements,
-                } => {
-                    let local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_remote_image_urls();
-                    let user_message = UserMessage {
+            _ => {
+                let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
+                match self.bottom_pane.handle_key_event(key_event) {
+                    InputResult::Submitted {
                         text,
-                        local_images,
-                        remote_image_urls,
                         text_elements,
-                        mention_bindings: self
+                    } => {
+                        let local_images = self
                             .bottom_pane
-                            .take_recent_submission_mention_bindings(),
-                    };
-                    if user_message.text.is_empty()
-                        && user_message.local_images.is_empty()
-                        && user_message.remote_image_urls.is_empty()
-                    {
-                        return;
+                            .take_recent_submission_images_with_placeholders();
+                        let remote_image_urls = self.take_remote_image_urls();
+                        let user_message = UserMessage {
+                            text,
+                            local_images,
+                            remote_image_urls,
+                            text_elements,
+                            mention_bindings: self
+                                .bottom_pane
+                                .take_recent_submission_mention_bindings(),
+                        };
+                        if user_message.text.is_empty()
+                            && user_message.local_images.is_empty()
+                            && user_message.remote_image_urls.is_empty()
+                        {
+                            return;
+                        }
+                        let should_submit_now =
+                            self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                        if should_submit_now {
+                            // Submitted is emitted when user submits.
+                            // Reset any reasoning header only when we are actually submitting a turn.
+                            self.reasoning_buffer.clear();
+                            self.full_reasoning_buffer.clear();
+                            self.set_status_header(String::from("Working"));
+                            self.submit_user_message(user_message);
+                        } else {
+                            self.queue_user_message(user_message);
+                        }
                     }
-                    let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
-                    if should_submit_now {
-                        // Submitted is emitted when user submits.
-                        // Reset any reasoning header only when we are actually submitting a turn.
-                        self.reasoning_buffer.clear();
-                        self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
-                        self.submit_user_message(user_message);
-                    } else {
-                        self.queue_user_message(user_message);
-                    }
-                }
-                InputResult::Queued {
-                    text,
-                    text_elements,
-                } => {
-                    let local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    let remote_image_urls = self.take_remote_image_urls();
-                    let user_message = UserMessage {
+                    InputResult::Queued {
                         text,
-                        local_images,
-                        remote_image_urls,
                         text_elements,
-                        mention_bindings: self
+                        action,
+                    } => {
+                        let local_images = self
                             .bottom_pane
-                            .take_recent_submission_mention_bindings(),
-                    };
-                    self.queue_user_message(user_message);
+                            .take_recent_submission_images_with_placeholders();
+                        let remote_image_urls = self.take_remote_image_urls();
+                        let user_message = UserMessage {
+                            text,
+                            local_images,
+                            remote_image_urls,
+                            text_elements,
+                            mention_bindings: self
+                                .bottom_pane
+                                .take_recent_submission_mention_bindings(),
+                        };
+                        self.queue_user_message_with_options(user_message, action);
+                    }
+                    InputResult::Command(cmd) => {
+                        self.handle_slash_command_dispatch(cmd);
+                    }
+                    InputResult::CommandWithArgs(cmd, args, text_elements) => {
+                        self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
+                    }
+                    InputResult::None => {}
                 }
-                InputResult::Command(cmd) => {
-                    self.handle_slash_command_dispatch(cmd);
+                if had_modal_or_popup && self.bottom_pane.no_modal_or_popup_active() {
+                    self.maybe_send_next_queued_input();
                 }
-                InputResult::CommandWithArgs(cmd, args, text_elements) => {
-                    self.handle_slash_command_with_args_dispatch(cmd, args, text_elements);
-                }
-                InputResult::None => {}
-            },
+            }
         }
     }
 
@@ -5572,6 +5736,9 @@ impl ChatWidget {
     }
 
     fn show_rename_prompt(&mut self) {
+        if !self.ensure_thread_rename_allowed() {
+            return;
+        }
         let tx = self.app_event_tx.clone();
         let existing_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
         let title = if existing_name.is_some() {
@@ -5596,6 +5763,16 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn ensure_thread_rename_allowed(&mut self) -> bool {
+        match self.thread_rename_block_message.clone() {
+            Some(message) => {
+                self.add_error_message(message);
+                false
+            }
+            None => true,
+        }
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -5649,8 +5826,17 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if !self.is_session_configured() || self.bottom_pane.is_task_running() {
-            self.queued_user_messages.push_back(user_message);
+        self.queue_user_message_with_options(user_message, QueuedInputAction::Plain);
+    }
+
+    fn queue_user_message_with_options(
+        &mut self,
+        user_message: UserMessage,
+        action: QueuedInputAction,
+    ) {
+        if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
+            self.queued_user_messages
+                .push_back(QueuedUserMessage::new(user_message, action));
             self.queued_user_message_history_records
                 .push_back(UserMessageHistoryRecord::UserMessageText);
             self.refresh_pending_input_preview();
@@ -5659,8 +5845,34 @@ impl ChatWidget {
         }
     }
 
+    fn submit_shell_command(&mut self, command: &str) -> QueueDrain {
+        let cmd = command.trim();
+        if cmd.is_empty() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(
+                    USER_SHELL_COMMAND_HELP_TITLE.to_string(),
+                    Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
+                ),
+            )));
+            QueueDrain::Continue
+        } else {
+            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
+            QueueDrain::Stop
+        }
+    }
+
+    fn submit_queued_shell_prompt(&mut self, user_message: UserMessage) -> QueueDrain {
+        match user_message.text.strip_prefix('!') {
+            Some(command) => self.submit_shell_command(command),
+            None => {
+                self.submit_user_message(user_message);
+                QueueDrain::Stop
+            }
+        }
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        self.submit_user_message_with_history_record(
+        let _accepted = self.submit_user_message_with_history_record(
             user_message,
             UserMessageHistoryRecord::UserMessageText,
         );
@@ -5671,19 +5883,47 @@ impl ChatWidget {
         user_message: UserMessage,
         history_record: UserMessageHistoryRecord,
     ) -> bool {
+        self.submit_user_message_with_history_and_shell_escape_policy(
+            user_message,
+            history_record,
+            ShellEscapePolicy::Allow,
+        )
+        .0
+    }
+
+    fn submit_user_message_with_shell_escape_policy(
+        &mut self,
+        user_message: UserMessage,
+        shell_escape_policy: ShellEscapePolicy,
+    ) -> Option<AppCommand> {
+        self.submit_user_message_with_history_and_shell_escape_policy(
+            user_message,
+            UserMessageHistoryRecord::UserMessageText,
+            shell_escape_policy,
+        )
+        .1
+    }
+
+    fn submit_user_message_with_history_and_shell_escape_policy(
+        &mut self,
+        user_message: UserMessage,
+        history_record: UserMessageHistoryRecord,
+        shell_escape_policy: ShellEscapePolicy,
+    ) -> (bool, Option<AppCommand>) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
-            self.queued_user_messages.push_front(user_message);
+            self.queued_user_messages
+                .push_front(QueuedUserMessage::from(user_message));
             self.queued_user_message_history_records
                 .push_front(history_record);
             self.refresh_pending_input_preview();
-            return true;
+            return (true, None);
         }
         if user_message.text.is_empty()
             && user_message.local_images.is_empty()
             && user_message.remote_image_urls.is_empty()
         {
-            return false;
+            return (false, None);
         }
         if (!user_message.local_images.is_empty() || !user_message.remote_image_urls.is_empty())
             && !self.current_model_supports_images()
@@ -5702,7 +5942,7 @@ impl ChatWidget {
                 mention_bindings,
                 remote_image_urls,
             );
-            return false;
+            return (false, None);
         }
         let UserMessage {
             text,
@@ -5716,19 +5956,16 @@ impl ChatWidget {
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
-        if let Some(stripped) = text.strip_prefix('!') {
-            let cmd = stripped.trim();
-            if cmd.is_empty() {
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_info_event(
-                        USER_SHELL_COMMAND_HELP_TITLE.to_string(),
-                        Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
-                    ),
-                )));
-                return false;
-            }
-            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
-            return true;
+        if shell_escape_policy == ShellEscapePolicy::Allow
+            && let Some(stripped) = text.strip_prefix('!')
+        {
+            let app_command = match self.submit_shell_command(stripped) {
+                QueueDrain::Continue => None,
+                QueueDrain::Stop => Some(AppCommand::run_user_shell_command(
+                    stripped.trim().to_string(),
+                )),
+            };
+            return (app_command.is_some(), app_command);
         }
 
         for image_url in &remote_image_urls {
@@ -5871,7 +6108,7 @@ impl ChatWidget {
                 },
                 &history_record,
             ));
-            return false;
+            return (false, None);
         }
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
@@ -5911,8 +6148,11 @@ impl ChatWidget {
             personality,
         );
 
-        if !self.submit_op(op) {
-            return false;
+        if !self.submit_op(op.clone()) {
+            return (false, None);
+        }
+        if render_in_history {
+            self.user_turn_pending_start = true;
         }
 
         // Persist the submitted text to cross-session message history. Mentions are encoded into
@@ -6002,7 +6242,7 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
-        true
+        (true, Some(op))
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.
@@ -6445,6 +6685,12 @@ impl ChatWidget {
         notification: ServerNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        if self.active_side_conversation
+            && replay_kind.is_none()
+            && matches!(notification, ServerNotification::McpServerStatusUpdated(_))
+        {
+            return;
+        }
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
@@ -7497,14 +7743,41 @@ impl ChatWidget {
         if self.suppress_queue_autosend {
             return;
         }
-        if self.bottom_pane.is_task_running() {
+        if self.is_user_turn_pending_or_running() {
             return;
         }
-        if let Some((user_message, history_record)) = self.pop_next_queued_user_message() {
-            self.submit_user_message_with_history_record(user_message, history_record);
+        while !self.is_user_turn_pending_or_running() {
+            let Some((queued_message, history_record)) = self.pop_next_queued_user_message() else {
+                break;
+            };
+            match queued_message.action {
+                QueuedInputAction::Plain => {
+                    self.submit_user_message_with_history_record(
+                        queued_message.into_user_message(),
+                        history_record,
+                    );
+                    break;
+                }
+                QueuedInputAction::ParseSlash => {
+                    let drain = self.submit_queued_slash_prompt(queued_message.into_user_message());
+                    if drain == QueueDrain::Stop {
+                        break;
+                    }
+                }
+                QueuedInputAction::RunShell => {
+                    let drain = self.submit_queued_shell_prompt(queued_message.into_user_message());
+                    if drain == QueueDrain::Stop {
+                        break;
+                    }
+                }
+            }
         }
         // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
+    }
+
+    pub(super) fn is_user_turn_pending_or_running(&self) -> bool {
+        self.user_turn_pending_start || self.bottom_pane.is_task_running()
     }
 
     /// Rebuild and update the bottom-pane pending-input preview.
@@ -7544,6 +7817,18 @@ impl ChatWidget {
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
         self.bottom_pane.set_pending_thread_approvals(threads);
+    }
+
+    pub(crate) fn clear_thread_rename_block(&mut self) {
+        self.thread_rename_block_message = None;
+    }
+
+    pub(crate) fn set_thread_rename_block_message(&mut self, message: impl Into<String>) {
+        self.thread_rename_block_message = Some(message.into());
+    }
+
+    pub(crate) fn set_interrupted_turn_notice_mode(&mut self, mode: InterruptedTurnNoticeMode) {
+        self.interrupted_turn_notice_mode = mode;
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
@@ -11400,6 +11685,12 @@ const PLACEHOLDERS: [&str; 8] = [
     "Improve documentation in @filename",
     "Run /review on my current changes",
     "Use /skills to list available skills",
+];
+
+const SIDE_PLACEHOLDERS: [&str; 3] = [
+    "Check recently modified functions for compatibility",
+    "How many files have been modified?",
+    "Will this algorithm scale well?",
 ];
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.

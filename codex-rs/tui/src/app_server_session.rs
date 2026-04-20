@@ -48,6 +48,8 @@ use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetParams;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ThreadInjectItemsParams;
+use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -88,6 +90,7 @@ use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -450,6 +453,29 @@ impl AppServerSession {
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
         Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_inject_items(
+        &mut self,
+        thread_id: ThreadId,
+        items: Vec<ResponseItem>,
+    ) -> Result<ThreadInjectItemsResponse> {
+        let items = items
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .wrap_err("failed to encode thread/inject_items payload")?;
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadInjectItems {
+                request_id,
+                params: ThreadInjectItemsParams {
+                    thread_id: thread_id.to_string(),
+                    items,
+                },
+            })
+            .await
+            .wrap_err("thread/inject_items failed during TUI side conversation setup")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1058,6 +1084,8 @@ fn thread_fork_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(&config),
+        base_instructions: config.base_instructions.clone(),
+        developer_instructions: config.developer_instructions.clone(),
         ephemeral: config.ephemeral,
         persist_extended_history: true,
         ..ThreadForkParams::default()
@@ -1419,6 +1447,28 @@ mod tests {
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
+    }
+
+    #[tokio::test]
+    async fn thread_fork_params_forward_instruction_overrides() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.base_instructions = Some("Base override.".to_string());
+        config.developer_instructions = Some("Developer override.".to_string());
+        let thread_id = ThreadId::new();
+
+        let params = thread_fork_params_from_config(
+            config,
+            thread_id,
+            ThreadParamsMode::Embedded,
+            /*remote_cwd_override*/ None,
+        );
+
+        assert_eq!(params.base_instructions.as_deref(), Some("Base override."));
+        assert_eq!(
+            params.developer_instructions.as_deref(),
+            Some("Developer override.")
+        );
     }
 
     #[tokio::test]

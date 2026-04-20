@@ -34,6 +34,7 @@ pub enum SlashCommand {
     Goal,
     Collab,
     Agent,
+    Side,
     // Undo,
     Copy,
     Diff,
@@ -105,6 +106,7 @@ impl SlashCommand {
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
+            SlashCommand::Side => "start a side conversation in an ephemeral fork",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
@@ -137,8 +139,17 @@ impl SlashCommand {
                 | SlashCommand::Plan
                 | SlashCommand::Goal
                 | SlashCommand::Fast
+                | SlashCommand::Side
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+        )
+    }
+
+    /// Whether this command remains available inside an active side conversation.
+    pub fn available_in_side_conversation(self) -> bool {
+        matches!(
+            self,
+            SlashCommand::Copy | SlashCommand::Diff | SlashCommand::Mention | SlashCommand::Status
         )
     }
 
@@ -181,7 +192,8 @@ impl SlashCommand {
             | SlashCommand::Plugins
             | SlashCommand::Feedback
             | SlashCommand::Quit
-            | SlashCommand::Exit => true,
+            | SlashCommand::Exit
+            | SlashCommand::Side => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,

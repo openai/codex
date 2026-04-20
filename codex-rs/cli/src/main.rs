@@ -34,9 +34,9 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod marketplace_cmd;
 mod mcp_cmd;
@@ -120,8 +120,8 @@ enum Subcommand {
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
-    /// Launch the Codex desktop app (downloads the macOS installer if missing).
-    #[cfg(target_os = "macos")]
+    /// Launch the Codex desktop app (opens the app installer if missing).
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     App(app_cmd::AppCommand),
 
     /// Generate shell completion scripts.
@@ -808,7 +808,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 }
             }
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Some(Subcommand::App(app_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),

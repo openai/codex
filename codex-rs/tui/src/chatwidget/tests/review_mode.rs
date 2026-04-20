@@ -29,26 +29,32 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     )];
     let existing_images = vec![PathBuf::from("/tmp/existing.png")];
 
-    chat.queued_user_messages.push_back(UserMessage {
-        text: first_text,
-        local_images: vec![LocalImageAttachment {
-            placeholder: first_placeholder.to_string(),
-            path: first_images[0].clone(),
-        }],
-        remote_image_urls: Vec::new(),
-        text_elements: first_elements,
-        mention_bindings: Vec::new(),
-    });
-    chat.queued_user_messages.push_back(UserMessage {
-        text: second_text,
-        local_images: vec![LocalImageAttachment {
-            placeholder: second_placeholder.to_string(),
-            path: second_images[0].clone(),
-        }],
-        remote_image_urls: Vec::new(),
-        text_elements: second_elements,
-        mention_bindings: Vec::new(),
-    });
+    chat.queued_user_messages.push_back(
+        UserMessage {
+            text: first_text,
+            local_images: vec![LocalImageAttachment {
+                placeholder: first_placeholder.to_string(),
+                path: first_images[0].clone(),
+            }],
+            remote_image_urls: Vec::new(),
+            text_elements: first_elements,
+            mention_bindings: Vec::new(),
+        }
+        .into(),
+    );
+    chat.queued_user_messages.push_back(
+        UserMessage {
+            text: second_text,
+            local_images: vec![LocalImageAttachment {
+                placeholder: second_placeholder.to_string(),
+                path: second_images[0].clone(),
+            }],
+            remote_image_urls: Vec::new(),
+            text_elements: second_elements,
+            mention_bindings: Vec::new(),
+        }
+        .into(),
+    );
     chat.refresh_pending_input_preview();
 
     chat.bottom_pane
@@ -164,7 +170,7 @@ async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages
     });
     let _ = drain_insert_history(&mut rx);
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued later"));
+        .push_back(UserMessage::from("queued later").into());
 
     chat.submit_user_message(UserMessage::from("review follow-up one"));
     chat.submit_user_message(UserMessage::from("review follow-up two"));
@@ -354,7 +360,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
     let mut rejected_steers_queue = VecDeque::new();
     rejected_steers_queue.push_back(UserMessage::from("already rejected"));
     let mut queued_user_messages = VecDeque::new();
-    queued_user_messages.push_back(UserMessage::from("queued draft"));
+    queued_user_messages.push_back(UserMessage::from("queued draft").into());
 
     chat.restore_thread_input_state(Some(ThreadInputState {
         composer: None,
@@ -364,6 +370,7 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         rejected_steer_history_records: VecDeque::new(),
         queued_user_messages,
         queued_user_message_history_records: VecDeque::new(),
+        user_turn_pending_start: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,
@@ -758,7 +765,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
     }
 
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()));
+        .push_back(UserMessage::from("queued draft".to_string()).into());
     chat.refresh_pending_input_preview();
     chat.bottom_pane
         .set_composer_text("still editing".to_string(), Vec::new(), Vec::new());
@@ -880,7 +887,7 @@ async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
         .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()));
+        .push_back(UserMessage::from("queued draft".to_string()).into());
     chat.refresh_pending_input_preview();
 
     match next_submit_op(&mut op_rx) {
@@ -922,7 +929,7 @@ async fn replaced_turn_clears_pending_steers_but_keeps_queued_drafts() {
         .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()));
+        .push_back(UserMessage::from("queued draft".to_string()).into());
     chat.refresh_pending_input_preview();
 
     match next_submit_op(&mut op_rx) {
@@ -1334,7 +1341,7 @@ async fn direct_budget_limited_turn_uses_budget_message_snapshot() {
 async fn budget_limited_turn_restores_queued_input_without_submitting() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.queued_user_messages
-        .push_back(UserMessage::from("follow-up after budget stop"));
+        .push_back(UserMessage::from("follow-up after budget stop").into());
     chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
