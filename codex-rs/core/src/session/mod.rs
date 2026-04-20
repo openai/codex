@@ -14,7 +14,6 @@ use crate::agent::MailboxReceiver;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::agent_identity::AgentIdentityManager;
-use crate::agent_identity::RegisteredAgentTask;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
@@ -55,6 +54,7 @@ use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
+use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::ToolInfo;
 use codex_mcp::codex_apps_tools_cache_key;
 #[cfg(test)]
@@ -164,6 +164,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+mod agent_task_lifecycle;
 mod handlers;
 mod mcp;
 mod review;
@@ -292,7 +293,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
-use codex_mcp::with_codex_apps_mcp;
+use codex_mcp::with_codex_apps_mcp_with_authorization_header;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
@@ -896,7 +897,10 @@ impl Session {
         let Some(started_proxy) = self.services.network_proxy.as_ref() else {
             return;
         };
-        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let Ok(_refresh_guard) = self.managed_network_proxy_refresh_lock.acquire().await else {
+            error!("managed network proxy refresh semaphore closed");
+            return;
+        };
         let session_configuration = {
             let state = self.state.lock().await;
             state.session_configuration.clone()
@@ -988,7 +992,10 @@ impl Session {
                     .ensure_registered_identity()
                     .await
                 {
-                    Ok(Some(_)) => return,
+                    Ok(Some(_)) => {
+                        sess.maybe_prewarm_agent_task_registration().await;
+                        return;
+                    }
                     Ok(None) => {
                         drop(sess);
                         if auth_state_rx.changed().await.is_err() {
@@ -1017,90 +1024,6 @@ impl Session {
             }),
         })
         .await;
-    }
-
-    async fn cached_agent_task_for_current_binding(&self) -> Option<RegisteredAgentTask> {
-        let agent_task = {
-            let state = self.state.lock().await;
-            state.agent_task()
-        }?;
-
-        if self
-            .services
-            .agent_identity_manager
-            .task_matches_current_binding(&agent_task)
-            .await
-        {
-            debug!(
-                agent_runtime_id = %agent_task.agent_runtime_id,
-                task_id = %agent_task.task_id,
-                "reusing cached agent task"
-            );
-            return Some(agent_task);
-        }
-
-        debug!(
-            agent_runtime_id = %agent_task.agent_runtime_id,
-            task_id = %agent_task.task_id,
-            "discarding cached agent task because auth binding changed"
-        );
-        let mut state = self.state.lock().await;
-        if state.agent_task().as_ref() == Some(&agent_task) {
-            state.clear_agent_task();
-        }
-        None
-    }
-
-    async fn ensure_agent_task_registered(&self) -> anyhow::Result<Option<RegisteredAgentTask>> {
-        if let Some(agent_task) = self.cached_agent_task_for_current_binding().await {
-            return Ok(Some(agent_task));
-        }
-
-        for _ in 0..2 {
-            let Some(agent_task) = self.services.agent_identity_manager.register_task().await?
-            else {
-                return Ok(None);
-            };
-
-            if !self
-                .services
-                .agent_identity_manager
-                .task_matches_current_binding(&agent_task)
-                .await
-            {
-                debug!(
-                    agent_runtime_id = %agent_task.agent_runtime_id,
-                    task_id = %agent_task.task_id,
-                    "discarding newly registered agent task because auth binding changed"
-                );
-                continue;
-            }
-
-            {
-                let mut state = self.state.lock().await;
-                if let Some(existing_agent_task) = state.agent_task() {
-                    if existing_agent_task.has_same_binding(&agent_task) {
-                        return Ok(Some(existing_agent_task));
-                    }
-                    debug!(
-                        agent_runtime_id = %existing_agent_task.agent_runtime_id,
-                        task_id = %existing_agent_task.task_id,
-                        "replacing cached agent task because auth binding changed"
-                    );
-                }
-                state.set_agent_task(agent_task.clone());
-            }
-
-            info!(
-                thread_id = %self.conversation_id,
-                agent_runtime_id = %agent_task.agent_runtime_id,
-                task_id = %agent_task.task_id,
-                "registered agent task for thread"
-            );
-            return Ok(Some(agent_task));
-        }
-
-        Ok(None)
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
@@ -1250,6 +1173,7 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
+                self.restore_persisted_agent_task(&rollout_items).await;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
@@ -1754,7 +1678,11 @@ impl Session {
         amendment: &NetworkPolicyAmendment,
         network_approval_context: &NetworkApprovalContext,
     ) -> anyhow::Result<()> {
-        let _refresh_guard = self.managed_network_proxy_refresh_lock.lock().await;
+        let _refresh_guard = self
+            .managed_network_proxy_refresh_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("managed network proxy refresh semaphore closed"))?;
         let host =
             Self::validated_network_policy_amendment_host(amendment, network_approval_context)?;
         let codex_home = self
@@ -2422,28 +2350,30 @@ impl Session {
                 developer_sections.push(apps_section);
             }
         }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        let rendered_skills = render_skills_section(
-            &implicit_skills,
-            default_skill_metadata_budget(turn_context.model_info.context_window),
-            SkillRenderSideEffects::ThreadStart {
-                session_telemetry: &self.services.session_telemetry,
-            },
-        );
-        if let Some(rendered_skills) = rendered_skills {
-            if rendered_skills.emit_warning {
-                self.send_event_raw(Event {
-                    id: String::new(),
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
-                    }),
-                })
-                .await;
+        if turn_context.config.include_skill_instructions {
+            let implicit_skills = turn_context
+                .turn_skills
+                .outcome
+                .allowed_skills_for_implicit_invocation();
+            let rendered_skills = render_skills_section(
+                &implicit_skills,
+                default_skill_metadata_budget(turn_context.model_info.context_window),
+                SkillRenderSideEffects::ThreadStart {
+                    session_telemetry: &self.services.session_telemetry,
+                },
+            );
+            if let Some(rendered_skills) = rendered_skills {
+                if rendered_skills.emit_warning {
+                    self.send_event_raw(Event {
+                        id: String::new(),
+                        msg: EventMsg::Warning(WarningEvent {
+                            message: THREAD_START_SKILLS_TRIMMED_WARNING_MESSAGE.to_string(),
+                        }),
+                    })
+                    .await;
+                }
+                developer_sections.push(rendered_skills.text);
             }
-            developer_sections.push(rendered_skills.text);
         }
         let loaded_plugins = self
             .services
@@ -2868,6 +2798,14 @@ impl Session {
             .lock()
             .await
             .set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
+    }
+
+    pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {
+        let turn_state = self.turn_state_for_sub_id(sub_id).await;
+        let Some(turn_state) = turn_state else {
+            return;
+        };
+        turn_state.lock().await.has_memory_citation = true;
     }
 
     async fn turn_state_for_sub_id(

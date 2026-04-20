@@ -1711,8 +1711,8 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    let previous_model = "gpt-5.2-codex";
-    let next_model = "gpt-5.1-codex-max";
+    let previous_model = "gpt-5.3-codex";
+    let next_model = "gpt-5.2";
 
     let models_mock = mount_models_once(
         &server,
@@ -1837,8 +1837,8 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    let previous_model = "gpt-5.2-codex";
-    let next_model = "gpt-5.1-codex-max";
+    let previous_model = "gpt-5.3-codex";
+    let next_model = "gpt-5.2";
 
     let models_mock = mount_models_once(
         &server,
@@ -3124,8 +3124,8 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let previous_model = "gpt-5.1-codex-max";
-    let next_model = "gpt-5.2-codex";
+    let previous_model = "gpt-5.4";
+    let next_model = "gpt-5.3-codex";
 
     let request_log = mount_sse_sequence(
         &server,

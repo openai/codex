@@ -139,10 +139,10 @@ impl FileSystemSandboxRunner {
             .flatten()
             .map(|helper_read_root| PermissionProfile {
                 network: None,
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![helper_read_root]),
-                    write: None,
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![helper_read_root]),
+                    /*write*/ None,
+                )),
             });
 
         merge_permission_profiles(inherited_permissions.as_ref(), helper_permissions.as_ref())
@@ -504,30 +504,23 @@ mod tests {
                     network: Some(NetworkPermissions {
                         enabled: Some(true),
                     }),
-                    file_system: Some(FileSystemPermissions {
-                        read: Some(vec![]),
-                        write: Some(vec![writable.clone()]),
-                    }),
+                    file_system: Some(FileSystemPermissions::from_read_write_roots(
+                        Some(vec![]),
+                        Some(vec![writable.clone()]),
+                    )),
                 }),
                 /*include_helper_read_root*/ true,
             )
             .expect("helper permissions");
+        let (read, write) = permissions
+            .file_system
+            .as_ref()
+            .and_then(FileSystemPermissions::legacy_read_write_roots)
+            .expect("helper permissions should stay lossless as legacy read/write roots");
 
         assert_eq!(permissions.network, None);
-        assert_eq!(
-            permissions
-                .file_system
-                .as_ref()
-                .and_then(|fs| fs.write.clone()),
-            Some(vec![writable])
-        );
-        assert_eq!(
-            permissions
-                .file_system
-                .as_ref()
-                .and_then(|fs| fs.read.clone()),
-            Some(vec![readable])
-        );
+        assert_eq!(write, Some(vec![writable]));
+        assert_eq!(read, Some(vec![readable]));
     }
 
     #[test]
@@ -646,10 +639,10 @@ mod tests {
         assert_eq!(permissions.network, None);
         assert_eq!(
             permissions.file_system,
-            Some(FileSystemPermissions {
-                read: Some(vec![readable]),
-                write: None,
-            })
+            Some(FileSystemPermissions::from_read_write_roots(
+                Some(vec![readable]),
+                /*write*/ None,
+            ))
         );
     }
 

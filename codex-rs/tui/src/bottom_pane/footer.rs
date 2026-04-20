@@ -16,7 +16,7 @@
 //!   confirmation, shortcut help, or queue hints.
 //! - "contextual footer" means the footer is free to show ambient context instead of an
 //!   instruction. In that state, the footer may render the configured status line, the active
-//!   agent label, or both combined.
+//!   agent label, side-conversation state, or some combination of those.
 //!
 //! Single-line collapse overview:
 //! 1. The composer decides the current `FooterMode` and hint flags, then calls
@@ -481,6 +481,14 @@ pub(crate) fn mode_indicator_line(
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
     indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
+}
+
+pub(crate) fn side_conversation_context_line(label: &str) -> Line<'static> {
+    if let Some(rest) = label.strip_prefix("Side ") {
+        Line::from(vec!["Side".magenta().bold(), format!(" {rest}").magenta()])
+    } else {
+        Line::from(label.to_string()).magenta()
+    }
 }
 
 fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
