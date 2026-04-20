@@ -44,11 +44,12 @@ pub fn create_create_goal_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: CREATE_GOAL_TOOL_NAME.to_string(),
-        description: r#"Create a new goal for this thread when no goal is already defined.
-This tool creates a new active goal and resets time/token usage accounting to zero.
-It fails if any goal already exists. Use update_goal, not create_goal, only to mark an existing goal achieved.
-Set token_budget here when the goal should have a budget."#
-            .to_string(),
+        description: format!(
+            r#"Create a new goal when no goal is defined; usage starts at zero.
+Set token_budget if the goal should be constrained to a max token usage.
+This call fails if a goal already exists. Call {UPDATE_GOAL_TOOL_NAME} to update an existing goal's status.
+"#
+        ),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(
