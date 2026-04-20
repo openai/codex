@@ -2101,7 +2101,7 @@ impl App {
         tokio::spawn(async move {
             let result = fetch_skills_list(request_handle, cwd)
                 .await
-                .map_err(|err| err.to_string());
+                .map_err(|err| format!("{err:#}"));
             app_event_tx.send(AppEvent::SkillsListLoaded { result });
         });
     }
@@ -2682,6 +2682,8 @@ impl App {
             Ok(response) => self.handle_skills_list_response(response),
             Err(err) => {
                 tracing::warn!("{failure_message}: {err:#}");
+                self.chat_widget
+                    .add_error_message(format!("{failure_message}: {err:#}"));
             }
         }
     }
