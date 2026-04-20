@@ -75,6 +75,10 @@ pub trait ToolHandler: Send + Sync {
         None
     }
 
+    fn uses_first_class_trace_object(&self, _invocation: &ToolInvocation) -> bool {
+        false
+    }
+
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
     fn handle(
@@ -133,6 +137,8 @@ trait AnyToolHandler: Send + Sync {
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload>;
 
+    fn uses_first_class_trace_object(&self, invocation: &ToolInvocation) -> bool;
+
     fn handle_any<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -162,6 +168,10 @@ where
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         ToolHandler::post_tool_use_payload(self, call_id, payload, result)
+    }
+
+    fn uses_first_class_trace_object(&self, invocation: &ToolInvocation) -> bool {
+        ToolHandler::uses_first_class_trace_object(self, invocation)
     }
 
     fn handle_any<'a>(
@@ -224,16 +234,23 @@ impl ToolRegistry {
     ) -> Result<AnyToolResult, FunctionCallError> {
         let call_id_owned = invocation.call_id.clone();
         let trace_tool_call_id = format!("tool:{call_id_owned}");
-        let invocation_payload =
-            codex_trace::write_payload("tool_invocation", &trace_tool_invocation(&invocation));
-        emit_tool_started(
-            &invocation,
-            &trace_tool_call_id,
-            invocation_payload.as_ref(),
-        );
+        let uses_first_class_trace_object = self
+            .handler(&invocation.tool_name)
+            .is_some_and(|handler| handler.uses_first_class_trace_object(&invocation));
+        if !uses_first_class_trace_object {
+            let invocation_payload =
+                codex_trace::write_payload("tool_invocation", &trace_tool_invocation(&invocation));
+            emit_tool_started(
+                &invocation,
+                &trace_tool_call_id,
+                invocation_payload.as_ref(),
+            );
+        }
 
         let result = self.dispatch_any_inner(invocation).await;
-        emit_tool_ended(&trace_tool_call_id, &result);
+        if !uses_first_class_trace_object {
+            emit_tool_ended(&trace_tool_call_id, &result);
+        }
         result
     }
 
@@ -466,6 +483,8 @@ fn emit_tool_started(
     tool_call_id: &str,
     invocation_payload: Option<&codex_trace::RawPayloadRef>,
 ) {
+    let (requester_type, model_visible_call_id, runtime_cell_id, runtime_tool_call_id) =
+        trace_tool_source_fields(invocation);
     tracing::event!(
         target: codex_otel::OTEL_TRACE_SAFE_TARGET,
         tracing::Level::INFO,
@@ -474,11 +493,32 @@ fn emit_tool_started(
         turn.id = %invocation.turn.sub_id,
         tool.call_id = %tool_call_id,
         tool.name = %invocation.tool_name.display(),
-        model_visible_call.id = %invocation.call_id,
+        tool.requester.type = %requester_type,
+        model_visible_call.id = %model_visible_call_id,
+        code_cell.runtime_id = %runtime_cell_id,
+        code_mode_runtime_tool.id = %runtime_tool_call_id,
         raw_payload.invocation.id = %invocation_payload.map(|payload| payload.raw_payload_id.as_str()).unwrap_or(""),
         raw_payload.invocation.path = %invocation_payload.map(|payload| payload.path.as_str()).unwrap_or(""),
         raw_payload.invocation.kind = %invocation_payload.map(|payload| payload.kind.as_str()).unwrap_or(""),
     );
+}
+
+fn trace_tool_source_fields(invocation: &ToolInvocation) -> (&str, &str, &str, &str) {
+    match &invocation.source {
+        crate::tools::context::ToolCallSource::Direct => {
+            ("model", invocation.call_id.as_str(), "", "")
+        }
+        crate::tools::context::ToolCallSource::CodeMode {
+            cell_id,
+            runtime_tool_call_id,
+        } => (
+            "code_cell",
+            "",
+            cell_id.as_str(),
+            runtime_tool_call_id.as_str(),
+        ),
+        crate::tools::context::ToolCallSource::JsRepl => ("runtime", "", "", ""),
+    }
 }
 
 fn emit_tool_ended(tool_call_id: &str, result: &Result<AnyToolResult, FunctionCallError>) {
@@ -541,8 +581,24 @@ fn trace_tool_invocation(invocation: &ToolInvocation) -> Value {
         "call_id": &invocation.call_id,
         "tool_name": invocation.tool_name.display(),
         "turn_id": &invocation.turn.sub_id,
+        "source": trace_tool_invocation_source(invocation),
         "payload": payload,
     })
+}
+
+fn trace_tool_invocation_source(invocation: &ToolInvocation) -> Value {
+    match &invocation.source {
+        crate::tools::context::ToolCallSource::Direct => json!({ "type": "model" }),
+        crate::tools::context::ToolCallSource::CodeMode {
+            cell_id,
+            runtime_tool_call_id,
+        } => json!({
+            "type": "code_cell",
+            "runtime_cell_id": cell_id,
+            "runtime_tool_call_id": runtime_tool_call_id,
+        }),
+        crate::tools::context::ToolCallSource::JsRepl => json!({ "type": "runtime" }),
+    }
 }
 
 fn trace_tool_result(

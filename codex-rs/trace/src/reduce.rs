@@ -51,7 +51,9 @@ struct Reducer<'a> {
     // around only while reducing. It lets full request snapshots point back to
     // the canonical item without writing the raw item into state.json.
     raw_conversation_items: BTreeMap<String, Value>,
+    code_cell_ids_by_runtime: BTreeMap<(String, String), String>,
     next_conversation_item_ordinal: u64,
+    next_terminal_operation_ordinal: u64,
 }
 
 pub fn reduce_bundle_to_path(bundle_dir: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<()> {
@@ -97,7 +99,9 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<ReducedTrace> {
             raw_payloads: BTreeMap::new(),
         },
         raw_conversation_items: BTreeMap::new(),
+        code_cell_ids_by_runtime: BTreeMap::new(),
         next_conversation_item_ordinal: 1,
+        next_terminal_operation_ordinal: 1,
     };
 
     let event_log_path = bundle_dir.join("events.jsonl");
@@ -112,6 +116,10 @@ fn reduce_bundle(bundle_dir: &Path) -> Result<ReducedTrace> {
         reducer.apply_event(event)?;
     }
     reducer.link_tools_to_conversation_items();
+    reducer.link_code_cells_to_conversation_items();
+    reducer.drop_redundant_code_cell_tool_calls();
+    reducer.attach_wait_tool_payloads_to_code_cells();
+    reducer.sync_terminal_model_observations();
     reducer.attach_tool_payloads_to_interaction_edges();
     if reducer.trace.started_at_unix_ms == 0 {
         reducer.trace.started_at_unix_ms = reducer
@@ -156,8 +164,10 @@ impl Reducer<'_> {
                 self.inference_completed(&event)?;
             }
             "codex.inference.failed" | "inference_failed" => self.inference_failed(&event),
-            "codex.tool.started" | "tool_started" => self.tool_started(&event),
+            "codex.tool.started" | "tool_started" => self.tool_started(&event)?,
             "codex.tool.ended" | "tool_ended" => self.tool_ended(&event),
+            "codex.code_cell.started" => self.code_cell_started(&event),
+            "codex.code_cell.ended" => self.code_cell_ended(&event),
             "codex.collab.spawn.started" => self.tool_to_thread_edge_started(&event, "spawn_agent"),
             "codex.collab.spawn.ended" => self.tool_to_thread_edge_ended(&event, "spawn_agent"),
             "codex.collab.message.started" => {
@@ -358,18 +368,30 @@ impl Reducer<'_> {
         }
     }
 
-    fn tool_started(&mut self, event: &CapturedEvent) {
+    fn tool_started(&mut self, event: &CapturedEvent) -> Result<()> {
         let (Some(tool_call_id), Some(thread_id), Some(turn_id)) = (
             trace_field_str(event, "tool", "call_id"),
             trace_field_str(event, "thread", "id"),
             trace_field_str(event, "turn", "id"),
         ) else {
-            return;
+            return Ok(());
         };
         self.ensure_thread(thread_id, event.wall_time_unix_ms);
         let tool_name = trace_field_str(event, "tool", "name").unwrap_or("tool");
         let raw_invocation_payload_id =
             raw_payload_field_str(event, "invocation", "id").unwrap_or("");
+        let model_visible_call_id = trace_field_str(event, "model_visible_call", "id")
+            .filter(|call_id| !call_id.is_empty());
+        let code_mode_runtime_tool_id =
+            field_str(event, "code_mode_runtime_tool.id").filter(|tool_id| !tool_id.is_empty());
+        let requester = self.tool_requester(event, thread_id);
+        let terminal_operation_id = self.start_terminal_operation_for_tool(
+            event,
+            thread_id,
+            tool_call_id,
+            tool_name,
+            raw_invocation_payload_id,
+        )?;
         self.trace.tool_calls.insert(
             tool_call_id.to_string(),
             json!({
@@ -377,11 +399,13 @@ impl Reducer<'_> {
                 "thread_id": thread_id,
                 "codex_turn_id": turn_id,
                 "started_by_codex_turn_id": turn_id,
-                "model_visible_call_id": trace_field_str(event, "model_visible_call", "id").unwrap_or(""),
+                "model_visible_call_id": model_visible_call_id,
+                "code_mode_runtime_tool_id": code_mode_runtime_tool_id,
                 "model_visible_call_item_ids": [],
                 "model_visible_output_item_ids": [],
-                "requester": { "type": "model" },
-                "kind": { "type": "other", "name": tool_name },
+                "requester": requester,
+                "kind": tool_call_kind(tool_name),
+                "terminal_operation_id": terminal_operation_id,
                 "summary": {
                     "input_preview": "",
                     "output_preview": "",
@@ -392,12 +416,17 @@ impl Reducer<'_> {
                 "raw_runtime_payload_ids": [],
             }),
         );
+        self.link_tool_call_to_code_cell(tool_call_id);
+        Ok(())
     }
 
     fn tool_ended(&mut self, event: &CapturedEvent) {
         let Some(tool_call_id) = trace_field_str(event, "tool", "call_id") else {
             return;
         };
+        let raw_result_payload_id = raw_payload_field_str(event, "result", "id").unwrap_or("");
+        let mut terminal_operation_id = None;
+        let mut thread_id = None;
         if let Some(tool) = self.trace.tool_calls.get_mut(tool_call_id) {
             let status = field_str(event, "status").unwrap_or("completed");
             set_execution_end(tool, event.wall_time_unix_ms, event.seq, status);
@@ -407,8 +436,96 @@ impl Reducer<'_> {
                     Value::String(field_str(event, "output_preview").unwrap_or("").to_string()),
                 );
             }
-            tool["raw_result_payload_id"] =
-                empty_to_null(raw_payload_field_str(event, "result", "id").unwrap_or(""));
+            tool["raw_result_payload_id"] = empty_to_null(raw_result_payload_id);
+            terminal_operation_id = tool
+                .get("terminal_operation_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            thread_id = tool
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+        if let Some(operation_id) = terminal_operation_id {
+            self.end_terminal_operation(
+                &operation_id,
+                thread_id.as_deref().unwrap_or(""),
+                event,
+                raw_result_payload_id,
+            );
+        }
+    }
+
+    fn code_cell_started(&mut self, event: &CapturedEvent) {
+        let (Some(thread_id), Some(turn_id), Some(runtime_cell_id), Some(model_visible_call_id)) = (
+            trace_field_str(event, "thread", "id"),
+            trace_field_str(event, "turn", "id"),
+            field_str(event, "code_cell.runtime_id"),
+            trace_field_str(event, "model_visible_call", "id"),
+        ) else {
+            return;
+        };
+        self.ensure_thread(thread_id, event.wall_time_unix_ms);
+        let code_cell_id = reduced_code_cell_id(model_visible_call_id);
+        self.code_cell_ids_by_runtime.insert(
+            (thread_id.to_string(), runtime_cell_id.to_string()),
+            code_cell_id.clone(),
+        );
+        self.trace.code_cells.entry(code_cell_id.clone()).or_insert_with(|| {
+            let raw_invocation_payload_id =
+                raw_payload_field_str(event, "invocation", "id").unwrap_or("");
+            json!({
+                "code_cell_id": code_cell_id,
+                "model_visible_call_id": model_visible_call_id,
+                "thread_id": thread_id,
+                "codex_turn_id": turn_id,
+                "source_item_id": Value::Null,
+                "output_item_ids": [],
+                "runtime_cell_id": runtime_cell_id,
+                "execution": execution_json(event.wall_time_unix_ms, None, "running", event.seq, None),
+                "runtime_status": "running",
+                "source_js": field_str(event, "code_cell.source_js").unwrap_or(""),
+                "nested_tool_call_ids": [],
+                "wait_tool_call_ids": [],
+                "raw_payload_ids": non_empty_array(raw_invocation_payload_id),
+            })
+        });
+    }
+
+    fn code_cell_ended(&mut self, event: &CapturedEvent) {
+        let (Some(thread_id), Some(runtime_cell_id)) = (
+            trace_field_str(event, "thread", "id"),
+            field_str(event, "code_cell.runtime_id"),
+        ) else {
+            return;
+        };
+        let Some(code_cell_id) = self
+            .code_cell_ids_by_runtime
+            .get(&(thread_id.to_string(), runtime_cell_id.to_string()))
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
+            let runtime_status = field_str(event, "status").unwrap_or("completed");
+            set_execution_end(
+                cell,
+                event.wall_time_unix_ms,
+                event.seq,
+                code_cell_execution_status(runtime_status),
+            );
+            cell["runtime_status"] = Value::String(runtime_status.to_string());
+            if let Some(wait_call_id) = trace_field_str(event, "model_visible_wait_call", "id")
+                .filter(|call_id| !call_id.is_empty())
+            {
+                let tool_call_id = normalize_tool_call_id(wait_call_id);
+                push_unique_json_string(cell, "wait_tool_call_ids", &tool_call_id);
+            }
+            if let Some(raw_result_payload_id) = raw_payload_field_str(event, "result", "id")
+                .filter(|payload_id| !payload_id.is_empty())
+            {
+                push_unique_json_string(cell, "raw_payload_ids", raw_result_payload_id);
+            }
         }
     }
 
@@ -675,6 +792,172 @@ impl Reducer<'_> {
         item_id
     }
 
+    fn tool_requester(&self, event: &CapturedEvent, thread_id: &str) -> Value {
+        if field_str(event, "tool.requester.type") != Some("code_cell") {
+            return json!({ "type": "model" });
+        }
+
+        // Code-mode nested tools are not visible to the model as ordinary
+        // request/response items. The runtime cell id is the stable bridge
+        // from the tool event back to the model-visible `exec` code cell.
+        let Some(runtime_cell_id) = field_str(event, "code_cell.runtime_id") else {
+            return json!({ "type": "code_cell", "code_cell_id": Value::Null });
+        };
+        let code_cell_id = self
+            .code_cell_ids_by_runtime
+            .get(&(thread_id.to_string(), runtime_cell_id.to_string()))
+            .cloned();
+        json!({
+            "type": "code_cell",
+            "code_cell_id": code_cell_id,
+            "runtime_cell_id": runtime_cell_id,
+        })
+    }
+
+    fn link_tool_call_to_code_cell(&mut self, tool_call_id: &str) {
+        let Some(code_cell_id) = self
+            .trace
+            .tool_calls
+            .get(tool_call_id)
+            .and_then(|tool| tool.get("requester"))
+            .and_then(|requester| requester.get("code_cell_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return;
+        };
+        if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
+            push_unique_json_string(cell, "nested_tool_call_ids", tool_call_id);
+        }
+    }
+
+    fn start_terminal_operation_for_tool(
+        &mut self,
+        event: &CapturedEvent,
+        thread_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        raw_invocation_payload_id: &str,
+    ) -> Result<Value> {
+        if !is_terminal_tool(tool_name) {
+            return Ok(Value::Null);
+        }
+
+        // Terminal operations are a runtime view over shell-like tools. They
+        // deliberately hang off the reduced tool call so direct model tools and
+        // nested code-cell tools share the same terminal model.
+        let operation_id = format!(
+            "terminal_operation:{}",
+            self.next_terminal_operation_ordinal
+        );
+        self.next_terminal_operation_ordinal += 1;
+        let request = self
+            .payload_by_id(raw_invocation_payload_id)?
+            .map(|payload| terminal_request_from_invocation(&payload))
+            .unwrap_or_else(|| json!({ "type": "exec_command" }));
+        let terminal_id = terminal_id_from_terminal_request(&request);
+        self.trace.terminal_operations.insert(
+            operation_id.clone(),
+            json!({
+                "operation_id": operation_id,
+                "terminal_id": terminal_id,
+                "tool_call_id": tool_call_id,
+                "kind": terminal_operation_kind(tool_name),
+                "execution": execution_json(event.wall_time_unix_ms, None, "running", event.seq, None),
+                "request": request,
+                "result": Value::Null,
+                "model_observations": [],
+                "raw_payload_ids": non_empty_array(raw_invocation_payload_id),
+            }),
+        );
+        // Continuation tools already name their terminal session in the request.
+        // Create the session immediately so interrupted traces still group the
+        // in-flight operation under the right terminal rail.
+        if let Some(terminal_id) = terminal_id {
+            self.ensure_terminal_session_for_operation(thread_id, &terminal_id, &operation_id);
+        }
+        Ok(json!(operation_id))
+    }
+
+    fn end_terminal_operation(
+        &mut self,
+        operation_id: &str,
+        thread_id: &str,
+        event: &CapturedEvent,
+        raw_result_payload_id: &str,
+    ) {
+        let result_payload = self
+            .payload_by_id(raw_result_payload_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| json!({}));
+        let request_terminal_id = self
+            .trace
+            .terminal_operations
+            .get(operation_id)
+            .and_then(terminal_id_from_operation_request);
+        // Prefer real runtime ids over synthetic ids. Some continuation
+        // results omit `session_id`, but their request still names the session.
+        let terminal_id = terminal_id_from_result_payload(&result_payload, "")
+            .or(request_terminal_id)
+            .or_else(|| terminal_id_from_result_payload(&result_payload, operation_id));
+        if let Some(operation) = self.trace.terminal_operations.get_mut(operation_id) {
+            let status = field_str(event, "status").unwrap_or("completed");
+            set_execution_end(operation, event.wall_time_unix_ms, event.seq, status);
+            if let Some(terminal_id) = terminal_id.as_deref() {
+                operation["terminal_id"] = Value::String(terminal_id.to_string());
+            }
+            operation["result"] =
+                terminal_result_from_payload(&result_payload, field_str(event, "output_preview"));
+            push_unique_json_string(operation, "raw_payload_ids", raw_result_payload_id);
+        }
+        if let Some(terminal_id) = terminal_id {
+            self.ensure_terminal_session_for_operation(thread_id, &terminal_id, operation_id);
+        }
+    }
+
+    fn ensure_terminal_session_for_operation(
+        &mut self,
+        thread_id: &str,
+        terminal_id: &str,
+        operation_id: &str,
+    ) {
+        if terminal_id.is_empty() || operation_id.is_empty() {
+            return;
+        }
+        let operation_execution = self
+            .trace
+            .terminal_operations
+            .get(operation_id)
+            .and_then(|operation| operation.get("execution"))
+            .cloned()
+            .unwrap_or_else(|| execution_json(0, None, "running", 0, None));
+        let session_execution = if terminal_id.starts_with("terminal:terminal_operation:") {
+            operation_execution
+        } else {
+            let mut execution = operation_execution;
+            execution["ended_at_unix_ms"] = Value::Null;
+            execution["ended_seq"] = Value::Null;
+            execution["status"] = Value::String("running".to_string());
+            execution
+        };
+        self.trace
+            .terminal_sessions
+            .entry(terminal_id.to_string())
+            .or_insert_with(|| {
+                json!({
+                    "terminal_id": terminal_id,
+                    "thread_id": thread_id,
+                    "created_by_operation_id": operation_id,
+                    "operation_ids": [],
+                    "execution": session_execution,
+                })
+            });
+        if let Some(session) = self.trace.terminal_sessions.get_mut(terminal_id) {
+            push_unique_json_string(session, "operation_ids", operation_id);
+        }
+    }
+
     fn payload_by_id(&self, raw_payload_id: &str) -> Result<Option<Value>> {
         if raw_payload_id.is_empty() {
             return Ok(None);
@@ -721,26 +1004,236 @@ impl Reducer<'_> {
             tool["model_visible_call_item_ids"] = json!(call_items);
             tool["model_visible_output_item_ids"] = json!(output_items);
         }
+
+        let links = self
+            .trace
+            .tool_calls
+            .iter()
+            .flat_map(|(tool_call_id, tool)| {
+                string_array_field(tool, "model_visible_output_item_ids")
+                    .into_iter()
+                    .map(|item_id| (tool_call_id.clone(), item_id))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for (tool_call_id, item_id) in links {
+            self.add_conversation_item_producer(
+                &item_id,
+                json!({ "type": "tool", "tool_call_id": tool_call_id }),
+            );
+        }
+    }
+
+    fn link_code_cells_to_conversation_items(&mut self) {
+        let code_cell_ids = self.trace.code_cells.keys().cloned().collect::<Vec<_>>();
+        for code_cell_id in code_cell_ids {
+            let Some(model_visible_call_id) = self
+                .trace
+                .code_cells
+                .get(&code_cell_id)
+                .and_then(|cell| cell.get("model_visible_call_id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+
+            let mut source_item_id = None;
+            let mut output_item_ids = Vec::new();
+            let mut output_call_ids = vec![model_visible_call_id.clone()];
+            if let Some(cell) = self.trace.code_cells.get(&code_cell_id) {
+                for wait_tool_call_id in string_array_field(cell, "wait_tool_call_ids") {
+                    if let Some(call_id) = wait_tool_call_id.strip_prefix("tool:") {
+                        output_call_ids.push(call_id.to_string());
+                    }
+                }
+            }
+            // The code-cell start event gives us runtime identity, but the
+            // provider payload gives us the canonical conversation item ids.
+            // Link them after replay so we can see both sides of the turn. A
+            // yielded cell may emit its final model-visible output through a
+            // later `wait` call, so outputs are collected from both ids.
+            for item in self.trace.conversation_items.values() {
+                let Some(item_call_id) = item.get("call_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if !output_call_ids
+                    .iter()
+                    .any(|call_id| call_id.as_str() == item_call_id)
+                {
+                    continue;
+                }
+                let Some(item_id) = item.get("item_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                match item.get("kind").and_then(Value::as_str) {
+                    Some("custom_tool_call") if item_call_id == model_visible_call_id => {
+                        source_item_id = Some(item_id.to_string());
+                    }
+                    Some("custom_tool_call_output" | "function_call_output") => {
+                        output_item_ids.push(item_id.to_string());
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
+                if let Some(source_item_id) = source_item_id {
+                    cell["source_item_id"] = Value::String(source_item_id);
+                }
+                cell["output_item_ids"] = json!(output_item_ids);
+            }
+            for output_item_id in output_item_ids {
+                self.add_conversation_item_producer(
+                    &output_item_id,
+                    json!({ "type": "code_cell", "code_cell_id": code_cell_id }),
+                );
+            }
+        }
+    }
+
+    fn drop_redundant_code_cell_tool_calls(&mut self) {
+        let mut redundant_tool_call_ids = Vec::new();
+        for (tool_call_id, tool) in &self.trace.tool_calls {
+            if tool
+                .get("kind")
+                .and_then(|kind| kind.get("type"))
+                .and_then(Value::as_str)
+                != Some("code_cell")
+            {
+                continue;
+            }
+            let Some(model_visible_call_id) =
+                tool.get("model_visible_call_id").and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let code_cell_id = reduced_code_cell_id(model_visible_call_id);
+            if self.trace.code_cells.contains_key(&code_cell_id) {
+                redundant_tool_call_ids.push(tool_call_id.clone());
+            }
+        }
+
+        for tool_call_id in redundant_tool_call_ids {
+            // `exec` itself is represented by `code_cells`; keeping the generic
+            // dispatch ToolCall makes viewers render two roots for the same
+            // model-visible JavaScript cell. Copy its payload refs first so the
+            // code-cell details view still has a direct path to raw bytes.
+            if let Some(tool) = self.trace.tool_calls.remove(&tool_call_id)
+                && let Some(model_visible_call_id) =
+                    tool.get("model_visible_call_id").and_then(Value::as_str)
+            {
+                let code_cell_id = reduced_code_cell_id(model_visible_call_id);
+                if let Some(cell) = self.trace.code_cells.get_mut(&code_cell_id) {
+                    for raw_payload_id in tool_raw_payload_ids(&tool) {
+                        push_unique_json_string(cell, "raw_payload_ids", &raw_payload_id);
+                    }
+                }
+            }
+            self.remove_conversation_item_producer(
+                json!({ "type": "tool", "tool_call_id": tool_call_id }),
+            );
+        }
+    }
+
+    fn attach_wait_tool_payloads_to_code_cells(&mut self) {
+        for cell in self.trace.code_cells.values_mut() {
+            for wait_tool_call_id in string_array_field(cell, "wait_tool_call_ids") {
+                let Some(wait_tool) = self.trace.tool_calls.get(&wait_tool_call_id) else {
+                    continue;
+                };
+                for raw_payload_id in tool_raw_payload_ids(wait_tool) {
+                    push_unique_json_string(cell, "raw_payload_ids", &raw_payload_id);
+                }
+            }
+        }
+    }
+
+    fn sync_terminal_model_observations(&mut self) {
+        let operation_ids = self
+            .trace
+            .terminal_operations
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for operation_id in operation_ids {
+            let Some(tool_call_id) = self
+                .trace
+                .terminal_operations
+                .get(&operation_id)
+                .and_then(|operation| operation.get("tool_call_id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let Some(tool) = self.trace.tool_calls.get(&tool_call_id) else {
+                continue;
+            };
+            // Direct shell tools are observed by the model through their own
+            // call/output items. Nested shell tools are only observed through
+            // the enclosing code cell's output, so terminal playback needs to
+            // point at the code cell in that case.
+            let observation = if tool
+                .get("requester")
+                .and_then(|requester| requester.get("type"))
+                .and_then(Value::as_str)
+                == Some("code_cell")
+            {
+                let Some(code_cell_id) = tool
+                    .get("requester")
+                    .and_then(|requester| requester.get("code_cell_id"))
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                let Some(cell) = self.trace.code_cells.get(code_cell_id) else {
+                    continue;
+                };
+                json!({
+                    "call_item_ids": non_empty_array(cell.get("source_item_id").and_then(Value::as_str).unwrap_or("")),
+                    "output_item_ids": string_array_field(cell, "output_item_ids"),
+                    "source": "code_cell_output",
+                })
+            } else {
+                json!({
+                    "call_item_ids": string_array_field(tool, "model_visible_call_item_ids"),
+                    "output_item_ids": string_array_field(tool, "model_visible_output_item_ids"),
+                    "source": "direct_tool_call",
+                })
+            };
+            if let Some(operation) = self.trace.terminal_operations.get_mut(&operation_id) {
+                operation["model_observations"] = json!([observation]);
+            }
+        }
+    }
+
+    fn add_conversation_item_producer(&mut self, item_id: &str, producer: Value) {
+        let Some(item) = self.trace.conversation_items.get_mut(item_id) else {
+            return;
+        };
+        let Some(produced_by) = item.get_mut("produced_by").and_then(Value::as_array_mut) else {
+            return;
+        };
+        if !produced_by.iter().any(|existing| existing == &producer) {
+            produced_by.push(producer);
+        }
+    }
+
+    fn remove_conversation_item_producer(&mut self, producer: Value) {
+        for item in self.trace.conversation_items.values_mut() {
+            let Some(produced_by) = item.get_mut("produced_by").and_then(Value::as_array_mut)
+            else {
+                continue;
+            };
+            produced_by.retain(|existing| existing != &producer);
+        }
     }
 
     fn attach_tool_payloads_to_interaction_edges(&mut self) {
         let mut tool_payloads = BTreeMap::new();
         for (tool_call_id, tool) in &self.trace.tool_calls {
-            let mut raw_payload_ids = Vec::new();
-            for field in ["raw_invocation_payload_id", "raw_result_payload_id"] {
-                if let Some(raw_payload_id) = tool.get(field).and_then(Value::as_str) {
-                    push_unique(&mut raw_payload_ids, raw_payload_id);
-                }
-            }
-            if let Some(runtime_payload_ids) = tool
-                .get("raw_runtime_payload_ids")
-                .and_then(Value::as_array)
-            {
-                for raw_payload_id in runtime_payload_ids.iter().filter_map(Value::as_str) {
-                    push_unique(&mut raw_payload_ids, raw_payload_id);
-                }
-            }
-
+            let raw_payload_ids = tool_raw_payload_ids(tool);
             let mut item_ids = Vec::new();
             for field in [
                 "model_visible_call_item_ids",
@@ -877,12 +1370,247 @@ fn normalize_body(kind: &str, item: &Value, raw_payload_id: &str) -> Value {
     }
 }
 
+fn reduced_code_cell_id(model_visible_call_id: &str) -> String {
+    format!("code_cell:{model_visible_call_id}")
+}
+
+fn tool_call_kind(tool_name: &str) -> Value {
+    if is_terminal_tool(tool_name) {
+        return json!({ "type": terminal_operation_kind(tool_name) });
+    }
+
+    match tool_name {
+        "exec" => json!({ "type": "code_cell" }),
+        "spawn_agent" | "send_message" | "followup_task" | "wait_agent" | "close_agent"
+        | "list_agents" => json!({ "type": "agent_interaction", "name": tool_name }),
+        _ => json!({ "type": "other", "name": tool_name }),
+    }
+}
+
+fn is_terminal_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "exec_command" | "local_shell" | "shell" | "shell_command" | "write_stdin"
+    )
+}
+
+fn terminal_operation_kind(tool_name: &str) -> &'static str {
+    match tool_name {
+        "write_stdin" => "write_stdin",
+        "exec_command" | "local_shell" | "shell" | "shell_command" => "exec_command",
+        _ => "terminal",
+    }
+}
+
+fn terminal_request_from_invocation(invocation: &Value) -> Value {
+    let tool_name = invocation
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let payload = invocation.get("payload").unwrap_or(&Value::Null);
+    match payload.get("type").and_then(Value::as_str) {
+        Some("function") => {
+            let arguments = payload
+                .get("arguments")
+                .and_then(Value::as_str)
+                .and_then(parse_json_object)
+                .unwrap_or_default();
+            terminal_request_from_arguments(tool_name, &arguments)
+        }
+        Some("local_shell") => {
+            let command = payload.get("command").cloned().unwrap_or_else(|| json!([]));
+            json!({
+                "type": "exec_command",
+                "command": command,
+                "display_command": display_command(&command),
+                "cwd": payload.get("workdir").and_then(Value::as_str).unwrap_or(""),
+                "timeout_ms": payload.get("timeout_ms").cloned().unwrap_or(Value::Null),
+            })
+        }
+        _ => json!({
+            "type": terminal_operation_kind(tool_name),
+            "raw_payload": payload,
+        }),
+    }
+}
+
+fn terminal_request_from_arguments(tool_name: &str, arguments: &Map<String, Value>) -> Value {
+    if tool_name == "write_stdin" {
+        return json!({
+            "type": "write_stdin",
+            "session_id": arguments.get("session_id").cloned().unwrap_or(Value::Null),
+            "chars": arguments.get("chars").and_then(Value::as_str).unwrap_or(""),
+        });
+    }
+
+    let command = arguments
+        .get("command")
+        .cloned()
+        .or_else(|| arguments.get("cmd").map(|cmd| json!([cmd])))
+        .unwrap_or_else(|| json!([]));
+    json!({
+        "type": "exec_command",
+        "command": command,
+        "display_command": display_command(&command),
+        "cwd": arguments
+            .get("workdir")
+            .or_else(|| arguments.get("cwd"))
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        "yield_time_ms": arguments.get("yield_time_ms").cloned().unwrap_or(Value::Null),
+        "max_output_tokens": arguments.get("max_output_tokens").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn parse_json_object(raw: &str) -> Option<Map<String, Value>> {
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+}
+
+fn display_command(command: &Value) -> String {
+    if let Some(text) = command.as_str() {
+        return text.to_string();
+    }
+
+    command
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn terminal_id_from_result_payload(payload: &Value, operation_id: &str) -> Option<String> {
+    let runtime_terminal_id = payload
+        .get("code_mode_result")
+        .and_then(|result| result.get("session_id"))
+        .and_then(|session_id| {
+            session_id
+                .as_u64()
+                .map(|id| id.to_string())
+                .or_else(|| session_id.as_str().map(str::to_string))
+        });
+    if runtime_terminal_id.is_some() {
+        return runtime_terminal_id;
+    }
+
+    // One-shot commands finish before the runtime has a persistent session id.
+    // Still create a terminal session so every terminal operation has a parent
+    // session object for viewers to hang lifecycle UI from.
+    payload
+        .get("code_mode_result")
+        .filter(|result| result.is_object())
+        .and_then(|_| (!operation_id.is_empty()).then(|| format!("terminal:{operation_id}")))
+}
+
+fn terminal_id_from_operation_request(operation: &Value) -> Option<String> {
+    // Continuation calls such as `write_stdin` already name the runtime
+    // session in their request. Completed chunks may omit that id from the
+    // result payload, so falling back to the request keeps all operations in
+    // the same terminal session instead of inventing a synthetic one.
+    operation
+        .get("request")
+        .and_then(terminal_id_from_terminal_request)
+}
+
+fn terminal_id_from_terminal_request(request: &Value) -> Option<String> {
+    request.get("session_id").and_then(|session_id| {
+        session_id
+            .as_u64()
+            .map(|id| id.to_string())
+            .or_else(|| session_id.as_str().map(str::to_string))
+    })
+}
+
+fn tool_raw_payload_ids(tool: &Value) -> Vec<String> {
+    let mut raw_payload_ids = Vec::new();
+    for field in ["raw_invocation_payload_id", "raw_result_payload_id"] {
+        if let Some(raw_payload_id) = tool.get(field).and_then(Value::as_str) {
+            push_unique(&mut raw_payload_ids, raw_payload_id);
+        }
+    }
+    for raw_payload_id in tool
+        .get("raw_runtime_payload_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        push_unique(&mut raw_payload_ids, raw_payload_id);
+    }
+    raw_payload_ids
+}
+
+fn terminal_result_from_payload(payload: &Value, output_preview: Option<&str>) -> Value {
+    let code_mode_result = payload.get("code_mode_result").unwrap_or(&Value::Null);
+    json!({
+        "output_preview": output_preview.unwrap_or(""),
+        "output": code_mode_result
+            .get("output")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| payload.get("output_preview").and_then(Value::as_str).unwrap_or("")),
+        "chunk_id": code_mode_result.get("chunk_id").cloned().unwrap_or(Value::Null),
+        "exit_code": code_mode_result.get("exit_code").cloned().unwrap_or(Value::Null),
+        "wall_time_seconds": code_mode_result
+            .get("wall_time_seconds")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "original_token_count": code_mode_result
+            .get("original_token_count")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "success": payload.get("success").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn code_cell_execution_status(runtime_status: &str) -> &'static str {
+    match runtime_status {
+        "completed" => "completed",
+        "failed" => "failed",
+        "terminated" => "cancelled",
+        "yielded" | "running" => "running",
+        _ => "completed",
+    }
+}
+
+fn non_empty_array(value: &str) -> Value {
+    if value.is_empty() {
+        json!([])
+    } else {
+        json!([value])
+    }
+}
+
+fn push_unique_json_string(object: &mut Value, key: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    let Some(array) = object.get_mut(key).and_then(Value::as_array_mut) else {
+        return;
+    };
+    if !array
+        .iter()
+        .any(|existing| existing.as_str() == Some(value))
+    {
+        array.push(Value::String(value.to_string()));
+    }
+}
+
 fn tool_output_text(output: Option<&Value>) -> String {
     let Some(output) = output else {
         return String::new();
     };
     if let Some(text) = output.as_str() {
         return text.to_string();
+    }
+    if let Some(items) = output.as_array() {
+        return items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("");
     }
     if let Some(text) = output.get("content").and_then(Value::as_str) {
         return text.to_string();
@@ -953,11 +1681,15 @@ fn trace_field_str<'a>(event: &'a CapturedEvent, namespace: &str, name: &str) ->
 fn normalized_tool_call_id(event: &CapturedEvent) -> Option<String> {
     let call_id =
         trace_field_str(event, "tool", "call_id").filter(|call_id| !call_id.is_empty())?;
-    Some(if call_id.starts_with("tool:") {
+    Some(normalize_tool_call_id(call_id))
+}
+
+fn normalize_tool_call_id(call_id: &str) -> String {
+    if call_id.starts_with("tool:") {
         call_id.to_string()
     } else {
         format!("tool:{call_id}")
-    })
+    }
 }
 
 fn interaction_edge_id(kind: &str, tool_call_id: &str) -> String {
@@ -1123,14 +1855,14 @@ mod tests {
 
         std::fs::write(
             temp.path().join("payloads/1.json"),
-            serde_json::to_vec(&json!({ "input": [user_message.clone()] }))?,
+            serde_json::to_vec(&json!({ "input": [user_message] }))?,
         )?;
         std::fs::write(
             temp.path().join("payloads/2.json"),
             serde_json::to_vec(&json!({
                 "response_id": "resp-1",
                 "token_usage": { "input_tokens": 1, "output_tokens": 2 },
-                "output_items": [tool_call.clone()]
+                "output_items": [tool_call]
             }))?,
         )?;
         // The next request includes the whole model-visible input again. The
@@ -1408,6 +2140,647 @@ mod tests {
                     "raw_payload:wait-result"
                 ],
             })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reduces_code_cell_nested_terminal_tool_relationships() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        std::fs::write(
+            temp.path().join("manifest.json"),
+            serde_json::to_vec(&json!({
+                "trace_id": "trace-test",
+                "started_at_unix_ms": 10,
+            }))?,
+        )?;
+        std::fs::create_dir(temp.path().join("payloads"))?;
+
+        let user_message = json!({
+            "type": "message",
+            "role": "user",
+            "content": [{ "type": "input_text", "text": "count files" }]
+        });
+        let code_call = json!({
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call-code",
+            "name": "exec",
+            "input": "await tools.exec_command({ cmd: \"find . -type f | wc -l\" });"
+        });
+        let code_output = json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call-code",
+            "output": [{ "type": "input_text", "text": "Script completed\nOutput:\n42" }]
+        });
+
+        std::fs::write(
+            temp.path().join("payloads/1.json"),
+            serde_json::to_vec(&json!({ "input": [user_message] }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/2.json"),
+            serde_json::to_vec(&json!({ "output_items": [code_call] }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/3.json"),
+            serde_json::to_vec(&json!({
+                "call_id": "call-code",
+                "tool_name": "exec",
+                "payload": { "type": "custom", "input": code_call["input"] }
+            }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/4.json"),
+            serde_json::to_vec(&json!({
+                "call_id": "runtime-tool-1",
+                "tool_name": "exec_command",
+                "payload": {
+                    "type": "function",
+                    "arguments": "{\"cmd\":\"find . -type f | wc -l\",\"workdir\":\"/repo\",\"max_output_tokens\":200,\"yield_time_ms\":1000}"
+                },
+                "source": {
+                    "type": "code_cell",
+                    "runtime_cell_id": "runtime-cell-1",
+                    "runtime_tool_call_id": "runtime-tool-1"
+                }
+            }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/5.json"),
+            serde_json::to_vec(&json!({
+                "status": "completed",
+                "success": true,
+                "output_preview": "Chunk ID: chunk-1\nWall time: 1.0 seconds\nOutput:\n",
+                "code_mode_result": {
+                    "chunk_id": "chunk-1",
+                    "wall_time_seconds": 1.0,
+                    "session_id": 55007,
+                    "original_token_count": 0,
+                    "output": ""
+                }
+            }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/6.json"),
+            serde_json::to_vec(&json!({
+                "status": "completed",
+                "success": true,
+                "output_preview": "Script completed\nOutput:\n42"
+            }))?,
+        )?;
+        // Code-cell outputs are model-visible only when the follow-up request
+        // sends the complete conversation snapshot back to the provider.
+        std::fs::write(
+            temp.path().join("payloads/7.json"),
+            serde_json::to_vec(&json!({
+                "input": [user_message, code_call, code_output]
+            }))?,
+        )?;
+
+        let mut events = std::fs::File::create(temp.path().join("events.jsonl"))?;
+        write_event(
+            &mut events,
+            1,
+            "codex.thread.started",
+            json!({"thread.id": "thread-1"}),
+        )?;
+        write_event(
+            &mut events,
+            2,
+            "codex.turn.started",
+            json!({"thread.id": "thread-1", "turn.id": "turn-1"}),
+        )?;
+        write_event(
+            &mut events,
+            3,
+            "codex.inference.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "inference.id": "inf-1",
+                "raw_payload.request.id": "raw_payload:1",
+                "raw_payload.request.path": "payloads/1.json",
+                "raw_payload.request.kind": "inference_request"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            4,
+            "codex.inference.completed",
+            json!({
+                "inference.id": "inf-1",
+                "response.id": "resp-1",
+                "raw_payload.response.id": "raw_payload:2",
+                "raw_payload.response.path": "payloads/2.json",
+                "raw_payload.response.kind": "inference_response_summary"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            5,
+            "codex.tool.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "tool.call_id": "tool:call-code",
+                "tool.name": "exec",
+                "model_visible_call.id": "call-code",
+                "raw_payload.invocation.id": "raw_payload:3",
+                "raw_payload.invocation.path": "payloads/3.json",
+                "raw_payload.invocation.kind": "tool_invocation"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            6,
+            "codex.code_cell.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "code_cell.runtime_id": "runtime-cell-1",
+                "model_visible_call.id": "call-code",
+                "code_cell.source_js": "await tools.exec_command({ cmd: \"find . -type f | wc -l\" });"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            7,
+            "codex.tool.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "tool.call_id": "tool:nested-exec",
+                "tool.name": "exec_command",
+                "tool.requester.type": "code_cell",
+                "code_cell.runtime_id": "runtime-cell-1",
+                "code_mode_runtime_tool.id": "runtime-tool-1",
+                "raw_payload.invocation.id": "raw_payload:4",
+                "raw_payload.invocation.path": "payloads/4.json",
+                "raw_payload.invocation.kind": "tool_invocation"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            8,
+            "codex.tool.ended",
+            json!({
+                "tool.call_id": "tool:nested-exec",
+                "status": "completed",
+                "output_preview": "Chunk ID: chunk-1\nWall time: 1.0 seconds\nOutput:\n",
+                "raw_payload.result.id": "raw_payload:5",
+                "raw_payload.result.path": "payloads/5.json",
+                "raw_payload.result.kind": "tool_result"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            9,
+            "codex.code_cell.ended",
+            json!({
+                "thread.id": "thread-1",
+                "code_cell.runtime_id": "runtime-cell-1",
+                "status": "completed"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            10,
+            "codex.tool.ended",
+            json!({
+                "tool.call_id": "tool:call-code",
+                "status": "completed",
+                "raw_payload.result.id": "raw_payload:6",
+                "raw_payload.result.path": "payloads/6.json",
+                "raw_payload.result.kind": "tool_result"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            11,
+            "codex.inference.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "inference.id": "inf-2",
+                "raw_payload.request.id": "raw_payload:7",
+                "raw_payload.request.path": "payloads/7.json",
+                "raw_payload.request.kind": "inference_request"
+            }),
+        )?;
+
+        let trace = reduce_bundle(temp.path())?;
+
+        assert_eq!(
+            trace.code_cells["code_cell:call-code"],
+            json!({
+                "code_cell_id": "code_cell:call-code",
+                "model_visible_call_id": "call-code",
+                "thread_id": "thread-1",
+                "codex_turn_id": "turn-1",
+                "source_item_id": "item:2",
+                "output_item_ids": ["item:3"],
+                "runtime_cell_id": "runtime-cell-1",
+                "execution": {
+                    "started_at_unix_ms": 1776420000000i64,
+                    "ended_at_unix_ms": 1776420000000i64,
+                    "status": "completed",
+                    "started_seq": 6,
+                    "ended_seq": 9,
+                },
+                "runtime_status": "completed",
+                "source_js": "await tools.exec_command({ cmd: \"find . -type f | wc -l\" });",
+                "nested_tool_call_ids": ["tool:nested-exec"],
+                "wait_tool_call_ids": [],
+                "raw_payload_ids": ["raw_payload:3", "raw_payload:6"],
+            })
+        );
+        assert_eq!(
+            json!({
+                "has_outer_exec_tool": trace.tool_calls.contains_key("tool:call-code"),
+                "nested_tool": trace.tool_calls["tool:nested-exec"].clone(),
+                "terminal_operation": trace.terminal_operations["terminal_operation:1"].clone(),
+                "terminal_session": trace.terminal_sessions["55007"].clone(),
+                "output_producers": trace.conversation_items["item:3"]["produced_by"].clone(),
+            }),
+            json!({
+                "has_outer_exec_tool": false,
+                "nested_tool": {
+                    "tool_call_id": "tool:nested-exec",
+                    "thread_id": "thread-1",
+                    "codex_turn_id": "turn-1",
+                    "started_by_codex_turn_id": "turn-1",
+                    "model_visible_call_id": null,
+                    "code_mode_runtime_tool_id": "runtime-tool-1",
+                    "model_visible_call_item_ids": [],
+                    "model_visible_output_item_ids": [],
+                    "requester": {
+                        "type": "code_cell",
+                        "code_cell_id": "code_cell:call-code",
+                        "runtime_cell_id": "runtime-cell-1",
+                    },
+                    "kind": { "type": "exec_command" },
+                    "terminal_operation_id": "terminal_operation:1",
+                    "summary": {
+                        "input_preview": "",
+                        "output_preview": "Chunk ID: chunk-1\nWall time: 1.0 seconds\nOutput:\n",
+                    },
+                    "execution": {
+                        "started_at_unix_ms": 1776420000000i64,
+                        "ended_at_unix_ms": 1776420000000i64,
+                        "status": "completed",
+                        "started_seq": 7,
+                        "ended_seq": 8,
+                    },
+                    "raw_invocation_payload_id": "raw_payload:4",
+                    "raw_result_payload_id": "raw_payload:5",
+                    "raw_runtime_payload_ids": [],
+                },
+                "terminal_operation": {
+                    "operation_id": "terminal_operation:1",
+                    "terminal_id": "55007",
+                    "tool_call_id": "tool:nested-exec",
+                    "kind": "exec_command",
+                    "execution": {
+                        "started_at_unix_ms": 1776420000000i64,
+                        "ended_at_unix_ms": 1776420000000i64,
+                        "status": "completed",
+                        "started_seq": 7,
+                        "ended_seq": 8,
+                    },
+                    "request": {
+                        "type": "exec_command",
+                        "command": ["find . -type f | wc -l"],
+                        "display_command": "find . -type f | wc -l",
+                        "cwd": "/repo",
+                        "yield_time_ms": 1000,
+                        "max_output_tokens": 200,
+                    },
+                    "result": {
+                        "output_preview": "Chunk ID: chunk-1\nWall time: 1.0 seconds\nOutput:\n",
+                        "output": "",
+                        "chunk_id": "chunk-1",
+                        "exit_code": null,
+                        "wall_time_seconds": 1.0,
+                        "original_token_count": 0,
+                        "success": true,
+                    },
+                    "model_observations": [{
+                        "call_item_ids": ["item:2"],
+                        "output_item_ids": ["item:3"],
+                        "source": "code_cell_output",
+                    }],
+                    "raw_payload_ids": ["raw_payload:4", "raw_payload:5"],
+                },
+                "terminal_session": {
+                    "terminal_id": "55007",
+                    "thread_id": "thread-1",
+                    "created_by_operation_id": "terminal_operation:1",
+                    "operation_ids": ["terminal_operation:1"],
+                    "execution": {
+                        "started_at_unix_ms": 1776420000000i64,
+                        "ended_at_unix_ms": null,
+                        "status": "running",
+                        "started_seq": 7,
+                        "ended_seq": null,
+                    },
+                },
+                "output_producers": [
+                    { "type": "code_cell", "code_cell_id": "code_cell:call-code" },
+                ],
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn links_wait_outputs_and_payloads_to_code_cell() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        std::fs::write(
+            temp.path().join("manifest.json"),
+            serde_json::to_vec(&json!({
+                "trace_id": "trace-test",
+                "started_at_unix_ms": 10,
+            }))?,
+        )?;
+        std::fs::create_dir(temp.path().join("payloads"))?;
+
+        let code_call = json!({
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call-code",
+            "name": "exec",
+            "input": "await sleep(1); text('done');"
+        });
+        let yielded_output = json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call-code",
+            "output": [{ "type": "input_text", "text": "Execution yielded. Call wait." }]
+        });
+        let wait_call = json!({
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call-wait",
+            "name": "wait",
+            "arguments": "{\"cell_id\":\"runtime-cell-1\"}"
+        });
+        let wait_output = json!({
+            "type": "function_call_output",
+            "call_id": "call-wait",
+            "output": [{ "type": "input_text", "text": "done" }]
+        });
+
+        std::fs::write(
+            temp.path().join("payloads/code-cell-invocation.json"),
+            serde_json::to_vec(&json!({ "source_js": code_call["input"] }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/wait-invocation.json"),
+            serde_json::to_vec(&json!({
+                "call_id": "call-wait",
+                "tool_name": "wait",
+                "payload": {
+                    "type": "function",
+                    "arguments": "{\"cell_id\":\"runtime-cell-1\"}"
+                }
+            }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/wait-result.json"),
+            serde_json::to_vec(&json!({
+                "status": "completed",
+                "success": true,
+                "output_preview": "done"
+            }))?,
+        )?;
+        // Wait outputs are only canonical conversation items after the next
+        // provider request carries the full snapshot back to the model.
+        std::fs::write(
+            temp.path().join("payloads/request.json"),
+            serde_json::to_vec(&json!({
+                "input": [code_call, yielded_output, wait_call, wait_output]
+            }))?,
+        )?;
+
+        let mut events = std::fs::File::create(temp.path().join("events.jsonl"))?;
+        write_event(
+            &mut events,
+            1,
+            "codex.thread.started",
+            json!({"thread.id": "thread-1"}),
+        )?;
+        write_event(
+            &mut events,
+            2,
+            "codex.turn.started",
+            json!({"thread.id": "thread-1", "turn.id": "turn-1"}),
+        )?;
+        write_event(
+            &mut events,
+            3,
+            "codex.code_cell.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "code_cell.runtime_id": "runtime-cell-1",
+                "model_visible_call.id": "call-code",
+                "code_cell.source_js": "await sleep(1); text('done');",
+                "raw_payload.invocation.id": "raw_payload:code-cell-invocation",
+                "raw_payload.invocation.path": "payloads/code-cell-invocation.json",
+                "raw_payload.invocation.kind": "code_cell_invocation"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            4,
+            "codex.tool.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "tool.call_id": "tool:call-wait",
+                "tool.name": "wait",
+                "tool.requester.type": "model",
+                "model_visible_call.id": "call-wait",
+                "raw_payload.invocation.id": "raw_payload:wait-invocation",
+                "raw_payload.invocation.path": "payloads/wait-invocation.json",
+                "raw_payload.invocation.kind": "tool_invocation"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            5,
+            "codex.tool.ended",
+            json!({
+                "tool.call_id": "tool:call-wait",
+                "status": "completed",
+                "output_preview": "done",
+                "raw_payload.result.id": "raw_payload:wait-result",
+                "raw_payload.result.path": "payloads/wait-result.json",
+                "raw_payload.result.kind": "tool_result"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            6,
+            "codex.code_cell.ended",
+            json!({
+                "thread.id": "thread-1",
+                "code_cell.runtime_id": "runtime-cell-1",
+                "status": "completed",
+                "model_visible_wait_call.id": "call-wait"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            7,
+            "codex.inference.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "inference.id": "inf-1",
+                "raw_payload.request.id": "raw_payload:request",
+                "raw_payload.request.path": "payloads/request.json",
+                "raw_payload.request.kind": "inference_request"
+            }),
+        )?;
+
+        let trace = reduce_bundle(temp.path())?;
+
+        assert_eq!(
+            json!({
+                "output_item_ids": trace.code_cells["code_cell:call-code"]["output_item_ids"].clone(),
+                "wait_tool_call_ids": trace.code_cells["code_cell:call-code"]["wait_tool_call_ids"].clone(),
+                "raw_payload_ids": trace.code_cells["code_cell:call-code"]["raw_payload_ids"].clone(),
+                "wait_output_producers": trace.conversation_items["item:4"]["produced_by"].clone(),
+            }),
+            json!({
+                "output_item_ids": ["item:2", "item:4"],
+                "wait_tool_call_ids": ["tool:call-wait"],
+                "raw_payload_ids": [
+                    "raw_payload:code-cell-invocation",
+                    "raw_payload:wait-invocation",
+                    "raw_payload:wait-result",
+                ],
+                "wait_output_producers": [
+                    { "type": "tool", "tool_call_id": "tool:call-wait" },
+                    { "type": "code_cell", "code_cell_id": "code_cell:call-code" },
+                ],
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn write_stdin_terminal_operation_uses_request_session_id() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        std::fs::write(
+            temp.path().join("manifest.json"),
+            serde_json::to_vec(&json!({
+                "trace_id": "trace-test",
+                "started_at_unix_ms": 10,
+            }))?,
+        )?;
+        std::fs::create_dir(temp.path().join("payloads"))?;
+
+        std::fs::write(
+            temp.path().join("payloads/1.json"),
+            serde_json::to_vec(&json!({
+                "call_id": "call-write",
+                "tool_name": "write_stdin",
+                "payload": {
+                    "type": "function",
+                    "arguments": "{\"session_id\":12121,\"chars\":\"\"}"
+                }
+            }))?,
+        )?;
+        std::fs::write(
+            temp.path().join("payloads/2.json"),
+            serde_json::to_vec(&json!({
+                "status": "completed",
+                "success": true,
+                "output_preview": "Chunk ID: chunk-1\nWall time: 2.0 seconds\nProcess exited with code 0\nOutput:\n42\n",
+                "code_mode_result": {
+                    "chunk_id": "chunk-1",
+                    "wall_time_seconds": 2.0,
+                    "exit_code": 0,
+                    "original_token_count": 1,
+                    "output": "42\n"
+                }
+            }))?,
+        )?;
+
+        let mut events = std::fs::File::create(temp.path().join("events.jsonl"))?;
+        write_event(
+            &mut events,
+            1,
+            "codex.thread.started",
+            json!({"thread.id": "thread-1"}),
+        )?;
+        write_event(
+            &mut events,
+            2,
+            "codex.turn.started",
+            json!({"thread.id": "thread-1", "turn.id": "turn-1"}),
+        )?;
+        write_event(
+            &mut events,
+            3,
+            "codex.tool.started",
+            json!({
+                "thread.id": "thread-1",
+                "turn.id": "turn-1",
+                "tool.call_id": "tool:call-write",
+                "tool.name": "write_stdin",
+                "tool.requester.type": "model",
+                "model_visible_call.id": "call-write",
+                "raw_payload.invocation.id": "raw_payload:1",
+                "raw_payload.invocation.path": "payloads/1.json",
+                "raw_payload.invocation.kind": "tool_invocation"
+            }),
+        )?;
+        write_event(
+            &mut events,
+            4,
+            "codex.tool.ended",
+            json!({
+                "tool.call_id": "tool:call-write",
+                "status": "completed",
+                "output_preview": "Chunk ID: chunk-1\nWall time: 2.0 seconds\nProcess exited with code 0\nOutput:\n42\n",
+                "raw_payload.result.id": "raw_payload:2",
+                "raw_payload.result.path": "payloads/2.json",
+                "raw_payload.result.kind": "tool_result"
+            }),
+        )?;
+
+        let trace = reduce_bundle(temp.path())?;
+
+        // `write_stdin` is a continuation of an existing terminal session. The
+        // final result can omit `session_id`, so the reducer must preserve the
+        // request-side id instead of creating a one-shot synthetic session.
+        assert_eq!(
+            trace.terminal_operations["terminal_operation:1"]["terminal_id"],
+            json!("12121")
+        );
+        assert_eq!(
+            trace.terminal_sessions["12121"],
+            json!({
+                "terminal_id": "12121",
+                "thread_id": "thread-1",
+                "created_by_operation_id": "terminal_operation:1",
+                "operation_ids": ["terminal_operation:1"],
+                "execution": {
+                    "started_at_unix_ms": 1776420000000i64,
+                    "ended_at_unix_ms": null,
+                    "status": "running",
+                    "started_seq": 3,
+                    "ended_seq": null,
+                },
+            })
+        );
+        assert!(
+            !trace
+                .terminal_sessions
+                .contains_key("terminal:terminal_operation:1")
         );
         Ok(())
     }

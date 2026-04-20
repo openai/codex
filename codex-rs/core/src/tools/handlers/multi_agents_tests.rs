@@ -68,6 +68,7 @@ fn invocation(
         session,
         turn,
         tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
+        source: crate::tools::context::ToolCallSource::Direct,
         call_id: "call-1".to_string(),
         tool_name: codex_tools::ToolName::plain(tool_name),
         payload,

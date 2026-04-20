@@ -25,6 +25,7 @@ const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
 #[derive(Clone, Debug)]
 pub struct ExecuteRequest {
+    pub cell_id: Option<String>,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
@@ -331,6 +332,7 @@ mod tests {
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
+            cell_id: None,
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),

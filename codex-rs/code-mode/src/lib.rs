@@ -24,6 +24,7 @@ pub use runtime::ExecuteRequest;
 pub use runtime::RuntimeResponse;
 pub use runtime::WaitRequest;
 pub use service::CodeModeService;
+pub use service::CodeModeToolInvocation;
 pub use service::CodeModeTurnHost;
 pub use service::CodeModeTurnWorker;
 

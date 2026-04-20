@@ -143,6 +143,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            source: crate::tools::context::ToolCallSource::Direct,
             call_id: "test-call".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
             payload: ToolPayload::Function {
@@ -209,6 +210,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&tracker),
+            source: crate::tools::context::ToolCallSource::Direct,
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             payload: ToolPayload::Function {
@@ -322,6 +324,7 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            source: crate::tools::context::ToolCallSource::Direct,
             call_id: "sticky-turn-grant".to_string(),
             tool_name: codex_tools::ToolName::plain("shell"),
             payload: ToolPayload::Function {

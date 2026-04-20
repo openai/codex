@@ -285,6 +285,7 @@ impl ToolRouter {
             session,
             turn,
             tracker,
+            source,
             call_id,
             tool_name,
             payload,

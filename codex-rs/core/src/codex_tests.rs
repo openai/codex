@@ -6027,6 +6027,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&turn_diff_tracker),
+            source: crate::tools::context::ToolCallSource::Direct,
             call_id,
             tool_name: codex_tools::ToolName::plain(tool_name),
             payload: ToolPayload::Function {
@@ -6105,6 +6106,7 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
             session: Arc::clone(&session),
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&tracker),
+            source: crate::tools::context::ToolCallSource::Direct,
             call_id: "exec-call".to_string(),
             tool_name: codex_tools::ToolName::plain("exec_command"),
             payload: ToolPayload::Function {
