@@ -16,6 +16,8 @@ use crate::facts;
 use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
+use crate::facts::SkillInvocation;
+use crate::facts::SkillInvokedInput;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnSubmissionType as AnalyticsTurnSubmissionType;
@@ -40,7 +42,29 @@ use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SkillScope as ProtocolSkillScope;
 use codex_protocol::protocol::TokenUsage;
+
+pub(crate) fn skill_invoked_input(observation: events::SkillInvoked<'_>) -> SkillInvokedInput {
+    SkillInvokedInput {
+        tracking: tracking_from_fields(
+            observation.model_slug,
+            observation.thread_id,
+            observation.turn_id,
+        ),
+        invocations: vec![SkillInvocation {
+            skill_name: observation.skill_name.to_string(),
+            skill_scope: match observation.skill_scope {
+                events::SkillScope::User => ProtocolSkillScope::User,
+                events::SkillScope::Repo => ProtocolSkillScope::Repo,
+                events::SkillScope::System => ProtocolSkillScope::System,
+                events::SkillScope::Admin => ProtocolSkillScope::Admin,
+            },
+            skill_path: observation.skill_path.to_path_buf(),
+            invocation_type: map_invocation_type(observation.invocation_type),
+        }],
+    }
+}
 
 pub(crate) fn app_mentioned_input(observation: events::AppMentioned<'_>) -> AppMentionedInput {
     AppMentionedInput {

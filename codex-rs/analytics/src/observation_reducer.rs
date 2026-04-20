@@ -35,6 +35,22 @@ impl AnalyticsObservationReducer {
         self.legacy.ingest(fact, out).await;
     }
 
+    /// Ingests a skill.invoked observation and emits the current analytics event.
+    pub(crate) async fn ingest_skill_invoked(
+        &mut self,
+        observation: events::SkillInvoked<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        self.legacy
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::SkillInvoked(
+                    observation_projection::skill_invoked_input(observation),
+                )),
+                out,
+            )
+            .await;
+    }
+
     /// Ingests an app.mentioned observation and emits the current analytics event.
     pub(crate) async fn ingest_app_mentioned(
         &mut self,

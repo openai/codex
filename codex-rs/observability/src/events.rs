@@ -2,6 +2,7 @@
 
 use crate::Observation;
 use serde::Serialize;
+use std::path::Path;
 
 mod compaction;
 mod review;
@@ -21,6 +22,16 @@ pub enum InvocationType {
     Explicit,
     /// Codex inferred that the capability should be used.
     Implicit,
+}
+
+/// Scope where a skill definition was found.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillScope {
+    User,
+    Repo,
+    System,
+    Admin,
 }
 
 /// Status reported after a hook run reaches a terminal state.
@@ -49,6 +60,39 @@ pub enum PluginState {
     Enabled,
     /// Plugin was disabled.
     Disabled,
+}
+
+/// Observation emitted when a skill is invoked during a turn.
+#[derive(Observation)]
+#[observation(name = "skill.invoked", crate = "crate", uses = ["analytics"])]
+pub struct SkillInvoked<'a> {
+    /// Model slug active for the turn where the skill was invoked.
+    #[obs(level = "basic", class = "operational")]
+    pub model_slug: &'a str,
+
+    /// Thread that owns the turn.
+    #[obs(level = "basic", class = "identifier")]
+    pub thread_id: &'a str,
+
+    /// Turn where the skill was invoked.
+    #[obs(level = "basic", class = "identifier")]
+    pub turn_id: &'a str,
+
+    /// Skill display name.
+    #[obs(level = "basic", class = "operational")]
+    pub skill_name: &'a str,
+
+    /// Scope where the skill was discovered.
+    #[obs(level = "basic", class = "operational")]
+    pub skill_scope: SkillScope,
+
+    /// Local skill definition path used to derive the existing analytics skill id.
+    #[obs(level = "basic", class = "environment")]
+    pub skill_path: &'a Path,
+
+    /// Whether the skill was explicitly requested or inferred.
+    #[obs(level = "basic", class = "operational")]
+    pub invocation_type: InvocationType,
 }
 
 /// Observation emitted when an app connector is mentioned during a turn.

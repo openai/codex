@@ -285,7 +285,7 @@ Initial workflow coverage should be chosen by conformance need:
 | Tools | `tool_call.started`, `tool_call.approval_resolved`, `tool_call.ended` | OTEL, rollout |
 | Compaction | `compaction.started`, `compaction.installed`, `compaction.ended` | analytics, rollout |
 | Agents | `agent.task_sent`, `agent.message_sent`, `agent.result_delivered`, `agent.closed` | rollout, analytics subset |
-| Product features | `app.mentioned`, `app.used`, `hook.run_completed`, `plugin.used`, `plugin.state_changed`, `review.completed` | analytics |
+| Product features | `skill.invoked`, `app.mentioned`, `app.used`, `hook.run_completed`, `plugin.used`, `plugin.state_changed`, `review.completed` | analytics |
 | Transport/auth | `transport.api_request_completed`, `transport.websocket_request_completed`, `auth.recovery_step_completed` | OTEL |
 
 This table is not a complete schema. Each event still needs a typed Rust

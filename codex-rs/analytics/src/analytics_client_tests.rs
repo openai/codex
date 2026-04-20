@@ -1630,6 +1630,22 @@ async fn feature_observations_match_legacy_analytics_facts() {
         turn_id: "turn-1".to_string(),
     };
     let connector_ids = vec!["calendar".to_string(), "drive".to_string()];
+    let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::SkillInvoked(SkillInvokedInput {
+                tracking: tracking.clone(),
+                invocations: vec![SkillInvocation {
+                    skill_name: "doc".to_string(),
+                    skill_scope: codex_protocol::protocol::SkillScope::User,
+                    skill_path: skill_path.clone(),
+                    invocation_type: InvocationType::Explicit,
+                }],
+            })),
+            &mut legacy_events,
+        )
+        .await;
 
     legacy_reducer
         .ingest(
@@ -1678,6 +1694,20 @@ async fn feature_observations_match_legacy_analytics_facts() {
         )
         .await;
 
+    observation_reducer
+        .ingest_skill_invoked(
+            codex_observability::events::SkillInvoked {
+                model_slug: "gpt-5",
+                thread_id: "thread-1",
+                turn_id: "turn-1",
+                skill_name: "doc",
+                skill_scope: codex_observability::events::SkillScope::User,
+                skill_path: skill_path.as_path(),
+                invocation_type: codex_observability::events::InvocationType::Explicit,
+            },
+            &mut observation_events,
+        )
+        .await;
     observation_reducer
         .ingest_app_mentioned(
             codex_observability::events::AppMentioned {
