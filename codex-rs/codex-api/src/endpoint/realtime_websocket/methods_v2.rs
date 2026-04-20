@@ -49,14 +49,14 @@ pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutbound
     }
 }
 
-pub(super) fn conversation_handoff_append_message(
-    handoff_id: String,
+pub(super) fn conversation_function_call_output_message(
+    call_id: String,
     output_text: String,
 ) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationItemCreate {
         item: ConversationItemPayload::FunctionCallOutput(ConversationFunctionCallOutputItem {
             r#type: ConversationItemType::FunctionCallOutput,
-            call_id: handoff_id,
+            call_id,
             output: output_text,
         }),
     }

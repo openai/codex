@@ -2,7 +2,7 @@ use crate::endpoint::realtime_websocket::methods_v1::conversation_handoff_append
 use crate::endpoint::realtime_websocket::methods_v1::conversation_item_create_message as v1_conversation_item_create_message;
 use crate::endpoint::realtime_websocket::methods_v1::session_update_session as v1_session_update_session;
 use crate::endpoint::realtime_websocket::methods_v1::websocket_intent as v1_websocket_intent;
-use crate::endpoint::realtime_websocket::methods_v2::conversation_handoff_append_message as v2_conversation_handoff_append_message;
+use crate::endpoint::realtime_websocket::methods_v2::conversation_function_call_output_message as v2_conversation_function_call_output_message;
 use crate::endpoint::realtime_websocket::methods_v2::conversation_item_create_message as v2_conversation_item_create_message;
 use crate::endpoint::realtime_websocket::methods_v2::session_update_session as v2_session_update_session;
 use crate::endpoint::realtime_websocket::methods_v2::websocket_intent as v2_websocket_intent;
@@ -40,18 +40,18 @@ pub(super) fn conversation_item_create_message(
     }
 }
 
-pub(super) fn conversation_handoff_append_message(
+pub(super) fn conversation_function_call_output_message(
     event_parser: RealtimeEventParser,
-    handoff_id: String,
+    call_id: String,
     output_text: String,
 ) -> RealtimeOutboundMessage {
     match event_parser {
         RealtimeEventParser::V1 => v1_conversation_handoff_append_message(
-            handoff_id,
+            call_id,
             format!("{AGENT_FINAL_MESSAGE_PREFIX}{output_text}"),
         ),
         RealtimeEventParser::RealtimeV2 => {
-            v2_conversation_handoff_append_message(handoff_id, output_text)
+            v2_conversation_function_call_output_message(call_id, output_text)
         }
     }
 }

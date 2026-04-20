@@ -1105,7 +1105,7 @@ async fn handle_handoff_output(
                 output_text,
             } => {
                 writer
-                    .send_conversation_handoff_append(handoff_id, output_text)
+                    .send_conversation_function_call_output(handoff_id, output_text)
                     .await
             }
         },
@@ -1129,7 +1129,7 @@ async fn handle_handoff_output(
                 output_text: _,
             } => {
                 if let Err(err) = writer
-                    .send_conversation_handoff_append(
+                    .send_conversation_function_call_output(
                         handoff_id,
                         REALTIME_V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT.to_string(),
                     )
@@ -1263,7 +1263,7 @@ async fn handle_realtime_server_event(
                     match active_handoff {
                         Some(_) => {
                             if let Err(err) = writer
-                                .send_conversation_handoff_append(
+                                .send_conversation_function_call_output(
                                     handoff.handoff_id.clone(),
                                     REALTIME_V2_STEER_ACKNOWLEDGEMENT.to_string(),
                                 )
@@ -1299,7 +1299,7 @@ async fn handle_realtime_server_event(
                 RealtimeSessionKind::V1 => {}
                 RealtimeSessionKind::V2 => {
                     if let Err(err) = writer
-                        .send_conversation_handoff_append(noop.call_id.clone(), String::new())
+                        .send_conversation_function_call_output(noop.call_id.clone(), String::new())
                         .await
                     {
                         let mapped_error = map_api_error(err);

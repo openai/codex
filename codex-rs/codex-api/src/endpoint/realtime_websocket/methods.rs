@@ -1,4 +1,4 @@
-use crate::endpoint::realtime_websocket::methods_common::conversation_handoff_append_message;
+use crate::endpoint::realtime_websocket::methods_common::conversation_function_call_output_message;
 use crate::endpoint::realtime_websocket::methods_common::conversation_item_create_message;
 use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode;
 use crate::endpoint::realtime_websocket::methods_common::session_update_session;
@@ -230,13 +230,13 @@ impl RealtimeWebsocketConnection {
         self.writer.send_conversation_item_create(text).await
     }
 
-    pub async fn send_conversation_handoff_append(
+    pub async fn send_conversation_function_call_output(
         &self,
-        handoff_id: String,
+        call_id: String,
         output_text: String,
     ) -> Result<(), ApiError> {
         self.writer
-            .send_conversation_handoff_append(handoff_id, output_text)
+            .send_conversation_function_call_output(call_id, output_text)
             .await
     }
 
@@ -290,14 +290,14 @@ impl RealtimeWebsocketWriter {
             .await
     }
 
-    pub async fn send_conversation_handoff_append(
+    pub async fn send_conversation_function_call_output(
         &self,
-        handoff_id: String,
+        call_id: String,
         output_text: String,
     ) -> Result<(), ApiError> {
-        self.send_json(&conversation_handoff_append_message(
+        self.send_json(&conversation_function_call_output_message(
             self.event_parser,
-            handoff_id,
+            call_id,
             output_text,
         ))
         .await
@@ -1714,7 +1714,7 @@ mod tests {
             .await
             .expect("send item");
         connection
-            .send_conversation_handoff_append(
+            .send_conversation_function_call_output(
                 "handoff_1".to_string(),
                 "hello from background agent".to_string(),
             )
@@ -1998,7 +1998,10 @@ mod tests {
             .await
             .expect("send text item");
         connection
-            .send_conversation_handoff_append("call_1".to_string(), "delegated result".to_string())
+            .send_conversation_function_call_output(
+                "call_1".to_string(),
+                "delegated result".to_string(),
+            )
             .await
             .expect("send handoff output");
 
