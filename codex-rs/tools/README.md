@@ -11,6 +11,10 @@ schema and Responses API tool primitives that no longer need to live in
 - `JsonSchema`
 - `AdditionalProperties`
 - `ToolDefinition`
+- `ToolLoadingPolicy`
+- `ToolExecution`
+- `ToolPresentation`
+- `ToolSearchMetadata`
 - `ToolSpec`
 - `ConfiguredToolSpec`
 - `ResponsesApiTool`
@@ -32,6 +36,8 @@ schema and Responses API tool primitives that no longer need to live in
 - `parse_tool_input_schema()`
 - `parse_dynamic_tool()`
 - `parse_mcp_tool()`
+- `dynamic_tool_to_tool_definition()`
+- `mcp_tool_to_tool_definition()`
 - `create_tools_json_for_responses_api()`
 - `mcp_call_tool_result_output_schema()`
 - `tool_definition_to_responses_api_tool()`

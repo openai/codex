@@ -1,6 +1,9 @@
 use super::parse_dynamic_tool;
 use crate::JsonSchema;
 use crate::ToolDefinition;
+use crate::ToolExecution;
+use crate::ToolLoadingPolicy;
+use crate::ToolName;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -23,7 +26,7 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
     assert_eq!(
         parse_dynamic_tool(&tool).expect("parse dynamic tool"),
         ToolDefinition {
-            name: "lookup_ticket".to_string(),
+            name: ToolName::plain("lookup_ticket"),
             description: "Fetch a ticket".to_string(),
             input_schema: JsonSchema::object(
                 BTreeMap::from([(
@@ -34,7 +37,11 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
                 /*additional_properties*/ None
             ),
             output_schema: None,
-            defer_loading: false,
+            loading: ToolLoadingPolicy::Eager,
+            execution: ToolExecution::Dynamic,
+            presentation: None,
+            search: None,
+            supports_parallel_tool_calls: false,
         }
     );
 }
@@ -54,7 +61,7 @@ fn parse_dynamic_tool_preserves_defer_loading() {
     assert_eq!(
         parse_dynamic_tool(&tool).expect("parse dynamic tool"),
         ToolDefinition {
-            name: "lookup_ticket".to_string(),
+            name: ToolName::plain("lookup_ticket"),
             description: "Fetch a ticket".to_string(),
             input_schema: JsonSchema::object(
                 BTreeMap::new(),
@@ -62,7 +69,11 @@ fn parse_dynamic_tool_preserves_defer_loading() {
                 /*additional_properties*/ None
             ),
             output_schema: None,
-            defer_loading: true,
+            loading: ToolLoadingPolicy::Deferred,
+            execution: ToolExecution::Dynamic,
+            presentation: None,
+            search: None,
+            supports_parallel_tool_calls: false,
         }
     );
 }
