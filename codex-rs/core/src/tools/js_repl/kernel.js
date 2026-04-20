@@ -1225,9 +1225,9 @@ function parseImageDetail(detail) {
   if (typeof detail !== "string" || !detail) {
     throw new Error("codex.emitImage expected detail to be a non-empty string");
   }
-  if (detail !== "original") {
+  if (!["auto", "low", "high", "original"].includes(detail)) {
     throw new Error(
-      'codex.emitImage only supports detail "original"; omit detail for default behavior',
+      'codex.emitImage expected detail to be one of "auto", "low", "high", or "original"',
     );
   }
   return detail;
@@ -1331,10 +1331,17 @@ function normalizeMcpImageData(data, mimeType) {
 }
 
 function parseMcpImageDetail(meta) {
-  if (!isPlainObject(meta) || meta["codex/imageDetail"] !== "original") {
+  if (!isPlainObject(meta)) {
     return undefined;
   }
-  return "original";
+  const detail = meta["codex/imageDetail"];
+  if (
+    typeof detail !== "string" ||
+    !["auto", "low", "high", "original"].includes(detail)
+  ) {
+    return undefined;
+  }
+  return detail;
 }
 
 function parseMcpToolResult(result) {

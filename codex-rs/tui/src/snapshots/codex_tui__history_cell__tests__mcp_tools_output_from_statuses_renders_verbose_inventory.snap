@@ -1,0 +1,15 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+/mcp
+
+🔌  MCP Tools
+
+  • plugin_docs
+    • Status: enabled
+    • Auth: Unsupported
+    • Command: docs-server --stdio
+    • Tools: lookup
+    • Resources: Docs (file:///docs)
+    • Resource templates: Doc Template (file:///docs/{id})

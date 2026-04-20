@@ -14,5 +14,4 @@ Scenario: /responses POST bodies (input only, redacted like other suite snapshot
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first prompt
 03:reasoning:summary=thinking:encrypted=true
-04:message/assistant:preserved commentary
-05:message/assistant:{"author":"/root/worker","recipient":"/root","other_recipients":[],"content":"queued child update","trigger_turn":false}
+04:message/assistant:{"author":"/root/worker","recipient":"/root","other_recipients":[],"content":"queued child update","trigger_turn":false}

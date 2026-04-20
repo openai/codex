@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/side.rs
+expression: terminal.backend()
+---
+"                                                                                "
+"                                                                                "
+"› Check recently modified functions for compatibility                           "
+"                                                                                "
+"  gpt-5.4                                Side from main thread · Esc to return  "

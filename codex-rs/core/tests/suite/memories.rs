@@ -175,11 +175,11 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
     )
     .await?;
 
-    let telepathy_resources = home.path().join("memories_extensions/telepathy/resources");
-    tokio::fs::create_dir_all(&telepathy_resources).await?;
+    let chronicle_resources = home.path().join("memories_extensions/chronicle/resources");
+    tokio::fs::create_dir_all(&chronicle_resources).await?;
     tokio::fs::write(
         home.path()
-            .join("memories_extensions/telepathy/instructions.md"),
+            .join("memories_extensions/chronicle/instructions.md"),
         "instructions",
     )
     .await?;
@@ -187,9 +187,9 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
         "{}-abcd-10min-old.md",
         (now - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
     );
-    let old_file = telepathy_resources.join(&old_file_name);
+    let old_file = chronicle_resources.join(&old_file_name);
     tokio::fs::write(&old_file, "old resource").await?;
-    let recent_file = telepathy_resources.join(format!(
+    let recent_file = chronicle_resources.join(format!(
         "{}-abcd-10min-recent.md",
         (now - ChronoDuration::days(6)).format("%Y-%m-%dT%H-%M-%S")
     ));
@@ -218,7 +218,7 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
         "expected retention window in prompt: {prompt}"
     );
     assert!(
-        prompt.contains("- extension: telepathy"),
+        prompt.contains("- extension: chronicle"),
         "expected extension name in prompt: {prompt}"
     );
     assert!(
@@ -251,11 +251,11 @@ async fn memories_startup_phase2_processes_old_extension_resources_without_stage
         .await?;
 
     let now = Utc::now();
-    let telepathy_resources = home.path().join("memories_extensions/telepathy/resources");
-    tokio::fs::create_dir_all(&telepathy_resources).await?;
+    let chronicle_resources = home.path().join("memories_extensions/chronicle/resources");
+    tokio::fs::create_dir_all(&chronicle_resources).await?;
     tokio::fs::write(
         home.path()
-            .join("memories_extensions/telepathy/instructions.md"),
+            .join("memories_extensions/chronicle/instructions.md"),
         "instructions",
     )
     .await?;
@@ -263,7 +263,7 @@ async fn memories_startup_phase2_processes_old_extension_resources_without_stage
         "{}-abcd-10min-old.md",
         (now - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
     );
-    let old_file = telepathy_resources.join(&old_file_name);
+    let old_file = chronicle_resources.join(&old_file_name);
     tokio::fs::write(&old_file, "old resource").await?;
 
     let phase2 = mount_sse_once(
