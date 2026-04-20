@@ -429,6 +429,7 @@ mod phase2 {
     use codex_config::Constrained;
     use codex_features::Feature;
     use codex_login::CodexAuth;
+    use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
     use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -703,6 +704,19 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
+        pretty_assertions::assert_eq!(
+            config_snapshot.session_source.get_agent_path(),
+            Some(AgentPath::morpheus())
+        );
+        assert!(
+            harness
+                .session
+                .services
+                .agent_control
+                .get_agent_metadata(thread_id)
+                .is_none(),
+            "memory consolidation should not be registered in the root collab agent registry"
+        );
         let turn_context = subagent.codex.session.new_default_turn().await;
         pretty_assertions::assert_eq!(
             turn_context.file_system_sandbox_policy,

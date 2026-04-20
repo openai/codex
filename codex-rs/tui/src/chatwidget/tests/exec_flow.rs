@@ -987,7 +987,7 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
-async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
+async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
@@ -1015,6 +1015,15 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
     });
     drain_insert_history(&mut rx);
     while op_rx.try_recv().is_ok() {}
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
 
     chat.bottom_pane
         .set_composer_text("!echo hi".to_string(), Vec::new(), Vec::new());

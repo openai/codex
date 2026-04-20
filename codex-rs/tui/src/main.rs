@@ -13,7 +13,6 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
     let AppExitInfo {
         token_usage,
         thread_id,
-        thread_name,
         ..
     } = exit_info;
 
@@ -22,7 +21,9 @@ fn format_exit_messages(exit_info: AppExitInfo, color_enabled: bool) -> Vec<Stri
         lines.push(codex_protocol::protocol::FinalOutput::from(token_usage).to_string());
     }
 
-    if let Some(resume_cmd) = legacy_core::util::resume_command(thread_name.as_deref(), thread_id) {
+    if let Some(resume_cmd) =
+        legacy_core::util::resume_command(/*thread_name*/ None, thread_id)
+    {
         let command = if color_enabled {
             format!("\u{1b}[36m{resume_cmd}\u{1b}[39m")
         } else {

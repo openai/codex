@@ -32,6 +32,7 @@ use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
 use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
+use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
@@ -291,6 +292,9 @@ consolidation_model = "gpt-5"
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"
+[skills]
+include_instructions = false
+
 [skills.bundled]
 enabled = false
 "#,
@@ -301,6 +305,7 @@ enabled = false
         cfg.skills,
         Some(SkillsConfig {
             bundled: Some(BundledSkillsConfig { enabled: false }),
+            include_instructions: Some(false),
             config: Vec::new(),
         })
     );
@@ -2490,7 +2495,7 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
-                env_vars: vec!["ALPHA".to_string(), "BETA".to_string()],
+                env_vars: vec!["ALPHA".into(), "BETA".into()],
                 cwd: None,
             },
             experimental_environment: None,
@@ -2526,10 +2531,66 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
     let docs = loaded.get("docs").expect("docs entry");
     match &docs.transport {
         McpServerTransportConfig::Stdio { env_vars, .. } => {
-            assert_eq!(env_vars, &vec!["ALPHA".to_string(), "BETA".to_string()]);
+            assert_eq!(env_vars, &vec!["ALPHA".into(), "BETA".into()]);
         }
         other => panic!("unexpected transport {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let servers = BTreeMap::from([(
+        "docs".to_string(),
+        McpServerConfig {
+            transport: McpServerTransportConfig::Stdio {
+                command: "docs-server".to_string(),
+                args: Vec::new(),
+                env: None,
+                env_vars: vec![
+                    "LEGACY".into(),
+                    McpServerEnvVar::Config {
+                        name: "REMOTE_TOKEN".to_string(),
+                        source: Some("remote".to_string()),
+                    },
+                ],
+                cwd: None,
+            },
+            experimental_environment: None,
+            enabled: true,
+            required: false,
+            supports_parallel_tool_calls: false,
+            disabled_reason: None,
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: None,
+            disabled_tools: None,
+            scopes: None,
+            oauth_resource: None,
+            tools: HashMap::new(),
+        },
+    )]);
+
+    apply_blocking(
+        codex_home.path(),
+        /*profile*/ None,
+        &[ConfigEdit::ReplaceMcpServers(servers.clone())],
+    )?;
+
+    let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let serialized = std::fs::read_to_string(&config_path)?;
+    assert!(
+        serialized
+            .contains(r#"env_vars = ["LEGACY", { name = "REMOTE_TOKEN", source = "remote" }]"#),
+        "serialized config missing sourced env_vars field:\n{serialized}"
+    );
+
+    let loaded = load_global_mcp_servers(codex_home.path()).await?;
+    assert_eq!(loaded, servers);
 
     Ok(())
 }
@@ -4831,6 +4892,7 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             guardian_policy_config: None,
             include_permissions_instructions: true,
             include_apps_instructions: true,
+            include_skill_instructions: true,
             include_environment_context: true,
             compact_prompt: None,
             commit_attribution: None,
@@ -4981,6 +5043,7 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5129,6 +5192,7 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -5262,6 +5326,7 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         guardian_policy_config: None,
         include_permissions_instructions: true,
         include_apps_instructions: true,
+        include_skill_instructions: true,
         include_environment_context: true,
         compact_prompt: None,
         commit_attribution: None,
@@ -6213,6 +6278,9 @@ include_apps_instructions = false
 include_environment_context = false
 profile = "chatty"
 
+[skills]
+include_instructions = false
+
 [profiles.chatty]
 include_permissions_instructions = true
 include_environment_context = true
@@ -6227,6 +6295,7 @@ include_environment_context = true
 
     assert!(config.include_permissions_instructions);
     assert!(!config.include_apps_instructions);
+    assert!(!config.include_skill_instructions);
     assert!(config.include_environment_context);
     Ok(())
 }

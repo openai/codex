@@ -2,6 +2,9 @@
 // from the eventual unsafe cleanup.
 #![allow(unsafe_op_in_unsafe_fn)]
 
+#[cfg(any(target_os = "windows", test))]
+mod ssh_config_dependencies;
+
 macro_rules! windows_modules {
     ($($name:ident),+ $(,)?) => {
         $(#[cfg(target_os = "windows")] mod $name;)+

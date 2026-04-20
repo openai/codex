@@ -1,5 +1,6 @@
 use serde_json::Value as JsonValue;
 
+use crate::response::DEFAULT_IMAGE_DETAIL;
 use crate::response::FunctionCallOutputContentItem;
 use crate::response::ImageDetail;
 
@@ -81,7 +82,7 @@ pub(super) fn normalize_output_image(
                     }
                 })
             }
-            None => None,
+            None => Some(DEFAULT_IMAGE_DETAIL),
         };
 
         Ok(FunctionCallOutputContentItem::InputImage { image_url, detail })
@@ -159,7 +160,7 @@ fn parse_mcp_output_image(
         .and_then(JsonValue::as_object)
         .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
         .and_then(JsonValue::as_str)
-        .filter(|detail| *detail == "original")
+        .filter(|detail| matches!(*detail, "auto" | "low" | "high" | "original"))
         .map(str::to_string);
     Ok((image_url, detail))
 }
