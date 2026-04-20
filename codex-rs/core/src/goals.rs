@@ -194,7 +194,11 @@ impl GoalWallClockAccountingState {
         *self.last_accounted_at.lock().await = Instant::now();
     }
 
-    async fn mark_active_goal(&self, created_at_ms: i64) {
+    async fn mark_active_goal(
+        &self,
+        _accounting_guard: &tokio::sync::MutexGuard<'_, ()>,
+        created_at_ms: i64,
+    ) {
         let mut active_goal_created_at_ms = self.active_goal_created_at_ms.lock().await;
         if *active_goal_created_at_ms != Some(created_at_ms) {
             self.reset_baseline().await;
@@ -355,8 +359,13 @@ impl Session {
                 .reset_baseline(current_token_usage)
                 .await;
             if goal_status == codex_state::ThreadGoalStatus::Active {
+                let wall_clock_guard = self
+                    .thread_goal_wall_clock_accounting
+                    .accounting_lock
+                    .lock()
+                    .await;
                 self.thread_goal_wall_clock_accounting
-                    .mark_active_goal(goal_created_at_ms)
+                    .mark_active_goal(&wall_clock_guard, goal_created_at_ms)
                     .await;
                 turn_context
                     .goal_accounting
@@ -437,8 +446,13 @@ impl Session {
             .goal_accounting
             .reset_baseline(current_token_usage)
             .await;
+        let wall_clock_guard = self
+            .thread_goal_wall_clock_accounting
+            .accounting_lock
+            .lock()
+            .await;
         self.thread_goal_wall_clock_accounting
-            .mark_active_goal(goal_created_at_ms)
+            .mark_active_goal(&wall_clock_guard, goal_created_at_ms)
             .await;
         turn_context
             .goal_accounting
@@ -526,8 +540,13 @@ impl Session {
                     .goal_accounting
                     .mark_active_goal(goal.created_at.timestamp_millis())
                     .await;
+                let wall_clock_guard = self
+                    .thread_goal_wall_clock_accounting
+                    .accounting_lock
+                    .lock()
+                    .await;
                 self.thread_goal_wall_clock_accounting
-                    .mark_active_goal(goal.created_at.timestamp_millis())
+                    .mark_active_goal(&wall_clock_guard, goal.created_at.timestamp_millis())
                     .await;
             }
             Ok(Some(_)) | Ok(None) => {
@@ -594,6 +613,7 @@ impl Session {
                 &state_db,
                 current_token_usage.clone(),
                 boundary,
+                &_wall_clock_guard,
             )
             .await?
         {
@@ -817,6 +837,7 @@ impl Session {
         state_db: &StateDbHandle,
         current_token_usage: TokenUsage,
         _boundary: GoalAccountingBoundary,
+        wall_clock_guard: &tokio::sync::MutexGuard<'_, ()>,
     ) -> anyhow::Result<bool> {
         let Some(goal) = state_db.get_thread_goal(self.conversation_id).await? else {
             return Ok(false);
@@ -838,7 +859,7 @@ impl Session {
                 .reset_baseline(current_token_usage)
                 .await;
             self.thread_goal_wall_clock_accounting
-                .mark_active_goal(created_at_ms)
+                .mark_active_goal(wall_clock_guard, created_at_ms)
                 .await;
             turn_context
                 .goal_accounting
@@ -929,8 +950,13 @@ impl Session {
             self.thread_goal_may_exist.store(true, Ordering::SeqCst);
             *self.thread_goal_cache.lock().await = Some(goal);
             if is_active {
+                let wall_clock_guard = self
+                    .thread_goal_wall_clock_accounting
+                    .accounting_lock
+                    .lock()
+                    .await;
                 self.thread_goal_wall_clock_accounting
-                    .mark_active_goal(goal_created_at_ms)
+                    .mark_active_goal(&wall_clock_guard, goal_created_at_ms)
                     .await;
             } else {
                 self.thread_goal_wall_clock_accounting
@@ -961,8 +987,13 @@ impl Session {
         let goal = protocol_goal_from_state(goal);
         self.thread_goal_may_exist.store(true, Ordering::SeqCst);
         *self.thread_goal_cache.lock().await = Some(goal.clone());
+        let wall_clock_guard = self
+            .thread_goal_wall_clock_accounting
+            .accounting_lock
+            .lock()
+            .await;
         self.thread_goal_wall_clock_accounting
-            .mark_active_goal(goal_created_at_ms)
+            .mark_active_goal(&wall_clock_guard, goal_created_at_ms)
             .await;
         self.clear_queued_goal_continuations_for_next_turn().await;
         self.send_event_raw(Event {
