@@ -1,0 +1,375 @@
+name: PR Health Review
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - synchronize
+
+concurrency:
+  group: ${{ github.workflow }}::${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure PR health signals
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'openai/codex' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      review_input_json: ${{ steps.prepare-review-input.outputs.review_input_json }}
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Keep base probe script
+        run: |
+          set -euo pipefail
+          cp scripts/context_bloat_probe.py "$RUNNER_TEMP/context_bloat_probe.py"
+
+      - name: Measure base
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pr-health-review"
+          python3 "$RUNNER_TEMP/context_bloat_probe.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --work-dir "$RUNNER_TEMP/pr-health-review/base" \
+            --output "$RUNNER_TEMP/pr-health-review/base.ndjson" \
+            --summary-output "$RUNNER_TEMP/pr-health-review/base-summary.json" \
+            --build-timeout-seconds 1800 \
+            --run-timeout-seconds 120
+
+      - name: Checkout head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Measure head
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/context_bloat_probe.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --work-dir "$RUNNER_TEMP/pr-health-review/head" \
+            --output "$RUNNER_TEMP/pr-health-review/head.ndjson" \
+            --summary-output "$RUNNER_TEMP/pr-health-review/head-summary.json" \
+            --build-timeout-seconds 1800 \
+            --run-timeout-seconds 120
+
+      - id: prepare-review-input
+        name: Prepare Codex review input
+        env:
+          BASE_SUMMARY: ${{ runner.temp }}/pr-health-review/base-summary.json
+          HEAD_SUMMARY: ${{ runner.temp }}/pr-health-review/head-summary.json
+          REVIEW_INPUT: ${{ runner.temp }}/pr-health-review/pr-health-review-input.json
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+
+          metrics = [
+              "request_body_bytes",
+              "context_component_bytes",
+              "instructions_bytes",
+              "input_json_bytes",
+              "tools_json_bytes",
+              "developer_message_json_bytes",
+              "user_message_json_bytes",
+              "tool_count",
+              "input_item_count",
+          ]
+
+          with open(os.environ["BASE_SUMMARY"], encoding="utf-8") as handle:
+              base = json.load(handle)
+          with open(os.environ["HEAD_SUMMARY"], encoding="utf-8") as handle:
+              head = json.load(handle)
+
+          def slim(summary):
+              return {
+                  "valid": summary.get("valid"),
+                  "invalid_reasons": summary.get("invalid_reasons", []),
+                  "build_elapsed_ms": summary.get("build_elapsed_ms"),
+                  "scenarios": summary.get("scenarios", []),
+                  "measurement_count": summary.get("measurement_count"),
+                  "measurements": summary.get("measurements", []),
+              }
+
+          def row_key(row):
+              return f"{row.get('scenario', '')}:{row.get('run_label', '')}"
+
+          base_rows = {row_key(row): row for row in base.get("measurements", [])}
+          head_rows = {row_key(row): row for row in head.get("measurements", [])}
+          comparisons = []
+          for key in sorted(set(base_rows) | set(head_rows)):
+              base_row = base_rows.get(key, {})
+              head_row = head_rows.get(key, {})
+              scenario, _, run_label = key.partition(":")
+              for metric in metrics:
+                  base_value = base_row.get(metric)
+                  head_value = head_row.get(metric)
+                  if not isinstance(base_value, (int, float)) or not isinstance(head_value, (int, float)):
+                      continue
+                  delta = head_value - base_value
+                  percent = None if base_value == 0 else (delta / base_value) * 100
+                  comparisons.append(
+                      {
+                          "scenario": scenario,
+                          "run_label": run_label,
+                          "metric": metric,
+                          "base": base_value,
+                          "head": head_value,
+                          "delta": delta,
+                          "percent": percent,
+                      }
+                  )
+
+          base_build_ms = base.get("build_elapsed_ms")
+          head_build_ms = head.get("build_elapsed_ms")
+          build_comparison = None
+          if isinstance(base_build_ms, (int, float)) and isinstance(head_build_ms, (int, float)):
+              delta = head_build_ms - base_build_ms
+              percent = None if base_build_ms == 0 else (delta / base_build_ms) * 100
+              build_comparison = {
+                  "metric": "build_elapsed_ms",
+                  "base": base_build_ms,
+                  "head": head_build_ms,
+                  "delta": delta,
+                  "percent": percent,
+              }
+
+          payload = {
+              "pull_request": {
+                  "number": os.environ["PR_NUMBER"],
+                  "title": os.environ["PR_TITLE"],
+                  "author": os.environ["PR_AUTHOR"],
+                  "base_sha": os.environ["BASE_SHA"],
+                  "head_sha": os.environ["HEAD_SHA"],
+              },
+              "thresholds": {
+                  "context_bytes_min_delta": 1,
+                  "context_bytes_min_percent": 0,
+                  "build_ms_min_percent": 3,
+              },
+              "base_summary": slim(base),
+              "head_summary": slim(head),
+              "comparisons": comparisons,
+              "build_comparison": build_comparison,
+          }
+
+          encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+          with open(os.environ["REVIEW_INPUT"], "w", encoding="utf-8") as handle:
+              handle.write(json.dumps(payload, indent=2, sort_keys=True))
+              handle.write("\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write("review_input_json<<EOF\n")
+              handle.write(encoded)
+              handle.write("\nEOF\n")
+          PY
+
+      - name: Upload PR health artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: pr-health-review-pr-${{ github.event.pull_request.number }}
+          path: |
+            ${{ runner.temp }}/pr-health-review/*.json
+            ${{ runner.temp }}/pr-health-review/*.ndjson
+
+  review-and-comment:
+    name: Ask Codex whether to comment
+    needs: measure
+    if: ${{ needs.measure.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Write review input
+        env:
+          REVIEW_INPUT_JSON: ${{ needs.measure.outputs.review_input_json }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$REVIEW_INPUT_JSON" > pr-health-review-input.json
+
+      - id: codex
+        name: Review PR health deltas
+        uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
+        with:
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          allow-users: "*"
+          prompt: |
+            You are an asynchronous PR health reviewer for the Codex repository.
+
+            Read `pr-health-review-input.json`. It contains context-size probe summaries for the PR base and head, precomputed scenario metric comparisons, and a separate build-time comparison.
+
+            Produce two independent evaluations: one for context size and one for build time.
+
+            Use these rules:
+            - For `context_evaluation`, set `should_comment: true` if any matching scenario/run has a positive increase in `request_body_bytes` or `context_component_bytes`.
+            - For `context_evaluation`, use component fields (`instructions_bytes`, `input_json_bytes`, `tools_json_bytes`, `developer_message_json_bytes`, `user_message_json_bytes`) to explain where the context growth came from.
+            - For `build_time_evaluation`, set `should_comment: true` if the separate `build_comparison` shows `build_elapsed_ms` increased by more than 3%.
+            - Build time is a separate reason to comment, even if context size does not increase.
+            - Ignore per-scenario command timing if it appears in the raw summaries; it is not part of either evaluation.
+            - If either summary is invalid, do not claim a regression. Explain the measurement issue in both evaluation reasons and set both evaluation `should_comment` fields to false.
+
+            Set top-level `should_comment` to true if either independent evaluation has `should_comment: true`.
+
+            When top-level `should_comment` is true:
+            - `comment_body` must be ready to post on the PR.
+            - Mention `@codex-core-agent-team`.
+            - If context grew, ask the PR author to explain in the PR body why the context growth is OK, or to reduce it.
+            - If build time grew by more than 3%, ask the PR author to explain in the PR body why the build-time growth is OK, or to reduce it.
+            - Include separate concise bullets or sections for context and build-time findings as applicable, with base, head, delta, and percent.
+            - Keep the comment concise and factual.
+
+            When top-level `should_comment` is false, return an empty string for `comment_body`.
+
+          output-schema: |
+            {
+              "type": "object",
+              "properties": {
+                "should_comment": { "type": "boolean" },
+                "reason": { "type": "string" },
+                "context_evaluation": {
+                  "type": "object",
+                  "properties": {
+                    "should_comment": { "type": "boolean" },
+                    "reason": { "type": "string" },
+                    "regressions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scenario": { "type": "string" },
+                          "run_label": { "type": "string" },
+                          "metric": { "type": "string" },
+                          "base": { "type": "number" },
+                          "head": { "type": "number" },
+                          "delta": { "type": "number" },
+                          "percent": { "type": "number" },
+                          "explanation": { "type": "string" }
+                        },
+                        "required": ["scenario", "run_label", "metric", "base", "head", "delta", "percent", "explanation"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["should_comment", "reason", "regressions"],
+                  "additionalProperties": false
+                },
+                "build_time_evaluation": {
+                  "type": "object",
+                  "properties": {
+                    "should_comment": { "type": "boolean" },
+                    "reason": { "type": "string" },
+                    "regressions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "metric": { "type": "string" },
+                          "base": { "type": "number" },
+                          "head": { "type": "number" },
+                          "delta": { "type": "number" },
+                          "percent": { "type": "number" },
+                          "explanation": { "type": "string" }
+                        },
+                        "required": ["metric", "base", "head", "delta", "percent", "explanation"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["should_comment", "reason", "regressions"],
+                  "additionalProperties": false
+                },
+                "comment_body": { "type": "string" }
+              },
+              "required": ["should_comment", "reason", "context_evaluation", "build_time_evaluation", "comment_body"],
+              "additionalProperties": false
+            }
+
+      - name: Comment on PR if needed
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CODEX_OUTPUT: ${{ steps.codex.outputs.final-message }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const marker = '<!-- codex-pr-health-review -->';
+            const raw = process.env.CODEX_OUTPUT ?? '';
+            let parsed;
+            try {
+              parsed = JSON.parse(raw);
+            } catch (error) {
+              core.info(`Codex output was not valid JSON. Raw output: ${raw}`);
+              core.info(`Parse error: ${error.message}`);
+              return;
+            }
+
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+
+            if (parsed?.should_comment !== true) {
+              core.info(`No PR health comment needed. Reason: ${parsed?.reason ?? ''}`);
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+
+            let body = typeof parsed.comment_body === 'string' ? parsed.comment_body.trim() : '';
+            if (!body) {
+              core.info('Codex requested a comment but returned an empty comment_body.');
+              return;
+            }
+            if (!body.includes('@codex-core-agent-team')) {
+              body = `@codex-core-agent-team\n\n${body}`;
+            }
+            if (!/PR body|pull request body|explain/i.test(body)) {
+              body += '\n\nPlease explain in the PR body why this regression is OK, or reduce it.';
+            }
+            body = `${marker}\n${body}`;
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              body,
+            });
