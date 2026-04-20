@@ -346,6 +346,7 @@ mod tests {
                 env_policy: None,
                 env: Default::default(),
                 tty: false,
+                pipe_stdin: false,
                 arg0: None,
             })
             .await

@@ -28,6 +28,7 @@ use std::time::Duration;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
+use codex_app_server::in_process::LogDbLayer;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -63,29 +64,16 @@ pub use crate::remote::RemoteAppServerConnectArgs;
 /// module exists so clients can remove a direct `codex-core` dependency
 /// while legacy startup/config paths are migrated to RPCs.
 pub mod legacy_core {
-    pub use codex_core::Cursor;
-    pub use codex_core::DEFAULT_PROJECT_DOC_FILENAME;
-    pub use codex_core::INTERACTIVE_SESSION_SOURCES;
-    pub use codex_core::LOCAL_PROJECT_DOC_FILENAME;
+    pub use codex_core::DEFAULT_AGENTS_MD_FILENAME;
+    pub use codex_core::LOCAL_AGENTS_MD_FILENAME;
     pub use codex_core::McpManager;
-    pub use codex_core::PLUGIN_TEXT_MENTION_SIGIL;
-    pub use codex_core::RolloutRecorder;
-    pub use codex_core::TOOL_MENTION_SIGIL;
-    pub use codex_core::ThreadItem;
-    pub use codex_core::ThreadSortKey;
-    pub use codex_core::ThreadsPage;
     pub use codex_core::append_message_history_entry;
     pub use codex_core::check_execpolicy_for_warnings;
-    pub use codex_core::discover_project_doc_paths;
-    pub use codex_core::find_thread_meta_by_name_str;
-    pub use codex_core::find_thread_name_by_id;
-    pub use codex_core::find_thread_names_by_ids;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
     pub use codex_core::lookup_message_history_entry;
     pub use codex_core::message_history_metadata;
     pub use codex_core::path_utils;
-    pub use codex_core::read_session_meta_line;
     pub use codex_core::web_search_detail;
 
     pub mod config {
@@ -122,10 +110,6 @@ pub mod legacy_core {
 
     pub mod review_prompts {
         pub use codex_core::review_prompts::*;
-    }
-
-    pub mod skills {
-        pub use codex_core::skills::*;
     }
 
     pub mod test_support {
@@ -354,6 +338,8 @@ pub struct InProcessClientStartArgs {
     pub cloud_requirements: CloudRequirementsLoader,
     /// Feedback sink used by app-server/core telemetry and logs.
     pub feedback: CodexFeedback,
+    /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
+    pub log_db: Option<LogDbLayer>,
     /// Environment manager used by core execution and filesystem operations.
     pub environment_manager: Arc<EnvironmentManager>,
     /// Startup warnings emitted after initialize succeeds.
@@ -405,6 +391,7 @@ impl InProcessClientStartArgs {
             loader_overrides: self.loader_overrides,
             cloud_requirements: self.cloud_requirements,
             feedback: self.feedback,
+            log_db: self.log_db,
             environment_manager: self.environment_manager,
             config_warnings: self.config_warnings,
             session_source: self.session_source,
@@ -967,6 +954,7 @@ mod tests {
         match ConfigBuilder::default().build().await {
             Ok(config) => config,
             Err(_) => Config::load_default_with_cli_overrides(Vec::new())
+                .await
                 .expect("default config should load"),
         }
     }
@@ -982,6 +970,7 @@ mod tests {
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
+            log_db: None,
             environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             config_warnings: Vec::new(),
             session_source,
@@ -1994,6 +1983,7 @@ mod tests {
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
+            log_db: None,
             environment_manager: environment_manager.clone(),
             config_warnings: Vec::new(),
             session_source: SessionSource::Exec,

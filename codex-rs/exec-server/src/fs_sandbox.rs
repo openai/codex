@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ReadOnlyAccess;
@@ -13,6 +12,7 @@ use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use tokio::io::AsyncWriteExt;
@@ -25,25 +25,30 @@ use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_helper::FsHelperResponse;
 use crate::local_file_system::current_sandbox_cwd;
-use crate::local_file_system::resolve_existing_path;
-use crate::protocol::FsCopyParams;
-use crate::protocol::FsCreateDirectoryParams;
-use crate::protocol::FsGetMetadataParams;
-use crate::protocol::FsReadDirectoryParams;
-use crate::protocol::FsReadFileParams;
-use crate::protocol::FsRemoveParams;
-use crate::protocol::FsWriteFileParams;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
+
+const FS_HELPER_ENV_ALLOWLIST: &[&str] = &["PATH", "TMPDIR", "TMP", "TEMP"];
 
 #[derive(Clone, Debug)]
 pub(crate) struct FileSystemSandboxRunner {
     runtime_paths: ExecServerRuntimePaths,
+    helper_env: HashMap<String, String>,
+}
+
+struct HelperSandboxInputs {
+    sandbox_policy: SandboxPolicy,
+    file_system_policy: FileSystemSandboxPolicy,
+    network_policy: NetworkSandboxPolicy,
+    cwd: AbsolutePathBuf,
 }
 
 impl FileSystemSandboxRunner {
     pub(crate) fn new(runtime_paths: ExecServerRuntimePaths) -> Self {
-        Self { runtime_paths }
+        Self {
+            runtime_paths,
+            helper_env: helper_env(),
+        }
     }
 
     pub(crate) async fn run(
@@ -51,26 +56,14 @@ impl FileSystemSandboxRunner {
         sandbox: &FileSystemSandboxContext,
         request: FsHelperRequest,
     ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-        let request_sandbox_policy =
-            normalize_sandbox_policy_root_aliases(sandbox.sandbox_policy.clone());
-        let helper_sandbox_policy = normalize_sandbox_policy_root_aliases(
-            sandbox_policy_with_helper_runtime_defaults(&sandbox.sandbox_policy),
-        );
-        let cwd = current_sandbox_cwd().map_err(io_error)?;
-        let cwd = AbsolutePathBuf::from_absolute_path(cwd.as_path())
-            .map_err(|err| invalid_request(format!("current directory is not absolute: {err}")))?;
-        let request_file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-            &request_sandbox_policy,
-            cwd.as_path(),
-        );
-        let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
-            &helper_sandbox_policy,
-            cwd.as_path(),
-        );
-        let request = resolve_request_paths(request, &request_file_system_policy, &cwd)?;
-        let network_policy = NetworkSandboxPolicy::Restricted;
+        let HelperSandboxInputs {
+            sandbox_policy,
+            file_system_policy,
+            network_policy,
+            cwd,
+        } = helper_sandbox_inputs(sandbox)?;
         let command = self.sandbox_exec_request(
-            &helper_sandbox_policy,
+            &sandbox_policy,
             &file_system_policy,
             network_policy,
             &cwd,
@@ -101,9 +94,10 @@ impl FileSystemSandboxRunner {
             program: helper.as_path().as_os_str().to_owned(),
             args: vec![CODEX_FS_HELPER_ARG1.to_string()],
             cwd: cwd.clone(),
-            env: HashMap::new(),
-            additional_permissions: Some(
-                self.helper_permissions(sandbox_context.additional_permissions.as_ref()),
+            env: self.helper_env.clone(),
+            additional_permissions: self.helper_permissions(
+                sandbox_context.additional_permissions.as_ref(),
+                /*include_helper_read_root*/ !sandbox_context.use_legacy_landlock,
             ),
         };
         sandbox_manager
@@ -127,139 +121,66 @@ impl FileSystemSandboxRunner {
     fn helper_permissions(
         &self,
         additional_permissions: Option<&PermissionProfile>,
-    ) -> PermissionProfile {
-        PermissionProfile {
-            network: None,
-            file_system: additional_permissions
-                .and_then(|permissions| permissions.file_system.clone()),
-        }
+        include_helper_read_root: bool,
+    ) -> Option<PermissionProfile> {
+        let inherited_permissions = additional_permissions
+            .map(|permissions| PermissionProfile {
+                network: None,
+                file_system: permissions.file_system.clone(),
+            })
+            .filter(|permissions| !permissions.is_empty());
+        let helper_permissions = include_helper_read_root
+            .then(|| {
+                self.runtime_paths
+                    .codex_self_exe
+                    .parent()
+                    .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+            })
+            .flatten()
+            .map(|helper_read_root| PermissionProfile {
+                network: None,
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![helper_read_root]),
+                    write: None,
+                }),
+            });
+
+        merge_permission_profiles(inherited_permissions.as_ref(), helper_permissions.as_ref())
     }
 }
 
-fn resolve_request_paths(
-    request: FsHelperRequest,
-    file_system_policy: &FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
-) -> Result<FsHelperRequest, JSONRPCErrorError> {
-    match request {
-        FsHelperRequest::ReadFile(FsReadFileParams { path, sandbox }) => {
-            let path = resolve_sandbox_path(&path, PreserveTerminalSymlink::No)?;
-            ensure_path_access(file_system_policy, cwd, &path, FileSystemAccessMode::Read)?;
-            Ok(FsHelperRequest::ReadFile(FsReadFileParams {
-                path,
-                sandbox,
-            }))
+fn helper_sandbox_inputs(
+    sandbox: &FileSystemSandboxContext,
+) -> Result<HelperSandboxInputs, JSONRPCErrorError> {
+    let sandbox_policy = normalize_sandbox_policy_root_aliases(
+        sandbox_policy_with_helper_runtime_defaults(&sandbox.sandbox_policy),
+    );
+    let cwd = match &sandbox.sandbox_policy_cwd {
+        Some(cwd) => cwd.clone(),
+        None if sandbox.file_system_sandbox_policy.is_some() => {
+            return Err(invalid_request(
+                "fileSystemSandboxPolicy requires sandboxPolicyCwd".to_string(),
+            ));
         }
-        FsHelperRequest::WriteFile(FsWriteFileParams {
-            path,
-            data_base64,
-            sandbox,
-        }) => Ok(FsHelperRequest::WriteFile(FsWriteFileParams {
-            path: {
-                let path = resolve_sandbox_path(&path, PreserveTerminalSymlink::No)?;
-                ensure_path_access(file_system_policy, cwd, &path, FileSystemAccessMode::Write)?;
-                path
-            },
-            data_base64,
-            sandbox,
-        })),
-        FsHelperRequest::CreateDirectory(FsCreateDirectoryParams {
-            path,
-            recursive,
-            sandbox,
-        }) => Ok(FsHelperRequest::CreateDirectory(FsCreateDirectoryParams {
-            path: {
-                let path = resolve_sandbox_path(&path, PreserveTerminalSymlink::No)?;
-                ensure_path_access(file_system_policy, cwd, &path, FileSystemAccessMode::Write)?;
-                path
-            },
-            recursive,
-            sandbox,
-        })),
-        FsHelperRequest::GetMetadata(FsGetMetadataParams { path, sandbox }) => {
-            let path = resolve_sandbox_path(&path, PreserveTerminalSymlink::No)?;
-            ensure_path_access(file_system_policy, cwd, &path, FileSystemAccessMode::Read)?;
-            Ok(FsHelperRequest::GetMetadata(FsGetMetadataParams {
-                path,
-                sandbox,
-            }))
+        None => {
+            let cwd = current_sandbox_cwd().map_err(io_error)?;
+            AbsolutePathBuf::from_absolute_path(cwd.as_path()).map_err(|err| {
+                invalid_request(format!("current directory is not absolute: {err}"))
+            })?
         }
-        FsHelperRequest::ReadDirectory(FsReadDirectoryParams { path, sandbox }) => {
-            let path = resolve_sandbox_path(&path, PreserveTerminalSymlink::No)?;
-            ensure_path_access(file_system_policy, cwd, &path, FileSystemAccessMode::Read)?;
-            Ok(FsHelperRequest::ReadDirectory(FsReadDirectoryParams {
-                path,
-                sandbox,
-            }))
-        }
-        FsHelperRequest::Remove(FsRemoveParams {
-            path,
-            recursive,
-            force,
-            sandbox,
-        }) => Ok(FsHelperRequest::Remove(FsRemoveParams {
-            path: {
-                let path = resolve_sandbox_path(&path, PreserveTerminalSymlink::Yes)?;
-                ensure_path_access(file_system_policy, cwd, &path, FileSystemAccessMode::Write)?;
-                path
-            },
-            recursive,
-            force,
-            sandbox,
-        })),
-        FsHelperRequest::Copy(FsCopyParams {
-            source_path,
-            destination_path,
-            recursive,
-            sandbox,
-        }) => Ok(FsHelperRequest::Copy(FsCopyParams {
-            source_path: {
-                let source_path = resolve_sandbox_path(&source_path, PreserveTerminalSymlink::Yes)?;
-                ensure_path_access(
-                    file_system_policy,
-                    cwd,
-                    &source_path,
-                    FileSystemAccessMode::Read,
-                )?;
-                source_path
-            },
-            destination_path: {
-                let destination_path =
-                    resolve_sandbox_path(&destination_path, PreserveTerminalSymlink::No)?;
-                ensure_path_access(
-                    file_system_policy,
-                    cwd,
-                    &destination_path,
-                    FileSystemAccessMode::Write,
-                )?;
-                destination_path
-            },
-            recursive,
-            sandbox,
-        })),
-    }
-}
-
-#[derive(Clone, Copy)]
-enum PreserveTerminalSymlink {
-    Yes,
-    No,
-}
-
-fn resolve_sandbox_path(
-    path: &AbsolutePathBuf,
-    preserve_terminal_symlink: PreserveTerminalSymlink,
-) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
-    if matches!(preserve_terminal_symlink, PreserveTerminalSymlink::Yes)
-        && std::fs::symlink_metadata(path.as_path())
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
-    {
-        return Ok(normalize_top_level_alias(path.clone()));
-    }
-
-    let resolved = resolve_existing_path(path.as_path()).map_err(io_error)?;
-    absolute_path(resolved)
+    };
+    let file_system_policy = sandbox
+        .file_system_sandbox_policy
+        .clone()
+        .unwrap_or_else(|| {
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path())
+        });
+    Ok(HelperSandboxInputs {
+        sandbox_policy,
+        file_system_policy,
+        network_policy: NetworkSandboxPolicy::Restricted,
+        cwd,
+    })
 }
 
 fn normalize_sandbox_policy_root_aliases(sandbox_policy: SandboxPolicy) -> SandboxPolicy {
@@ -316,31 +237,24 @@ fn normalize_top_level_alias(path: AbsolutePathBuf) -> AbsolutePathBuf {
     path
 }
 
-fn absolute_path(path: PathBuf) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
-    AbsolutePathBuf::from_absolute_path(path.as_path())
-        .map_err(|err| invalid_request(format!("resolved sandbox path is not absolute: {err}")))
+fn helper_env() -> HashMap<String, String> {
+    helper_env_from_vars(std::env::vars_os())
 }
 
-fn ensure_path_access(
-    file_system_policy: &FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
-    path: &AbsolutePathBuf,
-    required_access: FileSystemAccessMode,
-) -> Result<(), JSONRPCErrorError> {
-    let actual_access = file_system_policy.resolve_access_with_cwd(path.as_path(), cwd.as_path());
-    let permitted = match required_access {
-        FileSystemAccessMode::Read => actual_access.can_read(),
-        FileSystemAccessMode::Write => actual_access.can_write(),
-        FileSystemAccessMode::None => true,
-    };
-    if permitted {
-        return Ok(());
-    }
+fn helper_env_from_vars(
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> HashMap<String, String> {
+    vars.into_iter()
+        .filter_map(|(key, value)| {
+            let key = key.to_string_lossy();
+            helper_env_key_is_allowed(&key)
+                .then(|| (key.into_owned(), value.to_string_lossy().into_owned()))
+        })
+        .collect()
+}
 
-    Err(invalid_request(format!(
-        "{} is not permitted by filesystem sandbox",
-        path.display()
-    )))
+fn helper_env_key_is_allowed(key: &str) -> bool {
+    FS_HELPER_ENV_ALLOWLIST.contains(&key) || (cfg!(windows) && key.eq_ignore_ascii_case("PATH"))
 }
 
 async fn run_command(
@@ -403,10 +317,21 @@ fn spawn_command(
 fn sandbox_policy_with_helper_runtime_defaults(sandbox_policy: &SandboxPolicy) -> SandboxPolicy {
     let mut sandbox_policy = sandbox_policy.clone();
     match &mut sandbox_policy {
-        SandboxPolicy::ReadOnly { access, .. } => enable_platform_defaults(access),
+        SandboxPolicy::ReadOnly {
+            access,
+            network_access,
+        } => {
+            enable_platform_defaults(access);
+            *network_access = false;
+        }
         SandboxPolicy::WorkspaceWrite {
-            read_only_access, ..
-        } => enable_platform_defaults(read_only_access),
+            read_only_access,
+            network_access,
+            ..
+        } => {
+            enable_platform_defaults(read_only_access);
+            *network_access = false;
+        }
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {}
     }
     sandbox_policy
@@ -434,17 +359,27 @@ fn json_error(err: serde_json::Error) -> JSONRPCErrorError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
     use crate::ExecServerRuntimePaths;
+    use crate::FileSystemSandboxContext;
 
     use super::FileSystemSandboxRunner;
+    use super::helper_env;
+    use super::helper_env_from_vars;
+    use super::helper_env_key_is_allowed;
+    use super::helper_sandbox_inputs;
     use super::sandbox_policy_with_helper_runtime_defaults;
 
     #[test]
@@ -479,7 +414,7 @@ mod tests {
                 include_platform_defaults: false,
                 readable_roots: Vec::new(),
             },
-            network_access: false,
+            network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
@@ -502,6 +437,52 @@ mod tests {
     }
 
     #[test]
+    fn helper_sandbox_inputs_use_context_cwd_and_file_system_policy() {
+        let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
+            .expect("absolute temp dir");
+        let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        let file_system_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                &sandbox_policy,
+                cwd.as_path(),
+            );
+        let mut sandbox_context = FileSystemSandboxContext::new(sandbox_policy.clone());
+        sandbox_context.sandbox_policy_cwd = Some(cwd.clone());
+        sandbox_context.file_system_sandbox_policy = Some(file_system_policy.clone());
+
+        let inputs = helper_sandbox_inputs(&sandbox_context).expect("helper sandbox inputs");
+
+        assert_eq!(inputs.cwd, cwd);
+        assert_eq!(inputs.sandbox_policy, sandbox_policy);
+        assert_eq!(inputs.file_system_policy, file_system_policy);
+        assert_eq!(inputs.network_policy, NetworkSandboxPolicy::Restricted);
+    }
+
+    #[test]
+    fn helper_sandbox_inputs_rejects_file_system_policy_without_cwd() {
+        let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
+            .expect("absolute temp dir");
+        let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        let file_system_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                &sandbox_policy,
+                cwd.as_path(),
+            );
+        let mut sandbox_context = FileSystemSandboxContext::new(sandbox_policy);
+        sandbox_context.file_system_sandbox_policy = Some(file_system_policy);
+
+        let err = match helper_sandbox_inputs(&sandbox_context) {
+            Ok(_) => panic!("expected invalid sandbox inputs"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err.message,
+            "fileSystemSandboxPolicy requires sandboxPolicyCwd"
+        );
+    }
+
+    #[test]
     fn helper_permissions_strip_network_grants() {
         let codex_self_exe = std::env::current_exe().expect("current exe");
         let runtime_paths = ExecServerRuntimePaths::new(
@@ -517,15 +498,20 @@ mod tests {
         let writable = AbsolutePathBuf::from_absolute_path(std::env::temp_dir().as_path())
             .expect("absolute writable path");
 
-        let permissions = runner.helper_permissions(Some(&PermissionProfile {
-            network: Some(NetworkPermissions {
-                enabled: Some(true),
-            }),
-            file_system: Some(FileSystemPermissions {
-                read: Some(vec![readable.clone()]),
-                write: Some(vec![writable.clone()]),
-            }),
-        }));
+        let permissions = runner
+            .helper_permissions(
+                Some(&PermissionProfile {
+                    network: Some(NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    file_system: Some(FileSystemPermissions {
+                        read: Some(vec![]),
+                        write: Some(vec![writable.clone()]),
+                    }),
+                }),
+                /*include_helper_read_root*/ true,
+            )
+            .expect("helper permissions");
 
         assert_eq!(permissions.network, None);
         assert_eq!(
@@ -542,5 +528,143 @@ mod tests {
                 .and_then(|fs| fs.read.clone()),
             Some(vec![readable])
         );
+    }
+
+    #[test]
+    fn helper_env_carries_only_allowlisted_runtime_vars() {
+        let env = helper_env();
+
+        let expected = std::env::vars_os()
+            .filter_map(|(key, value)| {
+                let key = key.to_string_lossy();
+                helper_env_key_is_allowed(&key)
+                    .then(|| (key.into_owned(), value.to_string_lossy().into_owned()))
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(env, expected);
+    }
+
+    #[test]
+    fn helper_env_preserves_path_for_system_bwrap_discovery_without_leaking_secrets() {
+        let env = helper_env_from_vars(
+            [
+                ("PATH", "/usr/bin:/bin"),
+                ("TMPDIR", "/tmp/codex"),
+                ("TMP", "/tmp"),
+                ("TEMP", "/tmp"),
+                ("HOME", "/home/user"),
+                ("OPENAI_API_KEY", "secret"),
+                ("HTTPS_PROXY", "http://proxy.example"),
+            ]
+            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
+
+        assert_eq!(
+            env,
+            HashMap::from([
+                ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ("TMPDIR".to_string(), "/tmp/codex".to_string()),
+                ("TMP".to_string(), "/tmp".to_string()),
+                ("TEMP".to_string(), "/tmp".to_string()),
+            ])
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn helper_env_preserves_windows_path_key_for_system_bwrap_discovery() {
+        let env = helper_env_from_vars(
+            [
+                ("Path", r"C:\Windows\System32"),
+                ("PATH_INJECTION", "bad"),
+                ("OPENAI_API_KEY", "secret"),
+            ]
+            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
+
+        assert_eq!(
+            env,
+            HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())])
+        );
+    }
+
+    #[test]
+    fn sandbox_exec_request_carries_helper_env() {
+        let Some((path_key, path)) = std::env::vars_os().find(|(key, _)| {
+            let key = key.to_string_lossy();
+            key == "PATH" || (cfg!(windows) && key.eq_ignore_ascii_case("PATH"))
+        }) else {
+            return;
+        };
+        let path_key = path_key.to_string_lossy().into_owned();
+        let path = path.to_string_lossy().into_owned();
+        let codex_self_exe = std::env::current_exe().expect("current exe");
+        let runtime_paths =
+            ExecServerRuntimePaths::new(codex_self_exe.clone(), Some(codex_self_exe))
+                .expect("runtime paths");
+        let runner = FileSystemSandboxRunner::new(runtime_paths);
+        let cwd = AbsolutePathBuf::current_dir().expect("cwd");
+        let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        let file_system_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, cwd.as_path());
+        let sandbox_context = crate::FileSystemSandboxContext::new(sandbox_policy.clone());
+
+        let request = runner
+            .sandbox_exec_request(
+                &sandbox_policy,
+                &file_system_policy,
+                NetworkSandboxPolicy::Restricted,
+                &cwd,
+                &sandbox_context,
+            )
+            .expect("sandbox exec request");
+
+        assert_eq!(request.env.get(&path_key), Some(&path));
+    }
+
+    #[test]
+    fn helper_permissions_include_helper_read_root_without_additional_permissions() {
+        let codex_self_exe = std::env::current_exe().expect("current exe");
+        let runtime_paths = ExecServerRuntimePaths::new(
+            codex_self_exe.clone(),
+            /*codex_linux_sandbox_exe*/ None,
+        )
+        .expect("runtime paths");
+        let runner = FileSystemSandboxRunner::new(runtime_paths);
+        let readable = AbsolutePathBuf::from_absolute_path(
+            codex_self_exe.parent().expect("current exe parent"),
+        )
+        .expect("absolute readable path");
+
+        let permissions = runner
+            .helper_permissions(
+                /*additional_permissions*/ None, /*include_helper_read_root*/ true,
+            )
+            .expect("helper permissions");
+
+        assert_eq!(permissions.network, None);
+        assert_eq!(
+            permissions.file_system,
+            Some(FileSystemPermissions {
+                read: Some(vec![readable]),
+                write: None,
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_landlock_helper_permissions_do_not_add_helper_read_root() {
+        let codex_self_exe = std::env::current_exe().expect("current exe");
+        let runtime_paths =
+            ExecServerRuntimePaths::new(codex_self_exe, /*codex_linux_sandbox_exe*/ None)
+                .expect("runtime paths");
+        let runner = FileSystemSandboxRunner::new(runtime_paths);
+
+        let permissions = runner.helper_permissions(
+            /*additional_permissions*/ None, /*include_helper_read_root*/ false,
+        );
+
+        assert_eq!(permissions, None);
     }
 }

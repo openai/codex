@@ -82,6 +82,14 @@ pub struct Cli {
     #[arg(long = "ephemeral", global = true, default_value_t = false)]
     pub ephemeral: bool,
 
+    /// Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`.
+    #[arg(long = "ignore-user-config", global = true, default_value_t = false)]
+    pub ignore_user_config: bool,
+
+    /// Do not load user or project execpolicy `.rules` files.
+    #[arg(long = "ignore-rules", global = true, default_value_t = false)]
+    pub ignore_rules: bool,
+
     /// Path to a JSON Schema file describing the model's final response shape.
     #[arg(long = "output-schema", value_name = "FILE")]
     pub output_schema: Option<PathBuf>,

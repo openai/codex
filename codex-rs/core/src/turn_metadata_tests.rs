@@ -1,5 +1,9 @@
 use super::*;
 
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
+use core_test_support::PathBufExt;
+use core_test_support::PathExt;
 use serde_json::Value;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -8,7 +12,7 @@ use tokio::process::Command;
 #[tokio::test]
 async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
     let temp_dir = TempDir::new().expect("temp dir");
-    let repo_path = temp_dir.path().join("repo");
+    let repo_path = temp_dir.path().join("repo").abs();
     std::fs::create_dir_all(&repo_path).expect("create repo");
 
     Command::new("git")
@@ -64,11 +68,12 @@ async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
 #[test]
 fn turn_metadata_state_uses_platform_sandbox_tag() {
     let temp_dir = TempDir::new().expect("temp dir");
-    let cwd = temp_dir.path().to_path_buf();
+    let cwd = temp_dir.path().abs();
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
+        &SessionSource::Exec,
         "turn-a".to_string(),
         cwd,
         &sandbox_policy,
@@ -79,20 +84,47 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let json: Value = serde_json::from_str(&header).expect("json");
     let sandbox_name = json.get("sandbox").and_then(Value::as_str);
     let session_id = json.get("session_id").and_then(Value::as_str);
+    let thread_source = json.get("thread_source").and_then(Value::as_str);
 
     let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
     assert_eq!(sandbox_name, Some(expected_sandbox));
     assert_eq!(session_id, Some("session-a"));
+    assert_eq!(thread_source, Some("user"));
+    assert!(json.get("session_source").is_none());
+}
+
+#[test]
+fn turn_metadata_state_classifies_subagent_thread_source() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().abs();
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let session_source = SessionSource::SubAgent(SubAgentSource::Review);
+
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        &session_source,
+        "turn-a".to_string(),
+        cwd,
+        &sandbox_policy,
+        WindowsSandboxLevel::Disabled,
+    );
+
+    let header = state.current_header_value().expect("header");
+    let json: Value = serde_json::from_str(&header).expect("json");
+
+    assert_eq!(json["thread_source"].as_str(), Some("subagent"));
+    assert!(json.get("session_source").is_none());
 }
 
 #[test]
 fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields() {
     let temp_dir = TempDir::new().expect("temp dir");
-    let cwd = temp_dir.path().to_path_buf();
+    let cwd = temp_dir.path().abs();
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let state = TurnMetadataState::new(
         "session-a".to_string(),
+        &SessionSource::Exec,
         "turn-a".to_string(),
         cwd,
         &sandbox_policy,
@@ -101,6 +133,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     state.set_responsesapi_client_metadata(HashMap::from([
         ("fiber_run_id".to_string(), "fiber-123".to_string()),
         ("session_id".to_string(), "client-supplied".to_string()),
+        ("thread_source".to_string(), "client-supplied".to_string()),
     ]));
 
     let header = state.current_header_value().expect("header");
@@ -108,5 +141,6 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
 
     assert_eq!(json["fiber_run_id"].as_str(), Some("fiber-123"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
+    assert_eq!(json["thread_source"].as_str(), Some("user"));
     assert_eq!(json["turn_id"].as_str(), Some("turn-a"));
 }

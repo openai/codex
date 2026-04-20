@@ -91,9 +91,62 @@ fn deserialize_stdio_command_server_config_with_env_vars() {
             command: "echo".to_string(),
             args: vec![],
             env: None,
-            env_vars: vec!["FOO".to_string(), "BAR".to_string()],
+            env_vars: vec!["FOO".into(), "BAR".into()],
             cwd: None,
         }
+    );
+}
+
+#[test]
+fn deserialize_stdio_command_server_config_with_env_var_sources() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            env_vars = [
+                "LEGACY_TOKEN",
+                { name = "LOCAL_TOKEN", source = "local" },
+                { name = "REMOTE_TOKEN", source = "remote" },
+            ]
+        "#,
+    )
+    .expect("should deserialize command config with sourced env_vars");
+
+    assert_eq!(
+        cfg.transport,
+        McpServerTransportConfig::Stdio {
+            command: "echo".to_string(),
+            args: vec![],
+            env: None,
+            env_vars: vec![
+                McpServerEnvVar::Name("LEGACY_TOKEN".to_string()),
+                McpServerEnvVar::Config {
+                    name: "LOCAL_TOKEN".to_string(),
+                    source: Some("local".to_string()),
+                },
+                McpServerEnvVar::Config {
+                    name: "REMOTE_TOKEN".to_string(),
+                    source: Some("remote".to_string()),
+                },
+            ],
+            cwd: None,
+        }
+    );
+}
+
+#[test]
+fn deserialize_stdio_command_server_config_rejects_unknown_env_var_source() {
+    let err = toml::from_str::<McpServerConfig>(
+        r#"
+            command = "echo"
+            env_vars = [{ name = "TOKEN", source = "elsewhere" }]
+        "#,
+    )
+    .expect_err("unsupported env var source should be rejected");
+
+    assert!(
+        err.to_string()
+            .contains("unsupported env_vars source `elsewhere`"),
+        "unexpected error: {err}"
     );
 }
 
@@ -246,6 +299,70 @@ fn deserialize_server_config_with_tool_filters() {
 }
 
 #[test]
+fn deserialize_server_config_with_parallel_tool_calls() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            supports_parallel_tool_calls = true
+        "#,
+    )
+    .expect("should deserialize supports_parallel_tool_calls");
+
+    assert!(cfg.supports_parallel_tool_calls);
+}
+
+#[test]
+fn deserialize_server_config_with_default_tool_approval_mode() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            default_tools_approval_mode = "approve"
+
+            [tools.search]
+            approval_mode = "prompt"
+        "#,
+    )
+    .expect("should deserialize default tool approval mode");
+
+    assert_eq!(
+        cfg.default_tools_approval_mode,
+        Some(AppToolApproval::Approve)
+    );
+    assert_eq!(
+        cfg.tools.get("search"),
+        Some(&McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Prompt),
+        })
+    );
+
+    let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
+    assert!(serialized.contains("default_tools_approval_mode = \"approve\""));
+
+    let round_tripped: McpServerConfig =
+        toml::from_str(&serialized).expect("should deserialize serialized MCP config");
+    assert_eq!(round_tripped, cfg);
+}
+
+#[test]
+fn serialize_round_trips_server_config_with_parallel_tool_calls() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            command = "echo"
+            supports_parallel_tool_calls = true
+            tool_timeout_sec = 2.0
+        "#,
+    )
+    .expect("should deserialize supports_parallel_tool_calls");
+
+    let serialized = toml::to_string(&cfg).expect("should serialize MCP config");
+    assert!(serialized.contains("supports_parallel_tool_calls = true"));
+
+    let round_tripped: McpServerConfig =
+        toml::from_str(&serialized).expect("should deserialize serialized MCP config");
+    assert_eq!(round_tripped, cfg);
+}
+
+#[test]
 fn deserialize_ignores_unknown_server_fields() {
     let cfg: McpServerConfig = toml::from_str(
         r#"
@@ -265,11 +382,14 @@ fn deserialize_ignores_unknown_server_fields() {
                 env_vars: Vec::new(),
                 cwd: None,
             },
+            experimental_environment: None,
             enabled: true,
             required: false,
+            supports_parallel_tool_calls: false,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
+            default_tools_approval_mode: None,
             enabled_tools: None,
             disabled_tools: None,
             scopes: None,

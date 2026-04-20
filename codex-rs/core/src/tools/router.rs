@@ -1,11 +1,12 @@
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::build_specs_with_discoverable_tools;
 use codex_mcp::ToolInfo;
@@ -16,10 +17,12 @@ use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::DiscoverableTool;
+use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::ToolsConfig;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::instrument;
 
@@ -36,11 +39,14 @@ pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
     model_visible_specs: Vec<ToolSpec>,
+    parallel_mcp_server_names: HashSet<String>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, ToolInfo>>,
     pub(crate) deferred_mcp_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) unavailable_called_tools: Vec<ToolName>,
+    pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
@@ -50,6 +56,8 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             deferred_mcp_tools,
+            unavailable_called_tools,
+            parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools,
         } = params;
@@ -57,6 +65,7 @@ impl ToolRouter {
             config,
             mcp_tools,
             deferred_mcp_tools,
+            unavailable_called_tools,
             discoverable_tools,
             dynamic_tools,
         );
@@ -83,6 +92,7 @@ impl ToolRouter {
             registry,
             specs,
             model_visible_specs,
+            parallel_mcp_server_names,
         }
     }
 
@@ -97,20 +107,65 @@ impl ToolRouter {
         self.model_visible_specs.clone()
     }
 
-    pub fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
-        self.specs
-            .iter()
-            .find(|config| config.name() == tool_name)
-            .map(|config| config.spec.clone())
+    pub fn find_spec(&self, tool_name: &ToolName) -> Option<ToolSpec> {
+        self.specs.iter().find_map(|config| match &config.spec {
+            ToolSpec::Function(tool)
+                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
+            {
+                Some(config.spec.clone())
+            }
+            ToolSpec::Freeform(tool)
+                if tool_name.namespace.is_none() && tool.name == tool_name.name =>
+            {
+                Some(config.spec.clone())
+            }
+            ToolSpec::Namespace(namespace) => namespace.tools.iter().find_map(|tool| match tool {
+                ResponsesApiNamespaceTool::Function(tool)
+                    if tool_name.namespace.as_deref() == Some(namespace.name.as_str())
+                        && tool.name == tool_name.name =>
+                {
+                    Some(ToolSpec::Function(tool.clone()))
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
     }
 
-    pub fn tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
-        tool_name.namespace.is_none()
-            && self
-                .specs
-                .iter()
-                .filter(|config| config.supports_parallel_tool_calls)
-                .any(|config| config.name() == tool_name.name.as_str())
+    pub(crate) fn create_diff_consumer(
+        &self,
+        tool_name: &ToolName,
+    ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.registry.create_diff_consumer(tool_name)
+    }
+
+    fn configured_tool_supports_parallel(&self, tool_name: &ToolName) -> bool {
+        if tool_name.namespace.is_some() {
+            return false;
+        }
+
+        self.specs
+            .iter()
+            .filter(|config| config.supports_parallel_tool_calls)
+            .any(|config| match &config.spec {
+                ToolSpec::Function(tool) => tool.name == tool_name.name.as_str(),
+                ToolSpec::Freeform(tool) => tool.name == tool_name.name.as_str(),
+                ToolSpec::Namespace(_)
+                | ToolSpec::ToolSearch { .. }
+                | ToolSpec::LocalShell {}
+                | ToolSpec::ImageGeneration { .. }
+                | ToolSpec::WebSearch { .. } => false,
+            })
+    }
+
+    pub fn tool_supports_parallel(&self, call: &ToolCall) -> bool {
+        match &call.payload {
+            // MCP parallel support is configured per server, including for deferred
+            // tools that may not have a matching spec entry. Use the parsed payload
+            // server so similarly named servers/tools cannot collide.
+            ToolPayload::Mcp { server, .. } => self.parallel_mcp_server_names.contains(server),
+            _ => self.configured_tool_supports_parallel(&call.tool_name),
+        }
     }
 
     #[instrument(level = "trace", skip_all, err)]
@@ -126,16 +181,10 @@ impl ToolRouter {
                 call_id,
                 ..
             } => {
-                let mcp_tool = session
-                    .resolve_mcp_tool_info(&name, namespace.as_deref())
-                    .await;
-                let tool_name = match namespace {
-                    Some(namespace) => ToolName::namespaced(namespace, name),
-                    None => ToolName::plain(name),
-                };
-                if let Some(tool_info) = mcp_tool {
+                let tool_name = ToolName::new(namespace, name);
+                if let Some(tool_info) = session.resolve_mcp_tool_info(&tool_name).await {
                     Ok(Some(ToolCall {
-                        tool_name,
+                        tool_name: tool_info.canonical_tool_name(),
                         call_id,
                         payload: ToolPayload::Mcp {
                             server: tool_info.server_name,

@@ -1,6 +1,5 @@
 use anyhow::Result;
 use chrono::DateTime;
-use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -10,7 +9,6 @@ use codex_protocol::protocol::SessionSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 /// The sort key to use when listing threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,13 +19,18 @@ pub enum SortKey {
     UpdatedAt,
 }
 
+/// Sort direction to use when listing threads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
 /// A pagination anchor used for keyset pagination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
     /// The timestamp component of the anchor.
     pub ts: DateTime<Utc>,
-    /// The UUID component of the anchor.
-    pub id: Uuid,
 }
 
 /// A single page of thread metadata results.
@@ -300,7 +303,7 @@ impl ThreadMetadata {
 }
 
 fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
-    dt.with_nanosecond(0).unwrap_or(dt)
+    epoch_millis_to_datetime(datetime_to_epoch_millis(dt)).unwrap_or(dt)
 }
 
 #[derive(Debug)]
@@ -389,8 +392,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
         Ok(Self {
             id: ThreadId::try_from(id)?,
             rollout_path: PathBuf::from(rollout_path),
-            created_at: epoch_seconds_to_datetime(created_at)?,
-            updated_at: epoch_seconds_to_datetime(updated_at)?,
+            created_at: epoch_millis_to_datetime(created_at)?,
+            updated_at: epoch_millis_to_datetime(updated_at)?,
             source,
             agent_nickname,
             agent_role,
@@ -415,21 +418,37 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
 }
 
 pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
-    let id = Uuid::parse_str(&item.id.to_string()).ok()?;
     let ts = match sort_key {
         SortKey::CreatedAt => item.created_at,
         SortKey::UpdatedAt => item.updated_at,
     };
-    Some(Anchor { ts, id })
+    Some(Anchor { ts })
+}
+
+pub(crate) fn datetime_to_epoch_millis(dt: DateTime<Utc>) -> i64 {
+    dt.timestamp_millis()
 }
 
 pub(crate) fn datetime_to_epoch_seconds(dt: DateTime<Utc>) -> i64 {
     dt.timestamp()
 }
 
-pub(crate) fn epoch_seconds_to_datetime(secs: i64) -> Result<DateTime<Utc>> {
-    DateTime::<Utc>::from_timestamp(secs, 0)
-        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {secs}"))
+pub(crate) fn epoch_millis_to_datetime(value: i64) -> Result<DateTime<Utc>> {
+    // Values older than 2020 if interpreted as milliseconds are legacy second-precision rows.
+    // Convert them in memory so old state DBs keep ordering correctly after new writes use ms.
+    const MIN_EPOCH_MILLIS: i64 = 1_577_836_800_000;
+    let millis = if value < MIN_EPOCH_MILLIS {
+        value.saturating_mul(1000)
+    } else {
+        value
+    };
+    DateTime::<Utc>::from_timestamp_millis(millis)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp millis: {value}"))
+}
+
+pub(crate) fn epoch_seconds_to_datetime(value: i64) -> Result<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp(value, 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp seconds: {value}"))
 }
 
 /// Statistics about a backfill operation.

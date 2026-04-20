@@ -178,6 +178,7 @@ impl AppServerClient {
                 cursor,
                 limit: None,
                 sort_key: None,
+                sort_direction: None,
                 model_providers: None,
                 source_kinds: None,
                 archived: None,
@@ -299,8 +300,8 @@ impl AppServerClient {
             }
 
             let line = buffer.trim_end_matches(['\n', '\r']);
-            if !line.is_empty() && !self.filtered_output {
-                let _ = output.server_line(line);
+            if !line.is_empty() {
+                let _ = output.server_json_line(line, self.filtered_output);
             }
 
             let message = match serde_json::from_str::<JSONRPCMessage>(line) {

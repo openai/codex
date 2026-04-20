@@ -197,6 +197,22 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(filesystem) = requirements.filesystem.as_ref() {
+        let deny_read = join_or_empty(
+            filesystem
+                .value
+                .deny_read
+                .iter()
+                .map(|pattern| pattern.as_str().to_string())
+                .collect::<Vec<_>>(),
+        );
+        requirement_lines.push(requirement_line(
+            "permissions.filesystem.deny_read",
+            deny_read,
+            Some(&filesystem.source),
+        ));
+    }
+
     if requirement_lines.is_empty() {
         lines.push("  <none>".dim().into());
     } else {
@@ -367,7 +383,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         dangerously_allow_all_unix_sockets,
         domains,
         managed_allowed_domains_only,
-        danger_full_access_denylist_only,
         unix_sockets,
         allow_local_binding,
     } = network;
@@ -403,11 +418,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     if let Some(managed_allowed_domains_only) = managed_allowed_domains_only {
         parts.push(format!(
             "managed_allowed_domains_only={managed_allowed_domains_only}"
-        ));
-    }
-    if let Some(danger_full_access_denylist_only) = danger_full_access_denylist_only {
-        parts.push(format!(
-            "danger_full_access_denylist_only={danger_full_access_denylist_only}"
         ));
     }
     if let Some(unix_sockets) = unix_sockets {
@@ -464,6 +474,7 @@ mod tests {
     use crate::legacy_core::config_loader::ConfigRequirementsToml;
     use crate::legacy_core::config_loader::ConstrainedWithSource;
     use crate::legacy_core::config_loader::FeatureRequirementsToml;
+    use crate::legacy_core::config_loader::FilesystemConstraints;
     use crate::legacy_core::config_loader::McpServerIdentity;
     use crate::legacy_core::config_loader::McpServerRequirement;
     use crate::legacy_core::config_loader::NetworkConstraints;
@@ -555,6 +566,11 @@ mod tests {
         } else {
             absolute_path("/etc/codex/requirements.toml")
         };
+        let denied_path = if cfg!(windows) {
+            absolute_path("C:\\Users\\alice\\.gitconfig")
+        } else {
+            absolute_path("/home/alice/.gitconfig")
+        };
 
         let requirements = ConfigRequirements {
             approval_policy: ConstrainedWithSource::new(
@@ -605,10 +621,17 @@ mod tests {
                             NetworkDomainPermissionToml::Allow,
                         )]),
                     }),
-                    danger_full_access_denylist_only: Some(true),
                     ..Default::default()
                 },
                 RequirementSource::CloudRequirements,
+            )),
+            filesystem: Some(Sourced::new(
+                FilesystemConstraints {
+                    deny_read: vec![denied_path.clone().into()],
+                },
+                RequirementSource::SystemRequirementsToml {
+                    file: requirements_file.clone(),
+                },
             )),
             ..ConfigRequirements::default()
         };
@@ -634,6 +657,7 @@ mod tests {
             rules: None,
             enforce_residency: Some(ResidencyRequirement::Us),
             network: None,
+            permissions: None,
         };
 
         let user_file = if cfg!(windows) {
@@ -676,8 +700,17 @@ mod tests {
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
-            "experimental_network: enabled=true, domains={example.com=allow}, danger_full_access_denylist_only=true (source: cloud requirements)"
+            "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
         ));
+        assert!(
+            rendered.contains(
+                format!(
+                    "permissions.filesystem.deny_read: {}",
+                    denied_path.as_path().display()
+                )
+                .as_str()
+            )
+        );
         assert!(!rendered.contains("  - rules:"));
     }
 
@@ -818,6 +851,7 @@ approval_policy = "never"
             rules: None,
             enforce_residency: None,
             network: None,
+            permissions: None,
         };
 
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)

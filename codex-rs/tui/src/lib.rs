@@ -15,10 +15,8 @@ use crate::legacy_core::config_loader::CloudRequirementsLoader;
 use crate::legacy_core::config_loader::ConfigLoadError;
 use crate::legacy_core::config_loader::LoaderOverrides;
 use crate::legacy_core::config_loader::format_config_error_with_source;
-use crate::legacy_core::find_thread_meta_by_name_str;
 use crate::legacy_core::format_exec_policy_error_with_source;
 use crate::legacy_core::path_utils;
-use crate::legacy_core::read_session_meta_line;
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use additional_dirs::add_dir_warning_message;
 use app::App;
@@ -52,6 +50,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TurnContextItem;
+use codex_rollout::find_thread_meta_by_name_str;
+use codex_rollout::read_session_meta_line;
 use codex_rollout::state_db::get_state_db;
 use codex_state::log_db;
 use codex_terminal_detection::terminal_info;
@@ -68,10 +68,12 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::Level;
 use tracing::error;
 use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
@@ -117,6 +119,8 @@ mod debug_config;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
+mod external_agent_config_migration;
+mod external_agent_config_migration_startup;
 mod external_editor;
 mod file_search;
 mod frames;
@@ -238,6 +242,7 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+#[allow(clippy::too_many_arguments)]
 async fn start_embedded_app_server(
     arg0_paths: Arg0DispatchPaths,
     config: Config,
@@ -245,6 +250,7 @@ async fn start_embedded_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
@@ -254,6 +260,7 @@ async fn start_embedded_app_server(
         loader_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         environment_manager,
         InProcessAppServerClient::start,
     )
@@ -370,6 +377,7 @@ async fn start_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerClient> {
     match target {
@@ -380,6 +388,7 @@ async fn start_app_server(
             loader_overrides,
             cloud_requirements,
             feedback,
+            log_db,
             environment_manager,
         )
         .await
@@ -404,6 +413,7 @@ pub(crate) async fn start_app_server_for_picker(
         LoaderOverrides::default(),
         CloudRequirementsLoader::default(),
         codex_feedback::CodexFeedback::new(),
+        /*log_db*/ None,
         environment_manager,
     )
     .await?;
@@ -430,6 +440,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     environment_manager: Arc<EnvironmentManager>,
     start_client: F,
 ) -> color_eyre::Result<InProcessAppServerClient>
@@ -454,6 +465,7 @@ where
         loader_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         environment_manager,
         config_warnings,
         session_source: codex_protocol::protocol::SessionSource::Cli,
@@ -508,6 +520,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 cursor: cursor.clone(),
                 limit: Some(100),
                 sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+                sort_direction: None,
                 model_providers: None,
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
@@ -603,6 +616,7 @@ fn latest_session_lookup_params(
         cursor: None,
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+        sort_direction: None,
         model_providers: if is_remote {
             None
         } else {
@@ -983,9 +997,10 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = get_state_db(&config)
-        .await
-        .map(|db| log_db::start(db).with_filter(env_filter()));
+    let log_db = get_state_db(&config).await.map(log_db::start);
+    let log_db_layer = log_db
+        .clone()
+        .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
 
     let _ = tracing_subscriber::registry()
         .with(file_layer)
@@ -1007,6 +1022,7 @@ pub async fn run_main(
         cli_kv_overrides,
         cloud_requirements,
         feedback,
+        log_db,
         remote_url,
         remote_auth_token,
         environment_manager,
@@ -1027,6 +1043,7 @@ async fn run_ratatui_app(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
     remote_url: Option<String>,
     remote_auth_token: Option<String>,
     environment_manager: Arc<EnvironmentManager>,
@@ -1085,6 +1102,7 @@ async fn run_ratatui_app(
             loader_overrides.clone(),
             cloud_requirements.clone(),
             feedback.clone(),
+            log_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1425,6 +1443,7 @@ async fn run_ratatui_app(
             loader_overrides,
             cloud_requirements.clone(),
             feedback.clone(),
+            log_db.clone(),
             environment_manager.clone(),
         )
         .await
@@ -1451,6 +1470,7 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
         remote_auth_token,
@@ -1792,6 +1812,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
+            /*log_db*/ None,
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         )
         .await
@@ -2183,6 +2204,7 @@ mod tests {
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
+            /*log_db*/ None,
             Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
             |_args| async { Err(std::io::Error::other("boom")) },
         )
@@ -2252,6 +2274,7 @@ mod tests {
             approval_policy: config.permissions.approval_policy.value(),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             network: None,
+            file_system_sandbox_policy: None,
             model,
             personality: None,
             collaboration_mode: None,

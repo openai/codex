@@ -1,4 +1,5 @@
 use anyhow::Result;
+use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::McpProcess;
 use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_exec_command_sse_response;
@@ -9,6 +10,8 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
+use app_test_support::write_models_cache;
 use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ByteRange;
@@ -43,6 +46,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_app_server_protocol::WarningNotification;
 use codex_config::config_toml::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_features::FEATURES;
@@ -63,6 +67,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
+
+use super::analytics::enable_analytics_capture;
+use super::analytics::mount_analytics_capture;
+use super::analytics::wait_for_analytics_event;
 
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
@@ -239,6 +247,111 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+    write_models_cache(codex_home.path())?;
+    let cache_path = codex_home.path().join("models_cache.json");
+    let mut cache: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache_path)?)?;
+    let models = cache["models"]
+        .as_array_mut()
+        .expect("models_cache.json models should be an array");
+    let entry = models
+        .first_mut()
+        .expect("models cache should not be empty");
+    let model = entry["slug"]
+        .as_str()
+        .expect("model slug should be present")
+        .to_string();
+    entry["context_window"] = serde_json::Value::from(100);
+    std::fs::write(&cache_path, serde_json::to_string_pretty(&cache)?)?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        config.replace("model = \"mock-model\"", &format!("model = \"{model}\"")),
+    )?;
+    write_test_skill(codex_home.path(), "alpha-skill")?;
+    write_test_skill(codex_home.path(), "beta-skill")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("warning"),
+    )
+    .await??;
+    let params = notification.params.expect("warning params");
+    let warning: WarningNotification =
+        serde_json::from_value(params).expect("deserialize warning notification");
+    assert_eq!(warning.thread_id.as_deref(), Some(thread.id.as_str()));
+    assert_eq!(
+        warning.message,
+        "Some enabled skills were not included in the model-visible skills list for this session. Mention a skill by name or path if you need it."
+    );
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let request = requests
+        .last()
+        .expect("expected at least one model request");
+    assert!(
+        body_contains(request, "## Skills"),
+        "expected outgoing request to include the skills section"
+    );
+    assert!(
+        !body_contains(request, "- alpha-skill:") && !body_contains(request, "- beta-skill:"),
+        "expected trimmed skills to be omitted from the outgoing request body"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> Result<()> {
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![
@@ -325,6 +438,163 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
         })
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    enable_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Image {
+                url: "https://example.com/a.png".to_string(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    assert_eq!(event["event_params"]["thread_id"], thread.id);
+    assert_eq!(event["event_params"]["turn_id"], turn.id);
+    assert_eq!(
+        event["event_params"]["app_server_client"]["product_client_id"],
+        DEFAULT_CLIENT_NAME
+    );
+    assert_eq!(event["event_params"]["model"], "mock-model");
+    assert_eq!(event["event_params"]["model_provider"], "mock_provider");
+    assert_eq!(event["event_params"]["sandbox_policy"], "read_only");
+    assert_eq!(event["event_params"]["ephemeral"], false);
+    assert_eq!(event["event_params"]["thread_source"], "user");
+    assert_eq!(event["event_params"]["initialization_mode"], "new");
+    assert_eq!(
+        event["event_params"]["subagent_source"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        event["event_params"]["parent_thread_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(event["event_params"]["num_input_images"], 1);
+    assert_eq!(event["event_params"]["status"], "completed");
+    assert!(event["event_params"]["started_at"].as_u64().is_some());
+    assert!(event["event_params"]["completed_at"].as_u64().is_some());
+    assert!(event["event_params"]["duration_ms"].as_u64().is_some());
+    assert_eq!(event["event_params"]["input_tokens"], 0);
+    assert_eq!(event["event_params"]["cached_input_tokens"], 0);
+    assert_eq!(event["event_params"]["output_tokens"], 0);
+    assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
+    assert_eq!(event["event_params"]["total_tokens"], 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_does_not_track_turn_event_analytics_without_feature() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    let config_path = codex_home.path().join("config.toml");
+    let config_toml = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        &config_path,
+        format!("{config_toml}\n[features]\ngeneral_analytics = false\n"),
+    )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _ = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let turn_event = wait_for_analytics_event(
+        &server,
+        std::time::Duration::from_millis(250),
+        "codex_turn_event",
+    )
+    .await;
+    assert!(
+        turn_event.is_err(),
+        "turn analytics should be gated off when general_analytics is disabled"
+    );
     Ok(())
 }
 
@@ -1553,7 +1823,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     else {
         unreachable!("loop ensures we break on command execution items");
     };
-    assert_eq!(cwd, second_cwd);
+    assert_eq!(cwd.as_path(), second_cwd.as_path());
     let expected_command = format_with_current_shell_display("echo second turn");
     assert_eq!(command, expected_command);
     assert_eq!(status, CommandExecutionStatus::InProgress);
@@ -2737,5 +3007,14 @@ request_max_retries = 0
 stream_max_retries = 0
 "#
         ),
+    )
+}
+
+fn write_test_skill(codex_home: &Path, name: &str) -> std::io::Result<()> {
+    let skill_dir = codex_home.join("skills").join(name);
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: {name} description\n---\n\n# Body\n"),
     )
 }

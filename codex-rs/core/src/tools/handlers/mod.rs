@@ -15,6 +15,7 @@ mod shell;
 mod test_sync;
 mod tool_search;
 mod tool_suggest;
+mod unavailable_tool;
 pub(crate) mod unified_exec;
 mod view_image;
 
@@ -27,9 +28,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 
-use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::session::Session;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
@@ -49,6 +50,8 @@ pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
 pub use tool_suggest::ToolSuggestHandler;
+pub use unavailable_tool::UnavailableToolHandler;
+pub(crate) use unavailable_tool::unavailable_tool_message;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 

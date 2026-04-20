@@ -7,14 +7,7 @@ use std::sync::Arc;
 use crate::app_server_session::AppServerSession;
 use crate::diff_render::display_path_for;
 use crate::key_hint;
-use crate::legacy_core::Cursor;
-use crate::legacy_core::INTERACTIVE_SESSION_SOURCES;
-use crate::legacy_core::RolloutRecorder;
-use crate::legacy_core::ThreadItem;
-use crate::legacy_core::ThreadSortKey;
-use crate::legacy_core::ThreadsPage;
 use crate::legacy_core::config::Config;
-use crate::legacy_core::find_thread_names_by_ids;
 use crate::legacy_core::path_utils;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
@@ -27,10 +20,18 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_protocol::ThreadId;
+use codex_rollout::Cursor;
+use codex_rollout::INTERACTIVE_SESSION_SOURCES;
+use codex_rollout::RolloutRecorder;
+use codex_rollout::ThreadItem;
+use codex_rollout::ThreadSortKey;
+use codex_rollout::ThreadsPage;
+use codex_rollout::find_thread_names_by_ids;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
@@ -335,6 +336,7 @@ fn spawn_rollout_page_loader(
                 PAGE_SIZE,
                 cursor,
                 request.sort_key,
+                codex_rollout::SortDirection::Desc,
                 INTERACTIVE_SESSION_SOURCES.as_slice(),
                 default_provider.as_ref().map(std::slice::from_ref),
                 default_provider.as_deref().unwrap_or_default(),
@@ -617,16 +619,21 @@ impl PickerState {
 
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<SessionSelection>> {
         self.inline_error = None;
-        match key.code {
-            KeyCode::Esc => return Ok(Some(SessionSelection::StartFresh)),
-            KeyCode::Char('c')
-                if key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
+        match key {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => return Ok(Some(SessionSelection::StartFresh)),
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
                 return Ok(Some(SessionSelection::Exit));
             }
-            KeyCode::Enter => {
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     let path = row.path.clone();
                     let thread_id = match row.thread_id {
@@ -656,14 +663,39 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyCode::Up => {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{0010}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^P */ => {
                 if self.selected > 0 {
                     self.selected -= 1;
                     self.ensure_selected_visible();
                 }
                 self.request_frame();
             }
-            KeyCode::Down => {
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{000e}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^N */ => {
                 if self.selected + 1 < self.filtered_rows.len() {
                     self.selected += 1;
                     self.ensure_selected_visible();
@@ -671,7 +703,10 @@ impl PickerState {
                 self.maybe_load_more_for_scroll();
                 self.request_frame();
             }
-            KeyCode::PageUp => {
+            KeyEvent {
+                code: KeyCode::PageUp,
+                ..
+            } => {
                 let step = self.view_rows.unwrap_or(10).max(1);
                 if self.selected > 0 {
                     self.selected = self.selected.saturating_sub(step);
@@ -679,7 +714,10 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyCode::PageDown => {
+            KeyEvent {
+                code: KeyCode::PageDown,
+                ..
+            } => {
                 if !self.filtered_rows.is_empty() {
                     let step = self.view_rows.unwrap_or(10).max(1);
                     let max_index = self.filtered_rows.len().saturating_sub(1);
@@ -689,21 +727,28 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            KeyCode::Tab => {
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            } => {
                 self.toggle_sort_key();
                 self.request_frame();
             }
-            KeyCode::Backspace => {
+            KeyEvent {
+                code: KeyCode::Backspace,
+                ..
+            } => {
                 let mut new_query = self.query.clone();
                 new_query.pop();
                 self.set_query(new_query);
             }
-            KeyCode::Char(c) => {
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                ..
+            } => {
                 // basic text input for search
-                if !key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
+                if !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT)
                 {
                     let mut new_query = self.query.clone();
                     new_query.push(c);
@@ -1116,7 +1161,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             .map(|dt| dt.with_timezone(&Utc)),
         updated_at: chrono::DateTime::from_timestamp(thread.updated_at, 0)
             .map(|dt| dt.with_timezone(&Utc)),
-        cwd: Some(thread.cwd),
+        cwd: Some(thread.cwd.to_path_buf()),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
     })
 }
@@ -1135,6 +1180,7 @@ fn thread_list_params(
             ThreadSortKey::CreatedAt => AppServerThreadSortKey::CreatedAt,
             ThreadSortKey::UpdatedAt => AppServerThreadSortKey::UpdatedAt,
         }),
+        sort_direction: None,
         model_providers: match provider_filter {
             ProviderFilter::Any => None,
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
@@ -1640,6 +1686,8 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use codex_protocol::ThreadId;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
 
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
@@ -2374,9 +2422,7 @@ mod tests {
                 make_item("/tmp/a.jsonl", "2025-01-03T00:00:00Z", "third"),
                 make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "second"),
             ],
-            Some(cursor_from_str(
-                "2025-01-02T00-00-00|00000000-0000-0000-0000-000000000000",
-            )),
+            Some(cursor_from_str("2025-01-02T00:00:00Z")),
             /*num_scanned_files*/ 2,
             /*reached_scan_cap*/ false,
         ));
@@ -2386,9 +2432,7 @@ mod tests {
                 make_item("/tmp/a.jsonl", "2025-01-03T00:00:00Z", "duplicate"),
                 make_item("/tmp/c.jsonl", "2025-01-01T00:00:00Z", "first"),
             ],
-            Some(cursor_from_str(
-                "2025-01-01T00-00-00|00000000-0000-0000-0000-000000000001",
-            )),
+            Some(cursor_from_str("2025-01-01T00:00:00Z")),
             /*num_scanned_files*/ 2,
             /*reached_scan_cap*/ false,
         ));
@@ -2442,9 +2486,7 @@ mod tests {
                 make_item("/tmp/a.jsonl", "2025-01-01T00:00:00Z", "one"),
                 make_item("/tmp/b.jsonl", "2025-01-02T00:00:00Z", "two"),
             ],
-            Some(cursor_from_str(
-                "2025-01-03T00-00-00|00000000-0000-0000-0000-000000000000",
-            )),
+            Some(cursor_from_str("2025-01-03T00:00:00Z")),
             /*num_scanned_files*/ 2,
             /*reached_scan_cap*/ false,
         ));
@@ -2676,7 +2718,7 @@ mod tests {
             updated_at: 2,
             status: codex_app_server_protocol::ThreadStatus::Idle,
             path: None,
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_path_buf("/tmp").abs(),
             cli_version: String::from("0.0.0"),
             source: codex_app_server_protocol::SessionSource::Cli,
             agent_nickname: None,
@@ -2760,9 +2802,7 @@ mod tests {
                 "2025-01-01T00:00:00Z",
                 "alpha",
             )],
-            Some(cursor_from_str(
-                "2025-01-02T00-00-00|00000000-0000-0000-0000-000000000000",
-            )),
+            Some(cursor_from_str("2025-01-02T00:00:00Z")),
             /*num_scanned_files*/ 1,
             /*reached_scan_cap*/ false,
         ));
@@ -2781,9 +2821,7 @@ mod tests {
                 search_token: first_request.search_token,
                 page: Ok(page(
                     vec![make_item("/tmp/beta.jsonl", "2025-01-02T00:00:00Z", "beta")],
-                    Some(cursor_from_str(
-                        "2025-01-03T00-00-00|00000000-0000-0000-0000-000000000001",
-                    )),
+                    Some(cursor_from_str("2025-01-03T00:00:00Z")),
                     /*num_scanned_files*/ 5,
                     /*reached_scan_cap*/ false,
                 )),
@@ -2809,9 +2847,7 @@ mod tests {
                         "2025-01-03T00:00:00Z",
                         "target log",
                     )],
-                    Some(cursor_from_str(
-                        "2025-01-04T00-00-00|00000000-0000-0000-0000-000000000002",
-                    )),
+                    Some(cursor_from_str("2025-01-04T00:00:00Z")),
                     /*num_scanned_files*/ 7,
                     /*reached_scan_cap*/ false,
                 )),

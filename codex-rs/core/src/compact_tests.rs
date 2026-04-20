@@ -1,11 +1,14 @@
 use super::*;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use pretty_assertions::assert_eq;
 
 async fn process_compacted_history_with_test_session(
     compacted_history: Vec<ResponseItem>,
     previous_turn_settings: Option<&PreviousTurnSettings>,
 ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
-    let (session, turn_context) = crate::codex::make_session_and_context().await;
+    let (session, turn_context) = crate::session::tests::make_session_and_context().await;
     session
         .set_previous_turn_settings(previous_turn_settings.cloned())
         .await;
@@ -43,6 +46,7 @@ fn content_items_to_text_joins_non_empty_segments() {
 fn content_items_to_text_ignores_image_only_content() {
     let items = vec![ContentItem::InputImage {
         image_url: "file://image.png".to_string(),
+        detail: Some(DEFAULT_IMAGE_DETAIL),
     }];
 
     let joined = content_items_to_text(&items);
@@ -183,6 +187,30 @@ fn build_token_limited_compacted_history_appends_summary_message() {
         other => panic!("expected summary message, found {other:?}"),
     };
     assert_eq!(summary, summary_text);
+}
+
+#[test]
+fn should_use_remote_compact_task_for_azure_provider() {
+    let provider = ModelProviderInfo {
+        name: "Azure".into(),
+        base_url: Some("https://example.com/openai".into()),
+        env_key: Some("AZURE_OPENAI_API_KEY".into()),
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    assert!(should_use_remote_compact_task(&provider));
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@ use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::sandbox_tags::sandbox_tag;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -21,6 +22,7 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_tools::ConfiguredToolSpec;
 use codex_tools::ToolName;
@@ -74,12 +76,25 @@ pub trait ToolHandler: Send + Sync {
         None
     }
 
+    /// Creates an optional consumer for streamed tool argument diffs.
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        None
+    }
+
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
     fn handle(
         &self,
         invocation: ToolInvocation,
     ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send;
+}
+
+/// Consumes streamed argument diffs for a tool call and emits protocol events
+/// derived from partial tool input.
+pub(crate) trait ToolArgumentDiffConsumer: Send {
+    /// Consume the next argument diff for a tool call.
+    fn consume_diff(&mut self, turn: &TurnContext, call_id: String, diff: &str)
+    -> Option<EventMsg>;
 }
 
 pub(crate) struct AnyToolResult {
@@ -132,6 +147,8 @@ trait AnyToolHandler: Send + Sync {
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload>;
 
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>>;
+
     fn handle_any<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -161,6 +178,10 @@ where
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
         ToolHandler::post_tool_use_payload(self, call_id, payload, result)
+    }
+
+    fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        ToolHandler::create_diff_consumer(self)
     }
 
     fn handle_any<'a>(
@@ -196,6 +217,13 @@ impl ToolRegistry {
     #[cfg(test)]
     pub(crate) fn has_handler(&self, name: &ToolName) -> bool {
         self.handler(name).is_some()
+    }
+
+    pub(crate) fn create_diff_consumer(
+        &self,
+        name: &ToolName,
+    ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
+        self.handler(name)?.create_diff_consumer()
     }
 
     // TODO(jif) for dynamic tools.
@@ -578,7 +606,7 @@ async fn dispatch_after_tool_use_hook(
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
-            cwd: turn.cwd.to_path_buf(),
+            cwd: turn.cwd.clone(),
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::AfterToolUse {

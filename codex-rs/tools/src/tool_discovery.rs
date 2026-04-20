@@ -2,8 +2,10 @@ use crate::JsonSchema;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
+use crate::ToolName;
 use crate::ToolSearchOutputTool;
 use crate::ToolSpec;
+use crate::default_namespace_description;
 use crate::mcp_tool_to_deferred_responses_api_tool;
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
@@ -151,7 +153,7 @@ pub fn create_tool_search_tool(
     let properties = BTreeMap::from([
         (
             "query".to_string(),
-            JsonSchema::string(Some("Search query for MCP tools.".to_string())),
+            JsonSchema::string(Some("Search query for deferred tools.".to_string())),
         ),
         (
             "limit".to_string(),
@@ -187,7 +189,7 @@ pub fn create_tool_search_tool(
     };
 
     let description = format!(
-        "# MCP tool discovery\n\nSearches over MCP tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following MCP servers/connectors:\n{source_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required MCP tools. For MCP tool discovery, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates`."
+        "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following sources:\n{source_descriptions}\nSome of the tools may not have been provided to you upfront, and you should use this tool (`{TOOL_SEARCH_TOOL_NAME}`) to search for the required tools. For MCP tool discovery, always use `{TOOL_SEARCH_TOOL_NAME}` instead of `list_mcp_resources` or `list_mcp_resource_templates`."
     );
 
     ToolSpec::ToolSearch {
@@ -201,60 +203,38 @@ pub fn create_tool_search_tool(
     }
 }
 
-pub fn collect_tool_search_output_tools<'a>(
-    tool_sources: impl IntoIterator<Item = ToolSearchResultSource<'a>>,
-) -> Result<Vec<ToolSearchOutputTool>, serde_json::Error> {
-    let mut grouped: Vec<(&'a str, Vec<ToolSearchResultSource<'a>>)> = Vec::new();
-    for tool in tool_sources {
-        if let Some((_, tools)) = grouped
-            .iter_mut()
-            .find(|(tool_namespace, _)| *tool_namespace == tool.tool_namespace)
-        {
-            tools.push(tool);
-        } else {
-            grouped.push((tool.tool_namespace, vec![tool]));
-        }
-    }
+pub fn tool_search_result_source_to_output_tool(
+    source: ToolSearchResultSource<'_>,
+) -> Result<ToolSearchOutputTool, serde_json::Error> {
+    Ok(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+        name: source.tool_namespace.to_string(),
+        description: tool_search_result_source_namespace_description(source),
+        tools: vec![tool_search_result_source_to_namespace_tool(source)?],
+    }))
+}
 
-    let mut results = Vec::with_capacity(grouped.len());
-    for (tool_namespace, tools) in grouped {
-        let Some(first_tool) = tools.first() else {
-            continue;
-        };
+fn tool_search_result_source_namespace_description(source: ToolSearchResultSource<'_>) -> String {
+    source
+        .connector_description
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            source
+                .connector_name
+                .map(str::trim)
+                .filter(|connector_name| !connector_name.is_empty())
+                .map(|connector_name| format!("Tools for working with {connector_name}."))
+        })
+        .unwrap_or_else(|| default_namespace_description(source.tool_namespace))
+}
 
-        let description = first_tool
-            .connector_description
-            .map(str::to_string)
-            .or_else(|| {
-                first_tool
-                    .connector_name
-                    .map(str::trim)
-                    .filter(|connector_name| !connector_name.is_empty())
-                    .map(|connector_name| format!("Tools for working with {connector_name}."))
-            })
-            .or_else(|| {
-                Some(format!(
-                    "Tools from the {} MCP server.",
-                    first_tool.server_name
-                ))
-            });
-
-        let tools = tools
-            .iter()
-            .map(|tool| {
-                mcp_tool_to_deferred_responses_api_tool(tool.tool_name.to_string(), tool.tool)
-                    .map(ResponsesApiNamespaceTool::Function)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        results.push(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
-            name: tool_namespace.to_string(),
-            description: description.unwrap_or_default(),
-            tools,
-        }));
-    }
-
-    Ok(results)
+fn tool_search_result_source_to_namespace_tool(
+    source: ToolSearchResultSource<'_>,
+) -> Result<ResponsesApiNamespaceTool, serde_json::Error> {
+    let tool_name = ToolName::namespaced(source.tool_namespace, source.tool_name);
+    mcp_tool_to_deferred_responses_api_tool(&tool_name, source.tool)
+        .map(ResponsesApiNamespaceTool::Function)
 }
 
 pub fn collect_tool_search_source_infos<'a>(

@@ -42,8 +42,8 @@ fn default_enabled_features_are_stable() {
 }
 
 #[test]
-fn use_legacy_landlock_is_stable_and_disabled_by_default() {
-    assert_eq!(Feature::UseLegacyLandlock.stage(), Stage::Stable);
+fn use_legacy_landlock_is_deprecated_and_disabled_by_default() {
+    assert_eq!(Feature::UseLegacyLandlock.stage(), Stage::Deprecated);
     assert_eq!(Feature::UseLegacyLandlock.default_enabled(), false);
 }
 
@@ -51,6 +51,12 @@ fn use_legacy_landlock_is_stable_and_disabled_by_default() {
 fn use_linux_sandbox_bwrap_is_removed_and_disabled_by_default() {
     assert_eq!(Feature::UseLinuxSandboxBwrap.stage(), Stage::Removed);
     assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+}
+
+#[test]
+fn image_detail_original_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::ImageDetailOriginal.stage(), Stage::Removed);
+    assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
 }
 
 #[test]
@@ -86,7 +92,7 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     let stage = spec.stage;
 
     assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("Guardian Approvals"));
+    assert_eq!(stage.experimental_menu_name(), Some("Auto-review"));
     assert_eq!(
         stage.experimental_menu_description().map(str::to_owned),
         Some(
@@ -95,6 +101,23 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     );
     assert_eq!(stage.experimental_announcement(), None);
     assert_eq!(Feature::GuardianApproval.default_enabled(), false);
+}
+
+#[test]
+fn external_migration_is_experimental_and_disabled_by_default() {
+    let spec = Feature::ExternalMigration.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("External migration"));
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some(
+            "Show a startup prompt when Codex detects migratable external agent config for this machine or project."
+        )
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert_eq!(Feature::ExternalMigration.default_enabled(), false);
 }
 
 #[test]
@@ -122,15 +145,24 @@ fn tool_suggest_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn tool_search_is_under_development_and_disabled_by_default() {
-    assert_eq!(Feature::ToolSearch.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::ToolSearch.default_enabled(), false);
+fn tool_search_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::ToolSearch.stage(), Stage::Stable);
+    assert_eq!(Feature::ToolSearch.default_enabled(), true);
 }
 
 #[test]
-fn general_analytics_is_under_development_and_disabled_by_default() {
-    assert_eq!(Feature::GeneralAnalytics.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::GeneralAnalytics.default_enabled(), false);
+fn unavailable_dummy_tools_is_under_development_and_disabled_by_default() {
+    assert_eq!(
+        Feature::UnavailableDummyTools.stage(),
+        Stage::UnderDevelopment
+    );
+    assert_eq!(Feature::UnavailableDummyTools.default_enabled(), false);
+}
+
+#[test]
+fn general_analytics_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::GeneralAnalytics.stage(), Stage::Stable);
+    assert_eq!(Feature::GeneralAnalytics.default_enabled(), true);
 }
 
 #[test]
@@ -146,9 +178,39 @@ fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
 }
 
 #[test]
-fn image_generation_is_under_development() {
-    assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::ImageGeneration.default_enabled(), false);
+fn image_generation_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::ImageGeneration.stage(), Stage::Stable);
+    assert_eq!(Feature::ImageGeneration.default_enabled(), true);
+}
+
+#[test]
+fn use_legacy_landlock_config_records_deprecation_notice() {
+    let mut entries = BTreeMap::new();
+    entries.insert("use_legacy_landlock".to_string(), true);
+
+    let mut features = Features::with_defaults();
+    features.apply_map(&entries);
+
+    let usages = features.legacy_feature_usages().collect::<Vec<_>>();
+    assert_eq!(usages.len(), 1);
+    assert_eq!(usages[0].alias, "features.use_legacy_landlock");
+    assert_eq!(usages[0].feature, Feature::UseLegacyLandlock);
+    assert_eq!(
+        usages[0].summary,
+        "`[features].use_legacy_landlock` is deprecated and will be removed soon."
+    );
+    assert_eq!(
+        usages[0].details.as_deref(),
+        Some("Remove this setting to stop opting into the legacy Linux sandbox behavior.")
+    );
+}
+
+#[test]
+fn image_detail_original_is_a_removed_feature_key() {
+    assert_eq!(
+        feature_for_key("image_detail_original"),
+        Some(Feature::ImageDetailOriginal)
+    );
 }
 
 #[test]
@@ -170,15 +232,13 @@ fn use_agent_identity_is_under_development() {
 }
 
 #[test]
-fn image_detail_original_feature_is_experimental_and_user_toggleable() {
-    let stage = Feature::ImageDetailOriginal.stage();
-
-    assert!(matches!(stage, Stage::Experimental { .. }));
+fn workspace_dependencies_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::WorkspaceDependencies.stage(), Stage::Stable);
+    assert_eq!(Feature::WorkspaceDependencies.default_enabled(), true);
     assert_eq!(
-        stage.experimental_menu_name(),
-        Some("Original image detail")
+        feature_for_key("workspace_dependencies"),
+        Some(Feature::WorkspaceDependencies)
     );
-    assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
 }
 
 #[test]
@@ -261,6 +321,25 @@ fn from_sources_applies_base_profile_and_overrides() {
     assert_eq!(features.enabled(Feature::CodeMode), true);
     assert_eq!(features.enabled(Feature::ApplyPatchFreeform), true);
     assert_eq!(features.enabled(Feature::WebSearchRequest), false);
+}
+
+#[test]
+fn from_sources_ignores_removed_image_detail_original_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([(
+        "image_detail_original".to_string(),
+        true,
+    )]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
 }
 
 #[test]

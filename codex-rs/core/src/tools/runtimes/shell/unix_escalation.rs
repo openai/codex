@@ -8,11 +8,13 @@ use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
@@ -22,6 +24,7 @@ use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
+use codex_hooks::PermissionRequestDecision;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -158,7 +161,7 @@ pub(super) async fn try_run_zsh_fork(
         network: sandbox_network,
         windows_sandbox_level,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
+        sandbox_policy_cwd: ctx.turn.cwd.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -256,7 +259,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
+        sandbox_policy_cwd: ctx.turn.cwd.clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
@@ -297,8 +300,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
 
 struct CoreShellActionProvider {
     policy: Arc<RwLock<Policy>>,
-    session: Arc<crate::codex::Session>,
-    turn: Arc<crate::codex::TurnContext>,
+    session: Arc<crate::session::session::Session>,
+    turn: Arc<crate::session::turn_context::TurnContext>,
     call_id: String,
     tool_name: GuardianCommandSource,
     approval_policy: AskForApproval,
@@ -321,6 +324,7 @@ enum DecisionSource {
 struct PromptDecision {
     decision: ReviewDecision,
     guardian_review_id: Option<String>,
+    rejection_message: Option<String>,
 }
 
 fn execve_prompt_is_rejected_by_policy(
@@ -386,7 +390,7 @@ impl CoreShellActionProvider {
         additional_permissions: Option<PermissionProfile>,
     ) -> anyhow::Result<PromptDecision> {
         let command = join_program_and_argv(program, argv);
-        let workdir = workdir.to_path_buf();
+        let workdir = workdir.clone();
         let session = self.session.clone();
         let turn = self.turn.clone();
         let call_id = self.call_id.clone();
@@ -395,17 +399,50 @@ impl CoreShellActionProvider {
         let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
+                // 1) Run PermissionRequest hooks
+                let permission_request = PermissionRequestPayload {
+                    tool_name: "Bash".to_string(),
+                    command: codex_shell_command::parse_command::shlex_join(&command),
+                    description: None,
+                };
+                let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
+                match run_permission_request_hooks(
+                    &session,
+                    &turn,
+                    &effective_approval_id,
+                    permission_request,
+                )
+                .await
+                {
+                    Some(PermissionRequestDecision::Allow) => {
+                        return PromptDecision {
+                            decision: ReviewDecision::Approved,
+                            guardian_review_id: None,
+                            rejection_message: None,
+                        };
+                    }
+                    Some(PermissionRequestDecision::Deny { message }) => {
+                        return PromptDecision {
+                            decision: ReviewDecision::Denied,
+                            guardian_review_id: None,
+                            rejection_message: Some(message),
+                        };
+                    }
+                    None => {}
+                }
+
+                // 2) Route to Guardian if configured
                 if let Some(review_id) = guardian_review_id.clone() {
                     let decision = review_approval_request(
                         &session,
                         &turn,
-                        review_id,
+                        review_id.clone(),
                         GuardianApprovalRequest::Execve {
                             id: call_id.clone(),
                             source,
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),
-                            cwd: workdir,
+                            cwd: workdir.clone(),
                             additional_permissions,
                         },
                         /*retry_reason*/ None,
@@ -414,15 +451,18 @@ impl CoreShellActionProvider {
                     return PromptDecision {
                         decision,
                         guardian_review_id,
+                        rejection_message: None,
                     };
                 }
+
+                // 3) Fall back to regular user prompt
                 let decision = session
                     .request_command_approval(
                         &turn,
                         call_id,
                         approval_id,
                         command,
-                        workdir,
+                        workdir.clone(),
                         /*reason*/ None,
                         /*network_approval_context*/ None,
                         /*proposed_execpolicy_amendment*/ None,
@@ -433,6 +473,7 @@ impl CoreShellActionProvider {
                 PromptDecision {
                     decision,
                     guardian_review_id: None,
+                    rejection_message: None,
                 }
             })
             .await)
@@ -488,7 +529,11 @@ impl CoreShellActionProvider {
                             }
                         },
                         ReviewDecision::Denied => {
-                            let message = if let Some(review_id) =
+                            let message = if let Some(message) =
+                                prompt_decision.rejection_message.clone()
+                            {
+                                message
+                            } else if let Some(review_id) =
                                 prompt_decision.guardian_review_id.as_deref()
                             {
                                 guardian_rejection_message(self.session.as_ref(), review_id).await
@@ -696,7 +741,7 @@ struct CoreShellCommandExecutor {
     network: Option<codex_network_proxy::NetworkProxy>,
     windows_sandbox_level: WindowsSandboxLevel,
     arg0: Option<String>,
-    sandbox_policy_cwd: PathBuf,
+    sandbox_policy_cwd: AbsolutePathBuf,
     codex_linux_sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
 }

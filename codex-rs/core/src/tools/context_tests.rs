@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -98,6 +99,7 @@ fn mcp_tool_output_response_item_includes_wall_time() {
             meta: None,
         },
         wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
     };
 
     let response = output.to_response_item(
@@ -149,6 +151,7 @@ fn mcp_tool_output_response_item_preserves_content_items() {
             meta: None,
         },
         wall_time: std::time::Duration::from_millis(500),
+        original_image_detail_supported: false,
     };
 
     let response = output.to_response_item(
@@ -171,7 +174,7 @@ fn mcp_tool_output_response_item_preserves_content_items() {
                         },
                         FunctionCallOutputContentItem::InputImage {
                             image_url: image_url.to_string(),
-                            detail: None,
+                            detail: Some(DEFAULT_IMAGE_DETAIL),
                         },
                     ]
                     .as_slice()
@@ -201,6 +204,7 @@ fn mcp_tool_output_code_mode_result_stays_raw_call_tool_result() {
             meta: None,
         },
         wall_time: std::time::Duration::from_millis(1250),
+        original_image_detail_supported: false,
     };
 
     let result = output.code_mode_result(&ToolPayload::Mcp {
@@ -236,7 +240,7 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
             },
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: None,
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputText {
                 text: "line 2".to_string(),
@@ -256,7 +260,7 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,AAA".to_string(),
-                    detail: None,
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 FunctionCallOutputContentItem::InputText {
                     text: "line 2".to_string(),

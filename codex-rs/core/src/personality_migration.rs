@@ -1,14 +1,10 @@
 use crate::config::edit::ConfigEditsBuilder;
-use crate::rollout::ARCHIVED_SESSIONS_SUBDIR;
-use crate::rollout::SESSIONS_SUBDIR;
-use crate::rollout::list::ThreadListConfig;
-use crate::rollout::list::ThreadListLayout;
-use crate::rollout::list::ThreadSortKey;
-use crate::rollout::list::get_threads_in_root;
 use codex_config::config_toml::ConfigToml;
 use codex_protocol::config_types::Personality;
-use codex_protocol::protocol::SessionSource;
-use codex_rollout::state_db;
+use codex_thread_store::ListThreadsParams;
+use codex_thread_store::LocalThreadStore;
+use codex_thread_store::ThreadSortKey;
+use codex_thread_store::ThreadStore;
 use std::io;
 use std::path::Path;
 use tokio::fs::OpenOptions;
@@ -81,57 +77,34 @@ pub async fn maybe_migrate_personality_with_config_path(
 }
 
 async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io::Result<bool> {
-    let allowed_sources: &[SessionSource] = &[];
+    let store = LocalThreadStore::new(codex_rollout::RolloutConfig {
+        codex_home: codex_home.to_path_buf(),
+        sqlite_home: codex_home.to_path_buf(),
+        cwd: codex_home.to_path_buf(),
+        model_provider_id: default_provider.to_string(),
+        generate_memories: false,
+    });
+    if has_threads(&store, /*archived*/ false).await? {
+        return Ok(true);
+    }
+    has_threads(&store, /*archived*/ true).await
+}
 
-    if let Some(state_db_ctx) = state_db::open_if_present(codex_home, default_provider).await
-        && let Some(ids) = state_db::list_thread_ids_db(
-            Some(state_db_ctx.as_ref()),
-            codex_home,
-            /*page_size*/ 1,
-            /*cursor*/ None,
-            ThreadSortKey::CreatedAt,
-            allowed_sources,
-            /*model_providers*/ None,
-            /*archived_only*/ false,
-            "personality_migration",
-        )
+async fn has_threads(store: &LocalThreadStore, archived: bool) -> io::Result<bool> {
+    store
+        .list_threads(ListThreadsParams {
+            page_size: 1,
+            cursor: None,
+            sort_key: ThreadSortKey::CreatedAt,
+            sort_direction: codex_thread_store::SortDirection::Desc,
+            allowed_sources: Vec::new(),
+            model_providers: None,
+            archived,
+            search_term: None,
+        })
         .await
-        && !ids.is_empty()
-    {
-        return Ok(true);
-    }
-
-    let sessions = get_threads_in_root(
-        codex_home.join(SESSIONS_SUBDIR),
-        /*page_size*/ 1,
-        /*cursor*/ None,
-        ThreadSortKey::CreatedAt,
-        ThreadListConfig {
-            allowed_sources,
-            model_providers: None,
-            default_provider,
-            layout: ThreadListLayout::NestedByDate,
-        },
-    )
-    .await?;
-    if !sessions.items.is_empty() {
-        return Ok(true);
-    }
-
-    let archived_sessions = get_threads_in_root(
-        codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
-        /*page_size*/ 1,
-        /*cursor*/ None,
-        ThreadSortKey::CreatedAt,
-        ThreadListConfig {
-            allowed_sources,
-            model_providers: None,
-            default_provider,
-            layout: ThreadListLayout::Flat,
-        },
-    )
-    .await?;
-    Ok(!archived_sessions.items.is_empty())
+        .map(|page| !page.items.is_empty())
+        .map_err(io::Error::other)
 }
 
 async fn create_marker(marker_path: &Path) -> io::Result<()> {

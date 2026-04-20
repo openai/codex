@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn context_remaining_is_separate_selectable_id() {
+    fn context_remaining_is_selectable_id() {
         assert_eq!(
             "context-remaining".parse::<StatusLineItem>(),
             Ok(StatusLineItem::ContextRemaining)

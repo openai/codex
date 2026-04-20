@@ -38,6 +38,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
+    pub(crate) side_conversation_active: bool,
 }
 
 impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
@@ -51,6 +52,7 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
             realtime_conversation_enabled: value.realtime_conversation_enabled,
             audio_device_selection_enabled: value.audio_device_selection_enabled,
             allow_elevate_sandbox: value.windows_degraded_sandbox_active,
+            side_conversation_active: value.side_conversation_active,
         }
     }
 }
@@ -293,7 +295,7 @@ mod tests {
                 CommandItem::Builtin(cmd) => cmd.command(),
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
+        assert_eq!(cmds, vec!["model", "memories", "mention", "mcp"]);
     }
 
     #[test]
@@ -359,6 +361,7 @@ mod tests {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            side_conversation_active: false,
         });
         popup.on_composer_text_change("/collab".to_string());
 
@@ -379,6 +382,7 @@ mod tests {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            side_conversation_active: false,
         });
         popup.on_composer_text_change("/plan".to_string());
 
@@ -399,6 +403,7 @@ mod tests {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            side_conversation_active: false,
         });
         popup.on_composer_text_change("/pers".to_string());
 
@@ -426,6 +431,7 @@ mod tests {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            side_conversation_active: false,
         });
         popup.on_composer_text_change("/personality".to_string());
 
@@ -446,6 +452,7 @@ mod tests {
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            side_conversation_active: false,
         });
         popup.on_composer_text_change("/aud".to_string());
 

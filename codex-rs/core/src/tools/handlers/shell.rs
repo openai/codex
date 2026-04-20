@@ -4,13 +4,13 @@ use codex_protocol::models::ShellToolCallParams;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
 
-use crate::codex::TurnContext;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::maybe_emit_implicit_skill_invocation;
+use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -77,9 +77,10 @@ fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
 struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
+    hook_command: String,
     additional_permissions: Option<PermissionProfile>,
     prefix_rule: Option<Vec<String>>,
-    session: Arc<crate::codex::Session>,
+    session: Arc<crate::session::session::Session>,
     turn: Arc<TurnContext>,
     tracker: crate::tools::context::SharedTurnDiffTracker,
     call_id: String,
@@ -139,7 +140,7 @@ impl ShellCommandHandler {
 
     fn to_exec_params(
         params: &ShellCommandToolCallParams,
-        session: &crate::codex::Session,
+        session: &crate::session::session::Session,
         turn_context: &TurnContext,
         thread_id: ThreadId,
         allow_login_shell: bool,
@@ -241,6 +242,7 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.display(),
                     exec_params,
+                    hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
                     additional_permissions: params.additional_permissions.clone(),
                     prefix_rule,
                     session,
@@ -258,6 +260,7 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.display(),
                     exec_params,
+                    hook_command: codex_shell_command::parse_command::shlex_join(&params.command),
                     additional_permissions: None,
                     prefix_rule: None,
                     session,
@@ -366,6 +369,7 @@ impl ToolHandler for ShellCommandHandler {
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name: tool_name.display(),
             exec_params,
+            hook_command: params.command,
             additional_permissions: params.additional_permissions.clone(),
             prefix_rule,
             session,
@@ -384,6 +388,7 @@ impl ShellHandler {
         let RunExecLikeArgs {
             tool_name,
             exec_params,
+            hook_command,
             additional_permissions,
             prefix_rule,
             session,
@@ -469,7 +474,6 @@ impl ShellHandler {
             &exec_params.command,
             &exec_params.cwd,
             fs.as_ref(),
-            exec_params.expiration.timeout_ms(),
             session.clone(),
             turn.clone(),
             Some(&tracker),
@@ -484,7 +488,7 @@ impl ShellHandler {
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(
             exec_params.command.clone(),
-            exec_params.cwd.to_path_buf(),
+            exec_params.cwd.clone(),
             source,
             freeform,
         );
@@ -515,6 +519,7 @@ impl ShellHandler {
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
+            hook_command,
             cwd: exec_params.cwd.clone(),
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),

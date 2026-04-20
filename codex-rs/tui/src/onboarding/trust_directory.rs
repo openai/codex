@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
-use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::TrustLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -27,6 +26,7 @@ use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub cwd: PathBuf,
     pub user_config_path: PathBuf,
+    pub trust_target: PathBuf,
     pub show_windows_create_sandbox_hint: bool,
     pub should_quit: bool,
     pub selection: Option<TrustDirectorySelection>,
@@ -53,10 +53,15 @@ impl WidgetRef for &TrustDirectoryWidget {
 
         column.push(
             Paragraph::new(
-                "Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.".to_string(),
+                "Do you trust the contents of this directory? Working with untrusted \
+                 contents comes with higher risk of prompt injection. Trusting the \
+                 directory allows project-local config, hooks, and exec policies to load."
+                    .to_string(),
             )
-                .wrap(Wrap { trim: true })
-                .inset(Insets::tlbr(/*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0)),
+            .wrap(Wrap { trim: true })
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         column.push("");
 
@@ -142,8 +147,7 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
-        let target =
-            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
+        let target = self.trust_target.clone();
         if let Err(e) = ConfigEditsBuilder::for_config_path(&self.user_config_path)
             .set_project_trust_level(&target, TrustLevel::Trusted)
             .apply_blocking()
@@ -185,6 +189,7 @@ mod tests {
         let mut widget = TrustDirectoryWidget {
             cwd: PathBuf::from("."),
             user_config_path: codex_home.path().join("config.toml"),
+            trust_target: PathBuf::from("."),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
@@ -212,6 +217,7 @@ mod tests {
         let mut widget = TrustDirectoryWidget {
             cwd: workspace.clone(),
             user_config_path: user_config_path.clone(),
+            trust_target: workspace.clone(),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
@@ -233,6 +239,7 @@ mod tests {
         let widget = TrustDirectoryWidget {
             cwd: PathBuf::from("/workspace/project"),
             user_config_path: codex_home.path().join("config.toml"),
+            trust_target: PathBuf::from("/workspace/project"),
             show_windows_create_sandbox_hint: false,
             should_quit: false,
             selection: None,
