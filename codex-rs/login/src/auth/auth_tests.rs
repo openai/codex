@@ -211,6 +211,7 @@ fn chatgpt_auth_persists_agent_identity_for_workspace() {
         agent_runtime_id: "agent_123".to_string(),
         agent_private_key: "pkcs8-base64".to_string(),
         registered_at: "2026-04-13T12:00:00Z".to_string(),
+        background_task_id: None,
     };
 
     auth.set_agent_identity(record.clone())
@@ -227,6 +228,33 @@ fn chatgpt_auth_persists_agent_identity_for_workspace() {
 
     assert!(auth.remove_agent_identity().expect("remove agent identity"));
     assert_eq!(auth.get_agent_identity("account-123"), None);
+}
+
+#[test]
+fn dummy_chatgpt_auth_does_not_create_cwd_auth_json_when_identity_is_set() {
+    let cwd_auth = std::env::current_dir()
+        .expect("current dir")
+        .join("auth.json");
+    let had_auth_json_before_test = cwd_auth.exists();
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let record = AgentIdentityAuthRecord {
+        workspace_id: "account_id".to_string(),
+        chatgpt_user_id: None,
+        agent_runtime_id: "agent_123".to_string(),
+        agent_private_key: "pkcs8-base64".to_string(),
+        registered_at: "2026-04-13T12:00:00Z".to_string(),
+    };
+
+    auth.set_agent_identity(record.clone())
+        .expect("set agent identity");
+
+    assert_eq!(auth.get_agent_identity("account_id"), Some(record));
+    if !had_auth_json_before_test {
+        assert!(
+            !cwd_auth.exists(),
+            "dummy ChatGPT auth must not write auth.json in the test process cwd"
+        );
+    }
 }
 
 #[test]

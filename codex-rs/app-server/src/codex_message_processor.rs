@@ -85,6 +85,8 @@ use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceInterface;
+use codex_app_server_protocol::MarketplaceRemoveParams;
+use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
@@ -243,12 +245,15 @@ use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::path_utils;
 use codex_core::plugins::MarketplaceAddError;
+use codex_core::plugins::MarketplaceRemoveError;
+use codex_core::plugins::MarketplaceRemoveRequest as CoreMarketplaceRemoveRequest;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::add_marketplace as add_marketplace_to_codex_home;
+use codex_core::plugins::remove_marketplace;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
@@ -282,9 +287,9 @@ use codex_login::run_login_server;
 use codex_mcp::McpRuntimeEnvironment;
 use codex_mcp::McpServerStatusSnapshot;
 use codex_mcp::McpSnapshotDetail;
-use codex_mcp::collect_mcp_server_status_snapshot_with_detail;
+use codex_mcp::collect_mcp_server_status_snapshot_with_detail_and_authorization_header;
 use codex_mcp::discover_supported_scopes;
-use codex_mcp::effective_mcp_servers;
+use codex_mcp::effective_mcp_servers_with_authorization_header;
 use codex_mcp::resolve_oauth_scopes;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::ThreadId;
@@ -978,6 +983,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::MarketplaceAdd { request_id, params } => {
                 self.marketplace_add(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::MarketplaceRemove { request_id, params } => {
+                self.marketplace_remove(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::PluginList { request_id, params } => {
@@ -2004,12 +2013,28 @@ impl CodexMessageProcessor {
             });
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+        let authorization_header_value = self
+            .auth_manager
+            .chatgpt_authorization_header_for_auth(&auth)
+            .await;
+        let mut client = BackendClient::new(self.config.chatgpt_base_url.clone())
+            .map(|client| {
+                client.with_user_agent(codex_login::default_client::get_codex_user_agent())
+            })
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to construct backend client: {err}"),
                 data: None,
             })?;
+        if let Some(authorization_header_value) = authorization_header_value {
+            client = client.with_authorization_header_value(authorization_header_value);
+        }
+        if let Some(account_id) = auth.get_account_id() {
+            client = client.with_chatgpt_account_id(account_id);
+        }
+        if auth.is_fedramp_account() {
+            client = client.with_fedramp_routing_header();
+        }
 
         let snapshots = client
             .get_rate_limits_many()
@@ -5724,7 +5749,8 @@ impl CodexMessageProcessor {
         let mcp_config = config
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
-        let auth = self.auth_manager.auth().await;
+        let auth_manager = Arc::clone(&self.auth_manager);
+        let auth = auth_manager.auth().await;
         let runtime_environment = match self.thread_manager.environment_manager().current().await {
             Ok(Some(environment)) => {
                 // Status listing has no turn cwd. This fallback is used only
@@ -5749,120 +5775,111 @@ impl CodexMessageProcessor {
         };
 
         tokio::spawn(async move {
-            Self::list_mcp_server_status_task(
-                outgoing,
-                request,
-                params,
-                config,
-                mcp_config,
-                auth,
+            let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
+                McpServerStatusDetail::Full => McpSnapshotDetail::Full,
+                McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
+            };
+
+            let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
+                auth_manager
+                    .chatgpt_authorization_header_for_auth(auth)
+                    .await
+            } else {
+                None
+            };
+            let snapshot = collect_mcp_server_status_snapshot_with_detail_and_authorization_header(
+                &mcp_config,
+                auth.as_ref(),
+                request.request_id.to_string(),
                 runtime_environment,
+                detail,
+                background_authorization_header_value.as_deref(),
             )
             .await;
-        });
-    }
 
-    async fn list_mcp_server_status_task(
-        outgoing: Arc<OutgoingMessageSender>,
-        request_id: ConnectionRequestId,
-        params: ListMcpServerStatusParams,
-        config: Config,
-        mcp_config: codex_mcp::McpConfig,
-        auth: Option<CodexAuth>,
-        runtime_environment: McpRuntimeEnvironment,
-    ) {
-        let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
-            McpServerStatusDetail::Full => McpSnapshotDetail::Full,
-            McpServerStatusDetail::ToolsAndAuthOnly => McpSnapshotDetail::ToolsAndAuthOnly,
-        };
+            let effective_servers = effective_mcp_servers_with_authorization_header(
+                &mcp_config,
+                auth.as_ref(),
+                background_authorization_header_value.as_deref(),
+            );
+            let McpServerStatusSnapshot {
+                tools_by_server,
+                resources,
+                resource_templates,
+                auth_statuses,
+            } = snapshot;
 
-        let snapshot = collect_mcp_server_status_snapshot_with_detail(
-            &mcp_config,
-            auth.as_ref(),
-            request_id.request_id.to_string(),
-            runtime_environment,
-            detail,
-        )
-        .await;
+            let mut server_names: Vec<String> = config
+                .mcp_servers
+                .keys()
+                .cloned()
+                // Include built-in/plugin MCP servers that are present in the
+                // effective runtime config even when they are not user-declared in
+                // `config.mcp_servers`.
+                .chain(effective_servers.keys().cloned())
+                .chain(auth_statuses.keys().cloned())
+                .chain(resources.keys().cloned())
+                .chain(resource_templates.keys().cloned())
+                .collect();
+            server_names.sort();
+            server_names.dedup();
 
-        let effective_servers = effective_mcp_servers(&mcp_config, auth.as_ref());
-        let McpServerStatusSnapshot {
-            tools_by_server,
-            resources,
-            resource_templates,
-            auth_statuses,
-        } = snapshot;
-
-        let mut server_names: Vec<String> = config
-            .mcp_servers
-            .keys()
-            .cloned()
-            // Include built-in/plugin MCP servers that are present in the
-            // effective runtime config even when they are not user-declared in
-            // `config.mcp_servers`.
-            .chain(effective_servers.keys().cloned())
-            .chain(auth_statuses.keys().cloned())
-            .chain(resources.keys().cloned())
-            .chain(resource_templates.keys().cloned())
-            .collect();
-        server_names.sort();
-        server_names.dedup();
-
-        let total = server_names.len();
-        let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
-        let effective_limit = limit.min(total);
-        let start = match params.cursor {
-            Some(cursor) => match cursor.parse::<usize>() {
-                Ok(idx) => idx,
-                Err(_) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid cursor: {cursor}"),
-                        data: None,
-                    };
-                    outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            },
-            None => 0,
-        };
-
-        if start > total {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("cursor {start} exceeds total MCP servers {total}"),
-                data: None,
+            let total = server_names.len();
+            let limit = params.limit.unwrap_or(total as u32).max(1) as usize;
+            let effective_limit = limit.min(total);
+            let start = match params.cursor {
+                Some(cursor) => match cursor.parse::<usize>() {
+                    Ok(idx) => idx,
+                    Err(_) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("invalid cursor: {cursor}"),
+                            data: None,
+                        };
+                        outgoing.send_error(request, error).await;
+                        return;
+                    }
+                },
+                None => 0,
             };
-            outgoing.send_error(request_id, error).await;
-            return;
-        }
 
-        let end = start.saturating_add(effective_limit).min(total);
+            if start > total {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("cursor {start} exceeds total MCP servers {total}"),
+                    data: None,
+                };
+                outgoing.send_error(request, error).await;
+                return;
+            }
 
-        let data: Vec<McpServerStatus> = server_names[start..end]
-            .iter()
-            .map(|name| McpServerStatus {
-                name: name.clone(),
-                tools: tools_by_server.get(name).cloned().unwrap_or_default(),
-                resources: resources.get(name).cloned().unwrap_or_default(),
-                resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
-                auth_status: auth_statuses
-                    .get(name)
-                    .cloned()
-                    .unwrap_or(CoreMcpAuthStatus::Unsupported)
-                    .into(),
-            })
-            .collect();
+            let end = start.saturating_add(effective_limit).min(total);
 
-        let next_cursor = if end < total {
-            Some(end.to_string())
-        } else {
-            None
-        };
+            let data: Vec<McpServerStatus> = server_names[start..end]
+                .iter()
+                .map(|name| McpServerStatus {
+                    name: name.clone(),
+                    tools: tools_by_server.get(name).cloned().unwrap_or_default(),
+                    resources: resources.get(name).cloned().unwrap_or_default(),
+                    resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),
+                    auth_status: auth_statuses
+                        .get(name)
+                        .cloned()
+                        .unwrap_or(CoreMcpAuthStatus::Unsupported)
+                        .into(),
+                })
+                .collect();
 
-        let response = ListMcpServerStatusResponse { data, next_cursor };
+            let next_cursor = if end < total {
+                Some(end.to_string())
+            } else {
+                None
+            };
 
-        outgoing.send_response(request_id, response).await;
+            let response = ListMcpServerStatusResponse { data, next_cursor };
+
+            outgoing.send_response(request, response).await;
+        });
     }
 
     async fn read_mcp_resource(
@@ -6535,6 +6552,40 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
+    }
+
+    async fn marketplace_remove(
+        &self,
+        request_id: ConnectionRequestId,
+        params: MarketplaceRemoveParams,
+    ) {
+        let result = remove_marketplace(
+            self.config.codex_home.to_path_buf(),
+            CoreMarketplaceRemoveRequest {
+                marketplace_name: params.marketplace_name,
+            },
+        )
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        MarketplaceRemoveResponse {
+                            marketplace_name: outcome.marketplace_name,
+                            installed_root: outcome.removed_installed_root,
+                        },
+                    )
+                    .await;
+            }
+            Err(MarketplaceRemoveError::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(MarketplaceRemoveError::Internal(message)) => {
+                self.send_internal_error(request_id, message).await;
+            }
+        }
     }
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {

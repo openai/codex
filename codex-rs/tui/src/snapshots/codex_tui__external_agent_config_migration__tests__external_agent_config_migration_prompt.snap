@@ -1,9 +1,7 @@
 ---
 source: tui/src/external_agent_config_migration.rs
-assertion_line: 824
 expression: rendered
 ---
-
   > External agent config detected
   We found settings from another agent that you can add to this project.
   Select what to import
@@ -11,12 +9,12 @@ expression: rendered
     [x] Migrate /Users/alex/.claude/settings.json into /Users/alex/.codex/con…
 
   Project: /workspace/project
-    [x] Migrate enabled plugins from /workspace/project/.claude/settings.json…
+    [x] Migrate enabled plugins from .claude/settings.json (4 marketplaces, 6…
         • acme-tools: deployer, formatter, +1 more
         • team-marketplace: asana
         • debug: sample
         • +1 more marketplaces
-    [x] Migrate /workspace/project/CLAUDE.md to /workspace/project/AGENTS.md
+    [x] Migrate CLAUDE.md to AGENTS.md
 
   Selected 3 of 3 item(s).
     1. Proceed with selected                                                  

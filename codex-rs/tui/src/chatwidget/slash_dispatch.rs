@@ -24,6 +24,11 @@ struct PreparedSlashCommandArgs {
     source: SlashCommandDispatchSource,
 }
 
+const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
+const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
+    "'/side' is unavailable while code review is running.";
+const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -70,7 +75,35 @@ impl ChatWidget {
         }
     }
 
+    fn request_side_conversation(
+        &mut self,
+        parent_thread_id: ThreadId,
+        user_message: Option<UserMessage>,
+    ) {
+        self.set_side_conversation_context_label(Some(SIDE_STARTING_CONTEXT_LABEL.to_string()));
+        self.request_redraw();
+        self.app_event_tx.send(AppEvent::StartSide {
+            parent_thread_id,
+            user_message,
+        });
+    }
+
+    fn request_empty_side_conversation(&mut self) {
+        let Some(parent_thread_id) = self.thread_id else {
+            self.add_error_message("'/side' is unavailable before the session starts.".to_string());
+            return;
+        };
+
+        self.request_side_conversation(parent_thread_id, /*user_message*/ None);
+    }
+
     pub(super) fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
+            return;
+        }
+        if !self.ensure_side_command_allowed_outside_review(cmd) {
+            return;
+        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -177,6 +210,9 @@ impl ChatWidget {
                     return;
                 }
                 self.open_collaboration_modes_popup();
+            }
+            SlashCommand::Side => {
+                self.request_empty_side_conversation();
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
@@ -323,7 +359,7 @@ impl ChatWidget {
                 self.add_app_server_stub_message("Memory maintenance");
             }
             SlashCommand::Mcp => {
-                self.add_mcp_output();
+                self.add_mcp_output(McpServerStatusDetail::ToolsAndAuthOnly);
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
@@ -389,6 +425,12 @@ impl ChatWidget {
         args: String,
         text_elements: Vec<TextElement>,
     ) {
+        if !self.ensure_slash_command_allowed_in_side_conversation(cmd) {
+            return;
+        }
+        if !self.ensure_side_command_allowed_outside_review(cmd) {
+            return;
+        }
         if !cmd.supports_inline_args() {
             self.dispatch_command(cmd);
             return;
@@ -440,6 +482,31 @@ impl ChatWidget {
         }
     }
 
+    fn prepared_inline_user_message(
+        &mut self,
+        args: String,
+        text_elements: Vec<TextElement>,
+        mut local_images: Vec<LocalImageAttachment>,
+        mut remote_image_urls: Vec<String>,
+        mut mention_bindings: Vec<MentionBinding>,
+        source: SlashCommandDispatchSource,
+    ) -> UserMessage {
+        if source == SlashCommandDispatchSource::Live {
+            local_images = self
+                .bottom_pane
+                .take_recent_submission_images_with_placeholders();
+            remote_image_urls = self.take_remote_image_urls();
+            mention_bindings = self.bottom_pane.take_recent_submission_mention_bindings();
+        }
+        UserMessage {
+            text: args,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        }
+    }
+
     fn dispatch_prepared_command_with_args(
         &mut self,
         cmd: SlashCommand,
@@ -448,9 +515,9 @@ impl ChatWidget {
         let PreparedSlashCommandArgs {
             args,
             text_elements,
-            mut local_images,
-            mut remote_image_urls,
-            mut mention_bindings,
+            local_images,
+            remote_image_urls,
+            mention_bindings,
             source,
         } = prepared;
         let trimmed = args.trim();
@@ -476,7 +543,14 @@ impl ChatWidget {
                     }
                 }
             }
+            SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
+                "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
+                _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
+            },
             SlashCommand::Rename if !trimmed.is_empty() => {
+                if !self.ensure_thread_rename_allowed() {
+                    return;
+                }
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 let Some(name) = crate::legacy_core::util::normalize_thread_name(&args) else {
@@ -489,20 +563,14 @@ impl ChatWidget {
                 if !self.apply_plan_slash_command() {
                     return;
                 }
-                if source == SlashCommandDispatchSource::Live {
-                    local_images = self
-                        .bottom_pane
-                        .take_recent_submission_images_with_placeholders();
-                    remote_image_urls = self.take_remote_image_urls();
-                    mention_bindings = self.bottom_pane.take_recent_submission_mention_bindings();
-                }
-                let user_message = UserMessage {
-                    text: args,
+                let user_message = self.prepared_inline_user_message(
+                    args,
+                    text_elements,
                     local_images,
                     remote_image_urls,
-                    text_elements,
                     mention_bindings,
-                };
+                    source,
+                );
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
                     self.full_reasoning_buffer.clear();
@@ -511,6 +579,23 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Side if !trimmed.is_empty() => {
+                let Some(parent_thread_id) = self.thread_id else {
+                    self.add_error_message(
+                        "'/side' is unavailable before the session starts.".to_string(),
+                    );
+                    return;
+                };
+                let user_message = self.prepared_inline_user_message(
+                    args,
+                    text_elements,
+                    local_images,
+                    remote_image_urls,
+                    mention_bindings,
+                    source,
+                );
+                self.request_side_conversation(parent_thread_id, Some(user_message));
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(AppCommand::review(ReviewRequest {
@@ -623,6 +708,7 @@ impl ChatWidget {
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
             audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
             allow_elevate_sandbox,
+            side_conversation_active: self.active_side_conversation,
         }
     }
 
@@ -660,6 +746,7 @@ impl ChatWidget {
             | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Collab
+            | SlashCommand::Side
             | SlashCommand::Agent
             | SlashCommand::MultiAgents
             | SlashCommand::Approvals
@@ -702,5 +789,27 @@ impl ChatWidget {
                 (start < end).then_some(elem.map_range(|_| ByteRange { start, end }))
             })
             .collect()
+    }
+
+    fn ensure_slash_command_allowed_in_side_conversation(&mut self, cmd: SlashCommand) -> bool {
+        if !self.active_side_conversation || cmd.available_in_side_conversation() {
+            return true;
+        }
+        self.add_error_message(format!(
+            "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
+            cmd.command()
+        ));
+        self.bottom_pane.drain_pending_submission_state();
+        false
+    }
+
+    fn ensure_side_command_allowed_outside_review(&mut self, cmd: SlashCommand) -> bool {
+        if cmd != SlashCommand::Side || !self.is_review_mode {
+            return true;
+        }
+
+        self.add_error_message(SIDE_REVIEW_UNAVAILABLE_MESSAGE.to_string());
+        self.bottom_pane.drain_pending_submission_state();
+        false
     }
 }

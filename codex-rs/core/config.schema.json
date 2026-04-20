@@ -344,6 +344,9 @@
             "child_agents_md": {
               "type": "boolean"
             },
+            "chronicle": {
+              "type": "boolean"
+            },
             "code_mode": {
               "type": "boolean"
             },
@@ -537,6 +540,9 @@
               "type": "boolean"
             },
             "workspace_dependencies": {
+              "type": "boolean"
+            },
+            "workspace_owner_usage_nudge": {
               "type": "boolean"
             }
           },
@@ -1902,6 +1908,10 @@
             "$ref": "#/definitions/SkillConfig"
           },
           "type": "array"
+        },
+        "include_instructions": {
+          "description": "Whether turns receive the automatic skills instructions block.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2312,6 +2322,9 @@
         "child_agents_md": {
           "type": "boolean"
         },
+        "chronicle": {
+          "type": "boolean"
+        },
         "code_mode": {
           "type": "boolean"
         },
@@ -2505,6 +2518,9 @@
           "type": "boolean"
         },
         "workspace_dependencies": {
+          "type": "boolean"
+        },
+        "workspace_owner_usage_nudge": {
           "type": "boolean"
         }
       },

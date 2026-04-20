@@ -344,6 +344,10 @@ client_request_definitions! {
         params: v2::MarketplaceAddParams,
         response: v2::MarketplaceAddResponse,
     },
+    MarketplaceRemove => "marketplace/remove" {
+        params: v2::MarketplaceRemoveParams,
+        response: v2::MarketplaceRemoveResponse,
+    },
     PluginList => "plugin/list" {
         params: v2::PluginListParams,
         response: v2::PluginListResponse,

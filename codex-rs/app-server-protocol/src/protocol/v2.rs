@@ -3484,6 +3484,21 @@ pub struct MarketplaceAddResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct MarketplaceRemoveParams {
+    pub marketplace_name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceRemoveResponse {
+    pub marketplace_name: String,
+    pub installed_root: Option<AbsolutePathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct PluginListParams {
     /// Optional working directories used to discover repo marketplaces. When omitted,
     /// only home-scoped marketplaces and the official curated marketplace are considered.
@@ -8887,6 +8902,40 @@ mod tests {
             PluginUninstallParams {
                 plugin_id: "gmail@openai-curated".to_string(),
             },
+        );
+    }
+
+    #[test]
+    fn marketplace_remove_response_serializes_nullable_installed_root() {
+        let installed_root = if cfg!(windows) {
+            r"C:\marketplaces\debug"
+        } else {
+            "/tmp/marketplaces/debug"
+        };
+        let installed_root = AbsolutePathBuf::try_from(PathBuf::from(installed_root)).unwrap();
+        let installed_root_json = installed_root.as_path().display().to_string();
+        assert_eq!(
+            serde_json::to_value(MarketplaceRemoveResponse {
+                marketplace_name: "debug".to_string(),
+                installed_root: Some(installed_root),
+            })
+            .unwrap(),
+            json!({
+                "marketplaceName": "debug",
+                "installedRoot": installed_root_json,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(MarketplaceRemoveResponse {
+                marketplace_name: "debug".to_string(),
+                installed_root: None,
+            })
+            .unwrap(),
+            json!({
+                "marketplaceName": "debug",
+                "installedRoot": null,
+            }),
         );
     }
 

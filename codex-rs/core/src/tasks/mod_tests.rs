@@ -1,7 +1,9 @@
+use super::emit_turn_memory_metric;
 use super::emit_turn_network_proxy_metric;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
 use codex_otel::SessionTelemetry;
+use codex_otel::TURN_MEMORY_METRIC;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
@@ -55,8 +57,8 @@ fn attributes_to_map<'a>(
         .collect()
 }
 
-fn metric_point(resource_metrics: &ResourceMetrics) -> (BTreeMap<String, String>, u64) {
-    let metric = find_metric(resource_metrics, TURN_NETWORK_PROXY_METRIC);
+fn metric_point(resource_metrics: &ResourceMetrics, name: &str) -> (BTreeMap<String, String>, u64) {
+    let metric = find_metric(resource_metrics, name);
     match metric.data() {
         AggregatedMetrics::U64(data) => match data {
             MetricData::Sum(sum) => {
@@ -84,7 +86,7 @@ fn emit_turn_network_proxy_metric_records_active_turn() {
     let snapshot = session_telemetry
         .snapshot_metrics()
         .expect("runtime metrics snapshot");
-    let (attrs, value) = metric_point(&snapshot);
+    let (attrs, value) = metric_point(&snapshot, TURN_NETWORK_PROXY_METRIC);
 
     assert_eq!(value, 1);
     assert_eq!(
@@ -109,7 +111,7 @@ fn emit_turn_network_proxy_metric_records_inactive_turn() {
     let snapshot = session_telemetry
         .snapshot_metrics()
         .expect("runtime metrics snapshot");
-    let (attrs, value) = metric_point(&snapshot);
+    let (attrs, value) = metric_point(&snapshot, TURN_NETWORK_PROXY_METRIC);
 
     assert_eq!(value, 1);
     assert_eq!(
@@ -117,6 +119,62 @@ fn emit_turn_network_proxy_metric_records_inactive_turn() {
         BTreeMap::from([
             ("active".to_string(), "false".to_string()),
             ("tmp_mem_enabled".to_string(), "false".to_string()),
+        ])
+    );
+}
+
+#[test]
+fn emit_turn_memory_metric_records_read_allowed_with_citations() {
+    let session_telemetry = test_session_telemetry();
+
+    emit_turn_memory_metric(
+        &session_telemetry,
+        /*feature_enabled*/ true,
+        /*config_enabled*/ true,
+        /*has_citations*/ true,
+    );
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, value) = metric_point(&snapshot, TURN_MEMORY_METRIC);
+
+    assert_eq!(value, 1);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("config_use_memories".to_string(), "true".to_string()),
+            ("feature_enabled".to_string(), "true".to_string()),
+            ("has_citations".to_string(), "true".to_string()),
+            ("read_allowed".to_string(), "true".to_string()),
+        ])
+    );
+}
+
+#[test]
+fn emit_turn_memory_metric_records_config_disabled_without_citations() {
+    let session_telemetry = test_session_telemetry();
+
+    emit_turn_memory_metric(
+        &session_telemetry,
+        /*feature_enabled*/ true,
+        /*config_enabled*/ false,
+        /*has_citations*/ false,
+    );
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, value) = metric_point(&snapshot, TURN_MEMORY_METRIC);
+
+    assert_eq!(value, 1);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("config_use_memories".to_string(), "false".to_string()),
+            ("feature_enabled".to_string(), "true".to_string()),
+            ("has_citations".to_string(), "false".to_string()),
+            ("read_allowed".to_string(), "false".to_string()),
         ])
     );
 }

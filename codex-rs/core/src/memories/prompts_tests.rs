@@ -64,11 +64,11 @@ fn build_consolidation_prompt_includes_removed_extension_resources() {
     std::fs::create_dir_all(temp.path().join("memories_extensions")).unwrap();
     let removed_extension_resources = vec![
         RemovedExtensionResource {
-            extension: "telepathy".to_string(),
+            extension: "chronicle".to_string(),
             resource_path: "resources/2026-04-06T11-59-59-abcd-10min-old.md".to_string(),
         },
         RemovedExtensionResource {
-            extension: "telepathy".to_string(),
+            extension: "chronicle".to_string(),
             resource_path: "resources/2026-04-07T12-00-00-abcd-10min-cutoff.md".to_string(),
         },
     ];
@@ -81,7 +81,7 @@ fn build_consolidation_prompt_includes_removed_extension_resources() {
 
     assert!(prompt.contains("Memory extension resources removed by retention pruning:"));
     assert!(prompt.contains("- retention window: 7 days"));
-    assert!(prompt.contains("- extension: telepathy"));
+    assert!(prompt.contains("- extension: chronicle"));
     assert!(prompt.contains("  - resources/2026-04-06T11-59-59-abcd-10min-old.md"));
     assert!(prompt.contains("  - resources/2026-04-07T12-00-00-abcd-10min-cutoff.md"));
     assert!(prompt.contains("extension-specific deletion diff"));

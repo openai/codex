@@ -171,6 +171,7 @@ use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
+use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
@@ -205,12 +206,16 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
-use crate::legacy_core::plugins::PluginCapabilitySummary;
-use crate::legacy_core::skills::model::SkillMetadata;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_app_server_protocol::AppInfo;
+#[cfg(test)]
+use codex_core_skills::model::SkillInterface;
+use codex_core_skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+#[cfg(test)]
+use codex_plugin::AppConnectorId;
+use codex_plugin::PluginCapabilitySummary;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -367,9 +372,11 @@ pub(crate) struct ChatComposer {
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
     windows_degraded_sandbox_active: bool,
+    side_conversation_active: bool,
     is_zellij: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
+    side_conversation_context_label: Option<String>,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
     history_search: Option<HistorySearchSession>,
@@ -425,6 +432,7 @@ impl ChatComposer {
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
+            side_conversation_active: self.side_conversation_active,
         }
     }
 
@@ -508,12 +516,14 @@ impl ChatComposer {
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
             windows_degraded_sandbox_active: false,
+            side_conversation_active: false,
             is_zellij: matches!(
                 codex_terminal_detection::terminal_info().multiplexer,
                 Some(codex_terminal_detection::Multiplexer::Zellij {})
             ),
             status_line_value: None,
             status_line_enabled: false,
+            side_conversation_context_label: None,
             active_agent_label: None,
             history_search: None,
         };
@@ -606,6 +616,10 @@ impl ChatComposer {
 
     pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
         self.audio_device_selection_enabled = enabled;
+    }
+
+    pub fn set_side_conversation_active(&mut self, active: bool) {
+        self.side_conversation_active = active;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -3361,6 +3375,7 @@ impl ChatComposer {
                         realtime_conversation_enabled,
                         audio_device_selection_enabled,
                         windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
+                        side_conversation_active: self.side_conversation_active,
                     });
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
@@ -3605,6 +3620,14 @@ impl ChatComposer {
         true
     }
 
+    pub(crate) fn set_side_conversation_context_label(&mut self, label: Option<String>) -> bool {
+        if self.side_conversation_context_label == label {
+            return false;
+        }
+        self.side_conversation_context_label = label;
+        true
+    }
+
     /// Replaces the contextual footer label for the currently viewed agent.
     ///
     /// Returning `false` means the value was unchanged, so callers can skip redraw work. This
@@ -3814,12 +3837,13 @@ impl ChatComposer {
                     } else {
                         self.collaboration_mode_indicator
                     };
+                    let active_footer_hint_override = self.footer_hint_override.as_ref();
                     let mut left_width = if self.footer_flash_visible() {
                         self.footer_flash
                             .as_ref()
                             .map(|flash| flash.line.width() as u16)
                             .unwrap_or(0)
-                    } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    } else if let Some(items) = active_footer_hint_override {
                         footer_hint_items_width(items)
                     } else if status_line_active {
                         truncated_status_line
@@ -3835,7 +3859,11 @@ impl ChatComposer {
                             show_queue_hint,
                         )
                     };
-                    let right_line = if status_line_active {
+                    let right_line = if let Some(label) =
+                        self.side_conversation_context_label.as_ref()
+                    {
+                        Some(side_conversation_context_line(label))
+                    } else if status_line_active {
                         let full =
                             mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
                         let compact = mode_indicator_line(
@@ -3868,7 +3896,7 @@ impl ChatComposer {
                     let can_show_left_and_context =
                         can_show_left_with_context(hint_rect, left_width, right_width);
                     let has_override =
-                        self.footer_flash_visible() || self.footer_hint_override.is_some();
+                        self.footer_flash_visible() || active_footer_hint_override.is_some();
                     let single_line_layout = if has_override || status_line_active {
                         None
                     } else {
@@ -3946,7 +3974,7 @@ impl ChatComposer {
                         if let Some(flash) = self.footer_flash.as_ref() {
                             flash.line.render(inset_footer_hint_area(hint_rect), buf);
                         }
-                    } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    } else if let Some(items) = active_footer_hint_override {
                         render_footer_hint_items(hint_rect, buf, items);
                     } else if status_line_active {
                         if let Some(line) = truncated_status_line {
@@ -3963,7 +3991,6 @@ impl ChatComposer {
                             show_queue_hint,
                         );
                     }
-
                     if show_right && let Some(line) = &right_line {
                         render_context_right(hint_rect, buf, line);
                     }
@@ -5210,7 +5237,7 @@ mod tests {
             name: "google-calendar:availability".to_string(),
             description: "Find availability and plan event changes".to_string(),
             short_description: None,
-            interface: Some(crate::legacy_core::skills::model::SkillInterface {
+            interface: Some(SkillInterface {
                 display_name: Some("Google Calendar".to_string()),
                 short_description: None,
                 icon_small: None,
@@ -5232,9 +5259,7 @@ mod tests {
             ),
             has_skills: true,
             mcp_server_names: vec!["google-calendar".to_string()],
-            app_connector_ids: vec![crate::legacy_core::plugins::AppConnectorId(
-                "google_calendar".to_string(),
-            )],
+            app_connector_ids: vec![AppConnectorId("google_calendar".to_string())],
         }]));
         composer.set_connector_mentions(Some(ConnectorsSnapshot {
             connectors: vec![AppInfo {
@@ -5284,9 +5309,7 @@ mod tests {
                     ),
                     has_skills: true,
                     mcp_server_names: vec!["sample".to_string()],
-                    app_connector_ids: vec![crate::legacy_core::plugins::AppConnectorId(
-                        "calendar".to_string(),
-                    )],
+                    app_connector_ids: vec![AppConnectorId("calendar".to_string())],
                 }]));
             },
         );
@@ -5305,7 +5328,7 @@ mod tests {
                     name: "google-calendar-skill".to_string(),
                     description: "Find availability and plan event changes".to_string(),
                     short_description: None,
-                    interface: Some(crate::legacy_core::skills::model::SkillInterface {
+                    interface: Some(SkillInterface {
                         display_name: Some("Google Calendar".to_string()),
                         short_description: None,
                         icon_small: None,
