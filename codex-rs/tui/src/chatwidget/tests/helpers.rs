@@ -250,11 +250,17 @@ pub(super) async fn make_chatwidget_manual(
         thread_id: None,
         last_turn_id: None,
         thread_name: None,
+        thread_rename_block_message: None,
+        active_side_conversation: false,
+        normal_placeholder_text: "Ask Codex to do anything".to_string(),
+        side_placeholder_text: "Check recently modified functions for compatibility".to_string(),
         forked_from: None,
+        interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
+        user_turn_pending_start: false,
         rejected_steers_queue: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
@@ -726,9 +732,9 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
 
     // Seed two queued messages.
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
+        .push_back(UserMessage::from("first queued".to_string()).into());
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+        .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     // Press Shift+Left to edit the most recent (last) queued message.
