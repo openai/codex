@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::ForkSnapshot;
 use codex_core::config::Constrained;
+use codex_core::config_loader::ConfigLayerStack;
 use codex_execpolicy::Policy;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::protocol::AskForApproval;
@@ -536,6 +537,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config.config_layer_stack = ConfigLayerStack::default();
     });
     let test = builder.build(&server).await?;
 
