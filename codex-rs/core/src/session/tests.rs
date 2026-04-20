@@ -57,7 +57,10 @@ use crate::goals::SetGoalRequest;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::state::ActiveTurn;
+use crate::state::RunningTask;
+use crate::state::RunningTaskHandle;
 use crate::state::TaskKind;
+use crate::tasks::AnySessionTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tasks::UserShellCommandMode;
@@ -7511,6 +7514,85 @@ async fn parallel_goal_accounting_charges_delta_once() -> anyhow::Result<()> {
         .expect("goal should remain persisted after accounting");
     assert_eq!(40, goal.tokens_used);
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal_accounting_charges_once_when_last_active_turn_task_finishes() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: Some(Some(1_000)),
+        },
+    )
+    .await?;
+    set_total_token_usage(&sess, pre_goal_token_usage()).await;
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let second_tc = sess
+        .new_default_turn_with_sub_id("second-task".to_string())
+        .await;
+    sess.mark_thread_goal_turn_started(second_tc.as_ref(), pre_goal_token_usage())
+        .await;
+    let second_handle = tokio::spawn(async {
+        std::future::pending::<()>().await;
+    });
+    {
+        let mut active = sess.active_turn.lock().await;
+        active
+            .as_mut()
+            .expect("active turn should exist")
+            .add_task(RunningTask {
+                done: Arc::new(tokio::sync::Notify::new()),
+                kind: TaskKind::Regular,
+                task: Arc::new(NeverEndingTask {
+                    kind: TaskKind::Regular,
+                    listen_to_cancellation_token: false,
+                }) as Arc<dyn AnySessionTask>,
+                cancellation_token: CancellationToken::new(),
+                handle: Arc::new(RunningTaskHandle::new(second_handle.abort_handle())),
+                turn_context: Arc::clone(&second_tc),
+                _timer: None,
+            });
+    }
+
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
+
+    let config = sess.get_config().await;
+    let state_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await?;
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after first task finishes");
+    assert_eq!(0, goal.tokens_used);
+
+    sess.on_task_finished(second_tc, /*last_agent_message*/ None)
+        .await;
+
+    let goal = state_db
+        .get_thread_goal(sess.conversation_id)
+        .await?
+        .expect("goal should remain persisted after turn finishes");
+    assert_eq!(30, goal.tokens_used);
 
     Ok(())
 }
