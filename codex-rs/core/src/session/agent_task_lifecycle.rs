@@ -101,6 +101,11 @@ impl Session {
         agent_task
     }
 
+    #[cfg(test)]
+    pub(crate) async fn cache_agent_task_for_tests(&self, agent_task: RegisteredAgentTask) {
+        self.cache_agent_task(agent_task).await;
+    }
+
     pub(super) async fn cached_agent_task_for_current_identity(
         &self,
     ) -> Option<RegisteredAgentTask> {
@@ -134,6 +139,33 @@ impl Session {
         None
     }
 
+    pub(crate) async fn authorization_header_for_current_agent_task(
+        &self,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(agent_task) = self.cached_agent_task_for_current_identity().await else {
+            return Ok(None);
+        };
+
+        let Some(auth) = self.services.auth_manager.auth().await else {
+            return Ok(None);
+        };
+        let authorization_header_value = self
+            .services
+            .auth_manager
+            .chatgpt_agent_task_authorization_header_for_auth(
+                &auth,
+                agent_task.authorization_target(),
+            )?;
+        if authorization_header_value.is_some() {
+            debug!(
+                agent_runtime_id = %agent_task.agent_runtime_id,
+                task_id = %agent_task.task_id,
+                "using agent assertion authorization for current task request"
+            );
+        }
+        Ok(authorization_header_value)
+    }
+
     pub(super) async fn ensure_agent_task_registered(
         &self,
     ) -> anyhow::Result<Option<RegisteredAgentTask>> {
@@ -141,7 +173,11 @@ impl Session {
             return Ok(Some(agent_task));
         }
 
-        let _guard = self.agent_task_registration_lock.lock().await;
+        let _guard = self
+            .agent_task_registration_lock
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("agent task registration semaphore closed"))?;
         if let Some(agent_task) = self.cached_agent_task_for_current_identity().await {
             return Ok(Some(agent_task));
         }

@@ -47,10 +47,103 @@ You may perform non-mutating inspection, including reading or searching files an
 
 Do not modify files, source, git state, permissions, configuration, or any other workspace state unless the user explicitly requests that mutation in this side conversation. Do not request escalated permissions or broader sandbox access unless the user explicitly requests a mutation that requires it. If the user explicitly requests a mutation, keep it minimal, local to the request, and avoid disrupting the main thread."#;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SideParentStatus {
+    NeedsInput,
+    NeedsApproval,
+    Failed,
+    Interrupted,
+    Closed,
+    Finished,
+}
+
+impl SideParentStatus {
+    fn label(self, parent_is_main: bool) -> &'static str {
+        match (self, parent_is_main) {
+            (SideParentStatus::NeedsInput, true) => "main needs input",
+            (SideParentStatus::NeedsInput, false) => "parent needs input",
+            (SideParentStatus::NeedsApproval, true) => "main needs approval",
+            (SideParentStatus::NeedsApproval, false) => "parent needs approval",
+            (SideParentStatus::Failed, true) => "main failed",
+            (SideParentStatus::Failed, false) => "parent failed",
+            (SideParentStatus::Interrupted, true) => "main interrupted",
+            (SideParentStatus::Interrupted, false) => "parent interrupted",
+            (SideParentStatus::Closed, true) => "main closed",
+            (SideParentStatus::Closed, false) => "parent closed",
+            (SideParentStatus::Finished, true) => "main finished",
+            (SideParentStatus::Finished, false) => "parent finished",
+        }
+    }
+
+    fn is_actionable(self) -> bool {
+        matches!(
+            self,
+            SideParentStatus::NeedsInput | SideParentStatus::NeedsApproval
+        )
+    }
+
+    pub(super) fn for_request(request: &ServerRequest) -> Option<Self> {
+        match request {
+            ServerRequest::ToolRequestUserInput { .. } => Some(SideParentStatus::NeedsInput),
+            ServerRequest::CommandExecutionRequestApproval { .. }
+            | ServerRequest::FileChangeRequestApproval { .. }
+            | ServerRequest::McpServerElicitationRequest { .. }
+            | ServerRequest::PermissionsRequestApproval { .. }
+            | ServerRequest::ApplyPatchApproval { .. }
+            | ServerRequest::ExecCommandApproval { .. } => Some(SideParentStatus::NeedsApproval),
+            ServerRequest::DynamicToolCall { .. }
+            | ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SideParentStatusChange {
+    Set(SideParentStatus),
+    Clear,
+    ClearActionable,
+}
+
+impl SideParentStatusChange {
+    pub(super) fn for_notification(notification: &ServerNotification) -> Option<Self> {
+        match notification {
+            ServerNotification::TurnStarted(_) => Some(SideParentStatusChange::Clear),
+            ServerNotification::TurnCompleted(notification) => match &notification.turn.status {
+                TurnStatus::Completed => {
+                    Some(SideParentStatusChange::Set(SideParentStatus::Finished))
+                }
+                TurnStatus::Interrupted => {
+                    Some(SideParentStatusChange::Set(SideParentStatus::Interrupted))
+                }
+                TurnStatus::Failed => Some(SideParentStatusChange::Set(SideParentStatus::Failed)),
+                TurnStatus::InProgress => None,
+            },
+            ServerNotification::ThreadClosed(_) => {
+                Some(SideParentStatusChange::Set(SideParentStatus::Closed))
+            }
+            ServerNotification::ItemStarted(_) | ServerNotification::ServerRequestResolved(_) => {
+                Some(SideParentStatusChange::ClearActionable)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct SideThreadState {
     /// Thread to return to when the current side conversation is dismissed.
     pub(super) parent_thread_id: ThreadId,
+    /// Parent-thread condition that changed while this side thread is visible.
+    pub(super) parent_status: Option<SideParentStatus>,
+}
+
+impl SideThreadState {
+    pub(super) fn new(parent_thread_id: ThreadId) -> Self {
+        Self {
+            parent_thread_id,
+            parent_status: None,
+        }
+    }
 }
 
 impl App {
@@ -65,10 +158,10 @@ impl App {
             clear_side_ui(&mut self.chat_widget);
             return;
         };
-        let Some(parent_thread_id) = self
+        let Some((parent_thread_id, parent_status)) = self
             .side_threads
             .get(&active_thread_id)
-            .map(|state| state.parent_thread_id)
+            .map(|state| (state.parent_thread_id, state.parent_status))
         else {
             clear_side_ui(&mut self.chat_widget);
             return;
@@ -80,20 +173,85 @@ impl App {
             .set_side_conversation_active(/*active*/ true);
         self.chat_widget
             .set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Suppress);
-        let label = if self.primary_thread_id == Some(parent_thread_id) {
-            "from main thread · Esc to return".to_string()
+        let mut label_parts = Vec::new();
+        let parent_is_main = self.primary_thread_id == Some(parent_thread_id);
+        if parent_is_main {
+            label_parts.push("from main thread".to_string());
         } else {
             let parent_label = self.thread_label(parent_thread_id);
-            format!("from parent thread ({parent_label}) · Esc to return")
-        };
+            label_parts.push(format!("from parent thread ({parent_label})"));
+        }
+        if let Some(parent_status) = parent_status {
+            label_parts.push(parent_status.label(parent_is_main).to_string());
+        }
+        label_parts.push("Esc to return".to_string());
         self.chat_widget
-            .set_side_conversation_context_label(Some(format!("Side {label}")));
+            .set_side_conversation_context_label(Some(format!("Side {}", label_parts.join(" · "))));
     }
 
     pub(super) fn active_side_parent_thread_id(&self) -> Option<ThreadId> {
         self.current_displayed_thread_id()
             .and_then(|thread_id| self.side_threads.get(&thread_id))
             .map(|state| state.parent_thread_id)
+    }
+
+    pub(super) fn set_side_parent_status(
+        &mut self,
+        parent_thread_id: ThreadId,
+        status: Option<SideParentStatus>,
+    ) {
+        let mut changed = false;
+        for state in self
+            .side_threads
+            .values_mut()
+            .filter(|state| state.parent_thread_id == parent_thread_id)
+        {
+            if state.parent_status != status {
+                state.parent_status = status;
+                changed = true;
+            }
+        }
+        if changed {
+            self.sync_side_thread_ui();
+        }
+    }
+
+    pub(super) fn clear_side_parent_action_status(&mut self, parent_thread_id: ThreadId) {
+        let mut changed = false;
+        for state in self
+            .side_threads
+            .values_mut()
+            .filter(|state| state.parent_thread_id == parent_thread_id)
+        {
+            if state
+                .parent_status
+                .is_some_and(SideParentStatus::is_actionable)
+            {
+                state.parent_status = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.sync_side_thread_ui();
+        }
+    }
+
+    pub(super) fn apply_side_parent_status_change(
+        &mut self,
+        parent_thread_id: ThreadId,
+        change: SideParentStatusChange,
+    ) {
+        match change {
+            SideParentStatusChange::Set(status) => {
+                self.set_side_parent_status(parent_thread_id, Some(status));
+            }
+            SideParentStatusChange::Clear => {
+                self.set_side_parent_status(parent_thread_id, /*status*/ None);
+            }
+            SideParentStatusChange::ClearActionable => {
+                self.clear_side_parent_action_status(parent_thread_id);
+            }
+        }
     }
 
     pub(super) async fn maybe_return_from_side(
@@ -299,11 +457,18 @@ impl App {
         self.select_agent_thread(tui, app_server, thread_id).await?;
         if self.active_thread_id == Some(thread_id)
             && let Some(side_thread_id) = side_thread_to_discard
-            && !self.discard_side_thread(app_server, side_thread_id).await
-            && active_thread_id_before_switch == Some(side_thread_id)
         {
-            self.keep_side_thread_visible_after_cleanup_failure(tui, app_server, side_thread_id)
+            if self.discard_side_thread(app_server, side_thread_id).await {
+                self.surface_pending_inactive_thread_interactive_requests()
+                    .await;
+            } else if active_thread_id_before_switch == Some(side_thread_id) {
+                self.keep_side_thread_visible_after_cleanup_failure(
+                    tui,
+                    app_server,
+                    side_thread_id,
+                )
                 .await;
+            }
         }
         Ok(())
     }
@@ -340,7 +505,7 @@ impl App {
                     Self::install_side_thread_snapshot(&mut store, forked.session, forked.turns);
                 }
                 self.side_threads
-                    .insert(child_thread_id, SideThreadState { parent_thread_id });
+                    .insert(child_thread_id, SideThreadState::new(parent_thread_id));
                 if let Err(err) = app_server
                     .thread_inject_items(child_thread_id, vec![Self::side_boundary_prompt_item()])
                     .await

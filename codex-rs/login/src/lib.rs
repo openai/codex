@@ -1,3 +1,4 @@
+pub mod agent_identity;
 pub mod auth;
 pub mod auth_env_telemetry;
 pub mod token_data;
@@ -17,7 +18,10 @@ pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
 
+pub use agent_identity::BackgroundAgentTaskAuthMode;
+pub use agent_identity::cached_background_agent_task_authorization_header_value;
 pub use auth::AgentIdentityAuthRecord;
+pub use auth::AgentTaskAuthorizationTarget;
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;
 pub use auth::AuthManager;
