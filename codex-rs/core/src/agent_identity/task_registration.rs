@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_login::AgentTaskAuthorizationTarget;
 use codex_protocol::protocol::SessionAgentTask;
 use crypto_box::SecretKey as Curve25519SecretKey;
 use ed25519_dalek::Signer as _;
@@ -103,13 +102,6 @@ impl AgentIdentityManager {
 }
 
 impl RegisteredAgentTask {
-    pub(crate) fn authorization_target(&self) -> AgentTaskAuthorizationTarget<'_> {
-        AgentTaskAuthorizationTarget {
-            agent_runtime_id: &self.agent_runtime_id,
-            task_id: &self.task_id,
-        }
-    }
-
     pub(crate) fn to_session_agent_task(&self) -> SessionAgentTask {
         SessionAgentTask {
             agent_runtime_id: self.agent_runtime_id.clone(),

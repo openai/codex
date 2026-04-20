@@ -2385,7 +2385,6 @@ dependencies = [
  "codex-terminal-detection",
  "codex-utils-template",
  "core_test_support",
- "ed25519-dalek",
  "keyring",
  "once_cell",
  "os_info",
