@@ -23,7 +23,6 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -467,14 +466,12 @@ impl RealtimeWebsocketEvents {
             RealtimeEvent::ResponseCreated(_) => {
                 active_transcript.new_output_entry = true;
             }
-            RealtimeEvent::ConversationItemAdded(item) => {
-                apply_conversation_item_transcript(&mut active_transcript.entries, item);
-            }
             RealtimeEvent::SessionUpdated { .. }
             | RealtimeEvent::AudioOut(_)
             | RealtimeEvent::ResponseCancelled(_)
             | RealtimeEvent::ResponseDone(_)
             | RealtimeEvent::ConversationItemDone { .. }
+            | RealtimeEvent::ConversationItemAdded(_)
             | RealtimeEvent::Error(_) => {}
         }
     }
@@ -538,40 +535,6 @@ fn append_handoff_input(entries: &mut Vec<RealtimeTranscriptEntry>, input: &str)
         role: "user".to_string(),
         text: input.to_string(),
     });
-}
-
-fn apply_conversation_item_transcript(entries: &mut Vec<RealtimeTranscriptEntry>, item: &Value) {
-    let Some(item) = item.as_object() else {
-        return;
-    };
-    let Some(role) = item.get("role").and_then(Value::as_str) else {
-        return;
-    };
-    if role != "user" && role != "assistant" {
-        return;
-    }
-    let text = item
-        .get("content")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(item_content_text)
-        .collect::<String>();
-    if text.is_empty() || contains_transcript_entry(entries, role, &text) {
-        return;
-    }
-
-    entries.push(RealtimeTranscriptEntry {
-        role: role.to_string(),
-        text,
-    });
-}
-
-fn item_content_text(content: &Value) -> Option<&str> {
-    content
-        .get("text")
-        .or_else(|| content.get("transcript"))
-        .and_then(Value::as_str)
 }
 
 fn contains_transcript_entry(entries: &[RealtimeTranscriptEntry], role: &str, text: &str) -> bool {

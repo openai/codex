@@ -520,6 +520,24 @@ async fn realtime_ws_e2e_realtime_v2_parser_emits_handoff_requested() {
 
         ws.send(Message::Text(
             json!({
+                "type": "conversation.item.created",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "<realtime_collaboration_update><voice_policy>silent_delegate</voice_policy></realtime_collaboration_update>"
+                    }]
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send control item echo");
+
+        ws.send(Message::Text(
+            json!({
                 "type": "conversation.item.done",
                 "item": {
                     "id": "item_123",
@@ -578,6 +596,13 @@ async fn realtime_ws_e2e_realtime_v2_parser_emits_handoff_requested() {
             delta: "secret context".to_string()
         })
     );
+
+    let event = connection
+        .next_event()
+        .await
+        .expect("next event")
+        .expect("event");
+    assert!(matches!(event, RealtimeEvent::ConversationItemAdded(_)));
 
     let event = connection
         .next_event()

@@ -687,7 +687,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(
         handoff_item_added.item["active_transcript"],
         json!([
-            {"role": "assistant", "text": "hi"},
             {"role": "user", "text": "delegate now"},
             {"role": "assistant", "text": "working on it"}
         ])
@@ -1309,7 +1308,6 @@ async fn webrtc_v1_handoff_request_delegates_and_appends_result() -> Result<()> 
         "delegated Responses request should contain realtime delegation envelope: {}",
         requests[0]
     );
-
     let handoff_append = harness.sideband_outbound_request(/*request_index*/ 1).await;
     assert_eq!(
         handoff_append,
@@ -1570,6 +1568,17 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
                     "transcript": "The secret word is strawberry"
                 }),
                 json!({
+                    "type": "conversation.item.created",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "<realtime_collaboration_update><voice_policy>silent_delegate</voice_policy></realtime_collaboration_update>"
+                        }]
+                    }
+                }),
+                json!({
                     "type": "response.output_audio_transcript.delta",
                     "delta": "Got it-strawberry. What's next on the menu?"
                 }),
@@ -1605,6 +1614,11 @@ async fn webrtc_v2_background_agent_tool_call_delegates_and_returns_function_out
             "<realtime_delegation>\n  <input>run ls</input>\n  <transcript_delta>user: Hi how are you\nassistant: Doing well, what can I help you with?\nuser: The secret word is strawberry\nassistant: Got it-strawberry. What's next on the menu?\nuser: run ls</transcript_delta>\n</realtime_delegation>",
         ),
         "delegated Responses request should contain realtime delegation envelope: {}",
+        requests[0]
+    );
+    assert!(
+        !response_request_contains_text(&requests[0], "<realtime_collaboration_update>"),
+        "delegated Responses request should not include realtime control injects: {}",
         requests[0]
     );
 
