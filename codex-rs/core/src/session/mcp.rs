@@ -190,7 +190,20 @@ impl Session {
             .mcp_manager
             .tool_plugin_provenance(config.as_ref())
             .await;
-        let mcp_servers = with_codex_apps_mcp(mcp_servers, auth.as_ref(), &mcp_config);
+        let background_authorization_header_value = if let Some(auth) = auth.as_ref() {
+            self.services
+                .auth_manager
+                .chatgpt_authorization_header_for_auth(auth)
+                .await
+        } else {
+            None
+        };
+        let mcp_servers = with_codex_apps_mcp_with_authorization_header(
+            mcp_servers,
+            auth.as_ref(),
+            &mcp_config,
+            background_authorization_header_value.as_deref(),
+        );
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
@@ -205,6 +218,13 @@ impl Session {
             turn_context.sub_id.clone(),
             self.get_tx_event(),
             turn_context.sandbox_policy.get().clone(),
+            McpRuntimeEnvironment::new(
+                turn_context
+                    .environment
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(Environment::default())),
+                turn_context.cwd.to_path_buf(),
+            ),
             config.codex_home.to_path_buf(),
             codex_apps_tools_cache_key(auth.as_ref()),
             tool_plugin_provenance,

@@ -631,7 +631,10 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
         .and_then(Value::as_array)
         .expect("function_call_output should be a content item array");
     assert_eq!(output_items.len(), 1);
-    assert_eq!(output_items[0].get("detail"), None);
+    assert_eq!(
+        output_items[0].get("detail").and_then(Value::as_str),
+        Some("high")
+    );
     let image_url = output_items[0]
         .get("image_url")
         .and_then(Value::as_str)
@@ -728,7 +731,10 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
         .and_then(Value::as_array)
         .expect("function_call_output should be a content item array");
     assert_eq!(output_items.len(), 1);
-    assert_eq!(output_items[0].get("detail"), None);
+    assert_eq!(
+        output_items[0].get("detail").and_then(Value::as_str),
+        Some("high")
+    );
 
     let image_url = output_items[0]
         .get("image_url")
@@ -829,7 +835,10 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_only
         .and_then(Value::as_array)
         .expect("function_call_output should be a content item array");
     assert_eq!(output_items.len(), 1);
-    assert_eq!(output_items[0].get("detail"), None);
+    assert_eq!(
+        output_items[0].get("detail").and_then(Value::as_str),
+        Some("high")
+    );
     let image_url = output_items[0]
         .get("image_url")
         .and_then(Value::as_str)
@@ -1365,6 +1374,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
+        max_context_window: None,
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),

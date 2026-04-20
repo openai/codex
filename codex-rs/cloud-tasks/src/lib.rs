@@ -68,42 +68,44 @@ async fn init_backend(user_agent_suffix: &str) -> anyhow::Result<BackendContext>
     };
     append_error_log(format!("startup: base_url={base_url} path_style={style}"));
 
-    let auth_manager = util::load_auth_manager().await;
-    let auth = match auth_manager.as_ref() {
-        Some(manager) => manager.auth().await,
-        None => None,
+    let Some(auth_manager) = util::load_auth_manager(Some(base_url.clone())).await else {
+        eprintln!(
+            "Not signed in. Please run 'codex login' to sign in with ChatGPT, then re-run 'codex cloud'."
+        );
+        std::process::exit(1);
     };
-    let auth = match auth {
-        Some(auth) => auth,
-        None => {
-            eprintln!(
-                "Not signed in. Please run 'codex login' to sign in with ChatGPT, then re-run 'codex cloud'."
-            );
-            std::process::exit(1);
-        }
+    let Some(auth) = auth_manager.auth().await else {
+        eprintln!(
+            "Not signed in. Please run 'codex login' to sign in with ChatGPT, then re-run 'codex cloud'."
+        );
+        std::process::exit(1);
     };
 
     if let Some(acc) = auth.get_account_id() {
         append_error_log(format!("auth: mode=ChatGPT account_id={acc}"));
     }
 
-    let token = match auth.get_token() {
-        Ok(t) if !t.is_empty() => t,
-        _ => {
-            eprintln!(
-                "Not signed in. Please run 'codex login' to sign in with ChatGPT, then re-run 'codex cloud'."
-            );
-            std::process::exit(1);
-        }
+    let authorization_header_value = auth_manager
+        .chatgpt_authorization_header_for_auth(&auth)
+        .await;
+    let Some(authorization_header_value) = authorization_header_value else {
+        eprintln!(
+            "Not signed in. Please run 'codex login' to sign in with ChatGPT, then re-run 'codex cloud'."
+        );
+        std::process::exit(1);
     };
 
-    http = http.with_bearer_token(token.clone());
-    if let Some(acc) = auth
-        .get_account_id()
-        .or_else(|| util::extract_chatgpt_account_id(&token))
-    {
+    http = http.with_authorization_header_value(authorization_header_value);
+    if let Some(acc) = auth.get_account_id().or_else(|| {
+        auth.get_token()
+            .ok()
+            .and_then(|token| util::extract_chatgpt_account_id(&token))
+    }) {
         append_error_log(format!("auth: set ChatGPT-Account-Id header: {acc}"));
         http = http.with_chatgpt_account_id(acc);
+    }
+    if auth.is_fedramp_account() {
+        http = http.with_fedramp_routing_header();
     }
 
     Ok(BackendContext {

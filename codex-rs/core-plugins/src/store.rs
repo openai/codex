@@ -28,10 +28,15 @@ pub struct PluginStore {
 
 impl PluginStore {
     pub fn new(codex_home: PathBuf) -> Self {
-        Self {
-            root: AbsolutePathBuf::try_from(codex_home.join(PLUGINS_CACHE_DIR))
-                .unwrap_or_else(|err| panic!("plugin cache root should be absolute: {err}")),
-        }
+        Self::try_new(codex_home)
+            .unwrap_or_else(|err| panic!("plugin cache root should be absolute: {err}"))
+    }
+
+    pub fn try_new(codex_home: PathBuf) -> Result<Self, PluginStoreError> {
+        let root = AbsolutePathBuf::from_absolute_path_checked(codex_home.join(PLUGINS_CACHE_DIR))
+            .map_err(|err| PluginStoreError::io("failed to resolve plugin cache root", err))?;
+
+        Ok(Self { root })
     }
 
     pub fn root(&self) -> &AbsolutePathBuf {
@@ -39,22 +44,13 @@ impl PluginStore {
     }
 
     pub fn plugin_base_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(
-            self.root
-                .as_path()
-                .join(&plugin_id.marketplace_name)
-                .join(&plugin_id.plugin_name),
-        )
-        .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
+        self.root
+            .join(&plugin_id.marketplace_name)
+            .join(&plugin_id.plugin_name)
     }
 
     pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(
-            self.plugin_base_root(plugin_id)
-                .as_path()
-                .join(plugin_version),
-        )
-        .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
+        self.plugin_base_root(plugin_id).join(plugin_version)
     }
 
     pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {

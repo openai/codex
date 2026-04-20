@@ -201,8 +201,10 @@ pub(super) async fn make_chatwidget_manual(
         refreshing_status_outputs: Vec::new(),
         next_status_refresh_request_id: 0,
         plan_type: None,
+        codex_rate_limit_reached_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+        add_credits_nudge_email_in_flight: None,
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
         stream_controller: None,
         plan_stream_controller: None,
@@ -210,6 +212,9 @@ pub(super) async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         last_agent_markdown: None,
+        agent_turn_markdowns: Vec::new(),
+        visible_user_turn_count: 0,
+        copy_history_evicted_by_rollback: false,
         latest_proposed_plan_markdown: None,
         saw_copy_source_this_turn: false,
         running_commands: HashMap::new(),
@@ -250,11 +255,17 @@ pub(super) async fn make_chatwidget_manual(
         thread_id: None,
         last_turn_id: None,
         thread_name: None,
+        thread_rename_block_message: None,
+        active_side_conversation: false,
+        normal_placeholder_text: "Ask Codex to do anything".to_string(),
+        side_placeholder_text: "Check recently modified functions for compatibility".to_string(),
         forked_from: None,
+        interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
+        user_turn_pending_start: false,
         rejected_steers_queue: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
@@ -726,9 +737,9 @@ pub(super) async fn assert_shift_left_edits_most_recent_queued_message_for_termi
 
     // Seed two queued messages.
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
+        .push_back(UserMessage::from("first queued".to_string()).into());
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+        .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     // Press Shift+Left to edit the most recent (last) queued message.
@@ -859,8 +870,11 @@ pub(super) fn plugins_test_interface(
         default_prompt: None,
         brand_color: None,
         composer_icon: None,
+        composer_icon_url: None,
         logo: None,
+        logo_url: None,
         screenshots: Vec::new(),
+        screenshot_urls: Vec::new(),
     }
 }
 
@@ -896,7 +910,7 @@ pub(super) fn plugins_test_curated_marketplace(
 ) -> PluginMarketplaceEntry {
     PluginMarketplaceEntry {
         name: OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
-        path: plugins_test_absolute_path("marketplaces/chatgpt"),
+        path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         interface: Some(MarketplaceInterface {
             display_name: Some("ChatGPT Marketplace".to_string()),
         }),
@@ -907,7 +921,7 @@ pub(super) fn plugins_test_curated_marketplace(
 pub(super) fn plugins_test_repo_marketplace(plugins: Vec<PluginSummary>) -> PluginMarketplaceEntry {
     PluginMarketplaceEntry {
         name: "repo".to_string(),
-        path: plugins_test_absolute_path("marketplaces/repo"),
+        path: Some(plugins_test_absolute_path("marketplaces/repo")),
         interface: Some(MarketplaceInterface {
             display_name: Some("Repo Marketplace".to_string()),
         }),
@@ -921,7 +935,6 @@ pub(super) fn plugins_test_response(
     PluginListResponse {
         marketplaces,
         marketplace_load_errors: Vec::new(),
-        remote_sync_error: None,
         featured_plugin_ids: Vec::new(),
     }
 }

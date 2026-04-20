@@ -40,6 +40,7 @@ use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
+use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
@@ -101,6 +102,7 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_command_execution_end_item;
 use codex_app_server_protocol::build_file_change_approval_request_item;
 use codex_app_server_protocol::build_file_change_begin_item;
@@ -268,7 +270,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
-        EventMsg::Warning(_warning_event) => {}
+        EventMsg::Warning(warning_event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = WarningNotification {
+                    thread_id: Some(conversation_id.to_string()),
+                    message: warning_event.message,
+                };
+                if let Some(analytics_events_client) = analytics_events_client.as_ref() {
+                    analytics_events_client
+                        .track_notification(ServerNotification::Warning(notification.clone()));
+                }
+                outgoing
+                    .send_server_notification(ServerNotification::Warning(notification))
+                    .await;
+            }
+        }
         EventMsg::GuardianAssessment(assessment) => {
             if let ApiVersion::V2 = api_version {
                 let pending_command_execution = match build_item_from_guardian_event(
@@ -494,7 +510,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ))
                             .await;
                     }
-                    RealtimeEvent::ConversationItemDone { .. } => {}
+                    RealtimeEvent::ConversationItemDone { .. }
+                    | RealtimeEvent::NoopRequested(_) => {}
                     RealtimeEvent::HandoffRequested(handoff) => {
                         let notification = ThreadRealtimeItemAddedNotification {
                             thread_id: conversation_id.to_string(),
@@ -1620,6 +1637,17 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .send_server_notification(ServerNotification::ItemStarted(notification))
                     .await;
             }
+        }
+        EventMsg::PatchApplyUpdated(event) => {
+            let notification = FileChangePatchUpdatedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item_id: event.call_id,
+                changes: convert_patch_changes(&event.changes),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::FileChangePatchUpdated(notification))
+                .await;
         }
         EventMsg::PatchApplyEnd(patch_end_event) => {
             // Until we migrate the core to be aware of a first class FileChangeItem
@@ -3708,10 +3736,10 @@ mod tests {
             network: Some(CoreNetworkPermissions {
                 enabled: Some(true),
             }),
-            file_system: Some(CoreFileSystemPermissions {
-                read: Some(vec![absolute_path(input_path)]),
-                write: Some(vec![absolute_path(output_path)]),
-            }),
+            file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                Some(vec![absolute_path(input_path)]),
+                Some(vec![absolute_path(output_path)]),
+            )),
         };
         let cases = vec![
             (
@@ -3738,10 +3766,10 @@ mod tests {
                     },
                 }),
                 CoreRequestPermissionProfile {
-                    file_system: Some(CoreFileSystemPermissions {
-                        read: None,
-                        write: Some(vec![absolute_path(output_path)]),
-                    }),
+                    file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                        /*read*/ None,
+                        Some(vec![absolute_path(output_path)]),
+                    )),
                     ..CoreRequestPermissionProfile::default()
                 },
             ),
@@ -3756,10 +3784,10 @@ mod tests {
                     },
                 }),
                 CoreRequestPermissionProfile {
-                    file_system: Some(CoreFileSystemPermissions {
-                        read: Some(vec![absolute_path(input_path)]),
-                        write: Some(vec![absolute_path(output_path)]),
-                    }),
+                    file_system: Some(CoreFileSystemPermissions::from_read_write_roots(
+                        Some(vec![absolute_path(input_path)]),
+                        Some(vec![absolute_path(output_path)]),
+                    )),
                     ..CoreRequestPermissionProfile::default()
                 },
             ),
