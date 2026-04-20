@@ -3335,6 +3335,7 @@ impl App {
             .unwrap_or(ThreadSessionState {
                 thread_id,
                 forked_from_id: None,
+                fork_parent_title: None,
                 thread_name: None,
                 model: self.chat_widget.current_model().to_string(),
                 model_provider_id: self.config.model_provider_id.clone(),
@@ -10563,6 +10564,7 @@ guardian_approval = true
         ThreadSessionState {
             thread_id,
             forked_from_id: None,
+            fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
