@@ -23,8 +23,6 @@ use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
 use codex_config::permissions_toml::NetworkDomainPermissionsToml;
-use codex_config::permissions_toml::NetworkMitmHookActionName;
-use codex_config::permissions_toml::NetworkMitmHookMatchToml;
 use codex_config::permissions_toml::NetworkMitmHookToml;
 use codex_config::permissions_toml::NetworkMitmToml;
 use codex_config::permissions_toml::NetworkToml;
@@ -446,16 +444,13 @@ mode = "full"
 [permissions.workspace.network.mitm]
 enabled = true
 
-[permissions.workspace.network.mitm.hooks.github_write.match]
+[permissions.workspace.network.mitm.hooks.github_write]
 host = "api.github.com"
 methods = ["POST", "PUT"]
 path_prefixes = ["/repos/openai/"]
-action = ["strip_request_headers"]
+action = ["strip_auth"]
 
-[permissions.workspace.network.mitm.hooks.github_write.match.headers]
-"x-github-api-version" = ["2022-11-28"]
-
-[permissions.workspace.network.mitm.hooks.github_write.actions]
+[permissions.workspace.network.mitm.actions.strip_auth]
 strip_request_headers = ["authorization"]
 "#;
     let cfg: ConfigToml =
@@ -507,24 +502,20 @@ strip_request_headers = ["authorization"]
                             hooks: Some(BTreeMap::from([(
                                 "github_write".to_string(),
                                 NetworkMitmHookToml {
-                                    matcher: NetworkMitmHookMatchToml {
-                                        host: "api.github.com".to_string(),
-                                        methods: vec!["POST".to_string(), "PUT".to_string()],
-                                        path_prefixes: vec!["/repos/openai/".to_string()],
-                                        query: BTreeMap::new(),
-                                        headers: BTreeMap::from([(
-                                            "x-github-api-version".to_string(),
-                                            vec!["2022-11-28".to_string()],
-                                        )]),
-                                        body: None,
-                                        action: vec![
-                                            NetworkMitmHookActionName::StripRequestHeaders
-                                        ],
-                                    },
-                                    actions: MitmHookActionsConfig {
-                                        strip_request_headers: vec!["authorization".to_string()],
-                                        inject_request_headers: Vec::new(),
-                                    },
+                                    host: "api.github.com".to_string(),
+                                    methods: vec!["POST".to_string(), "PUT".to_string()],
+                                    path_prefixes: vec!["/repos/openai/".to_string()],
+                                    query: BTreeMap::new(),
+                                    headers: BTreeMap::new(),
+                                    body: None,
+                                    action: vec!["strip_auth".to_string()],
+                                },
+                            )])),
+                            actions: Some(BTreeMap::from([(
+                                "strip_auth".to_string(),
+                                MitmHookActionsConfig {
+                                    strip_request_headers: vec!["authorization".to_string()],
+                                    inject_request_headers: Vec::new(),
                                 },
                             )])),
                         }),
@@ -544,17 +535,18 @@ fn permissions_profile_network_to_proxy_config_preserves_mitm_hooks() {
             hooks: Some(BTreeMap::from([(
                 "github_write".to_string(),
                 NetworkMitmHookToml {
-                    matcher: NetworkMitmHookMatchToml {
-                        host: "api.github.com".to_string(),
-                        methods: vec!["POST".to_string()],
-                        path_prefixes: vec!["/repos/openai/".to_string()],
-                        action: vec![NetworkMitmHookActionName::StripRequestHeaders],
-                        ..NetworkMitmHookMatchToml::default()
-                    },
-                    actions: MitmHookActionsConfig {
-                        strip_request_headers: vec!["authorization".to_string()],
-                        inject_request_headers: Vec::new(),
-                    },
+                    host: "api.github.com".to_string(),
+                    methods: vec!["POST".to_string()],
+                    path_prefixes: vec!["/repos/openai/".to_string()],
+                    action: vec!["strip_auth".to_string()],
+                    ..NetworkMitmHookToml::default()
+                },
+            )])),
+            actions: Some(BTreeMap::from([(
+                "strip_auth".to_string(),
+                MitmHookActionsConfig {
+                    strip_request_headers: vec!["authorization".to_string()],
+                    inject_request_headers: Vec::new(),
                 },
             )])),
         }),

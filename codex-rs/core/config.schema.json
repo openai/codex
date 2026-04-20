@@ -1197,25 +1197,16 @@
     "NetworkDomainPermissionsToml": {
       "type": "object"
     },
-    "NetworkMitmHookActionName": {
-      "enum": [
-        "strip_request_headers",
-        "inject_request_headers"
-      ],
-      "type": "string"
-    },
-    "NetworkMitmHookMatchToml": {
+    "NetworkMitmHookToml": {
+      "additionalProperties": false,
       "properties": {
         "action": {
-          "default": [],
           "items": {
-            "$ref": "#/definitions/NetworkMitmHookActionName"
+            "type": "string"
           },
           "type": "array"
         },
-        "body": {
-          "default": null
-        },
+        "body": true,
         "headers": {
           "additionalProperties": {
             "items": {
@@ -1227,18 +1218,15 @@
           "type": "object"
         },
         "host": {
-          "default": "",
           "type": "string"
         },
         "methods": {
-          "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "path_prefixes": {
-          "default": [],
           "items": {
             "type": "string"
           },
@@ -1255,44 +1243,23 @@
           "type": "object"
         }
       },
-      "type": "object"
-    },
-    "NetworkMitmHookToml": {
-      "additionalProperties": false,
-      "properties": {
-        "actions": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/MitmHookActionsConfigSchema"
-            }
-          ],
-          "default": {
-            "inject_request_headers": [],
-            "strip_request_headers": []
-          }
-        },
-        "match": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/NetworkMitmHookMatchToml"
-            }
-          ],
-          "default": {
-            "action": [],
-            "body": null,
-            "headers": {},
-            "host": "",
-            "methods": [],
-            "path_prefixes": [],
-            "query": {}
-          }
-        }
-      },
+      "required": [
+        "action",
+        "host",
+        "methods",
+        "path_prefixes"
+      ],
       "type": "object"
     },
     "NetworkMitmToml": {
       "additionalProperties": false,
       "properties": {
+        "actions": {
+          "additionalProperties": {
+            "$ref": "#/definitions/MitmHookActionsConfigSchema"
+          },
+          "type": "object"
+        },
         "enabled": {
           "type": "boolean"
         },

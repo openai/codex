@@ -119,10 +119,14 @@ mode = "limited"
 [permissions.workspace.network.mitm]
 enabled = false
 
-[permissions.workspace.network.mitm.hooks.lower.match]
+[permissions.workspace.network.mitm.hooks.lower]
 host = "lower.example.com"
 methods = ["POST"]
 path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
 "#,
     )
     .expect("lower layer should parse");
@@ -139,10 +143,14 @@ mode = "full"
 [permissions.workspace.network.mitm]
 enabled = true
 
-[permissions.workspace.network.mitm.hooks.github_write.match]
+[permissions.workspace.network.mitm.hooks.github_write]
 host = "api.github.com"
 methods = ["PUT"]
 path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.workspace.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
 "#,
     )
     .expect("higher layer should parse");

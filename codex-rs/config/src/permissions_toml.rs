@@ -170,36 +170,23 @@ pub struct NetworkToml {
 pub struct NetworkMitmToml {
     pub enabled: Option<bool>,
     pub hooks: Option<BTreeMap<String, NetworkMitmHookToml>>,
+    #[schemars(with = "Option<BTreeMap<String, MitmHookActionsConfigSchema>>")]
+    pub actions: Option<BTreeMap<String, MitmHookActionsConfig>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct NetworkMitmHookToml {
-    #[serde(rename = "match", default)]
-    pub matcher: NetworkMitmHookMatchToml,
-    #[serde(default)]
-    #[schemars(with = "MitmHookActionsConfigSchema")]
-    pub actions: MitmHookActionsConfig,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[serde(default)]
-pub struct NetworkMitmHookMatchToml {
     pub host: String,
     pub methods: Vec<String>,
     pub path_prefixes: Vec<String>,
+    #[serde(default)]
     pub query: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
     pub headers: BTreeMap<String, Vec<String>>,
     #[schemars(with = "Option<MitmHookBodyConfigSchema>")]
     pub body: Option<MitmHookBodyConfig>,
-    pub action: Vec<NetworkMitmHookActionName>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum NetworkMitmHookActionName {
-    StripRequestHeaders,
-    InjectRequestHeaders,
+    pub action: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -288,7 +275,7 @@ impl NetworkToml {
             if let Some(hooks) = mitm.hooks.as_ref() {
                 config.network.mitm_hooks = hooks
                     .values()
-                    .map(NetworkMitmHookToml::to_runtime)
+                    .map(|hook| hook.to_runtime(mitm.actions.as_ref()))
                     .collect();
             }
         }
@@ -302,39 +289,43 @@ impl NetworkToml {
 }
 
 impl NetworkMitmHookToml {
-    fn to_runtime(&self) -> MitmHookConfig {
+    fn to_runtime(
+        &self,
+        actions_by_name: Option<&BTreeMap<String, MitmHookActionsConfig>>,
+    ) -> MitmHookConfig {
         MitmHookConfig {
-            host: self.matcher.host.clone(),
+            host: self.host.clone(),
             matcher: MitmHookMatchConfig {
-                methods: self.matcher.methods.clone(),
-                path_prefixes: self.matcher.path_prefixes.clone(),
-                query: self.matcher.query.clone(),
-                headers: self.matcher.headers.clone(),
-                body: self.matcher.body.clone(),
+                methods: self.methods.clone(),
+                path_prefixes: self.path_prefixes.clone(),
+                query: self.query.clone(),
+                headers: self.headers.clone(),
+                body: self.body.clone(),
             },
-            actions: self.selected_actions(),
+            actions: self.selected_actions(actions_by_name),
         }
     }
 
-    fn selected_actions(&self) -> MitmHookActionsConfig {
-        if self.matcher.action.is_empty() {
-            return self.actions.clone();
-        }
+    fn selected_actions(
+        &self,
+        actions_by_name: Option<&BTreeMap<String, MitmHookActionsConfig>>,
+    ) -> MitmHookActionsConfig {
+        let Some(actions_by_name) = actions_by_name else {
+            return MitmHookActionsConfig::default();
+        };
 
-        MitmHookActionsConfig {
-            strip_request_headers: self
-                .matcher
-                .action
-                .contains(&NetworkMitmHookActionName::StripRequestHeaders)
-                .then(|| self.actions.strip_request_headers.clone())
-                .unwrap_or_default(),
-            inject_request_headers: self
-                .matcher
-                .action
-                .contains(&NetworkMitmHookActionName::InjectRequestHeaders)
-                .then(|| self.actions.inject_request_headers.clone())
-                .unwrap_or_default(),
+        let mut selected = MitmHookActionsConfig::default();
+        for action_name in &self.action {
+            if let Some(action) = actions_by_name.get(action_name) {
+                selected
+                    .strip_request_headers
+                    .extend(action.strip_request_headers.clone());
+                selected
+                    .inject_request_headers
+                    .extend(action.inject_request_headers.clone());
+            }
         }
+        selected
     }
 }
 
