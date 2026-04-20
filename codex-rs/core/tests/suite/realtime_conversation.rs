@@ -2127,22 +2127,25 @@ async fn realtime_v2_noop_tool_call_returns_empty_function_output_without_respon
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
-    let realtime_server = start_websocket_server(vec![vec![vec![
-        json!({
-            "type": "session.updated",
-            "session": { "id": "sess_silent", "instructions": "backend prompt" }
-        }),
-        json!({
-            "type": "conversation.item.done",
-            "item": {
-                "id": "item_silent",
-                "type": "function_call",
-                "name": "remain_silent",
-                "call_id": "call_silent",
-                "arguments": "{}"
-            }
-        }),
-    ]]])
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_silent", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "conversation.item.done",
+                "item": {
+                    "id": "item_silent",
+                    "type": "function_call",
+                    "name": "remain_silent",
+                    "call_id": "call_silent",
+                    "arguments": "{}"
+                }
+            }),
+        ],
+        vec![],
+    ]])
     .await;
 
     let mut builder = test_codex().with_config({
