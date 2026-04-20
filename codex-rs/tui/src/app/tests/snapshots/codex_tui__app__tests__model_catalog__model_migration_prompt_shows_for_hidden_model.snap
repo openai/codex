@@ -1,5 +1,6 @@
 ---
 source: tui/src/app/tests/model_catalog.rs
+assertion_line: 289
 expression: model_migration_copy_to_plain_text(&copy)
 ---
 Introducing GPT-5.4
