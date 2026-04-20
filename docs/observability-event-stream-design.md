@@ -223,9 +223,9 @@ Each field should carry at least:
 - **Data class**: `identifier`, `operational`, `environment`, `content`, or
   `secret_risk`.
 
-Use markers express intent. Detail level and data class are guardrails. A sink
-must first select only fields explicitly marked for that sink, then enforce its
-detail/class policy before serializing values.
+Use markers are the allow marker: a sink should consume only fields explicitly
+marked for that sink. Detail level and data class are descriptive metadata for
+review, auditing, and sinks that need coarse verbosity or redaction modes.
 Event structs may define default use markers when most fields feed the same
 projection; field-level use markers override that default for mixed events.
 
@@ -234,11 +234,10 @@ remote export, and a trace-level field can be trace-level because it is large
 rather than sensitive. Data class is also not enough for selection: analytics
 must not consume every basic operational field just because it would be safe.
 
-Expected sink policies:
+Expected sink behavior:
 
-- Analytics selects only fields marked `analytics`, then allows basic
-  identifiers/operational fields plus selected environment fields; it denies
-  content and secret-risk fields even if they are marked accidentally.
+- Analytics consumes fields marked `analytics`. Content-bearing analytics fields
+  should be rare and called out on the field or projection that exports them.
 - Rollout trace allows rich local fields, with explicit redaction rules for
   secret-risk material.
 - OTEL logs preserve today's log export behavior, including account/email only
@@ -276,7 +275,7 @@ Initial workflow coverage should be chosen by conformance need:
 | Tools | `tool_call.started`, `tool_call.approval_resolved`, `tool_call.ended` | OTEL, rollout |
 | Compaction | `compaction.started`, `compaction.installed`, `compaction.ended` | analytics, rollout |
 | Agents | `agent.task_sent`, `agent.message_sent`, `agent.result_delivered`, `agent.closed` | rollout, analytics subset |
-| Product features | `app.mentioned`, `app.used`, `hook.run_completed`, `plugin.used`, `plugin.state_changed`, `guardian.review_completed` | analytics |
+| Product features | `app.mentioned`, `app.used`, `hook.run_completed`, `plugin.used`, `plugin.state_changed`, `review.completed` | analytics |
 | Transport/auth | `transport.api_request_completed`, `transport.websocket_request_completed`, `auth.recovery_step_completed` | OTEL |
 
 This table is not a complete schema. Each event still needs a typed Rust
@@ -293,9 +292,14 @@ output schemas.
 | --- | --- |
 | `thread.started` | `codex_thread_initialized` |
 | `turn.started` with resolved config, `turn.ended` with token usage | `codex_turn_event` |
-| `turn.steer_resolved` | `codex_turn_steer_event` |
+| `turn.steer` | `codex_turn_steer_event` |
 | compaction lifecycle observations | `codex_compaction_event` |
-| skill/app/plugin/guardian observations | existing feature events |
+| skill/app/plugin/review observations | existing feature events |
+
+`review.completed` is generic, but the current analytics projection only emits
+the legacy guardian event for guardian reviewer responses. User reviewer
+responses remain represented in the observation stream until a consumer needs
+an analytics output for them.
 
 The analytics crate should keep the observation-to-legacy-schema translation in
 a private projection module. The reducer then stays responsible for ingestion
@@ -354,7 +358,7 @@ tests. Recommended first scenarios:
 - failed or interrupted turn
 - accepted and rejected turn steering
 - compaction
-- skill, app, plugin, and guardian events
+- skill, app, plugin, and review events
 - subagent thread start
 
 Rollout trace can start with observation-to-trace unit tests plus one or two

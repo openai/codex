@@ -11,6 +11,7 @@ use crate::facts::AnalyticsFact;
 use crate::facts::CustomAnalyticsFact;
 use crate::observation_projection;
 use crate::reducer::AnalyticsReducer;
+use crate::review_observation_projection;
 use codex_observability::events;
 
 /// Analytics reducer entrypoint for typed observations.
@@ -150,6 +151,30 @@ impl AnalyticsObservationReducer {
             .ingest(
                 AnalyticsFact::Custom(CustomAnalyticsFact::Compaction(Box::new(
                     observation_projection::compaction_ended_event(observation),
+                ))),
+                out,
+            )
+            .await;
+    }
+
+    /// Ingests a review.completed observation for the legacy guardian analytics event.
+    ///
+    /// User review responses are represented in the shared observation type but
+    /// do not have a legacy analytics event today.
+    pub(crate) async fn ingest_review_completed(
+        &mut self,
+        observation: events::ReviewCompleted<'_>,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(guardian_review) =
+            review_observation_projection::legacy_guardian_review_event(observation)
+        else {
+            return;
+        };
+        self.legacy
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(Box::new(
+                    guardian_review,
                 ))),
                 out,
             )

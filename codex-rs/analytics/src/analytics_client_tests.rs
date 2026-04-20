@@ -2428,6 +2428,166 @@ async fn compaction_ended_observation_matches_legacy_fact() {
     assert_eq!(observation_payload, legacy_payload);
 }
 
+#[tokio::test]
+async fn review_completed_observation_matches_legacy_guardian_fact() {
+    use crate::events as analytics_events;
+    use codex_observability::events as observation_events;
+
+    let mut legacy_reducer = AnalyticsReducer::default();
+    let mut observation_reducer = AnalyticsObservationReducer::default();
+    let mut legacy_events = Vec::new();
+    let mut observation_events = Vec::new();
+
+    ingest_initialize(&mut legacy_reducer, &mut legacy_events).await;
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-guardian",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                )),
+            },
+            &mut legacy_events,
+        )
+        .await;
+    legacy_events.clear();
+
+    observation_reducer
+        .ingest_existing_fact_for_test(sample_initialize_fact(), &mut observation_events)
+        .await;
+    observation_reducer
+        .ingest_existing_fact_for_test(
+            AnalyticsFact::Response {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-guardian",
+                    /*ephemeral*/ false,
+                    "gpt-5",
+                )),
+            },
+            &mut observation_events,
+        )
+        .await;
+    observation_events.clear();
+
+    legacy_reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::GuardianReview(Box::new(
+                analytics_events::GuardianReviewEventParams {
+                    thread_id: "thread-guardian".to_string(),
+                    turn_id: "turn-guardian".to_string(),
+                    review_id: "review-1".to_string(),
+                    target_item_id: "item-1".to_string(),
+                    retry_reason: Some("parse_retry".to_string()),
+                    approval_request_source:
+                        analytics_events::GuardianApprovalRequestSource::DelegatedSubagent,
+                    reviewed_action: analytics_events::GuardianReviewedAction::McpToolCall {
+                        server: "drive".to_string(),
+                        tool_name: "search".to_string(),
+                        connector_id: Some("drive-connector".to_string()),
+                        connector_name: Some("Drive".to_string()),
+                        tool_title: Some("Search Drive".to_string()),
+                    },
+                    reviewed_action_truncated: false,
+                    decision: analytics_events::GuardianReviewDecision::Aborted,
+                    terminal_status: analytics_events::GuardianReviewTerminalStatus::FailedClosed,
+                    failure_reason: Some(analytics_events::GuardianReviewFailureReason::ParseError),
+                    risk_level: Some(analytics_events::GuardianReviewRiskLevel::High),
+                    user_authorization: Some(
+                        analytics_events::GuardianReviewUserAuthorization::Medium,
+                    ),
+                    outcome: Some(analytics_events::GuardianReviewOutcome::Deny),
+                    rationale: Some("review could not parse final policy".to_string()),
+                    guardian_thread_id: Some("guardian-thread-1".to_string()),
+                    guardian_session_kind: Some(
+                        analytics_events::GuardianReviewSessionKind::TrunkNew,
+                    ),
+                    guardian_model: Some("gpt-5".to_string()),
+                    guardian_reasoning_effort: Some("medium".to_string()),
+                    had_prior_review_context: Some(true),
+                    review_timeout_ms: 30_000,
+                    tool_call_count: 2,
+                    time_to_first_token_ms: Some(100),
+                    completion_latency_ms: Some(1500),
+                    started_at: 100,
+                    completed_at: Some(102),
+                    input_tokens: Some(123),
+                    cached_input_tokens: Some(45),
+                    output_tokens: Some(140),
+                    reasoning_output_tokens: Some(13),
+                    total_tokens: Some(321),
+                },
+            ))),
+            &mut legacy_events,
+        )
+        .await;
+
+    observation_reducer
+        .ingest_review_completed(
+            observation_events::ReviewCompleted {
+                thread_id: "thread-guardian",
+                turn_id: "turn-guardian",
+                review_id: "review-1",
+                target_item_id: "item-1",
+                retry_reason: Some("parse_retry"),
+                request_source: observation_events::ReviewRequestSource::DelegatedSubagent,
+                reviewed_action: observation_events::ReviewedAction::McpToolCall {
+                    server: "drive",
+                    tool_name: "search",
+                    connector_id: Some("drive-connector"),
+                    connector_name: Some("Drive"),
+                    tool_title: Some("Search Drive"),
+                },
+                reviewed_action_truncated: false,
+                response: observation_events::ReviewResponse::Guardian(
+                    observation_events::GuardianReviewResponse {
+                        decision: observation_events::ReviewDecision::Aborted,
+                        terminal_status: observation_events::ReviewTerminalStatus::FailedClosed {
+                            failure_reason: Some(
+                                observation_events::ReviewFailureReason::ParseError,
+                            ),
+                        },
+                        risk_level: Some(observation_events::ReviewRiskLevel::High),
+                        user_authorization: Some(
+                            observation_events::ReviewUserAuthorization::Medium,
+                        ),
+                        outcome: Some(observation_events::ReviewOutcome::Deny),
+                        rationale: Some("review could not parse final policy"),
+                        session: Some(observation_events::GuardianReviewSession {
+                            guardian_thread_id: "guardian-thread-1",
+                            session_kind: observation_events::GuardianReviewSessionKind::TrunkNew,
+                            model: "gpt-5",
+                            reasoning_effort: Some("medium"),
+                            had_prior_review_context: true,
+                        }),
+                        review_timeout_ms: 30_000,
+                        tool_call_count: 2,
+                        time_to_first_token_ms: Some(100),
+                        completion_latency_ms: Some(1500),
+                        token_usage: Some(observation_events::TurnTokenUsage {
+                            input_tokens: 123,
+                            cached_input_tokens: 45,
+                            output_tokens: 140,
+                            reasoning_output_tokens: 13,
+                            total_tokens: 321,
+                        }),
+                    },
+                ),
+                started_at: 100,
+                ended_at: 102,
+            },
+            &mut observation_events,
+        )
+        .await;
+
+    let legacy_payload = serde_json::to_value(&legacy_events).expect("serialize legacy events");
+    let observation_payload =
+        serde_json::to_value(&observation_events).expect("serialize observation events");
+    assert_eq!(observation_payload, legacy_payload);
+}
+
 fn legacy_event_created_at(event: &TrackEventRequest) -> i64 {
     serde_json::to_value(event)
         .expect("serialize event")
