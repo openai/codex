@@ -1,5 +1,6 @@
 pub(crate) mod config;
 mod events;
+mod logger_layer;
 pub(crate) mod metrics;
 pub(crate) mod provider;
 pub(crate) mod trace_context;
@@ -18,6 +19,7 @@ pub use crate::config::OtelTlsConfig;
 pub use crate::events::session_telemetry::AuthEnvTelemetryMetadata;
 pub use crate::events::session_telemetry::SessionTelemetry;
 pub use crate::events::session_telemetry::SessionTelemetryMetadata;
+pub use crate::logger_layer::OtelLoggerLayer;
 pub use crate::metrics::runtime_metrics::RuntimeMetricTotals;
 pub use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 pub use crate::metrics::timer::Timer;

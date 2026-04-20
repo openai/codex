@@ -14,14 +14,25 @@ pub use crate::metrics::error::MetricsError;
 pub use crate::metrics::error::Result;
 pub use names::*;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 pub use tags::SessionMetricTagValues;
 
-static GLOBAL_METRICS: OnceLock<MetricsClient> = OnceLock::new();
+static GLOBAL_METRICS: OnceLock<RwLock<Option<MetricsClient>>> = OnceLock::new();
 
-pub(crate) fn install_global(metrics: MetricsClient) {
-    let _ = GLOBAL_METRICS.set(metrics);
+fn global_metrics() -> &'static RwLock<Option<MetricsClient>> {
+    GLOBAL_METRICS.get_or_init(|| RwLock::new(None))
+}
+
+pub(crate) fn replace_global(metrics: Option<MetricsClient>) {
+    let mut global = global_metrics()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *global = metrics;
 }
 
 pub fn global() -> Option<MetricsClient> {
-    GLOBAL_METRICS.get().cloned()
+    global_metrics()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }

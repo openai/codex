@@ -11,6 +11,7 @@ use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::fuzzy_file_search::start_fuzzy_file_search_session;
 use crate::models::supported_models;
+use crate::otel_reload::OtelReloader;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -488,6 +489,7 @@ pub(crate) struct CodexMessageProcessor {
     background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
+    otel_reloader: Option<OtelReloader>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -509,6 +511,7 @@ struct ListenerTaskContext {
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
+    otel_reloader: Option<OtelReloader>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -640,6 +643,7 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+    pub(crate) otel_reloader: Option<OtelReloader>,
 }
 
 impl CodexMessageProcessor {
@@ -718,6 +722,7 @@ impl CodexMessageProcessor {
             cloud_requirements,
             feedback,
             log_db,
+            otel_reloader,
         } = args;
         Self {
             auth_manager,
@@ -740,6 +745,7 @@ impl CodexMessageProcessor {
             background_tasks: TaskTracker::new(),
             feedback,
             log_db,
+            otel_reloader,
         }
     }
 
@@ -2420,6 +2426,7 @@ impl CodexMessageProcessor {
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
+            otel_reloader: self.otel_reloader.clone(),
         };
         let request_trace = request_context.request_trace();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
@@ -2619,6 +2626,27 @@ impl CodexMessageProcessor {
                     return;
                 }
             };
+        }
+
+        if let Some(otel_reloader) = listener_task_context.otel_reloader.as_ref() {
+            let otel_reload_error = otel_reloader
+                .reload_from_config(&config)
+                .err()
+                .map(|err| err.to_string());
+            if let Some(err) = otel_reload_error {
+                listener_task_context
+                    .outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to reload otel config: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
         }
 
         let instruction_sources = Self::instruction_sources_from_config(&config).await;
@@ -7936,6 +7964,7 @@ impl CodexMessageProcessor {
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
+                otel_reloader: self.otel_reloader.clone(),
             },
             conversation_id,
             connection_id,
@@ -8050,6 +8079,7 @@ impl CodexMessageProcessor {
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.to_path_buf(),
+                otel_reloader: self.otel_reloader.clone(),
             },
             conversation_id,
             conversation,
@@ -8099,6 +8129,7 @@ impl CodexMessageProcessor {
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
+            otel_reloader: _,
         } = listener_task_context;
         let outgoing_for_task = Arc::clone(&outgoing);
         tokio::spawn(async move {

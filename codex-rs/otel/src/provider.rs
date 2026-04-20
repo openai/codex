@@ -84,9 +84,7 @@ impl OtelProvider {
             Some(MetricsClient::new(config)?)
         };
 
-        if let Some(metrics) = metrics.as_ref() {
-            crate::metrics::install_global(metrics.clone());
-        }
+        crate::metrics::replace_global(metrics.clone());
 
         if !log_enabled && !trace_enabled && metrics.is_none() {
             debug!("No OTEL exporter enabled in settings.");

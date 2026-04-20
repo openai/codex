@@ -252,6 +252,7 @@ fn build_test_processor(
         auth_manager,
         rpc_transport: AppServerRpcTransport::Stdio,
         remote_control_handle: None,
+        otel_reloader: None,
     }));
     (processor, outgoing_rx)
 }
