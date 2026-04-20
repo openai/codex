@@ -337,6 +337,7 @@ use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
+use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::SortDirection as StoreSortDirection;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
@@ -474,7 +475,7 @@ pub(crate) struct CodexMessageProcessor {
     analytics_events_client: AnalyticsEventsClient,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
-    thread_store: LocalThreadStore,
+    thread_store: Arc<dyn ThreadStore>,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
@@ -642,6 +643,15 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
 }
 
+fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
+    match config.experimental_thread_store_endpoint.as_deref() {
+        Some(endpoint) => Arc::new(RemoteThreadStore::new(endpoint)),
+        None => Arc::new(LocalThreadStore::new(
+            codex_rollout::RolloutConfig::from_view(config),
+        )),
+    }
+}
+
 impl CodexMessageProcessor {
     async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
         codex_core::AgentsMdManager::new(config)
@@ -725,7 +735,7 @@ impl CodexMessageProcessor {
             outgoing: outgoing.clone(),
             analytics_events_client,
             arg0_paths,
-            thread_store: LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(&config)),
+            thread_store: configured_thread_store(&config),
             config,
             cli_overrides,
             runtime_feature_enablement,
