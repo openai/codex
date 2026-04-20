@@ -27,6 +27,7 @@ pub(super) struct GuardianReviewSessionMetadata {
     pub(super) guardian_reasoning_effort: Option<String>,
     pub(super) had_prior_review_context: bool,
     pub(super) completed_at: u64,
+    pub(super) reviewed_action_truncated: bool,
     pub(super) token_usage: Option<TokenUsage>,
 }
 
@@ -163,6 +164,7 @@ impl From<Option<GuardianReviewSessionMetadata>> for GuardianReviewAnalyticsResu
             result.guardian_model = Some(metadata.guardian_model);
             result.guardian_reasoning_effort = metadata.guardian_reasoning_effort;
             result.had_prior_review_context = Some(metadata.had_prior_review_context);
+            result.reviewed_action_truncated = metadata.reviewed_action_truncated;
             result.token_usage = metadata.token_usage;
         }
 

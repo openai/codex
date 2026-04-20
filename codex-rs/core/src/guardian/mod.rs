@@ -63,7 +63,7 @@ pub(crate) struct GuardianRejection {
 }
 
 #[cfg(test)]
-use approval_request::format_guardian_action_pretty;
+use approval_request::format_guardian_action_pretty_with_truncation;
 #[cfg(test)]
 use approval_request::guardian_assessment_action;
 #[cfg(test)]
