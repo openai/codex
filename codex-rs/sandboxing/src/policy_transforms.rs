@@ -45,6 +45,7 @@ pub fn normalize_additional_permissions(
     let file_system = match additional_permissions.file_system {
         Some(file_system) => {
             let mut entries = Vec::with_capacity(file_system.entries.len());
+            let glob_scan_max_depth = file_system.glob_scan_max_depth;
             for entry in file_system.entries {
                 if matches!(&entry.path, FileSystemPath::GlobPattern { .. })
                     && entry.access != FileSystemAccessMode::None
@@ -73,7 +74,10 @@ pub fn normalize_additional_permissions(
                     entries.push(normalized_entry);
                 }
             }
-            let file_system = FileSystemPermissions { entries };
+            let file_system = FileSystemPermissions {
+                entries,
+                glob_scan_max_depth,
+            };
             (!file_system.is_empty()).then_some(file_system)
         }
         None => None,
@@ -114,6 +118,12 @@ pub fn merge_permission_profiles(
             let file_system = match (base.file_system.as_ref(), permissions.file_system.as_ref()) {
                 (Some(base), Some(permissions)) => Some(FileSystemPermissions {
                     entries: merge_permission_entries(&base.entries, &permissions.entries),
+                    glob_scan_max_depth: merge_glob_scan_max_depth(
+                        &base.entries,
+                        base.glob_scan_max_depth,
+                        &permissions.entries,
+                        permissions.glob_scan_max_depth,
+                    ),
                 })
                 .filter(|file_system| !file_system.is_empty()),
                 (Some(base), None) => Some(base.clone()),
@@ -139,12 +149,20 @@ pub fn intersect_permission_profiles(
         .file_system
         .map(|requested_file_system| {
             let granted_file_system = granted.file_system.unwrap_or_default();
-            let entries = requested_file_system
+            let entries: Vec<_> = requested_file_system
                 .entries
                 .into_iter()
                 .filter(|entry| granted_file_system.entries.contains(entry))
                 .collect();
-            FileSystemPermissions { entries }
+            FileSystemPermissions {
+                glob_scan_max_depth: merge_glob_scan_max_depth(
+                    &entries,
+                    requested_file_system.glob_scan_max_depth,
+                    &entries,
+                    granted_file_system.glob_scan_max_depth,
+                ),
+                entries,
+            }
         })
         .filter(|file_system| !file_system.is_empty());
     let network = match (requested.network, granted.network) {
@@ -165,6 +183,48 @@ pub fn intersect_permission_profiles(
         network,
         file_system,
     }
+}
+
+fn merge_glob_scan_max_depth(
+    left_entries: &[FileSystemSandboxEntry],
+    left_depth: Option<usize>,
+    right_entries: &[FileSystemSandboxEntry],
+    right_depth: Option<usize>,
+) -> Option<usize> {
+    let left_depth = effective_glob_scan_depth(left_entries, left_depth);
+    let right_depth = effective_glob_scan_depth(right_entries, right_depth);
+
+    match (left_depth, right_depth) {
+        (Some(GlobScanDepth::Unbounded), _) | (_, Some(GlobScanDepth::Unbounded)) => None,
+        (Some(GlobScanDepth::Bounded(left)), Some(GlobScanDepth::Bounded(right))) => {
+            Some(left.max(right))
+        }
+        (Some(GlobScanDepth::Bounded(depth)), None)
+        | (None, Some(GlobScanDepth::Bounded(depth))) => Some(depth),
+        (None, None) => None,
+    }
+}
+
+fn effective_glob_scan_depth(
+    entries: &[FileSystemSandboxEntry],
+    depth: Option<usize>,
+) -> Option<GlobScanDepth> {
+    entries
+        .iter()
+        .any(|entry| {
+            entry.access == FileSystemAccessMode::None
+                && matches!(&entry.path, FileSystemPath::GlobPattern { .. })
+        })
+        .then_some(match depth {
+            Some(depth) => GlobScanDepth::Bounded(depth),
+            None => GlobScanDepth::Unbounded,
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GlobScanDepth {
+    Bounded(usize),
+    Unbounded,
 }
 
 fn merge_permission_entries(
@@ -234,6 +294,12 @@ fn merge_file_system_policy_with_additional_permissions(
                     merged_policy.entries.push(entry.clone());
                 }
             }
+            merged_policy.glob_scan_max_depth = merge_glob_scan_max_depth(
+                &file_system_policy.entries,
+                file_system_policy.glob_scan_max_depth,
+                &additional_permissions.entries,
+                additional_permissions.glob_scan_max_depth,
+            );
             merged_policy
         }
         FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
