@@ -215,6 +215,12 @@ impl AnalyticsEventsClient {
         )));
     }
 
+    pub fn track_responses_api_call(&self, event: CodexResponsesApiCallFact) {
+        self.record_fact(AnalyticsFact::Custom(
+            CustomAnalyticsFact::ResponsesApiCall(Box::new(event)),
+        ));
+    }
+
     pub fn track_turn_resolved_config(&self, fact: TurnResolvedConfigFact) {
         self.record_fact(AnalyticsFact::Custom(
             CustomAnalyticsFact::TurnResolvedConfig(Box::new(fact)),
