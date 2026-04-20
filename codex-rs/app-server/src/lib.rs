@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
+use crate::analytics_events::analytics_events_client_from_config;
 use crate::message_processor::MessageProcessor;
 use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
@@ -65,6 +66,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod analytics_events;
 mod app_server_tracing;
 mod bespoke_event_handling;
 mod codex_message_processor;
@@ -645,14 +647,20 @@ pub async fn run_main_with_transport(
     });
 
     let processor_handle = tokio::spawn({
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
         let outbound_control_tx = outbound_control_tx;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false);
+        let analytics_events_client =
+            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            analytics_events_client.clone(),
+        ));
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
         let loader_overrides = loader_overrides_for_config_api;
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: outgoing_message_sender,
+            analytics_events_client,
             arg0_paths,
             config: Arc::new(config),
             environment_manager,
