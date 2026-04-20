@@ -20,6 +20,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+const ERROR_LOGON_FAILURE: u32 = 1326;
+const ERROR_ACCOUNT_LOCKED_OUT: u32 = 1909;
+
 #[derive(Debug, Clone)]
 struct SandboxIdentity {
     username: String,
@@ -30,6 +33,47 @@ struct SandboxIdentity {
 pub struct SandboxCreds {
     pub username: String,
     pub password: String,
+}
+
+fn sandbox_logon_error_requires_reprovision(error: u32) -> bool {
+    matches!(error, ERROR_LOGON_FAILURE | ERROR_ACCOUNT_LOCKED_OUT)
+}
+
+#[cfg(target_os = "windows")]
+fn validate_logon_sandbox_creds(creds: &SandboxCreds) -> std::result::Result<(), u32> {
+    use crate::winutil::to_wide;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::Security::LOGON32_LOGON_NETWORK;
+    use windows_sys::Win32::Security::LOGON32_PROVIDER_DEFAULT;
+    use windows_sys::Win32::Security::LogonUserW;
+
+    let user_w = to_wide(&creds.username);
+    let domain_w = to_wide(".");
+    let password_w = to_wide(&creds.password);
+    let mut token = 0isize;
+    let ok = unsafe {
+        LogonUserW(
+            user_w.as_ptr(),
+            domain_w.as_ptr(),
+            password_w.as_ptr(),
+            LOGON32_LOGON_NETWORK,
+            LOGON32_PROVIDER_DEFAULT,
+            &mut token,
+        )
+    };
+    if ok == 0 {
+        return Err(unsafe { GetLastError() });
+    }
+    unsafe {
+        CloseHandle(token);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn validate_logon_sandbox_creds(_creds: &SandboxCreds) -> std::result::Result<(), u32> {
+    Ok(())
 }
 
 /// Returns true when the on-disk setup artifacts exist and match the current
@@ -193,6 +237,57 @@ pub fn require_logon_sandbox_creds(
         )?;
         identity = select_identity(network_identity, codex_home)?;
     }
+    let identity = identity.ok_or_else(|| {
+        anyhow!(
+            "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"
+        )
+    })?;
+    let mut creds = SandboxCreds {
+        username: identity.username,
+        password: identity.password,
+    };
+    if let Err(error) = validate_logon_sandbox_creds(&creds) {
+        if sandbox_logon_error_requires_reprovision(error) {
+            crate::logging::log_note(
+                &format!(
+                    "sandbox setup required: cached sandbox credentials rejected by Windows logon API (error={error}); reprovisioning sandbox users"
+                ),
+                Some(&sandbox_dir),
+            );
+            run_elevated_setup(
+                crate::setup::SandboxSetupRequest {
+                    policy,
+                    policy_cwd,
+                    command_cwd,
+                    env_map,
+                    codex_home,
+                    proxy_enforced,
+                },
+                crate::setup::SetupRootOverrides {
+                    read_roots: Some(needed_read.clone()),
+                    write_roots: Some(needed_write.clone()),
+                },
+            )?;
+            let identity = select_identity(network_identity, codex_home)?.ok_or_else(|| {
+                anyhow!(
+                    "Windows sandbox setup did not persist refreshed sandbox credentials"
+                )
+            })?;
+            creds = SandboxCreds {
+                username: identity.username,
+                password: identity.password,
+            };
+            if let Err(retry_error) = validate_logon_sandbox_creds(&creds) {
+                return Err(anyhow!(
+                    "sandbox credentials are still invalid after reprovision (windows_logon_error={retry_error})"
+                ));
+            }
+        } else {
+            return Err(anyhow!(
+                "failed to validate sandbox credentials before launch (windows_logon_error={error})"
+            ));
+        }
+    }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
     crate::setup::run_setup_refresh(
         policy,
@@ -202,13 +297,22 @@ pub fn require_logon_sandbox_creds(
         codex_home,
         proxy_enforced,
     )?;
-    let identity = identity.ok_or_else(|| {
-        anyhow!(
-            "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"
-        )
-    })?;
-    Ok(SandboxCreds {
-        username: identity.username,
-        password: identity.password,
-    })
+    Ok(creds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sandbox_logon_error_requires_reprovision;
+
+    #[test]
+    fn reprovisions_for_bad_or_locked_sandbox_credentials() {
+        assert!(sandbox_logon_error_requires_reprovision(1326));
+        assert!(sandbox_logon_error_requires_reprovision(1909));
+    }
+
+    #[test]
+    fn ignores_unrelated_windows_logon_errors() {
+        assert!(!sandbox_logon_error_requires_reprovision(5));
+        assert!(!sandbox_logon_error_requires_reprovision(1385));
+    }
 }
