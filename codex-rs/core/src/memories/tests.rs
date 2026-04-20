@@ -1005,21 +1005,21 @@ mod phase2 {
             "stage-1 success should enqueue global consolidation"
         );
 
-        let telepathy_resources = config
+        let chronicle_resources = config
             .codex_home
-            .join("memories_extensions/telepathy/resources");
-        tokio::fs::create_dir_all(&telepathy_resources)
+            .join("memories_extensions/chronicle/resources");
+        tokio::fs::create_dir_all(&chronicle_resources)
             .await
-            .expect("create telepathy resources");
+            .expect("create chronicle resources");
         tokio::fs::write(
             config
                 .codex_home
-                .join("memories_extensions/telepathy/instructions.md"),
+                .join("memories_extensions/chronicle/instructions.md"),
             "instructions",
         )
         .await
-        .expect("write telepathy instructions");
-        let old_file = telepathy_resources.join(format!(
+        .expect("write chronicle instructions");
+        let old_file = chronicle_resources.join(format!(
             "{}-abcd-10min-old.md",
             (Utc::now() - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
         ));
