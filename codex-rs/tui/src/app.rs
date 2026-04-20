@@ -11407,6 +11407,26 @@ guardian_approval = true
         }
     }
 
+    fn clear_nux(presets: &mut [ModelPreset]) {
+        for preset in presets {
+            preset.availability_nux = None;
+        }
+    }
+
+    fn preset_mut<'a>(presets: &'a mut [ModelPreset], model: &str) -> &'a mut ModelPreset {
+        presets
+            .iter_mut()
+            .find(|preset| preset.model == model)
+            .unwrap_or_else(|| panic!("{model} preset present"))
+    }
+
+    fn tooltip(model: &str, msg: &str) -> StartupTooltipOverride {
+        StartupTooltipOverride {
+            model_slug: model.into(),
+            message: msg.into(),
+        }
+    }
+
     fn model_migration_copy_to_plain_text(
         copy: &crate::model_migration::ModelMigrationCopy,
     ) -> String {
@@ -11454,47 +11474,28 @@ guardian_approval = true
     #[test]
     fn select_model_availability_nux_picks_only_eligible_model() {
         let mut presets = all_model_presets();
-        presets.iter_mut().for_each(|preset| {
-            preset.availability_nux = None;
-        });
-        let target = presets
-            .iter_mut()
-            .find(|preset| preset.model == "gpt-5.4")
-            .expect("target preset present");
+        clear_nux(&mut presets);
+        let target = preset_mut(&mut presets, "gpt-5.4");
         target.availability_nux = Some(ModelAvailabilityNux {
-            message: "gpt-5.4 is available".to_string(),
+            message: "available".to_string(),
         });
 
         let selected = select_model_availability_nux(&presets, &model_availability_nux_config(&[]));
 
-        assert_eq!(
-            selected,
-            Some(StartupTooltipOverride {
-                model_slug: "gpt-5.4".to_string(),
-                message: "gpt-5.4 is available".to_string(),
-            })
-        );
+        assert_eq!(selected, Some(tooltip("gpt-5.4", "available")));
     }
 
     #[test]
     fn select_model_availability_nux_skips_missing_and_exhausted_models() {
         let mut presets = all_model_presets();
-        presets.iter_mut().for_each(|preset| {
-            preset.availability_nux = None;
-        });
-        let gpt_5_4 = presets
-            .iter_mut()
-            .find(|preset| preset.model == "gpt-5.4")
-            .expect("gpt-5.4 preset present");
+        clear_nux(&mut presets);
+        let gpt_5_4 = preset_mut(&mut presets, "gpt-5.4");
         gpt_5_4.availability_nux = Some(ModelAvailabilityNux {
-            message: "gpt-5.4 is available".to_string(),
+            message: "exhausted".to_string(),
         });
-        let gpt_5_4_mini = presets
-            .iter_mut()
-            .find(|preset| preset.model == "gpt-5.4-mini")
-            .expect("gpt-5.4-mini preset present");
-        gpt_5_4_mini.availability_nux = Some(ModelAvailabilityNux {
-            message: "gpt-5.4-mini is available".to_string(),
+        let mini = preset_mut(&mut presets, "gpt-5.4-mini");
+        mini.availability_nux = Some(ModelAvailabilityNux {
+            message: "available".to_string(),
         });
 
         let selected = select_model_availability_nux(
@@ -11502,13 +11503,7 @@ guardian_approval = true
             &model_availability_nux_config(&[("gpt-5.4", MODEL_AVAILABILITY_NUX_MAX_SHOW_COUNT)]),
         );
 
-        assert_eq!(
-            selected,
-            Some(StartupTooltipOverride {
-                model_slug: "gpt-5.4-mini".to_string(),
-                message: "gpt-5.4-mini is available".to_string(),
-            })
-        );
+        assert_eq!(selected, Some(tooltip("gpt-5.4-mini", "available")));
     }
 
     #[test]
@@ -11576,47 +11571,28 @@ guardian_approval = true
     #[test]
     fn select_model_availability_nux_uses_existing_model_order_as_priority() {
         let mut presets = all_model_presets();
-        presets.iter_mut().for_each(|preset| {
-            preset.availability_nux = None;
-        });
-        let first = presets
-            .iter_mut()
-            .find(|preset| preset.model == "gpt-5.4-mini")
-            .expect("gpt-5.4-mini preset present");
+        clear_nux(&mut presets);
+        let first = preset_mut(&mut presets, "gpt-5.4-mini");
         first.availability_nux = Some(ModelAvailabilityNux {
             message: "first".to_string(),
         });
-        let second = presets
-            .iter_mut()
-            .find(|preset| preset.model == "gpt-5.2")
-            .expect("gpt-5.2 preset present");
+        let second = preset_mut(&mut presets, "gpt-5.2");
         second.availability_nux = Some(ModelAvailabilityNux {
             message: "second".to_string(),
         });
 
         let selected = select_model_availability_nux(&presets, &model_availability_nux_config(&[]));
 
-        assert_eq!(
-            selected,
-            Some(StartupTooltipOverride {
-                model_slug: "gpt-5.4-mini".to_string(),
-                message: "first".to_string(),
-            })
-        );
+        assert_eq!(selected, Some(tooltip("gpt-5.4-mini", "first")));
     }
 
     #[test]
     fn select_model_availability_nux_returns_none_when_all_models_are_exhausted() {
         let mut presets = all_model_presets();
-        presets.iter_mut().for_each(|preset| {
-            preset.availability_nux = None;
-        });
-        let target = presets
-            .iter_mut()
-            .find(|preset| preset.model == "gpt-5.4")
-            .expect("target preset present");
+        clear_nux(&mut presets);
+        let target = preset_mut(&mut presets, "gpt-5.4");
         target.availability_nux = Some(ModelAvailabilityNux {
-            message: "gpt-5.4 is available".to_string(),
+            message: "available".to_string(),
         });
 
         let selected = select_model_availability_nux(
@@ -11705,14 +11681,9 @@ guardian_approval = true
             .expect("gpt-5.3-codex preset present");
         current.show_in_picker = false;
         let current = current.clone();
-        assert!(
-            !current.show_in_picker,
-            "expected current model to be hidden from picker for this test"
-        );
+        assert!(!current.show_in_picker);
 
         let upgrade = current.upgrade.as_ref().expect("upgrade configured");
-        // Test "hidden current model still prompts" even if bundled
-        // catalog data changes the target model's picker visibility.
         available_models
             .iter_mut()
             .find(|preset| preset.model == upgrade.id)
