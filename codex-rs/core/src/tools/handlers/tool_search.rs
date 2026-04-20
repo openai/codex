@@ -202,6 +202,8 @@ mod tests {
     use codex_tools::ResponsesApiNamespace;
     use codex_tools::ResponsesApiNamespaceTool;
     use codex_tools::ResponsesApiTool;
+    use codex_tools::ToolDefinition;
+    use codex_tools::ToolLoadingPolicy;
     use pretty_assertions::assert_eq;
     use rmcp::model::Tool;
     use std::sync::Arc;
@@ -444,6 +446,21 @@ mod tests {
         mcp_tools: Option<&std::collections::HashMap<String, ToolInfo>>,
         dynamic_tools: &[DynamicToolSpec],
     ) -> ToolSearchHandler {
-        ToolSearchHandler::new(build_tool_search_entries(mcp_tools, dynamic_tools))
+        let mcp_tools = mcp_tools.map(|tools| {
+            tools
+                .values()
+                .map(|tool| {
+                    crate::tools::mcp_tool_definition::mcp_tool_info_to_tool_definition(
+                        tool,
+                        ToolLoadingPolicy::Deferred,
+                    )
+                    .expect("convert deferred MCP test tool")
+                })
+                .collect::<Vec<ToolDefinition>>()
+        });
+        ToolSearchHandler::new(build_tool_search_entries(
+            mcp_tools.as_deref(),
+            dynamic_tools,
+        ))
     }
 }

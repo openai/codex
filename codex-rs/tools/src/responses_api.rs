@@ -1,8 +1,6 @@
 use crate::JsonSchema;
 use crate::ToolDefinition;
-use crate::ToolName;
 use crate::dynamic_tool_to_tool_definition;
-use crate::mcp_tool_to_tool_definition;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use serde::Deserialize;
 use serde::Serialize;
@@ -74,24 +72,6 @@ pub fn dynamic_tool_to_responses_api_tool(
     ))
 }
 
-pub fn mcp_tool_to_responses_api_tool(
-    tool_name: &ToolName,
-    tool: &rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(
-        &mcp_tool_to_tool_definition(tool_name, tool)?,
-    ))
-}
-
-pub fn mcp_tool_to_deferred_responses_api_tool(
-    tool_name: &ToolName,
-    tool: &rmcp::model::Tool,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(
-        &mcp_tool_to_tool_definition(tool_name, tool)?.into_deferred(),
-    ))
-}
-
 /// Converts the leaf function shape of a canonical tool definition.
 ///
 /// If the tool is namespaced, callers are still responsible for wrapping the
@@ -105,6 +85,30 @@ pub fn tool_definition_to_responses_api_tool(tool_definition: &ToolDefinition) -
         parameters: tool_definition.input_schema.clone(),
         output_schema: tool_definition.output_schema.clone(),
     }
+}
+
+pub fn tool_definition_to_tool_search_output_tool(
+    tool_definition: &ToolDefinition,
+) -> ToolSearchOutputTool {
+    let function_tool = tool_definition_to_responses_api_tool(tool_definition);
+    let Some(namespace) = tool_definition.name.namespace.as_ref() else {
+        return ToolSearchOutputTool::Function(function_tool);
+    };
+
+    let description = tool_definition
+        .presentation
+        .as_ref()
+        .and_then(|presentation| presentation.namespace_description.as_deref())
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| default_namespace_description(namespace));
+
+    ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
+        name: namespace.clone(),
+        description,
+        tools: vec![ResponsesApiNamespaceTool::Function(function_tool)],
+    })
 }
 
 #[cfg(test)]

@@ -10,14 +10,12 @@ use crate::TOOL_SUGGEST_TOOL_NAME;
 use crate::ToolHandlerKind;
 use crate::ToolRegistryPlan;
 use crate::ToolRegistryPlanParams;
-use crate::ToolSearchSource;
 use crate::ToolSearchSourceInfo;
 use crate::ToolSpec;
 use crate::ToolsConfig;
 use crate::ViewImageToolOptions;
 use crate::WebSearchToolOptions;
 use crate::collect_code_mode_exec_prompt_tool_definitions;
-use crate::collect_tool_search_source_infos;
 use crate::collect_tool_suggest_entries;
 use crate::create_apply_patch_freeform_tool;
 use crate::create_apply_patch_json_tool;
@@ -58,9 +56,9 @@ use crate::create_web_search_tool;
 use crate::create_write_stdin_tool;
 use crate::default_namespace_description;
 use crate::dynamic_tool_to_responses_api_tool;
-use crate::mcp_tool_to_responses_api_tool;
 use crate::request_permissions_tool_description;
 use crate::request_user_input_tool_description;
+use crate::tool_definition_to_responses_api_tool;
 use crate::tool_registry_plan_types::agent_type_description;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -261,16 +259,28 @@ pub fn build_tool_registry_plan(
     if config.search_tool
         && (params.deferred_mcp_tools.is_some() || !deferred_dynamic_tools.is_empty())
     {
-        let mut search_source_infos = params
+        let mut search_source_infos: Vec<ToolSearchSourceInfo> = params
             .deferred_mcp_tools
             .map(|deferred_mcp_tools| {
-                collect_tool_search_source_infos(deferred_mcp_tools.iter().map(|tool| {
-                    ToolSearchSource {
-                        server_name: tool.server_name,
-                        connector_name: tool.connector_name,
-                        connector_description: tool.connector_description,
-                    }
-                }))
+                deferred_mcp_tools
+                    .iter()
+                    .filter_map(|tool| {
+                        let search = tool.search.as_ref()?;
+                        let name = search.source_name.trim();
+                        if name.is_empty() {
+                            return None;
+                        }
+                        Some(ToolSearchSourceInfo {
+                            name: name.to_string(),
+                            description: search
+                                .source_description
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|description| !description.is_empty())
+                                .map(str::to_string),
+                        })
+                    })
+                    .collect()
             })
             .unwrap_or_default();
 
@@ -493,7 +503,7 @@ pub fn build_tool_registry_plan(
     }
 
     if let Some(mcp_tools) = params.mcp_tools {
-        let mut entries = mcp_tools.to_vec();
+        let mut entries = mcp_tools.iter().collect::<Vec<_>>();
         entries.sort_by_key(|tool| tool.name.display());
         let mut namespace_entries = BTreeMap::new();
 
@@ -511,34 +521,20 @@ pub fn build_tool_registry_plan(
 
         for (namespace, mut entries) in namespace_entries {
             entries.sort_by_key(|tool| tool.name.name.clone());
-            let tool_namespace = params
-                .tool_namespaces
-                .and_then(|namespaces| namespaces.get(&namespace));
-            let description = tool_namespace
-                .and_then(|namespace| namespace.description.as_deref())
+            let description = entries
+                .iter()
+                .filter_map(|tool| tool.presentation.as_ref())
+                .filter_map(|presentation| presentation.namespace_description.as_deref())
                 .map(str::trim)
-                .filter(|description| !description.is_empty())
+                .find(|description| !description.is_empty())
                 .map(str::to_string)
-                .unwrap_or_else(|| {
-                    let namespace_name = tool_namespace
-                        .map(|namespace| namespace.name.as_str())
-                        .unwrap_or(namespace.as_str());
-                    default_namespace_description(namespace_name)
-                });
+                .unwrap_or_else(|| default_namespace_description(&namespace));
             let mut tools = Vec::new();
             for tool in entries {
-                match mcp_tool_to_responses_api_tool(&tool.name, tool.tool) {
-                    Ok(converted_tool) => {
-                        tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
-                        plan.register_handler(tool.name, ToolHandlerKind::Mcp);
-                    }
-                    Err(error) => {
-                        let tool_name = &tool.name;
-                        tracing::error!(
-                            "Failed to convert `{tool_name}` MCP tool to OpenAI tool: {error:?}"
-                        );
-                    }
-                }
+                tools.push(ResponsesApiNamespaceTool::Function(
+                    tool_definition_to_responses_api_tool(tool),
+                ));
+                plan.register_handler(tool.name.clone(), ToolHandlerKind::Mcp);
             }
 
             if !tools.is_empty() {

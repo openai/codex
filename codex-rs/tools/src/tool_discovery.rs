@@ -1,12 +1,6 @@
 use crate::JsonSchema;
-use crate::ResponsesApiNamespace;
-use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
-use crate::ToolName;
-use crate::ToolSearchOutputTool;
 use crate::ToolSpec;
-use crate::default_namespace_description;
-use crate::mcp_tool_to_deferred_responses_api_tool;
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,23 +15,6 @@ pub const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
 pub struct ToolSearchSourceInfo {
     pub name: String,
     pub description: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ToolSearchSource<'a> {
-    pub server_name: &'a str,
-    pub connector_name: Option<&'a str>,
-    pub connector_description: Option<&'a str>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ToolSearchResultSource<'a> {
-    pub server_name: &'a str,
-    pub tool_namespace: &'a str,
-    pub tool_name: &'a str,
-    pub tool: &'a rmcp::model::Tool,
-    pub connector_name: Option<&'a str>,
-    pub connector_description: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -201,74 +178,6 @@ pub fn create_tool_search_tool(
             Some(false.into()),
         ),
     }
-}
-
-pub fn tool_search_result_source_to_output_tool(
-    source: ToolSearchResultSource<'_>,
-) -> Result<ToolSearchOutputTool, serde_json::Error> {
-    Ok(ToolSearchOutputTool::Namespace(ResponsesApiNamespace {
-        name: source.tool_namespace.to_string(),
-        description: tool_search_result_source_namespace_description(source),
-        tools: vec![tool_search_result_source_to_namespace_tool(source)?],
-    }))
-}
-
-fn tool_search_result_source_namespace_description(source: ToolSearchResultSource<'_>) -> String {
-    source
-        .connector_description
-        .map(str::trim)
-        .filter(|description| !description.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            source
-                .connector_name
-                .map(str::trim)
-                .filter(|connector_name| !connector_name.is_empty())
-                .map(|connector_name| format!("Tools for working with {connector_name}."))
-        })
-        .unwrap_or_else(|| default_namespace_description(source.tool_namespace))
-}
-
-fn tool_search_result_source_to_namespace_tool(
-    source: ToolSearchResultSource<'_>,
-) -> Result<ResponsesApiNamespaceTool, serde_json::Error> {
-    let tool_name = ToolName::namespaced(source.tool_namespace, source.tool_name);
-    mcp_tool_to_deferred_responses_api_tool(&tool_name, source.tool)
-        .map(ResponsesApiNamespaceTool::Function)
-}
-
-pub fn collect_tool_search_source_infos<'a>(
-    searchable_tools: impl IntoIterator<Item = ToolSearchSource<'a>>,
-) -> Vec<ToolSearchSourceInfo> {
-    searchable_tools
-        .into_iter()
-        .filter_map(|tool| {
-            if let Some(name) = tool
-                .connector_name
-                .map(str::trim)
-                .filter(|connector_name| !connector_name.is_empty())
-            {
-                return Some(ToolSearchSourceInfo {
-                    name: name.to_string(),
-                    description: tool
-                        .connector_description
-                        .map(str::trim)
-                        .filter(|description| !description.is_empty())
-                        .map(str::to_string),
-                });
-            }
-
-            let name = tool.server_name.trim();
-            if name.is_empty() {
-                return None;
-            }
-
-            Some(ToolSearchSourceInfo {
-                name: name.to_string(),
-                description: None,
-            })
-        })
-        .collect()
 }
 
 pub fn create_tool_suggest_tool(discoverable_tools: &[ToolSuggestEntry]) -> ToolSpec {

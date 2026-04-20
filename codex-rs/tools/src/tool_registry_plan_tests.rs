@@ -11,14 +11,15 @@ use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::ResponsesApiWebSearchFilters;
 use crate::ResponsesApiWebSearchUserLocation;
+use crate::ToolDefinition;
 use crate::ToolHandlerSpec;
 use crate::ToolName;
 use crate::ToolNamespace;
-use crate::ToolRegistryPlanDeferredTool;
-use crate::ToolRegistryPlanMcpTool;
+use crate::ToolSearchMetadata;
 use crate::ToolsConfigParams;
 use crate::WaitAgentTimeoutOptions;
 use crate::mcp_call_tool_result_output_schema;
+use crate::mcp_tool_to_tool_definition;
 use codex_app_server_protocol::AppInfo;
 use codex_features::Feature;
 use codex_features::Features;
@@ -1935,10 +1936,10 @@ fn search_capable_model_info() -> ModelInfo {
     }
 }
 
-fn build_specs<'a>(
+fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
-    deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
+    deferred_mcp_tools: Option<Vec<ToolDefinition>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
     build_specs_with_discoverable_tools(
@@ -1950,10 +1951,10 @@ fn build_specs<'a>(
     )
 }
 
-fn build_specs_with_discoverable_tools<'a>(
+fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
-    deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
+    deferred_mcp_tools: Option<Vec<ToolDefinition>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> (Vec<ConfiguredToolSpec>, Vec<ToolHandlerSpec>) {
@@ -1967,10 +1968,10 @@ fn build_specs_with_discoverable_tools<'a>(
     )
 }
 
-fn build_specs_with_optional_tool_namespaces<'a>(
+fn build_specs_with_optional_tool_namespaces(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<ToolName, rmcp::model::Tool>>,
-    deferred_mcp_tools: Option<Vec<ToolRegistryPlanDeferredTool<'a>>>,
+    deferred_mcp_tools: Option<Vec<ToolDefinition>>,
     tool_namespaces: Option<HashMap<String, ToolNamespace>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -1978,9 +1979,8 @@ fn build_specs_with_optional_tool_namespaces<'a>(
     let mcp_tool_inputs = mcp_tools.as_ref().map(|mcp_tools| {
         mcp_tools
             .iter()
-            .map(|(name, tool)| ToolRegistryPlanMcpTool {
-                name: name.clone(),
-                tool,
+            .map(|(name, tool)| {
+                mcp_tool_to_tool_definition(name, tool).expect("convert MCP test tool")
             })
             .collect::<Vec<_>>()
     });
@@ -2104,19 +2104,26 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
     }))
 }
 
-fn deferred_mcp_tool<'a>(
-    tool_name: &'a str,
-    tool_namespace: &'a str,
-    server_name: &'a str,
-    connector_name: Option<&'a str>,
-    connector_description: Option<&'a str>,
-) -> ToolRegistryPlanDeferredTool<'a> {
-    ToolRegistryPlanDeferredTool {
-        name: ToolName::namespaced(tool_namespace, tool_name),
-        server_name,
-        connector_name,
-        connector_description,
-    }
+fn deferred_mcp_tool(
+    tool_name: &str,
+    tool_namespace: &str,
+    server_name: &str,
+    connector_name: Option<&str>,
+    connector_description: Option<&str>,
+) -> ToolDefinition {
+    let mut definition = mcp_tool_to_tool_definition(
+        &ToolName::namespaced(tool_namespace, tool_name),
+        &mcp_tool(tool_name, "", serde_json::json!({"type": "object"})),
+    )
+    .expect("convert deferred MCP test tool")
+    .into_deferred();
+    definition.search = Some(ToolSearchMetadata {
+        source_name: connector_name.unwrap_or(server_name).to_string(),
+        source_description: connector_description.map(str::to_string),
+        extra_terms: Vec::new(),
+        limit_bucket: Some(server_name.to_string()),
+    });
+    definition
 }
 
 fn assert_contains_tool_names(tools: &[ConfiguredToolSpec], expected_subset: &[&str]) {
