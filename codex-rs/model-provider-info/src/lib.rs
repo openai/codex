@@ -427,7 +427,7 @@ pub fn merge_configured_model_providers(
     mut model_providers: HashMap<String, ModelProviderInfo>,
     configured_model_providers: HashMap<String, ModelProviderInfo>,
 ) -> Result<HashMap<String, ModelProviderInfo>, String> {
-    for (key, mut provider) in configured_model_providers {
+    for (key, provider) in configured_model_providers {
         if key == AMAZON_BEDROCK_PROVIDER_ID {
             if let Some(profile) = provider.aws.and_then(|aws| aws.profile)
                 && let Some(built_in) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)

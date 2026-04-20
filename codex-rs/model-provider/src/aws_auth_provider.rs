@@ -6,6 +6,7 @@ use codex_aws_auth::AwsAuthError;
 use codex_aws_auth::AwsRequestToSign;
 use codex_client::Request;
 use http::HeaderMap;
+use http::HeaderValue;
 use tokio::sync::OnceCell;
 
 /// AWS SigV4 auth provider for OpenAI-compatible model-provider requests.
@@ -16,10 +17,20 @@ pub(crate) struct AwsSigV4AuthProvider {
 }
 
 impl AwsSigV4AuthProvider {
+    #[cfg(test)]
     pub(crate) fn new(config: AwsAuthConfig) -> Self {
         Self {
             config,
             context: OnceCell::new(),
+        }
+    }
+
+    pub(crate) fn with_context(config: AwsAuthConfig, context: AwsAuthContext) -> Self {
+        let cell = OnceCell::new();
+        let _ = cell.set(context);
+        Self {
+            config,
+            context: cell,
         }
     }
 
@@ -28,6 +39,35 @@ impl AwsSigV4AuthProvider {
             .get_or_try_init(|| AwsAuthContext::load(self.config.clone()))
             .await
             .map_err(aws_auth_error_to_auth_error)
+    }
+}
+
+/// Amazon Bedrock bearer-token auth provider for OpenAI-compatible requests.
+#[derive(Debug)]
+pub(crate) struct AwsBedrockBearerAuthProvider {
+    token: String,
+}
+
+impl AwsBedrockBearerAuthProvider {
+    pub(crate) fn new(token: String) -> Self {
+        Self { token }
+    }
+}
+
+#[async_trait::async_trait]
+impl AuthProvider for AwsBedrockBearerAuthProvider {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        let token = &self.token;
+        if let Ok(header) = HeaderValue::from_str(&format!("Bearer {token}")) {
+            let _ = headers.insert(http::header::AUTHORIZATION, header);
+        }
+    }
+
+    /// Bedrock requests are sent to OpenAI-compatible provider endpoints, not
+    /// Codex's legacy Responses backend, so avoid forwarding the Codex-private
+    /// `session_id` compatibility header.
+    fn should_send_legacy_conversation_header(&self) -> bool {
+        false
     }
 }
 
@@ -78,11 +118,26 @@ mod tests {
     #[test]
     fn aws_sigv4_auth_disables_legacy_conversation_header() {
         let provider = AwsSigV4AuthProvider::new(AwsAuthConfig {
-            region: Some("us-east-1".to_string()),
             profile: Some("codex-bedrock".to_string()),
             service: "bedrock-mantle".to_string(),
         });
 
+        assert!(!provider.should_send_legacy_conversation_header());
+    }
+
+    #[test]
+    fn aws_bedrock_bearer_auth_adds_header_and_disables_legacy_conversation_header() {
+        let provider = AwsBedrockBearerAuthProvider::new("bedrock-token".to_string());
+        let mut headers = HeaderMap::new();
+
+        provider.add_auth_headers(&mut headers);
+
+        assert_eq!(
+            headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer bedrock-token")
+        );
         assert!(!provider.should_send_legacy_conversation_header());
     }
 }
