@@ -14,13 +14,17 @@ use tokio::sync::OnceCell;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
+use tokio::process::Child;
+use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
 
 use crate::ProcessId;
+use crate::client_api::CommandExecServerConnectArgs;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::RemoteExecServerConnectArgs;
+use crate::client_api::RemoteExecServerTransport;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
@@ -102,6 +106,16 @@ impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
     }
 }
 
+impl From<CommandExecServerConnectArgs> for ExecServerClientConnectOptions {
+    fn from(value: CommandExecServerConnectArgs) -> Self {
+        Self {
+            client_name: value.client_name,
+            initialize_timeout: value.initialize_timeout,
+            resume_session_id: value.resume_session_id,
+        }
+    }
+}
+
 impl RemoteExecServerConnectArgs {
     pub fn new(websocket_url: String, client_name: String) -> Self {
         Self {
@@ -162,11 +176,15 @@ struct Inner {
     http_body_stream_next_id: AtomicU64,
     session_id: std::sync::RwLock<Option<String>>,
     reader_task: tokio::task::JoinHandle<()>,
+    child: Option<Child>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         self.reader_task.abort();
+        if let Some(child) = &mut self.child {
+            let _ = child.start_kill();
+        }
     }
 }
 
@@ -177,14 +195,14 @@ pub struct ExecServerClient {
 
 #[derive(Clone)]
 pub(crate) struct LazyRemoteExecServerClient {
-    websocket_url: String,
+    transport: RemoteExecServerTransport,
     client: Arc<OnceCell<ExecServerClient>>,
 }
 
 impl LazyRemoteExecServerClient {
-    pub(crate) fn new(websocket_url: String) -> Self {
+    pub(crate) fn new(transport: RemoteExecServerTransport) -> Self {
         Self {
-            websocket_url,
+            transport,
             client: Arc::new(OnceCell::new()),
         }
     }
@@ -192,14 +210,27 @@ impl LazyRemoteExecServerClient {
     pub(crate) async fn get(&self) -> Result<ExecServerClient, ExecServerError> {
         self.client
             .get_or_try_init(|| async {
-                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
-                    websocket_url: self.websocket_url.clone(),
-                    client_name: "codex-environment".to_string(),
-                    connect_timeout: Duration::from_secs(5),
-                    initialize_timeout: Duration::from_secs(5),
-                    resume_session_id: None,
-                })
-                .await
+                match &self.transport {
+                    RemoteExecServerTransport::WebSocket { url } => {
+                        ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
+                            websocket_url: url.clone(),
+                            client_name: "codex-environment".to_string(),
+                            connect_timeout: Duration::from_secs(5),
+                            initialize_timeout: Duration::from_secs(5),
+                            resume_session_id: None,
+                        })
+                        .await
+                    }
+                    RemoteExecServerTransport::Command { command } => {
+                        ExecServerClient::connect_command(CommandExecServerConnectArgs {
+                            command: command.clone(),
+                            client_name: "codex-environment".to_string(),
+                            initialize_timeout: Duration::from_secs(5),
+                            resume_session_id: None,
+                        })
+                        .await
+                    }
+                }
             })
             .await
             .cloned()
@@ -255,6 +286,39 @@ impl ExecServerClient {
                 format!("exec-server websocket {websocket_url}"),
             ),
             args.into(),
+            /*child*/ None,
+        )
+        .await
+    }
+
+    pub async fn connect_command(
+        args: CommandExecServerConnectArgs,
+    ) -> Result<Self, ExecServerError> {
+        let command = args.command.clone();
+        let mut child = Command::new("sh")
+            .arg("-lc")
+            .arg(&command)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(ExecServerError::Spawn)?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            ExecServerError::Protocol(format!("exec-server command `{command}` has no stdout"))
+        })?;
+        let stdin = child.stdin.take().ok_or_else(|| {
+            ExecServerError::Protocol(format!("exec-server command `{command}` has no stdin"))
+        })?;
+
+        Self::connect(
+            JsonRpcConnection::from_stdio(
+                stdout,
+                stdin,
+                format!("exec-server command `{command}`"),
+            ),
+            args.into(),
+            Some(child),
         )
         .await
     }
@@ -410,6 +474,7 @@ impl ExecServerClient {
     async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
+        child: Option<Child>,
     ) -> Result<Self, ExecServerError> {
         let (rpc_client, mut events_rx) = RpcClient::new(connection);
         let inner = Arc::new_cyclic(|weak| {
@@ -455,6 +520,7 @@ impl ExecServerClient {
                 http_body_stream_next_id: AtomicU64::new(1),
                 session_id: std::sync::RwLock::new(None),
                 reader_task,
+                child,
             }
         });
 
@@ -949,6 +1015,7 @@ mod tests {
                 "test-exec-server-client".to_string(),
             ),
             ExecServerClientConnectOptions::default(),
+            /*child*/ None,
         )
         .await
         .expect("client should connect");
@@ -1092,6 +1159,7 @@ mod tests {
                 "test-exec-server-client".to_string(),
             ),
             ExecServerClientConnectOptions::default(),
+            /*child*/ None,
         )
         .await
         .expect("client should connect");

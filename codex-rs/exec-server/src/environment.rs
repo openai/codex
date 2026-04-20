@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
+use crate::RemoteExecServerTransport;
 use crate::client::LazyRemoteExecServerClient;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
@@ -16,10 +17,13 @@ pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 /// Owns the execution/filesystem environments available to the Codex runtime.
 ///
 /// `EnvironmentManager` is a shared registry for concrete environments. It
-/// always creates a local environment under [`LOCAL_ENVIRONMENT_ID`]. When
-/// `CODEX_EXEC_SERVER_URL` is set to a websocket URL, it also creates a remote
-/// environment under [`REMOTE_ENVIRONMENT_ID`] and makes that the default
-/// environment. Otherwise the local environment is the default.
+/// always creates a local environment under [`LOCAL_ENVIRONMENT_ID`]. Additional
+/// environments are remote exec-server endpoints that can connect over either a
+/// websocket URL or a command-backed stdio JSON-RPC transport.
+///
+/// In legacy mode, when `CODEX_EXEC_SERVER_URL` is set to a websocket URL, it
+/// also creates a remote environment under [`REMOTE_ENVIRONMENT_ID`] and makes
+/// that the default environment. Otherwise the local environment is the default.
 ///
 /// Setting `CODEX_EXEC_SERVER_URL=none` disables environment access by leaving
 /// the default environment unset while still keeping the local environment
@@ -63,12 +67,49 @@ impl EnvironmentManagerArgs {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ConfiguredEnvironmentManagerArgs {
+    pub default_environment: Option<String>,
+    pub environments: Vec<ConfiguredEnvironmentSpec>,
+    pub local_runtime_paths: Option<ExecServerRuntimePaths>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConfiguredEnvironmentSpec {
+    pub id: String,
+    pub transport: RemoteExecServerTransport,
+}
+
+#[derive(Clone, Debug)]
+pub enum EnvironmentManagerConfig {
+    ExecServerUrl(EnvironmentManagerArgs),
+    Configured(ConfiguredEnvironmentManagerArgs),
+}
+
 impl From<Option<String>> for EnvironmentManagerArgs {
     fn from(exec_server_url: Option<String>) -> Self {
         Self {
             exec_server_url,
             local_runtime_paths: None,
         }
+    }
+}
+
+impl From<EnvironmentManagerArgs> for EnvironmentManagerConfig {
+    fn from(args: EnvironmentManagerArgs) -> Self {
+        Self::ExecServerUrl(args)
+    }
+}
+
+impl From<Option<String>> for EnvironmentManagerConfig {
+    fn from(exec_server_url: Option<String>) -> Self {
+        Self::ExecServerUrl(EnvironmentManagerArgs::from(exec_server_url))
+    }
+}
+
+impl From<ConfiguredEnvironmentManagerArgs> for EnvironmentManagerConfig {
+    fn from(args: ConfiguredEnvironmentManagerArgs) -> Self {
+        Self::Configured(args)
     }
 }
 
@@ -85,8 +126,15 @@ impl EnvironmentManager {
 
     /// Builds a manager from the raw `CODEX_EXEC_SERVER_URL` value and local
     /// runtime paths used when creating local filesystem helpers.
-    pub fn new(exec_server_url: impl Into<EnvironmentManagerArgs>) -> Self {
-        let args = exec_server_url.into();
+    pub fn new(config: impl Into<EnvironmentManagerConfig>) -> Self {
+        match config.into() {
+            EnvironmentManagerConfig::ExecServerUrl(args) => Self::from_exec_server_url_args(args),
+            EnvironmentManagerConfig::Configured(args) => Self::from_configured_args(args)
+                .unwrap_or_else(|err| panic!("invalid environment manager config: {err}")),
+        }
+    }
+
+    fn from_exec_server_url_args(args: EnvironmentManagerArgs) -> Self {
         let EnvironmentManagerArgs {
             exec_server_url,
             local_runtime_paths,
@@ -106,7 +154,9 @@ impl EnvironmentManager {
                     environments.insert(
                         REMOTE_ENVIRONMENT_ID.to_string(),
                         Arc::new(Environment::remote_with_runtime_paths(
-                            exec_server_url,
+                            RemoteExecServerTransport::WebSocket {
+                                url: exec_server_url,
+                            },
                             local_runtime_paths,
                         )),
                     );
@@ -120,6 +170,75 @@ impl EnvironmentManager {
             default_environment,
             environments,
         }
+    }
+
+    pub fn try_new(config: impl Into<EnvironmentManagerConfig>) -> Result<Self, ExecServerError> {
+        match config.into() {
+            EnvironmentManagerConfig::ExecServerUrl(args) => {
+                Ok(Self::from_exec_server_url_args(args))
+            }
+            EnvironmentManagerConfig::Configured(args) => Self::from_configured_args(args),
+        }
+    }
+
+    fn from_configured_args(
+        args: ConfiguredEnvironmentManagerArgs,
+    ) -> Result<Self, ExecServerError> {
+        let ConfiguredEnvironmentManagerArgs {
+            default_environment,
+            environments: configured_environments,
+            local_runtime_paths,
+        } = args;
+        let mut environments = HashMap::from([(
+            LOCAL_ENVIRONMENT_ID.to_string(),
+            Arc::new(Environment::local_with_runtime_paths(
+                local_runtime_paths.clone(),
+            )),
+        )]);
+
+        for environment in configured_environments {
+            let id = environment.id.trim();
+            if id.is_empty() {
+                return Err(ExecServerError::Protocol(
+                    "environment id must not be empty".to_string(),
+                ));
+            }
+            if id == LOCAL_ENVIRONMENT_ID || id.eq_ignore_ascii_case("none") {
+                return Err(ExecServerError::Protocol(format!(
+                    "environment id `{id}` is reserved"
+                )));
+            }
+            if environments.contains_key(id) {
+                return Err(ExecServerError::Protocol(format!(
+                    "duplicate environment id `{id}`"
+                )));
+            }
+            environments.insert(
+                id.to_string(),
+                Arc::new(Environment::remote_with_runtime_paths(
+                    environment.transport,
+                    local_runtime_paths.clone(),
+                )),
+            );
+        }
+
+        let default_environment = match default_environment.as_deref().map(str::trim) {
+            None | Some("") => Some(LOCAL_ENVIRONMENT_ID.to_string()),
+            Some(default_environment) if default_environment.eq_ignore_ascii_case("none") => None,
+            Some(default_environment) => {
+                if !environments.contains_key(default_environment) {
+                    return Err(ExecServerError::Protocol(format!(
+                        "default_environment `{default_environment}` is not a configured environment id"
+                    )));
+                }
+                Some(default_environment.to_string())
+            }
+        };
+
+        Ok(Self {
+            default_environment,
+            environments,
+        })
     }
 
     /// Returns the default environment instance.
@@ -141,7 +260,7 @@ impl EnvironmentManager {
 /// paths used by filesystem helpers.
 #[derive(Clone)]
 pub struct Environment {
-    exec_server_url: Option<String>,
+    remote_transport: Option<RemoteExecServerTransport>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
@@ -150,7 +269,7 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         Self {
-            exec_server_url: None,
+            remote_transport: None,
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             local_runtime_paths: None,
@@ -161,7 +280,7 @@ impl Default for Environment {
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")
-            .field("exec_server_url", &self.exec_server_url)
+            .field("remote_transport", &self.remote_transport)
             .finish_non_exhaustive()
     }
 }
@@ -186,9 +305,12 @@ impl Environment {
         }
 
         Ok(match exec_server_url {
-            Some(exec_server_url) => {
-                Self::remote_with_runtime_paths(exec_server_url, local_runtime_paths)
-            }
+            Some(exec_server_url) => Self::remote_with_runtime_paths(
+                RemoteExecServerTransport::WebSocket {
+                    url: exec_server_url,
+                },
+                local_runtime_paths,
+            ),
             None => Self::local_with_runtime_paths(local_runtime_paths),
         })
     }
@@ -200,7 +322,7 @@ impl Environment {
         };
 
         Self {
-            exec_server_url: None,
+            remote_transport: None,
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem,
             local_runtime_paths,
@@ -208,15 +330,15 @@ impl Environment {
     }
 
     fn remote_with_runtime_paths(
-        exec_server_url: String,
+        transport: RemoteExecServerTransport,
         local_runtime_paths: Option<ExecServerRuntimePaths>,
     ) -> Self {
-        let client = LazyRemoteExecServerClient::new(exec_server_url.clone());
+        let client = LazyRemoteExecServerClient::new(transport.clone());
         let exec_backend: Arc<dyn ExecBackend> = Arc::new(RemoteProcess::new(client.clone()));
         let filesystem: Arc<dyn ExecutorFileSystem> = Arc::new(RemoteFileSystem::new(client));
 
         Self {
-            exec_server_url: Some(exec_server_url),
+            remote_transport: Some(transport),
             exec_backend,
             filesystem,
             local_runtime_paths,
@@ -224,12 +346,22 @@ impl Environment {
     }
 
     pub fn is_remote(&self) -> bool {
-        self.exec_server_url.is_some()
+        self.remote_transport.is_some()
     }
 
     /// Returns the remote exec-server URL when this environment is remote.
     pub fn exec_server_url(&self) -> Option<&str> {
-        self.exec_server_url.as_deref()
+        match self.remote_transport.as_ref() {
+            Some(RemoteExecServerTransport::WebSocket { url }) => Some(url.as_str()),
+            Some(RemoteExecServerTransport::Command { .. }) | None => None,
+        }
+    }
+
+    pub fn exec_server_command(&self) -> Option<&str> {
+        match self.remote_transport.as_ref() {
+            Some(RemoteExecServerTransport::Command { command }) => Some(command.as_str()),
+            Some(RemoteExecServerTransport::WebSocket { .. }) | None => None,
+        }
     }
 
     pub fn local_runtime_paths(&self) -> Option<&ExecServerRuntimePaths> {

@@ -110,6 +110,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
@@ -629,7 +630,6 @@ impl Codex {
             persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
-            environment_selections,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.

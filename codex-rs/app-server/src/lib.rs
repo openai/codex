@@ -362,13 +362,10 @@ pub async fn run_main_with_transport(
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
 ) -> IoResult<()> {
-    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
-        local_runtime_paths: Some(ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?),
-        ..EnvironmentManagerArgs::default()
-    }));
+    let runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(CHANNEL_CAPACITY);
@@ -445,6 +442,13 @@ pub async fn run_main_with_transport(
                 })?
         }
     };
+    let environment_manager = Arc::new(
+        EnvironmentManager::try_new(config.environment_manager_args(
+            EnvironmentManagerArgs::default().exec_server_url,
+            Some(runtime_paths),
+        )?)
+        .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?,
+    );
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
         let (path, range) = exec_policy_warning_location(&err);

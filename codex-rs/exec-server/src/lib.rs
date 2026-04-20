@@ -20,12 +20,17 @@ mod server;
 
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
+pub use client_api::CommandExecServerConnectArgs;
 pub use client_api::ExecServerClientConnectOptions;
 pub use client_api::RemoteExecServerConnectArgs;
+pub use client_api::RemoteExecServerTransport;
 pub use environment::CODEX_EXEC_SERVER_URL_ENV_VAR;
+pub use environment::ConfiguredEnvironmentManagerArgs;
+pub use environment::ConfiguredEnvironmentSpec;
 pub use environment::Environment;
 pub use environment::EnvironmentManager;
 pub use environment::EnvironmentManagerArgs;
+pub use environment::EnvironmentManagerConfig;
 pub use file_system::CopyOptions;
 pub use file_system::CreateDirectoryOptions;
 pub use file_system::ExecutorFileSystem;

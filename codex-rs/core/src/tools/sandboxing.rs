@@ -329,6 +329,10 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
         None
     }
 
+    fn sandbox_cwd<'a>(&self, _req: &'a Req, turn_ctx: &'a TurnContext) -> &'a AbsolutePathBuf {
+        &turn_ctx.cwd
+    }
+
     async fn run(
         &mut self,
         req: &Req,

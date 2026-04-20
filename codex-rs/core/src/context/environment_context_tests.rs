@@ -73,6 +73,51 @@ fn serialize_environment_context_with_network() {
 }
 
 #[test]
+fn serialize_environment_context_with_selected_environments() {
+    let context = EnvironmentContext::new_with_environments(
+        Some(test_path_buf("/repo-primary")),
+        Some(vec![
+            EnvironmentContextEnvironment {
+                id: "remote".to_string(),
+                cwd: test_path_buf("/repo-primary"),
+                primary: true,
+            },
+            EnvironmentContextEnvironment {
+                id: "local".to_string(),
+                cwd: test_path_buf("/repo-local"),
+                primary: false,
+            },
+        ]),
+        fake_shell_name(),
+        Some("2026-02-26".to_string()),
+        Some("America/Los_Angeles".to_string()),
+        /*network*/ None,
+        /*subagents*/ None,
+    );
+
+    let expected = format!(
+        r#"<environment_context>
+  <cwd>{primary}</cwd>
+  <environments>
+    <environment id="remote" primary="true">
+      <cwd>{primary}</cwd>
+    </environment>
+    <environment id="local">
+      <cwd>{local}</cwd>
+    </environment>
+  </environments>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+</environment_context>"#,
+        primary = test_path_buf("/repo-primary").display(),
+        local = test_path_buf("/repo-local").display()
+    );
+
+    assert_eq!(context.render(), expected);
+}
+
+#[test]
 fn serialize_read_only_environment_context() {
     let context = EnvironmentContext::new(
         /*cwd*/ None,

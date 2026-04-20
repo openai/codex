@@ -3944,6 +3944,36 @@ async fn turn_environment_selection_sets_primary_environment() {
     ));
     assert_eq!(turn_context.cwd.as_path(), selected_cwd.as_path());
     assert_eq!(turn_context.config.cwd.as_path(), selected_cwd.as_path());
+
+    let primary_environment = turn_context
+        .primary_environment()
+        .expect("primary environment should resolve");
+    assert_eq!(primary_environment.environment_id.as_deref(), Some("local"));
+    assert!(std::sync::Arc::ptr_eq(
+        &primary_environment.environment,
+        &turn_environments[0].environment
+    ));
+    assert_eq!(primary_environment.cwd, selected_cwd);
+    let tool_environment = turn_context
+        .environment_for_tool(Some("local"))
+        .expect("tool environment should resolve by id");
+    assert_eq!(tool_environment.environment_id.as_deref(), Some("local"));
+    assert!(std::sync::Arc::ptr_eq(
+        &tool_environment.environment,
+        &turn_environments[0].environment
+    ));
+    let default_tool_environment = turn_context
+        .environment_for_tool(/*environment_id*/ None)
+        .expect("tool environment should default to primary");
+    assert_eq!(
+        default_tool_environment.environment_id.as_deref(),
+        Some("local")
+    );
+    assert_eq!(
+        turn_context
+            .resolve_path_for_environment(&primary_environment, Some("relative/path".to_string())),
+        selected_cwd.join("relative/path")
+    );
 }
 
 #[tokio::test]
@@ -3989,6 +4019,15 @@ async fn multiple_turn_environment_selections_use_first_as_primary_environment()
     ));
     assert_eq!(turn_context.cwd, first_cwd);
     assert_eq!(turn_context.config.cwd, first_cwd);
+
+    let primary_environment = turn_context
+        .primary_environment()
+        .expect("primary environment should resolve");
+    assert_eq!(primary_environment.cwd, first_cwd);
+    let tool_environment = turn_context
+        .environment_for_tool(Some("local"))
+        .expect("tool environment should resolve by id");
+    assert_eq!(tool_environment.cwd, first_cwd);
 }
 
 #[tokio::test]
@@ -4014,6 +4053,46 @@ async fn empty_turn_environment_selection_clears_primary_environment() {
             .expect("turn environments should be recorded")
             .len(),
         0
+    );
+    assert!(turn_context.primary_environment().is_none());
+    assert!(
+        turn_context
+            .environment_for_tool(/*environment_id*/ None)
+            .is_none()
+    );
+    assert!(turn_context.environment_for_tool(Some("local")).is_none());
+}
+
+#[tokio::test]
+async fn primary_environment_falls_back_to_compatibility_projection() {
+    let (_session, turn_context, _rx) = make_session_and_context_with_rx().await;
+
+    let primary_environment = turn_context
+        .primary_environment()
+        .expect("primary environment should resolve from compatibility fields");
+    assert_eq!(primary_environment.environment_id.as_deref(), None);
+    assert!(std::sync::Arc::ptr_eq(
+        &primary_environment.environment,
+        turn_context
+            .environment
+            .as_ref()
+            .expect("compatibility environment should be set")
+    ));
+    assert_eq!(primary_environment.cwd, turn_context.cwd);
+
+    let default_tool_environment = turn_context
+        .environment_for_tool(/*environment_id*/ None)
+        .expect("tool environment should resolve from compatibility fields");
+    assert_eq!(default_tool_environment.environment_id.as_deref(), None);
+    assert!(std::sync::Arc::ptr_eq(
+        &default_tool_environment.environment,
+        &primary_environment.environment
+    ));
+    assert!(turn_context.environment_for_tool(Some("local")).is_none());
+    assert_eq!(
+        turn_context
+            .resolve_path_for_environment(&primary_environment, Some("relative/path".to_string())),
+        turn_context.cwd.join("relative/path")
     );
 }
 

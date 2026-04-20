@@ -49,8 +49,13 @@ use codex_config::types::ToolSuggestDiscoverable;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_exec_server::ConfiguredEnvironmentManagerArgs;
+use codex_exec_server::ConfiguredEnvironmentSpec;
+use codex_exec_server::EnvironmentManagerArgs;
+use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
+use codex_exec_server::RemoteExecServerTransport;
 pub use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -833,6 +838,38 @@ impl Config {
         }
     }
 
+    pub fn environment_manager_args(
+        &self,
+        exec_server_url: Option<String>,
+        local_runtime_paths: Option<ExecServerRuntimePaths>,
+    ) -> std::io::Result<codex_exec_server::EnvironmentManagerConfig> {
+        let environment_config: EnvironmentConfigToml = self
+            .config_layer_stack
+            .effective_config()
+            .try_into()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        let Some(environments) = environment_config.environments.as_ref() else {
+            if environment_config.default_environment.is_none() {
+                return Ok(EnvironmentManagerArgs {
+                    exec_server_url,
+                    local_runtime_paths,
+                }
+                .into());
+            }
+            return build_configured_environment_manager_args(
+                environment_config.default_environment,
+                &[],
+                local_runtime_paths,
+            );
+        };
+
+        build_configured_environment_manager_args(
+            environment_config.default_environment,
+            environments,
+            local_runtime_paths,
+        )
+    }
+
     /// This is the preferred way to create an instance of [Config].
     pub async fn load_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -1281,6 +1318,92 @@ fn resolve_tool_suggest_config(config_toml: &ConfigToml) -> ToolSuggestConfig {
         .collect();
 
     ToolSuggestConfig { discoverables }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct EnvironmentConfigToml {
+    default_environment: Option<String>,
+    environments: Option<Vec<EnvironmentToml>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnvironmentToml {
+    id: String,
+    url: Option<String>,
+    exec_server_command: Option<String>,
+}
+
+fn build_configured_environment_manager_args(
+    default_environment: Option<String>,
+    environments: &[EnvironmentToml],
+    local_runtime_paths: Option<ExecServerRuntimePaths>,
+) -> std::io::Result<codex_exec_server::EnvironmentManagerConfig> {
+    let mut configured_environments = Vec::with_capacity(environments.len());
+    for environment in environments {
+        let id = environment.id.trim();
+        if id.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "environment id must not be empty",
+            ));
+        }
+        if id == "local" || id.eq_ignore_ascii_case("none") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("environment id `{id}` is reserved"),
+            ));
+        }
+
+        let url = environment
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let command = environment
+            .exec_server_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let transport = match (url, command) {
+            (Some(url), None) => {
+                if !(url.starts_with("ws://") || url.starts_with("wss://")) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("environment `{id}` url must start with ws:// or wss://"),
+                    ));
+                }
+                RemoteExecServerTransport::WebSocket {
+                    url: url.to_string(),
+                }
+            }
+            (None, Some(command)) => RemoteExecServerTransport::Command {
+                command: command.to_string(),
+            },
+            (Some(_), Some(_)) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("environment `{id}` must set only one of url or exec_server_command"),
+                ));
+            }
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("environment `{id}` must set url or exec_server_command"),
+                ));
+            }
+        };
+        configured_environments.push(ConfiguredEnvironmentSpec {
+            id: id.to_string(),
+            transport,
+        });
+    }
+
+    Ok(ConfiguredEnvironmentManagerArgs {
+        default_environment,
+        environments: configured_environments,
+        local_runtime_paths,
+    }
+    .into())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

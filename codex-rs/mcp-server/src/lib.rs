@@ -60,13 +60,10 @@ pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
 ) -> IoResult<()> {
-    let environment_manager = Arc::new(EnvironmentManager::new(EnvironmentManagerArgs {
-        local_runtime_paths: Some(ExecServerRuntimePaths::from_optional_paths(
-            arg0_paths.codex_self_exe.clone(),
-            arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?),
-        ..EnvironmentManagerArgs::default()
-    }));
+    let runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )?;
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
     let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
@@ -80,6 +77,13 @@ pub async fn run_main(
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
+    let environment_manager = Arc::new(
+        EnvironmentManager::try_new(config.environment_manager_args(
+            EnvironmentManagerArgs::default().exec_server_url,
+            Some(runtime_paths),
+        )?)
+        .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?,
+    );
     set_default_client_residency_requirement(config.enforce_residency.value());
 
     let otel = codex_core::otel_init::build_provider(
