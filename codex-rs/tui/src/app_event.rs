@@ -31,11 +31,9 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
-use crate::history_cell::HistoryCell;
-use crate::legacy_core::plugins::PluginCapabilitySummary;
-
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -44,6 +42,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
+
+use crate::history_cell::HistoryCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {

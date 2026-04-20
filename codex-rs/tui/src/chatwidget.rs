@@ -61,8 +61,6 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
 use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
-use crate::legacy_core::find_thread_name_by_id;
-use crate::legacy_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
@@ -109,6 +107,7 @@ use codex_chatgpt::connectors;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_core_skills::model::SkillMetadata;
 use codex_features::FEATURES;
 use codex_features::Feature;
 #[cfg(test)]
@@ -119,6 +118,7 @@ use codex_git_utils::local_git_branches;
 use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -222,6 +222,7 @@ use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_rollout::find_thread_name_by_id;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
@@ -9973,9 +9974,7 @@ impl ChatWidget {
         }
     }
 
-    fn plugins_for_mentions(
-        &self,
-    ) -> Option<&[crate::legacy_core::plugins::PluginCapabilitySummary]> {
+    fn plugins_for_mentions(&self) -> Option<&[PluginCapabilitySummary]> {
         if !self.config.features.enabled(Feature::Plugins) {
             return None;
         }
@@ -10709,7 +10708,7 @@ impl ChatWidget {
 
     pub(crate) fn on_plugin_mentions_loaded(
         &mut self,
-        plugins: Option<Vec<crate::legacy_core::plugins::PluginCapabilitySummary>>,
+        plugins: Option<Vec<PluginCapabilitySummary>>,
     ) {
         self.bottom_pane.set_plugin_mentions(plugins);
     }

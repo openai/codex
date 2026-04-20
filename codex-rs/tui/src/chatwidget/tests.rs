@@ -26,7 +26,6 @@ pub(super) use crate::legacy_core::config_loader::ConfigRequirements;
 pub(super) use crate::legacy_core::config_loader::ConfigRequirementsToml;
 pub(super) use crate::legacy_core::config_loader::RequirementSource;
 pub(super) use crate::legacy_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
-pub(super) use crate::legacy_core::skills::model::SkillMetadata;
 pub(super) use crate::model_catalog::ModelCatalog;
 pub(super) use crate::test_backend::VT100Backend;
 pub(super) use crate::test_support::PathBufExt;
@@ -101,6 +100,7 @@ pub(super) use codex_config::types::ApprovalsReviewer;
 pub(super) use codex_config::types::Notifications;
 #[cfg(target_os = "windows")]
 pub(super) use codex_config::types::WindowsSandboxModeToml;
+pub(super) use codex_core_skills::model::SkillMetadata;
 pub(super) use codex_features::FEATURES;
 pub(super) use codex_features::Feature;
 pub(super) use codex_git_utils::CommitLogEntry;
