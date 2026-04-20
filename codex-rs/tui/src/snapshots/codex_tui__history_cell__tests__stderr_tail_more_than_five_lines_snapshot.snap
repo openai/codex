@@ -5,6 +5,6 @@ expression: rendered
 • Ran seq 1 10 1>&2 && false
   └ 1
     2
-    … +6 lines (ctrl + t to view transcript)
+    … +6 lines (ctrl + t to view)
     9
     10

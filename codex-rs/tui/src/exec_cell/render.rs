@@ -29,7 +29,7 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) const TOOL_CALL_MAX_LINES: usize = 5;
 const USER_SHELL_TOOL_CALL_MAX_LINES: usize = 50;
 const MAX_INTERACTION_PREVIEW_CHARS: usize = 80;
-const TRANSCRIPT_HINT: &str = "ctrl + t to view transcript";
+const TRANSCRIPT_HINT: &str = "ctrl + t to view";
 
 pub(crate) struct OutputLinesParams {
     pub(crate) line_limit: usize,
@@ -646,7 +646,7 @@ impl ExecCell {
         .max(1)
     }
 
-    /// Builds an output ellipsis line (`… +N lines (ctrl + t to view transcript)`)
+    /// Builds an output ellipsis line (`… +N lines (ctrl + t to view)`)
     /// with an optional leading prefix so the ellipsis aligns with the output gutter.
     fn output_ellipsis_line_with_prefix(
         omitted: usize,
@@ -852,7 +852,7 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("… +6 lines (ctrl + t to view transcript)")),
+                .any(|line| line.contains("… +6 lines (ctrl + t to view)")),
             "expected omitted hint to count hidden lines (not wrapped rows), got: {rendered:?}"
         );
     }
@@ -882,7 +882,7 @@ mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|line| line.contains("… +3 lines (ctrl + t to view transcript)")),
+                .any(|line| line.contains("… +3 lines (ctrl + t to view)")),
             "expected logical truncation to include transcript hint, got: {rendered:?}"
         );
     }
