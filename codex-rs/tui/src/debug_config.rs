@@ -578,7 +578,7 @@ mod tests {
                 Some(RequirementSource::CloudRequirements),
             ),
             approvals_reviewer: ConstrainedWithSource::new(
-                Constrained::allow_any(ApprovalsReviewer::AutoReview),
+                Constrained::allow_any(ApprovalsReviewer::GuardianSubagent),
                 Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             sandbox_policy: ConstrainedWithSource::new(
@@ -608,7 +608,7 @@ mod tests {
             ),
             feature_requirements: Some(Sourced::new(
                 FeatureRequirementsToml {
-                    entries: BTreeMap::from([("auto_review".to_string(), true)]),
+                    entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
                 },
                 RequirementSource::CloudRequirements,
             )),
@@ -638,12 +638,12 @@ mod tests {
 
         let requirements_toml = ConfigRequirementsToml {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
-            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             guardian_policy_config: None,
             feature_requirements: Some(FeatureRequirementsToml {
-                entries: BTreeMap::from([("auto_review".to_string(), true)]),
+                entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
@@ -680,7 +680,7 @@ mod tests {
             rendered.contains("allowed_approval_policies: on-request (source: cloud requirements)")
         );
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
         ));
         assert!(
             rendered.contains(
@@ -696,7 +696,7 @@ mod tests {
                 "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
             )
         );
-        assert!(rendered.contains("features: auto_review=true (source: cloud requirements)"));
+        assert!(rendered.contains("features: guardian_approval=true (source: cloud requirements)"));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
@@ -718,13 +718,13 @@ mod tests {
     fn debug_config_output_lists_approvals_reviewer_as_requirement() {
         let requirements = ConfigRequirements {
             approvals_reviewer: ConstrainedWithSource::new(
-                Constrained::allow_any(ApprovalsReviewer::AutoReview),
+                Constrained::allow_any(ApprovalsReviewer::GuardianSubagent),
                 Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             ..ConfigRequirements::default()
         };
         let requirements_toml = ConfigRequirementsToml {
-            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             ..ConfigRequirementsToml::default()
         };
         let stack = ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
@@ -732,7 +732,7 @@ mod tests {
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
         assert!(rendered.contains(
-            "allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))"
+            "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
         ));
         assert!(!rendered.contains("Requirements:\n  <none>"));
     }

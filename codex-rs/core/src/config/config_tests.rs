@@ -3360,7 +3360,7 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_feature_enabled("auto_review", /*enabled*/ true)
+        .set_feature_enabled("guardian_approval", /*enabled*/ true)
         .apply()
         .await?;
 
@@ -3375,14 +3375,14 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries().get("auto_review").copied()),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         Some(true),
     );
     assert_eq!(
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries().get("auto_review").copied()),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         None,
     );
 
@@ -3396,13 +3396,13 @@ async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_feature_enabled("auto_review", /*enabled*/ true)
+        .set_feature_enabled("guardian_approval", /*enabled*/ true)
         .apply()
         .await?;
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_feature_enabled("auto_review", /*enabled*/ false)
+        .set_feature_enabled("guardian_approval", /*enabled*/ false)
         .apply()
         .await?;
 
@@ -3417,14 +3417,14 @@ async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries().get("auto_review").copied()),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         Some(false),
     );
     assert_eq!(
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries().get("auto_review").copied()),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         None,
     );
 
@@ -3436,13 +3436,13 @@ async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::
     let codex_home = TempDir::new()?;
 
     ConfigEditsBuilder::new(codex_home.path())
-        .set_feature_enabled("auto_review", /*enabled*/ true)
+        .set_feature_enabled("guardian_approval", /*enabled*/ true)
         .apply()
         .await?;
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_feature_enabled("auto_review", /*enabled*/ false)
+        .set_feature_enabled("guardian_approval", /*enabled*/ false)
         .apply()
         .await?;
 
@@ -3457,14 +3457,14 @@ async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries().get("auto_review").copied()),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         Some(true),
     );
     assert_eq!(
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries().get("auto_review").copied()),
+            .and_then(|features| features.entries().get("guardian_approval").copied()),
         Some(false),
     );
 
@@ -6307,7 +6307,7 @@ async fn approvals_reviewer_stays_manual_only_when_guardian_feature_is_enabled()
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
-auto_review = true
+guardian_approval = true
 "#,
     )?;
 
@@ -6322,7 +6322,8 @@ auto_review = true
 }
 
 #[tokio::test]
-async fn approvals_reviewer_can_be_set_in_config_without_auto_review() -> std::io::Result<()> {
+async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -6341,14 +6342,15 @@ async fn approvals_reviewer_can_be_set_in_config_without_auto_review() -> std::i
 }
 
 #[tokio::test]
-async fn approvals_reviewer_can_be_set_in_profile_without_auto_review() -> std::io::Result<()> {
+async fn approvals_reviewer_can_be_set_in_profile_without_guardian_approval() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"profile = "guardian"
 
 [profiles.guardian]
-approvals_reviewer = "auto_review"
+approvals_reviewer = "guardian_subagent"
 "#,
     )?;
 
@@ -6358,7 +6360,10 @@ approvals_reviewer = "auto_review"
         .build()
         .await?;
 
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
     Ok(())
 }
 
@@ -6371,14 +6376,17 @@ async fn requirements_disallowing_default_approvals_reviewer_falls_back_to_requi
         .codex_home(codex_home.path().to_path_buf())
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
                 ..Default::default()
             }))
         }))
         .build()
         .await?;
 
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
     Ok(())
 }
 
@@ -6397,14 +6405,17 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
                 ..Default::default()
             }))
         }))
         .build()
         .await?;
 
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
     assert!(
         config.startup_warnings.iter().any(|warning| {
             warning
@@ -6434,14 +6445,17 @@ approvals_reviewer = "user"
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .cloud_requirements(CloudRequirementsLoader::new(async {
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+                allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
                 ..Default::default()
             }))
         }))
         .build()
         .await?;
 
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
     Ok(())
 }
 
@@ -6451,7 +6465,7 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
-        r#"approvals_reviewer = "auto_review"
+        r#"approvals_reviewer = "guardian_subagent"
 "#,
     )?;
 
@@ -6462,7 +6476,7 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
             Ok(Some(crate::config_loader::ConfigRequirementsToml {
                 allowed_approvals_reviewers: Some(vec![
                     ApprovalsReviewer::User,
-                    ApprovalsReviewer::AutoReview,
+                    ApprovalsReviewer::GuardianSubagent,
                 ]),
                 ..Default::default()
             }))
@@ -6470,7 +6484,10 @@ async fn approvals_reviewer_preserves_valid_user_choice_when_allowed_by_requirem
         .build()
         .await?;
 
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::AutoReview);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
     assert!(
         config
             .startup_warnings
@@ -6503,7 +6520,7 @@ smart_approvals = true
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
     assert!(serialized.contains("smart_approvals = true"));
-    assert!(!serialized.contains("auto_review"));
+    assert!(!serialized.contains("guardian_approval"));
     assert!(!serialized.contains("approvals_reviewer"));
 
     Ok(())
@@ -6533,7 +6550,7 @@ smart_approvals = true
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
     assert!(serialized.contains("[profiles.guardian.features]"));
     assert!(serialized.contains("smart_approvals = true"));
-    assert!(!serialized.contains("auto_review"));
+    assert!(!serialized.contains("guardian_approval"));
     assert!(!serialized.contains("approvals_reviewer"));
 
     Ok(())
@@ -6636,59 +6653,6 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
 
     assert!(config.features.enabled(Feature::Personality));
     assert!(!config.features.enabled(Feature::ShellTool));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn feature_requirements_accept_guardian_approval_legacy_alias() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
-                    entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
-                }),
-                ..Default::default()
-            }))
-        }))
-        .build()
-        .await?;
-
-    assert!(config.features.enabled(Feature::GuardianApproval));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn feature_requirements_validate_auto_review_over_stale_legacy_alias() -> std::io::Result<()>
-{
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-auto_review = true
-guardian_approval = false
-"#,
-    )?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async {
-            Ok(Some(crate::config_loader::ConfigRequirementsToml {
-                feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
-                    entries: BTreeMap::from([("auto_review".to_string(), true)]),
-                }),
-                ..Default::default()
-            }))
-        }))
-        .build()
-        .await?;
-
-    assert!(config.features.enabled(Feature::GuardianApproval));
 
     Ok(())
 }

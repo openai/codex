@@ -94,7 +94,7 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
 /// block actions earlier in the flow.
 pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
     turn.approval_policy.value() == AskForApproval::OnRequest
-        && turn.config.approvals_reviewer == ApprovalsReviewer::AutoReview
+        && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
 }
 
 pub(crate) fn is_guardian_reviewer_source(

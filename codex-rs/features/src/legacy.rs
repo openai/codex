@@ -46,16 +46,11 @@ const ALIASES: &[Alias] = &[
         feature: Feature::MemoryTool,
     },
     Alias {
-        legacy_key: "guardian_approval",
-        feature: Feature::GuardianApproval,
-    },
-    Alias {
         legacy_key: "telepathy",
         feature: Feature::Chronicle,
     },
 ];
 
-/// Legacy feature keys that should still be advertised in the config schema.
 pub fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {
     ALIASES.iter().map(|alias| alias.legacy_key)
 }

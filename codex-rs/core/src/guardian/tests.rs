@@ -746,7 +746,7 @@ async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
 
     assert!(!routes_approval_to_guardian(&turn));
 
-    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     turn.config = Arc::new(config);
 
     assert!(routes_approval_to_guardian(&turn));

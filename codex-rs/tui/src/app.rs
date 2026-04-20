@@ -294,7 +294,7 @@ struct GuardianApprovalsMode {
 fn guardian_approvals_mode() -> GuardianApprovalsMode {
     GuardianApprovalsMode {
         approval_policy: AskForApproval::OnRequest,
-        approvals_reviewer: ApprovalsReviewer::AutoReview,
+        approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
     }
 }
@@ -1320,18 +1320,6 @@ impl App {
                 vec![key.to_string()]
             }
         };
-        let scoped_feature_segments = |key: &str| {
-            if let Some(profile) = active_profile.as_deref() {
-                vec![
-                    "profiles".to_string(),
-                    profile.to_string(),
-                    "features".to_string(),
-                    key.to_string(),
-                ]
-            } else {
-                vec!["features".to_string(), key.to_string()]
-            }
-        };
         let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
             matches!(
                 feature,
@@ -1416,9 +1404,6 @@ impl App {
                             segments: scoped_segments("approvals_reviewer"),
                         });
                     }
-                    feature_edits.push(ConfigEdit::ClearPath {
-                        segments: scoped_feature_segments("guardian_approval"),
-                    });
                     feature_config.approvals_reviewer = ApprovalsReviewer::User;
                     if previous_approvals_reviewer != ApprovalsReviewer::User {
                         permissions_history_label = Some("Default");
@@ -1435,7 +1420,7 @@ impl App {
                     &mut feature_config,
                     guardian_approvals_preset.approval_policy,
                     "Failed to enable Auto-review",
-                    "failed to set auto-review approval policy on staged config",
+                    "failed to set guardian approvals approval policy on staged config",
                 ) {
                     continue;
                 }
@@ -1443,7 +1428,7 @@ impl App {
                     &mut feature_config,
                     guardian_approvals_preset.sandbox_policy.clone(),
                     "Failed to enable Auto-review",
-                    "failed to set auto-review sandbox policy on staged config",
+                    "failed to set guardian approvals sandbox policy on staged config",
                 ) {
                     continue;
                 }
@@ -1504,7 +1489,7 @@ impl App {
         {
             tracing::error!(
                 error = %err,
-                "failed to set auto-review sandbox policy on chat config"
+                "failed to set guardian approvals sandbox policy on chat config"
             );
             self.chat_widget
                 .add_error_message(format!("Failed to enable Auto-review: {err}"));
@@ -8919,8 +8904,8 @@ mod tests {
         assert!(rendered.contains("Permissions updated to Auto-review"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("auto_review = true"));
-        assert!(config.contains("approvals_reviewer = \"auto_review\""));
+        assert!(config.contains("guardian_approval = true"));
+        assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
@@ -8933,7 +8918,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
         let config_toml_path = codex_home.path().join("config.toml").abs();
-        let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\nauto_review = true\n";
+        let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -8945,9 +8930,9 @@ mod tests {
             .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-        app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         app.chat_widget
-            .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+            .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
         app.config
             .permissions
             .approval_policy
@@ -9011,7 +8996,6 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
-        assert!(!config.contains("auto_review = true"));
         assert!(!config.contains("approvals_reviewer ="));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -9079,8 +9063,8 @@ mod tests {
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("approvals_reviewer = \"auto_review\""));
-        assert!(config.contains("auto_review = true"));
+        assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
+        assert!(config.contains("guardian_approval = true"));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
@@ -9093,7 +9077,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
         let config_toml_path = codex_home.path().join("config.toml").abs();
-        let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\nauto_review = true\n";
+        let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -9141,7 +9125,6 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
-        assert!(!config.contains("auto_review = true"));
         assert!(!config.contains("approvals_reviewer ="));
         Ok(())
     }
@@ -9212,7 +9195,7 @@ mod tests {
         );
         assert_eq!(
             profile_config.get("approvals_reviewer"),
-            Some(&TomlValue::String("auto_review".to_string()))
+            Some(&TomlValue::String("guardian_subagent".to_string()))
         );
         Ok(())
     }
@@ -9234,7 +9217,6 @@ approvals_reviewer = "guardian_subagent"
 
 [profiles.guardian.features]
 guardian_approval = true
-auto_review = true
 "#;
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -9247,9 +9229,9 @@ auto_review = true
             .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-        app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         app.chat_widget
-            .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+            .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
             .await;
@@ -9296,7 +9278,6 @@ auto_review = true
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
-        assert!(!config.contains("auto_review = true"));
         assert!(!config.contains("guardian_subagent"));
         assert_eq!(
             toml::from_str::<TomlValue>(&config)?
@@ -9315,7 +9296,7 @@ auto_review = true
         app.config.codex_home = codex_home.path().to_path_buf().abs();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = codex_home.path().join("config.toml").abs();
-        let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"auto_review\"\n\n[features]\nauto_review = true\n";
+        let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"guardian_subagent\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -9327,9 +9308,9 @@ auto_review = true
             .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-        app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         app.chat_widget
-            .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+            .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
             .await;
@@ -9341,10 +9322,13 @@ auto_review = true
                 .features
                 .enabled(Feature::GuardianApproval)
         );
-        assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::AutoReview);
+        assert_eq!(
+            app.config.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
+        );
         assert_eq!(
             app.chat_widget.config_ref().approvals_reviewer,
-            ApprovalsReviewer::AutoReview
+            ApprovalsReviewer::GuardianSubagent
         );
         assert!(
             op_rx.try_recv().is_err(),
@@ -9363,12 +9347,12 @@ auto_review = true
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("auto_review = true"));
+        assert!(config.contains("guardian_approval = true"));
         assert_eq!(
             toml::from_str::<TomlValue>(&config)?
                 .as_table()
                 .and_then(|table| table.get("approvals_reviewer")),
-            Some(&TomlValue::String("auto_review".to_string()))
+            Some(&TomlValue::String("guardian_subagent".to_string()))
         );
         Ok(())
     }

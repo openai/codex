@@ -322,7 +322,7 @@ pub enum ApprovalsReviewer {
     #[serde(rename = "user")]
     User,
     #[serde(rename = "auto_review", alias = "guardian_subagent")]
-    AutoReview,
+    GuardianSubagent,
 }
 
 impl JsonSchema for ApprovalsReviewer {
@@ -360,7 +360,7 @@ impl ApprovalsReviewer {
     pub fn to_core(self) -> CoreApprovalsReviewer {
         match self {
             ApprovalsReviewer::User => CoreApprovalsReviewer::User,
-            ApprovalsReviewer::AutoReview => CoreApprovalsReviewer::AutoReview,
+            ApprovalsReviewer::GuardianSubagent => CoreApprovalsReviewer::GuardianSubagent,
         }
     }
 }
@@ -369,7 +369,7 @@ impl From<CoreApprovalsReviewer> for ApprovalsReviewer {
     fn from(value: CoreApprovalsReviewer) -> Self {
         match value {
             CoreApprovalsReviewer::User => ApprovalsReviewer::User,
-            CoreApprovalsReviewer::AutoReview => ApprovalsReviewer::AutoReview,
+            CoreApprovalsReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
         }
     }
 }
@@ -7013,7 +7013,8 @@ mod tests {
             "\"user\""
         );
         assert_eq!(
-            serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
+            serde_json::to_string(&ApprovalsReviewer::GuardianSubagent)
+                .expect("serialize reviewer"),
             "\"auto_review\""
         );
 
@@ -7024,7 +7025,7 @@ mod tests {
             let expected = if value == "user" {
                 ApprovalsReviewer::User
             } else {
-                ApprovalsReviewer::AutoReview
+                ApprovalsReviewer::GuardianSubagent
             };
             assert_eq!(expected, reviewer);
         }
@@ -8024,7 +8025,7 @@ mod tests {
             model_auto_compact_token_limit: None,
             model_provider: None,
             approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -8126,7 +8127,7 @@ mod tests {
                     model: None,
                     model_provider: None,
                     approval_policy: None,
-                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                    approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
                     service_tier: None,
                     model_reasoning_effort: None,
                     model_reasoning_summary: None,

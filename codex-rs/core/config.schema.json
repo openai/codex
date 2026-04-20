@@ -342,9 +342,6 @@
             "apps": {
               "type": "boolean"
             },
-            "auto_review": {
-              "type": "boolean"
-            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -2321,9 +2318,6 @@
           "type": "boolean"
         },
         "apps": {
-          "type": "boolean"
-        },
-        "auto_review": {
           "type": "boolean"
         },
         "child_agents_md": {

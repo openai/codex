@@ -557,7 +557,7 @@ mod tests {
             ]),
             allowed_approvals_reviewers: Some(vec![
                 CoreApprovalsReviewer::User,
-                CoreApprovalsReviewer::AutoReview,
+                CoreApprovalsReviewer::GuardianSubagent,
             ]),
             allowed_sandbox_modes: Some(vec![
                 CoreSandboxModeRequirement::ReadOnly,
@@ -621,7 +621,7 @@ mod tests {
             mapped.allowed_approvals_reviewers,
             Some(vec![
                 codex_app_server_protocol::ApprovalsReviewer::User,
-                codex_app_server_protocol::ApprovalsReviewer::AutoReview,
+                codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
             ])
         );
         assert_eq!(

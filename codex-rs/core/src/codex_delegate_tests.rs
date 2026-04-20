@@ -247,7 +247,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let mut config = (*parent_ctx.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     parent_ctx.config = Arc::new(config);
     parent_ctx
         .approval_policy
@@ -359,7 +359,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
         crate::session::tests::make_session_and_context_with_rx().await;
     let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
     let mut config = (*parent_ctx.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     parent_ctx.config = Arc::new(config);
     parent_ctx
         .approval_policy
