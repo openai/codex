@@ -182,6 +182,14 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn transcript_animation_tick(&self) -> Option<u64> {
         None
     }
+
+    /// Returns semantic copy target groups exposed by this cell.
+    ///
+    /// Grouping is used by the copy picker to cap recent tool calls while keeping
+    /// related targets, such as a command and its output, adjacent.
+    fn copy_target_groups(&self) -> Vec<crate::copy_target::CopyTargetGroup> {
+        Vec::new()
+    }
 }
 
 impl Renderable for Box<dyn HistoryCell> {

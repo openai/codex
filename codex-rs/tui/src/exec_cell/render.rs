@@ -3,6 +3,10 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
+use crate::copy_target::CopyTarget;
+use crate::copy_target::CopyTargetGroup;
+use crate::copy_target::CopyTargetKind;
+use crate::copy_target::output_text_for_copy;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
 use crate::render::highlight::highlight_bash_to_lines;
@@ -247,6 +251,33 @@ impl HistoryCell for ExecCell {
             }
         }
         lines
+    }
+
+    fn copy_target_groups(&self) -> Vec<CopyTargetGroup> {
+        self.calls
+            .iter()
+            .rev()
+            .filter_map(|call| {
+                let command = strip_bash_lc_and_escape(&call.command);
+                if command.trim().is_empty() {
+                    return None;
+                }
+
+                let mut targets =
+                    vec![CopyTarget::new(CopyTargetKind::Command, "Command", command)];
+                if let Some(output) = call.output.as_ref() {
+                    let output_text = output_text_for_copy(&output.aggregated_output);
+                    if !output_text.trim().is_empty() {
+                        targets.push(CopyTarget::new(
+                            CopyTargetKind::Output,
+                            "Output",
+                            output_text,
+                        ));
+                    }
+                }
+                Some(CopyTargetGroup::new(targets))
+            })
+            .collect()
     }
 }
 
@@ -721,6 +752,38 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    #[test]
+    fn copy_target_groups_use_unwrapped_command_and_plain_output() {
+        let call = ExecCall {
+            call_id: "call-id".to_string(),
+            command: vec![
+                "bash".into(),
+                "-lc".into(),
+                "printf 'hello world\\n'".into(),
+            ],
+            parsed: Vec::new(),
+            output: Some(CommandOutput {
+                exit_code: 0,
+                aggregated_output: "\u{1b}[32mhello\u{1b}[0m\n".to_string(),
+                formatted_output: "\u{1b}[32mhello\u{1b}[0m\n".to_string(),
+            }),
+            source: ExecCommandSource::UserShell,
+            start_time: None,
+            duration: None,
+            interaction_input: None,
+        };
+        let cell = ExecCell::new(call, /*animations_enabled*/ false);
+
+        let groups = cell.copy_target_groups();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].targets.len(), 2);
+        assert_eq!(groups[0].targets[0].kind, CopyTargetKind::Command);
+        assert_eq!(groups[0].targets[0].content, "printf 'hello world\\n'");
+        assert_eq!(groups[0].targets[1].kind, CopyTargetKind::Output);
+        assert_eq!(groups[0].targets[1].content, "hello");
     }
 
     #[test]

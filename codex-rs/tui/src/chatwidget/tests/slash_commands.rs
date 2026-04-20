@@ -326,6 +326,15 @@ async fn slash_copy_reports_when_no_agent_response_exists() {
 }
 
 #[tokio::test]
+async fn slash_copy_picker_requests_picker_overlay() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::CopyPicker);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenCopyPicker));
+}
+
+#[tokio::test]
 async fn ctrl_o_copy_reports_when_no_agent_response_exists() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

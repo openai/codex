@@ -117,6 +117,7 @@ pub(crate) async fn run_external_agent_config_migration_prompt(
             match event {
                 TuiEvent::Key(key_event) => screen.handle_key(key_event),
                 TuiEvent::Paste(_) => {}
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Draw => {
                     let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&screen, frame.area());

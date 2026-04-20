@@ -19,6 +19,8 @@ use std::io::Result;
 use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
+use crate::copy_picker_overlay::CopyPickerOverlay;
+use crate::copy_target::CopyTarget;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
@@ -48,6 +50,7 @@ use ratatui::widgets::Wrap;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    CopyPicker(CopyPickerOverlay),
 }
 
 impl Overlay {
@@ -66,10 +69,15 @@ impl Overlay {
         Self::Static(StaticOverlay::with_renderables(renderables, title))
     }
 
+    pub(crate) fn new_copy_picker(targets: Vec<CopyTarget>) -> Self {
+        Self::CopyPicker(CopyPickerOverlay::new(targets))
+    }
+
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
+            Overlay::CopyPicker(o) => o.handle_event(tui, event),
         }
     }
 
@@ -77,6 +85,14 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
+            Overlay::CopyPicker(o) => o.is_done(),
+        }
+    }
+
+    pub(crate) fn take_pending_copy(&mut self) -> Option<CopyTarget> {
+        match self {
+            Overlay::CopyPicker(o) => o.take_pending_copy(),
+            Overlay::Transcript(_) | Overlay::Static(_) => None,
         }
     }
 }

@@ -35,6 +35,7 @@ pub enum SlashCommand {
     Agent,
     // Undo,
     Copy,
+    CopyPicker,
     Diff,
     Mention,
     Status,
@@ -83,6 +84,7 @@ impl SlashCommand {
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Copy => "copy last response as markdown",
+            SlashCommand::CopyPicker => "open semantic copy picker",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
@@ -165,6 +167,7 @@ impl SlashCommand {
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
             | SlashCommand::Copy
+            | SlashCommand::CopyPicker
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
@@ -193,7 +196,7 @@ impl SlashCommand {
     fn is_visible(self) -> bool {
         match self {
             SlashCommand::SandboxReadRoot => cfg!(target_os = "windows"),
-            SlashCommand::Copy => !cfg!(target_os = "android"),
+            SlashCommand::Copy | SlashCommand::CopyPicker => !cfg!(target_os = "android"),
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }

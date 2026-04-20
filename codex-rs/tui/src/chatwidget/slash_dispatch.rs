@@ -243,6 +243,9 @@ impl ChatWidget {
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
             }
+            SlashCommand::CopyPicker => {
+                self.app_event_tx.send(AppEvent::OpenCopyPicker);
+            }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();

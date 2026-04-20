@@ -16,10 +16,13 @@ use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
+use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
+use crossterm::event::MouseEvent;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
@@ -273,6 +276,7 @@ fn set_panic_hook() {
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Paste(String),
     Draw,
 }
@@ -483,6 +487,7 @@ impl Tui {
         if !self.alt_screen_enabled {
             return Ok(());
         }
+        let _ = self.disable_mouse_capture();
         // Disable alternate scroll when leaving alt-screen
         let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
@@ -490,6 +495,16 @@ impl Tui {
             self.terminal.set_viewport_area(saved);
         }
         self.alt_screen_active.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn enable_mouse_capture(&mut self) -> Result<()> {
+        execute!(self.terminal.backend_mut(), EnableMouseCapture)?;
+        Ok(())
+    }
+
+    pub fn disable_mouse_capture(&mut self) -> Result<()> {
+        execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
         Ok(())
     }
 

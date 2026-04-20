@@ -1,0 +1,17 @@
+---
+source: tui/src/copy_picker_overlay.rs
+assertion_line: 465
+expression: term.backend()
+---
+" 1 Response  2 Command  3 Output                                "
+"first paragraph                                                 "
+"                                                                "
+"second paragraph                                                "
+"third paragraph                                                 "
+"                                                                "
+"                                                                "
+"                                                                "
+"                                                                "
+"                                                                "
+" ←/→/h/l target   ↑/↓/k/j scroll   pgup/pgdn page               "
+" enter copy   q/esc close                                       "

@@ -30,6 +30,7 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::copy_target::build_copy_targets;
 #[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
@@ -234,7 +235,26 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    /// Close transcript overlay and restore normal UI.
+    /// Open the semantic copy picker (enters alternate screen and enables mouse capture).
+    pub(crate) fn open_copy_picker(&mut self, tui: &mut tui::Tui) {
+        let targets = build_copy_targets(
+            self.chat_widget.last_agent_markdown_text(),
+            &self.transcript_cells,
+        );
+        if targets.is_empty() {
+            self.chat_widget
+                .add_error_message("No recent content to copy".to_string());
+            tui.frame_requester().schedule_frame();
+            return;
+        }
+
+        let _ = tui.enter_alt_screen();
+        let _ = tui.enable_mouse_capture();
+        self.overlay = Some(Overlay::new_copy_picker(targets));
+        tui.frame_requester().schedule_frame();
+    }
+
+    /// Close the active alternate-screen overlay and restore normal UI.
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
         let was_backtrack = self.backtrack.overlay_preview_active;
@@ -392,8 +412,15 @@ impl App {
 
         if let Some(overlay) = &mut self.overlay {
             overlay.handle_event(tui, event)?;
+            let pending_copy = overlay.take_pending_copy();
             if overlay.is_done() {
                 self.close_transcript_overlay(tui);
+                if let Some(target) = pending_copy {
+                    self.chat_widget.copy_text_to_clipboard(
+                        &target.content,
+                        format!("Copied {} to clipboard", target.title),
+                    );
+                }
                 tui.frame_requester().schedule_frame();
             }
         }

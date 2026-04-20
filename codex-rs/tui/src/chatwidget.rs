@@ -5258,18 +5258,11 @@ impl ChatWidget {
         copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
     ) {
         match self.last_agent_markdown.clone() {
-            Some(markdown) if !markdown.is_empty() => match copy_fn(&markdown) {
-                Ok(lease) => {
-                    self.clipboard_lease = lease;
-                    self.add_to_history(history_cell::new_info_event(
-                        "Copied last message to clipboard".into(),
-                        /*hint*/ None,
-                    ));
-                }
-                Err(error) => self.add_to_history(history_cell::new_error_event(format!(
-                    "Copy failed: {error}"
-                ))),
-            },
+            Some(markdown) if !markdown.is_empty() => self.copy_text_to_clipboard_with(
+                &markdown,
+                "Copied last message to clipboard",
+                copy_fn,
+            ),
             _ => self.add_to_history(history_cell::new_error_event(
                 "No agent response to copy".into(),
             )),
@@ -5277,9 +5270,37 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    #[cfg(test)]
     pub(crate) fn last_agent_markdown_text(&self) -> Option<&str> {
         self.last_agent_markdown.as_deref()
+    }
+
+    pub(crate) fn copy_text_to_clipboard(&mut self, text: &str, success_message: String) {
+        self.copy_text_to_clipboard_with(
+            text,
+            success_message,
+            crate::clipboard_copy::copy_to_clipboard,
+        );
+        self.request_redraw();
+    }
+
+    fn copy_text_to_clipboard_with(
+        &mut self,
+        text: &str,
+        success_message: impl Into<String>,
+        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+    ) {
+        match copy_fn(text) {
+            Ok(lease) => {
+                self.clipboard_lease = lease;
+                self.add_to_history(history_cell::new_info_event(
+                    success_message.into(),
+                    /*hint*/ None,
+                ));
+            }
+            Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                "Copy failed: {error}"
+            ))),
+        }
     }
 
     fn show_rename_prompt(&mut self) {
