@@ -886,7 +886,9 @@ mod tests {
     #[test]
     fn terminal_draw_applies_requested_cursor_style() {
         let mut output = Vec::new();
-        let mut terminal = Terminal::with_options(CaptureBackend::new(2, 1)).expect("terminal");
+        let mut terminal =
+            Terminal::with_options(CaptureBackend::new(/*width*/ 2, /*height*/ 1))
+                .expect("terminal");
         terminal.set_viewport_area(Rect::new(0, 0, 2, 1));
 
         terminal
@@ -909,7 +911,9 @@ mod tests {
     #[test]
     fn reset_cursor_style_emits_default_user_shape() {
         let mut output = Vec::new();
-        let mut terminal = Terminal::with_options(CaptureBackend::new(2, 1)).expect("terminal");
+        let mut terminal =
+            Terminal::with_options(CaptureBackend::new(/*width*/ 2, /*height*/ 1))
+                .expect("terminal");
 
         terminal.reset_cursor_style().expect("reset cursor style");
         ratatui::backend::Backend::flush(terminal.backend_mut()).expect("flush backend");

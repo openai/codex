@@ -5119,7 +5119,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             /*disable_paste_burst*/ false,
         );
-        composer.set_vim_enabled(true);
+        composer.set_vim_enabled(/*enabled*/ true);
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
 
         assert!(composer.is_empty());
@@ -5265,14 +5265,14 @@ mod tests {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
-            true,
+            /*has_input_focus*/ true,
             sender,
-            true,
+            /*enhanced_keys_supported*/ true,
             "Ask Codex to do anything".to_string(),
-            false,
+            /*disable_paste_burst*/ false,
         );
-        composer.set_steer_enabled(true);
-        composer.set_vim_enabled(true);
+        composer.set_steer_enabled(/*enabled*/ true);
+        composer.set_vim_enabled(/*enabled*/ true);
 
         assert!(composer.textarea.is_vim_enabled());
         assert_eq!(
@@ -5282,7 +5282,7 @@ mod tests {
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         composer.set_text_content("h".to_string(), Vec::new(), Vec::new());
-        let (result, _) = composer.handle_submission(false);
+        let (result, _) = composer.handle_submission(/*should_queue*/ false);
 
         assert!(composer.textarea.is_vim_enabled());
         assert_eq!(
@@ -5305,13 +5305,13 @@ mod tests {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
-            true,
+            /*has_input_focus*/ true,
             sender,
-            true,
+            /*enhanced_keys_supported*/ true,
             "Ask Codex to do anything".to_string(),
-            false,
+            /*disable_paste_burst*/ false,
         );
-        composer.set_vim_enabled(true);
+        composer.set_vim_enabled(/*enabled*/ true);
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         composer.set_text_content("hey".to_string(), Vec::new(), Vec::new());
@@ -5342,11 +5342,11 @@ mod tests {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
-            true,
+            /*has_input_focus*/ true,
             sender,
-            true,
+            /*enhanced_keys_supported*/ true,
             "Ask Codex to do anything".to_string(),
-            false,
+            /*disable_paste_burst*/ false,
         );
         let area = Rect::new(0, 0, 80, 10);
         let style_output = |style| {
@@ -5359,7 +5359,7 @@ mod tests {
 
         assert_eq!(style_output(composer.cursor_style(area)), default,);
 
-        composer.set_vim_enabled(true);
+        composer.set_vim_enabled(/*enabled*/ true);
         assert_eq!(style_output(composer.cursor_style(area)), default,);
 
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
