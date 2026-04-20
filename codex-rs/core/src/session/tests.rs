@@ -143,6 +143,7 @@ use sha2::Digest as _;
 use sha2::Sha512;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -3293,7 +3294,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
-        managed_network_proxy_refresh_lock: Mutex::new(()),
+        managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -3305,7 +3306,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
-        agent_task_registration_lock: Mutex::new(()),
+        agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
     };
 
     (session, turn_context)
@@ -4263,7 +4264,7 @@ where
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
-        managed_network_proxy_refresh_lock: Mutex::new(()),
+        managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
@@ -4275,7 +4276,7 @@ where
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
-        agent_task_registration_lock: Mutex::new(()),
+        agent_task_registration_lock: Semaphore::new(/*permits*/ 1),
     });
 
     (session, turn_context, rx_event)
