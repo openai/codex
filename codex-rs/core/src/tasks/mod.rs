@@ -6,6 +6,7 @@ mod undo;
 mod user_shell;
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -290,6 +291,18 @@ impl Session {
 
         let queued_response_items = self.take_queued_response_items_for_next_turn().await;
         let mailbox_items = self.get_pending_input().await;
+        let started_from_goal_continuation = queued_response_items
+            .iter()
+            .chain(mailbox_items.iter())
+            .any(crate::goals::is_goal_continuation_item);
+        let has_non_goal_pending_input = queued_response_items
+            .iter()
+            .chain(mailbox_items.iter())
+            .any(|item| !crate::goals::is_goal_continuation_item(item));
+        if !input.is_empty() || has_non_goal_pending_input {
+            self.goal_continuation_suppressed
+                .store(false, Ordering::SeqCst);
+        }
 
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
@@ -297,6 +310,7 @@ impl Session {
         {
             let mut turn_state = turn.turn_state.lock().await;
             turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+            turn_state.started_from_goal_continuation = started_from_goal_continuation;
             for item in queued_response_items {
                 turn_state.push_pending_input(item);
             }
@@ -524,6 +538,7 @@ impl Session {
         let mut token_usage_at_turn_start = None;
         let mut turn_had_memory_citation = false;
         let mut turn_tool_calls = 0_u64;
+        let mut started_from_goal_continuation = false;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             if let Some(at) = active.as_mut()
@@ -540,6 +555,7 @@ impl Session {
             pending_input = ts.take_pending_input();
             turn_had_memory_citation = ts.has_memory_citation;
             turn_tool_calls = ts.tool_calls;
+            started_from_goal_continuation = ts.started_from_goal_continuation;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
         }
         if !pending_input.is_empty() {
@@ -665,6 +681,10 @@ impl Session {
             .await
         {
             warn!("failed to account thread goal progress at turn end: {err}");
+        }
+        if started_from_goal_continuation && turn_tool_calls == 0 {
+            self.goal_continuation_suppressed
+                .store(true, Ordering::SeqCst);
         }
         {
             let mut active = self.active_turn.lock().await;

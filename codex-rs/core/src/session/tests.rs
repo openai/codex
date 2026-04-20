@@ -3315,6 +3315,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_goal_cache: Mutex::new(None),
         thread_goal_wall_clock_accounting: crate::goals::GoalWallClockAccountingState::new(),
         goal_continuation_lock: Mutex::new(()),
+        goal_continuation_suppressed: AtomicBool::new(false),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -4290,6 +4291,7 @@ where
         thread_goal_cache: Mutex::new(None),
         thread_goal_wall_clock_accounting: crate::goals::GoalWallClockAccountingState::new(),
         goal_continuation_lock: Mutex::new(()),
+        goal_continuation_suppressed: AtomicBool::new(false),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -6618,6 +6620,67 @@ async fn finished_active_goal_turn_starts_continuation() -> anyhow::Result<()> {
     assert!(saw_original_turn_complete);
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal_continuation_without_tool_calls_does_not_requeue_itself() -> anyhow::Result<()> {
+    let (sess, tc, _rx) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.queue_goal_continuation_if_active().await;
+    assert!(
+        sess.has_queued_response_items_for_next_turn().await,
+        "active goal should queue a continuation"
+    );
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    assert!(
+        !sess.has_queued_response_items_for_next_turn().await,
+        "starting the continuation turn should drain queued continuation input"
+    );
+
+    sess.on_task_finished(Arc::clone(&tc), /*last_agent_message*/ None)
+        .await;
+    tokio::task::yield_now().await;
+    sess.queue_goal_continuation_if_active().await;
+
+    assert!(
+        !sess.has_queued_response_items_for_next_turn().await,
+        "a continuation turn that made no tool calls should wait for new input"
+    );
+
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: None,
+            status: Some(codex_protocol::protocol::ThreadGoalStatus::Active),
+            token_budget: None,
+        },
+    )
+    .await?;
+    sess.queue_goal_continuation_if_active().await;
+
+    assert!(
+        sess.has_queued_response_items_for_next_turn().await,
+        "mutating the goal should allow continuation again"
+    );
 
     Ok(())
 }
