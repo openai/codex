@@ -137,6 +137,7 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
@@ -2060,6 +2061,12 @@ impl ChatWidget {
         event: codex_protocol::protocol::SessionConfiguredEvent,
         display: SessionConfiguredDisplay,
     ) {
+        let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
+            PermissionProfile::from_legacy_sandbox_policy(&event.sandbox_policy, &event.cwd)
+        });
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+
         self.last_agent_markdown = None;
         self.saw_copy_source_this_turn = false;
         self.bottom_pane
@@ -2093,6 +2100,8 @@ impl ChatWidget {
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
+        self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.config.permissions.network_sandbox_policy = network_sandbox_policy;
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = event.forked_from_id;
