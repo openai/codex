@@ -2999,6 +2999,7 @@ dependencies = [
  "codex-utils-elapsed",
  "codex-utils-fuzzy-match",
  "codex-utils-oss",
+ "codex-utils-path",
  "codex-utils-plugins",
  "codex-utils-pty",
  "codex-utils-sandbox-summary",
