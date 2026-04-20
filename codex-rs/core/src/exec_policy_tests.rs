@@ -162,6 +162,22 @@ async fn child_uses_parent_exec_policy_when_non_exec_policy_layers_differ() {
 }
 
 #[tokio::test]
+async fn child_does_not_use_parent_exec_policy_when_ignore_rules_differs() {
+    let (_home, parent_config) = test_config().await;
+    let mut child_config = parent_config.clone();
+    child_config.config_layer_stack = child_config
+        .config_layer_stack
+        .with_user_and_project_exec_policy_rules_ignored(
+            /*ignore_user_and_project_exec_policy_rules*/ true,
+        );
+
+    assert!(!child_uses_parent_exec_policy(
+        &parent_config,
+        &child_config
+    ));
+}
+
+#[tokio::test]
 async fn child_does_not_use_parent_exec_policy_when_requirements_exec_policy_differs() {
     let (_home, parent_config) = test_config().await;
     let mut child_config = parent_config.clone();

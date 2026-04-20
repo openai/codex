@@ -111,6 +111,12 @@ pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config
     }
 
     exec_policy_config_folders(parent_config) == exec_policy_config_folders(child_config)
+        && parent_config
+            .config_layer_stack
+            .ignore_user_and_project_exec_policy_rules()
+            == child_config
+                .config_layer_stack
+                .ignore_user_and_project_exec_policy_rules()
         && parent_config.config_layer_stack.requirements().exec_policy
             == child_config.config_layer_stack.requirements().exec_policy
 }
