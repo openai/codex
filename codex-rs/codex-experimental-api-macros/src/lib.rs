@@ -261,11 +261,8 @@ fn presence_expr_for_access(
     access: proc_macro2::TokenStream,
     ty: &Type,
 ) -> proc_macro2::TokenStream {
-    if let Some(inner) = option_inner(ty) {
-        let inner_expr = presence_expr_for_ref(quote!(value), inner);
-        return quote! {
-            #access.as_ref().is_some_and(|value| #inner_expr)
-        };
+    if option_inner(ty).is_some() {
+        return quote! { #access.is_some() };
     }
     if is_vec_like(ty) || is_map_like(ty) {
         return quote! { !#access.is_empty() };
