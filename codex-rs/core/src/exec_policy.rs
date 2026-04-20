@@ -7,6 +7,7 @@ use arc_swap::ArcSwap;
 
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -505,6 +506,14 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
         /*include_disabled*/ false,
     ) {
+        if config_stack.ignore_user_and_project_exec_policy_rules()
+            && matches!(
+                layer.name,
+                ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
+            )
+        {
+            continue;
+        }
         if let Some(config_folder) = layer.config_folder() {
             let policy_dir = config_folder.join(RULES_DIR_NAME);
             let layer_policy_paths = collect_policy_files(&policy_dir).await?;

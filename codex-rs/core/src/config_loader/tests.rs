@@ -6,6 +6,7 @@ use crate::config::ConstraintError;
 use crate::config_loader::CloudRequirementsLoadError;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerEntry;
+use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::ConfigLoadError;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
@@ -14,6 +15,7 @@ use crate::config_loader::FilesystemDenyReadPattern;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
 use crate::config_loader::version_for_toml;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
@@ -109,6 +111,64 @@ async fn returns_config_error_for_invalid_user_config_toml() {
     let expected_config_error =
         super::config_error_from_toml(&config_path, contents, expected_toml_error);
     assert_eq!(config_error, &expected_config_error);
+}
+
+#[tokio::test]
+async fn ignore_user_config_skips_codex_home_config_toml() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        "model = \"from-user-config\"\ninvalid = [",
+    )
+    .expect("write config");
+
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            ignore_user_config: true,
+            ..Default::default()
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    assert!(
+        layers
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
+            .iter()
+            .all(|layer| !matches!(layer.name, ConfigLayerSource::User { .. }))
+    );
+    assert_eq!(layers.effective_config().get("model"), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ignore_rules_marks_config_stack_for_exec_policy_rule_skip() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        tmp.path(),
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            ignore_user_and_project_exec_policy_rules: true,
+            ..Default::default()
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    assert!(layers.ignore_user_and_project_exec_policy_rules());
+    Ok(())
 }
 
 #[tokio::test]

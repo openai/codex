@@ -425,6 +425,69 @@ async fn ignores_policies_outside_policy_dir() {
 }
 
 #[tokio::test]
+async fn ignores_policy_files_when_config_stack_disables_exec_policy_rules() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    fs::write(
+        policy_dir.join("allow.rules"),
+        r#"prefix_rule(pattern=["curl"], decision="allow")"#,
+    )
+    .expect("write policy file");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path())
+        .with_user_and_project_exec_policy_rules_ignored(true);
+
+    let policy = load_exec_policy(&config_stack)
+        .await
+        .expect("policy result");
+
+    assert_eq!(
+        policy
+            .check_multiple([vec!["curl".to_string()]].iter(), &|_| Decision::Forbidden)
+            .decision,
+        Decision::Forbidden,
+    );
+}
+
+#[tokio::test]
+async fn ignore_user_project_rules_keeps_system_policy_files() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_dir = temp_dir.path().join("system");
+    let policy_dir = config_dir.join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    fs::write(
+        policy_dir.join("allow.rules"),
+        r#"prefix_rule(pattern=["curl"], decision="allow")"#,
+    )
+    .expect("write policy file");
+    let config_file =
+        AbsolutePathBuf::from_absolute_path(config_dir.join(codex_config::CONFIG_TOML_FILE))
+            .expect("absolute config file");
+    let layer = ConfigLayerEntry::new(
+        ConfigLayerSource::System { file: config_file },
+        TomlValue::Table(Default::default()),
+    );
+    let config_stack = ConfigLayerStack::new(
+        vec![layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("ConfigLayerStack")
+    .with_user_and_project_exec_policy_rules_ignored(true);
+
+    let policy = load_exec_policy(&config_stack)
+        .await
+        .expect("policy result");
+
+    assert_eq!(
+        policy
+            .check_multiple([vec!["curl".to_string()]].iter(), &|_| Decision::Forbidden)
+            .decision,
+        Decision::Allow,
+    );
+}
+
+#[tokio::test]
 async fn ignores_rules_from_untrusted_project_layers() -> anyhow::Result<()> {
     let project_dir = tempdir()?;
     let policy_dir = project_dir.path().join(RULES_DIR_NAME);

@@ -857,12 +857,27 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cwd: Option<&AbsolutePathBuf>,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
+    load_config_as_toml_with_cli_and_loader_overrides(
+        codex_home,
+        cwd,
+        cli_overrides,
+        LoaderOverrides::default(),
+    )
+    .await
+}
+
+pub async fn load_config_as_toml_with_cli_and_loader_overrides(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_overrides: Vec<(String, TomlValue)>,
+    loader_overrides: LoaderOverrides,
+) -> std::io::Result<ConfigToml> {
     let config_layer_stack = load_config_layers_state(
         LOCAL_FS.as_ref(),
         codex_home,
         cwd.cloned(),
         &cli_overrides,
-        LoaderOverrides::default(),
+        loader_overrides,
         CloudRequirementsLoader::default(),
     )
     .await?;

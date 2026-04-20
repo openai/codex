@@ -128,6 +128,9 @@ pub async fn load_config_layers_state(
     overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
 ) -> io::Result<ConfigLayerStack> {
+    let ignore_user_config = overrides.ignore_user_config;
+    let ignore_user_and_project_exec_policy_rules =
+        overrides.ignore_user_and_project_exec_policy_rules;
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
@@ -193,16 +196,18 @@ pub async fn load_config_layers_state(
     // exists, but is malformed, then this error should be propagated to the
     // user.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home);
-    let user_layer = load_config_toml_for_required_layer(fs, &user_file, |config_toml| {
-        ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: user_file.clone(),
-            },
-            config_toml,
-        )
-    })
-    .await?;
-    layers.push(user_layer);
+    if !ignore_user_config {
+        let user_layer = load_config_toml_for_required_layer(fs, &user_file, |config_toml| {
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_file.clone(),
+                },
+                config_toml,
+            )
+        })
+        .await?;
+        layers.push(user_layer);
+    }
 
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
@@ -312,11 +317,12 @@ pub async fn load_config_layers_state(
         ));
     }
 
-    ConfigLayerStack::new(
+    Ok(ConfigLayerStack::new(
         layers,
         config_requirements_toml.clone().try_into()?,
         config_requirements_toml.into_toml(),
-    )
+    )?
+    .with_user_and_project_exec_policy_rules_ignored(ignore_user_and_project_exec_policy_rules))
 }
 
 /// Attempts to load a config.toml file from `config_toml`.
