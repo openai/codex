@@ -113,6 +113,7 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
                 file_system: Some(AppServerAdditionalFileSystemPermissions {
                     read: Some(vec![read_path.clone()]),
                     write: Some(vec![write_path.clone()]),
+                    glob_scan_max_depth: None,
                     entries: None,
                 }),
             }),
@@ -163,6 +164,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
             file_system: Some(AppServerAdditionalFileSystemPermissions {
                 read: Some(vec![read_path.clone()]),
                 write: Some(vec![write_path.clone()]),
+                glob_scan_max_depth: None,
                 entries: None,
             }),
         },

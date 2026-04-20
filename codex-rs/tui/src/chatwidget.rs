@@ -137,6 +137,7 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
@@ -1382,6 +1383,7 @@ fn thread_session_state_to_legacy_event(
         approval_policy: session.approval_policy,
         approvals_reviewer: session.approvals_reviewer,
         sandbox_policy: session.sandbox_policy,
+        permission_profile: Some(session.permission_profile),
         cwd: session.cwd,
         reasoning_effort: session.reasoning_effort,
         history_log_id: session.history_log_id,
@@ -2059,6 +2061,12 @@ impl ChatWidget {
         event: codex_protocol::protocol::SessionConfiguredEvent,
         display: SessionConfiguredDisplay,
     ) {
+        let permission_profile = event.permission_profile.clone().unwrap_or_else(|| {
+            PermissionProfile::from_legacy_sandbox_policy(&event.sandbox_policy, &event.cwd)
+        });
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+
         self.last_agent_markdown = None;
         self.saw_copy_source_this_turn = false;
         self.bottom_pane
@@ -2092,6 +2100,8 @@ impl ChatWidget {
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
+        self.config.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
+        self.config.permissions.network_sandbox_policy = network_sandbox_policy;
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
         let forked_from_id = event.forked_from_id;
@@ -5810,11 +5820,20 @@ impl ChatWidget {
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
         let service_tier = Some(self.config.service_tier);
+        let permission_profile = if matches!(
+            self.config.permissions.sandbox_policy.get(),
+            SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            None
+        } else {
+            Some(self.config.permissions.permission_profile())
+        };
         let op = AppCommand::user_turn(
             items,
             self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
             self.config.permissions.sandbox_policy.get().clone(),
+            permission_profile,
             effective_mode.model().to_string(),
             effective_mode.reasoning_effort(),
             /*summary*/ None,

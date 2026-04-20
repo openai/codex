@@ -6,6 +6,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
@@ -13,6 +14,8 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::canonicalize_preserving_symlinks;
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveSandboxPermissions {
@@ -45,6 +48,7 @@ pub fn normalize_additional_permissions(
     let file_system = match additional_permissions.file_system {
         Some(file_system) => {
             let mut entries = Vec::with_capacity(file_system.entries.len());
+            let glob_scan_max_depth = file_system.glob_scan_max_depth;
             for entry in file_system.entries {
                 if matches!(&entry.path, FileSystemPath::GlobPattern { .. })
                     && entry.access != FileSystemAccessMode::None
@@ -73,7 +77,10 @@ pub fn normalize_additional_permissions(
                     entries.push(normalized_entry);
                 }
             }
-            let file_system = FileSystemPermissions { entries };
+            let file_system = FileSystemPermissions {
+                entries,
+                glob_scan_max_depth,
+            };
             (!file_system.is_empty()).then_some(file_system)
         }
         None => None,
@@ -114,6 +121,9 @@ pub fn merge_permission_profiles(
             let file_system = match (base.file_system.as_ref(), permissions.file_system.as_ref()) {
                 (Some(base), Some(permissions)) => Some(FileSystemPermissions {
                     entries: merge_permission_entries(&base.entries, &permissions.entries),
+                    glob_scan_max_depth: base
+                        .glob_scan_max_depth
+                        .max(permissions.glob_scan_max_depth),
                 })
                 .filter(|file_system| !file_system.is_empty()),
                 (Some(base), None) => Some(base.clone()),
@@ -134,17 +144,31 @@ pub fn merge_permission_profiles(
 pub fn intersect_permission_profiles(
     requested: PermissionProfile,
     granted: PermissionProfile,
+    cwd: &Path,
 ) -> PermissionProfile {
     let file_system = requested
         .file_system
         .map(|requested_file_system| {
-            let granted_file_system = granted.file_system.unwrap_or_default();
-            let entries = requested_file_system
+            let requested_policy =
+                FileSystemSandboxPolicy::restricted(requested_file_system.entries.clone());
+            let entries = granted
+                .file_system
+                .unwrap_or_default()
                 .entries
                 .into_iter()
-                .filter(|entry| granted_file_system.entries.contains(entry))
+                .filter(|entry| {
+                    granted_file_system_entry_within_request(
+                        &requested_file_system,
+                        &requested_policy,
+                        entry,
+                        cwd,
+                    )
+                })
                 .collect();
-            FileSystemPermissions { entries }
+            FileSystemPermissions {
+                entries,
+                glob_scan_max_depth: requested_file_system.glob_scan_max_depth,
+            }
         })
         .filter(|file_system| !file_system.is_empty());
     let network = match (requested.network, granted.network) {
@@ -164,6 +188,74 @@ pub fn intersect_permission_profiles(
     PermissionProfile {
         network,
         file_system,
+    }
+}
+
+fn granted_file_system_entry_within_request(
+    requested: &FileSystemPermissions,
+    requested_policy: &FileSystemSandboxPolicy,
+    granted_entry: &FileSystemSandboxEntry,
+    cwd: &Path,
+) -> bool {
+    if !granted_entry.access.can_read() {
+        return false;
+    }
+
+    if let Some(path) = resolve_permission_path(&granted_entry.path, cwd) {
+        return access_covers(
+            requested_policy.resolve_access_with_cwd(path.as_path(), cwd),
+            granted_entry.access,
+        );
+    }
+
+    requested.entries.iter().any(|requested_entry| {
+        access_covers(requested_entry.access, granted_entry.access)
+            && requested_entry.path == granted_entry.path
+    })
+}
+
+fn access_covers(requested: FileSystemAccessMode, granted: FileSystemAccessMode) -> bool {
+    match granted {
+        FileSystemAccessMode::Read => requested.can_read(),
+        FileSystemAccessMode::Write => requested.can_write(),
+        FileSystemAccessMode::None => false,
+    }
+}
+
+fn resolve_permission_path(path: &FileSystemPath, cwd: &Path) -> Option<AbsolutePathBuf> {
+    match path {
+        FileSystemPath::Path { path } => Some(path.clone()),
+        FileSystemPath::GlobPattern { .. } => None,
+        FileSystemPath::Special { value } => match value {
+            FileSystemSpecialPath::Root => {
+                let root = cwd.ancestors().last()?;
+                AbsolutePathBuf::from_absolute_path(root).ok()
+            }
+            FileSystemSpecialPath::CurrentWorkingDirectory => {
+                AbsolutePathBuf::from_absolute_path(cwd).ok()
+            }
+            FileSystemSpecialPath::ProjectRoots { subpath } => {
+                let cwd = AbsolutePathBuf::from_absolute_path(cwd).ok()?;
+                Some(match subpath {
+                    Some(subpath) => {
+                        AbsolutePathBuf::resolve_path_against_base(subpath, cwd.as_path())
+                    }
+                    None => cwd,
+                })
+            }
+            FileSystemSpecialPath::Tmpdir => {
+                let tmpdir = std::env::var_os("TMPDIR")?;
+                if tmpdir.is_empty() {
+                    None
+                } else {
+                    AbsolutePathBuf::from_absolute_path(PathBuf::from(tmpdir)).ok()
+                }
+            }
+            FileSystemSpecialPath::SlashTmp => AbsolutePathBuf::from_absolute_path("/tmp")
+                .ok()
+                .filter(|path| path.as_path().is_dir()),
+            FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => None,
+        },
     }
 }
 
