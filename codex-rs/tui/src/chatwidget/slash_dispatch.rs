@@ -645,7 +645,7 @@ impl ChatWidget {
                         text_elements: history_text_elements,
                     }),
                 );
-                if submitted {
+                if submitted && source == SlashCommandDispatchSource::Live {
                     self.bottom_pane.drain_pending_submission_state();
                 }
             }

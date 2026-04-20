@@ -880,6 +880,54 @@ async fn queued_goal_slash_command_records_original_command_in_history() {
 }
 
 #[tokio::test]
+async fn queued_goal_slash_command_preserves_current_draft_metadata() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let command = "/goal write a cat poem";
+
+    submit_composer_text(&mut chat, command);
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    let remote_url = "https://example.com/current-draft.png".to_string();
+    let local_image = PathBuf::from("/tmp/current-draft-local.png");
+    let placeholder = "[Image #3]";
+    let draft = format!("draft with {placeholder}");
+    let placeholder_start = draft.find(placeholder).expect("placeholder in draft");
+    chat.set_remote_image_urls(vec![remote_url.clone()]);
+    chat.bottom_pane.set_composer_text(
+        draft.clone(),
+        vec![TextElement::new(
+            (placeholder_start..placeholder_start + placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )],
+        vec![local_image.clone()],
+    );
+
+    chat.thread_id = Some(ThreadId::new());
+    chat.maybe_send_next_queued_input();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            let [UserInput::Text { text, .. }] = items.as_slice() else {
+                panic!("expected one text item, got {items:?}");
+            };
+            assert!(
+                text.starts_with("Set the current thread goal"),
+                "model should receive goal-parser prompt, got {text:?}"
+            );
+        }
+        other => panic!("expected user turn, got {other:?}"),
+    }
+    assert_eq!(next_add_to_history_op(&mut op_rx), command);
+    assert_eq!(chat.bottom_pane.composer_text(), draft);
+    assert_eq!(chat.remote_image_urls(), vec![remote_url]);
+    assert_eq!(
+        chat.bottom_pane.composer_local_image_paths(),
+        vec![local_image]
+    );
+}
+
+#[tokio::test]
 async fn restored_queued_goal_slash_command_records_original_command_in_history() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
