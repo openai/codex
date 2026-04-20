@@ -1,11 +1,7 @@
 ---
-source: tui/src/chatwidget/tests.rs
+source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
-  Select Personality
-  Choose a communication style for Codex.
+› Ask Codex to do anything
 
-  1. Friendly             Warm, collaborative, and helpful.
-› 2. Pragmatic (current)  Concise, task-focused, and direct.
-
-  Press enter to confirm or esc to go back
+  gpt-5.2-codex default · /tmp/project
