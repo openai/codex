@@ -42,7 +42,6 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
-use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
 use crate::legacy_core::lookup_message_history_entry;
 use crate::legacy_core::plugins::PluginsManager;
 #[cfg(target_os = "windows")]
@@ -75,6 +74,7 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -97,6 +97,7 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListParams;
@@ -111,6 +112,7 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_exec_server::EnvironmentManager;
@@ -182,6 +184,7 @@ mod app_server_adapter;
 pub(crate) mod app_server_requests;
 mod loaded_threads;
 mod pending_interactive_replay;
+mod replay_filter;
 mod side;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -189,6 +192,8 @@ use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::side::SideParentStatus;
+use self::side::SideParentStatusChange;
 use self::side::SideThreadState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -372,11 +377,10 @@ fn session_summary(
     rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| FinalOutput::from(token_usage).to_string());
-    let (thread_id, thread_name) = resumable_thread(thread_id, thread_name, rollout_path)
-        .map(|thread| (Some(thread.thread_id), thread.thread_name))
-        .unwrap_or((None, None));
+    let thread_id =
+        resumable_thread(thread_id, thread_name, rollout_path).map(|thread| thread.thread_id);
     let resume_command =
-        crate::legacy_core::util::resume_command(thread_name.as_deref(), thread_id);
+        crate::legacy_core::util::resume_command(/*thread_name*/ None, thread_id);
 
     if usage_line.is_none() && resume_command.is_none() {
         return None;
@@ -696,6 +700,25 @@ impl ThreadEventStore {
         }
     }
 
+    fn pending_replay_requests(&self) -> Vec<ServerRequest> {
+        self.buffer
+            .iter()
+            .filter_map(|event| match event {
+                ThreadBufferedEvent::Request(request)
+                    if self
+                        .pending_interactive_replay
+                        .should_replay_snapshot_request(request) =>
+                {
+                    Some(request.clone())
+                }
+                ThreadBufferedEvent::Request(_)
+                | ThreadBufferedEvent::Notification(_)
+                | ThreadBufferedEvent::HistoryEntryResponse(_)
+                | ThreadBufferedEvent::FeedbackSubmission(_) => None,
+            })
+            .collect()
+    }
+
     fn apply_thread_rollback(&mut self, response: &ThreadRollbackResponse) {
         self.turns = response.thread.turns.clone();
         self.buffer.clear();
@@ -743,6 +766,22 @@ impl ThreadEventStore {
     fn has_pending_thread_approvals(&self) -> bool {
         self.pending_interactive_replay
             .has_pending_thread_approvals()
+    }
+
+    fn side_parent_pending_status(&self) -> Option<SideParentStatus> {
+        if self
+            .pending_interactive_replay
+            .has_pending_thread_user_input()
+        {
+            Some(SideParentStatus::NeedsInput)
+        } else if self
+            .pending_interactive_replay
+            .has_pending_thread_approvals()
+        {
+            Some(SideParentStatus::NeedsApproval)
+        } else {
+            None
+        }
     }
 
     fn active_turn_id(&self) -> Option<&str> {
@@ -2053,6 +2092,58 @@ impl App {
         }
     }
 
+    fn push_thread_interactive_request(&mut self, request: ThreadInteractiveRequest) {
+        match request {
+            ThreadInteractiveRequest::Approval(request) => {
+                self.chat_widget.push_approval_request(request);
+            }
+            ThreadInteractiveRequest::McpServerElicitation(request) => {
+                self.chat_widget
+                    .push_mcp_server_elicitation_request(request);
+            }
+        }
+    }
+
+    async fn pending_inactive_thread_requests(&self) -> Vec<(ThreadId, ServerRequest)> {
+        let channels: Vec<(ThreadId, Arc<Mutex<ThreadEventStore>>)> = self
+            .thread_event_channels
+            .iter()
+            .map(|(thread_id, channel)| (*thread_id, Arc::clone(&channel.store)))
+            .collect();
+
+        let mut requests = Vec::new();
+        for (thread_id, store) in channels {
+            if Some(thread_id) == self.active_thread_id {
+                continue;
+            }
+
+            let store = store.lock().await;
+            requests.extend(
+                store
+                    .pending_replay_requests()
+                    .into_iter()
+                    .map(|request| (thread_id, request)),
+            );
+        }
+        requests
+    }
+
+    pub(super) async fn surface_pending_inactive_thread_interactive_requests(&mut self) {
+        if self.active_side_parent_thread_id().is_some() {
+            return;
+        }
+
+        let requests = self.pending_inactive_thread_requests().await;
+        for (thread_id, request) in requests {
+            if let Some(request) = self
+                .interactive_request_for_thread_request(thread_id, &request)
+                .await
+            {
+                self.push_thread_interactive_request(request);
+            }
+        }
+    }
+
     async fn submit_active_thread_op(
         &mut self,
         app_server: &mut AppServerSession,
@@ -2093,6 +2184,7 @@ impl App {
             if ThreadEventStore::op_can_change_pending_replay_state(&op) {
                 self.note_thread_outbound_op(thread_id, &op).await;
                 self.refresh_pending_thread_approvals().await;
+                self.refresh_side_parent_status_from_store(thread_id).await;
             }
             return Ok(());
         }
@@ -2111,14 +2203,18 @@ impl App {
     /// tradeoff because the effect is limited to stale inventory output in history,
     /// while request-token invalidation would add cross-cutting async state for a
     /// low-severity path.
-    fn fetch_mcp_inventory(&mut self, app_server: &AppServerSession) {
+    fn fetch_mcp_inventory(
+        &mut self,
+        app_server: &AppServerSession,
+        detail: McpServerStatusDetail,
+    ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = fetch_all_mcp_server_statuses(request_handle)
+            let result = fetch_all_mcp_server_statuses(request_handle, detail)
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+            app_event_tx.send(AppEvent::McpInventoryLoaded { result, detail });
         });
     }
 
@@ -2141,6 +2237,21 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
+        });
+    }
+
+    fn send_add_credits_nudge_email(
+        &mut self,
+        app_server: &AppServerSession,
+        credit_type: AddCreditsNudgeCreditType,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = send_add_credits_nudge_email(request_handle, credit_type)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AddCreditsNudgeEmailFinished { result });
         });
     }
 
@@ -2428,7 +2539,11 @@ impl App {
     ///
     /// When both the local config and the app-server report zero servers, a special
     /// "empty" cell is shown instead of the full table.
-    fn handle_mcp_inventory_result(&mut self, result: Result<Vec<McpServerStatus>, String>) {
+    fn handle_mcp_inventory_result(
+        &mut self,
+        result: Result<Vec<McpServerStatus>, String>,
+        detail: McpServerStatusDetail,
+    ) {
         let config = self.chat_widget.config_ref().clone();
         self.chat_widget.clear_mcp_inventory_loading();
         self.clear_committed_mcp_inventory_loading();
@@ -2450,9 +2565,7 @@ impl App {
 
         self.chat_widget
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
-                &config,
-                &statuses,
-                McpServerStatusDetail::ToolsAndAuthOnly,
+                &config, &statuses, detail,
             ));
     }
 
@@ -2765,6 +2878,7 @@ impl App {
                 if ThreadEventStore::op_can_change_pending_replay_state(op) {
                     self.note_thread_outbound_op(thread_id, op).await;
                     self.refresh_pending_thread_approvals().await;
+                    self.refresh_side_parent_status_from_store(thread_id).await;
                 }
                 Ok(true)
             }
@@ -2778,6 +2892,7 @@ impl App {
     }
 
     async fn refresh_pending_thread_approvals(&mut self) {
+        let side_parent_thread_id = self.active_side_parent_thread_id();
         let channels: Vec<(ThreadId, Arc<Mutex<ThreadEventStore>>)> = self
             .thread_event_channels
             .iter()
@@ -2786,7 +2901,8 @@ impl App {
 
         let mut pending_thread_ids = Vec::new();
         for (thread_id, store) in channels {
-            if Some(thread_id) == self.active_thread_id {
+            if Some(thread_id) == self.active_thread_id || Some(thread_id) == side_parent_thread_id
+            {
                 continue;
             }
 
@@ -2806,6 +2922,21 @@ impl App {
         self.chat_widget.set_pending_thread_approvals(threads);
     }
 
+    async fn refresh_side_parent_status_from_store(&mut self, thread_id: ThreadId) {
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            return;
+        };
+        let status = {
+            let store = channel.store.lock().await;
+            store.side_parent_pending_status()
+        };
+        if let Some(status) = status {
+            self.set_side_parent_status(thread_id, Some(status));
+        } else {
+            self.clear_side_parent_action_status(thread_id);
+        }
+    }
+
     async fn enqueue_thread_notification(
         &mut self,
         thread_id: ThreadId,
@@ -2819,7 +2950,7 @@ impl App {
             (channel.sender.clone(), Arc::clone(&channel.store))
         };
 
-        let should_send = {
+        let (should_send, pending_status) = {
             let mut guard = store.lock().await;
             if guard.session.is_none()
                 && let Some(session) = inferred_session
@@ -2827,8 +2958,9 @@ impl App {
                 guard.session = Some(session);
             }
             guard.push_notification(notification.clone());
-            guard.active
+            (guard.active, guard.side_parent_pending_status())
         };
+        let notification_status_change = SideParentStatusChange::for_notification(&notification);
 
         if should_send {
             match sender.try_send(ThreadBufferedEvent::Notification(notification)) {
@@ -2844,6 +2976,11 @@ impl App {
                     tracing::warn!("thread {thread_id} event channel closed");
                 }
             }
+        }
+        if let Some(status) = pending_status {
+            self.set_side_parent_status(thread_id, Some(status));
+        } else if let Some(change) = notification_status_change {
+            self.apply_side_parent_status_change(thread_id, change);
         }
         self.refresh_pending_thread_approvals().await;
         Ok(())
@@ -2958,11 +3095,12 @@ impl App {
             (channel.sender.clone(), Arc::clone(&channel.store))
         };
 
-        let should_send = {
+        let (should_send, pending_status) = {
             let mut guard = store.lock().await;
             guard.push_request(request.clone());
-            guard.active
+            (guard.active, guard.side_parent_pending_status())
         };
+        let request_status = SideParentStatus::for_request(&request);
 
         if should_send {
             match sender.try_send(ThreadBufferedEvent::Request(request)) {
@@ -2978,16 +3116,13 @@ impl App {
                     tracing::warn!("thread {thread_id} event channel closed");
                 }
             }
-        } else if let Some(request) = inactive_interactive_request {
-            match request {
-                ThreadInteractiveRequest::Approval(request) => {
-                    self.chat_widget.push_approval_request(request);
-                }
-                ThreadInteractiveRequest::McpServerElicitation(request) => {
-                    self.chat_widget
-                        .push_mcp_server_elicitation_request(request);
-                }
-            }
+        } else if self.active_side_parent_thread_id().is_none()
+            && let Some(request) = inactive_interactive_request
+        {
+            self.push_thread_interactive_request(request);
+        }
+        if let Some(status) = pending_status.or(request_status) {
+            self.set_side_parent_status(thread_id, Some(status));
         }
         self.refresh_pending_thread_approvals().await;
         Ok(())
@@ -3912,9 +4047,13 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        let suppress_replay_notices =
+            replay_filter::snapshot_has_pending_interactive_request(&snapshot);
         if let Some(session) = snapshot.session {
             if self.side_threads.contains_key(&session.thread_id) {
                 self.chat_widget.handle_side_thread_session(session);
+            } else if suppress_replay_notices {
+                self.chat_widget.handle_thread_session_quiet(session);
             } else {
                 self.chat_widget.handle_thread_session(session);
             }
@@ -3928,6 +4067,9 @@ impl App {
                 .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
         }
         for event in snapshot.events {
+            if suppress_replay_notices && replay_filter::event_is_notice(&event) {
+                continue;
+            }
             self.handle_thread_event_replay(event);
         }
         self.chat_widget
@@ -4742,13 +4884,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ResumeSessionByIdOrName(id_or_name) => {
-                match crate::lookup_session_target_with_app_server(
-                    app_server,
-                    self.config.codex_home.as_path(),
-                    &id_or_name,
-                )
-                .await?
-                {
+                match crate::lookup_session_target_with_app_server(app_server, &id_or_name).await? {
                     Some(target_session) => {
                         return self
                             .resume_target_session(tui, app_server, target_session)
@@ -5102,11 +5238,11 @@ impl App {
                         .on_plugin_enabled_set(cwd, plugin_id, enabled, result);
                 }
             }
-            AppEvent::FetchMcpInventory => {
-                self.fetch_mcp_inventory(app_server);
+            AppEvent::FetchMcpInventory { detail } => {
+                self.fetch_mcp_inventory(app_server, detail);
             }
-            AppEvent::McpInventoryLoaded { result } => {
-                self.handle_mcp_inventory_result(result);
+            AppEvent::McpInventoryLoaded { result, detail } => {
+                self.handle_mcp_inventory_result(result, detail);
             }
             AppEvent::SkillsListLoaded { result } => {
                 self.handle_skills_list_result(
@@ -5132,6 +5268,18 @@ impl App {
             }
             AppEvent::ClearThreadGoal { thread_id } => {
                 self.clear_thread_goal(app_server, thread_id).await;
+            }
+            AppEvent::SendAddCreditsNudgeEmail { credit_type } => {
+                if self
+                    .chat_widget
+                    .start_add_credits_nudge_email_request(credit_type)
+                {
+                    self.send_add_credits_nudge_email(app_server, credit_type);
+                }
+            }
+            AppEvent::AddCreditsNudgeEmailFinished { result } => {
+                self.chat_widget
+                    .finish_add_credits_nudge_email_request(result);
             }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {
@@ -6804,6 +6952,7 @@ fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
 /// the inventory atomically. Each page requests up to 100 entries.
 async fn fetch_all_mcp_server_statuses(
     request_handle: AppServerRequestHandle,
+    detail: McpServerStatusDetail,
 ) -> Result<Vec<McpServerStatus>> {
     let mut cursor = None;
     let mut statuses = Vec::new();
@@ -6816,7 +6965,7 @@ async fn fetch_all_mcp_server_statuses(
                 params: ListMcpServerStatusParams {
                     cursor: cursor.clone(),
                     limit: Some(100),
-                    detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+                    detail: Some(detail),
                 },
             })
             .await
@@ -6845,6 +6994,22 @@ async fn fetch_account_rate_limits(
         .wrap_err("account/rateLimits/read failed in TUI")?;
 
     Ok(app_server_rate_limit_snapshots_to_core(response))
+}
+
+async fn send_add_credits_nudge_email(
+    request_handle: AppServerRequestHandle,
+    credit_type: AddCreditsNudgeCreditType,
+) -> Result<codex_app_server_protocol::AddCreditsNudgeEmailStatus> {
+    let request_id = RequestId::String(format!("add-credits-nudge-{}", Uuid::new_v4()));
+    let response: codex_app_server_protocol::SendAddCreditsNudgeEmailResponse = request_handle
+        .request_typed(ClientRequest::SendAddCreditsNudgeEmail {
+            request_id,
+            params: SendAddCreditsNudgeEmailParams { credit_type },
+        })
+        .await
+        .wrap_err("account/sendAddCreditsNudgeEmail failed in TUI")?;
+
+    Ok(response.status)
 }
 
 async fn fetch_skills_list(
@@ -7100,12 +7265,14 @@ mod tests {
     use codex_app_server_protocol::ThreadTokenUsage;
     use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
     use codex_app_server_protocol::TokenUsageBreakdown;
+    use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnError as AppServerTurnError;
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
+    use codex_app_server_protocol::WarningNotification;
     use codex_config::types::ModelAvailabilityNuxConfig;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
@@ -7284,13 +7451,16 @@ mod tests {
                 /*animations_enabled*/ false,
             )));
 
-        app.handle_mcp_inventory_result(Ok(vec![McpServerStatus {
-            name: "docs".to_string(),
-            tools: HashMap::new(),
-            resources: Vec::new(),
-            resource_templates: Vec::new(),
-            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
-        }]));
+        app.handle_mcp_inventory_result(
+            Ok(vec![McpServerStatus {
+                name: "docs".to_string(),
+                tools: HashMap::new(),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            }]),
+            McpServerStatusDetail::ToolsAndAuthOnly,
+        );
 
         assert_eq!(app.transcript_cells.len(), 0);
     }
@@ -9492,6 +9662,172 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn side_defers_parent_approval_overlay_until_parent_replay() -> Result<()> {
+        let mut app = make_test_app().await;
+        let parent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000011").expect("valid thread");
+        let side_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000022").expect("valid thread");
+
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+        app.thread_event_channels.insert(
+            parent_thread_id,
+            ThreadEventChannel::new_with_session(
+                /*capacity*/ 4,
+                test_thread_session(parent_thread_id, test_path_buf("/tmp/main")),
+                Vec::new(),
+            ),
+        );
+
+        app.enqueue_thread_request(
+            parent_thread_id,
+            exec_approval_request(
+                parent_thread_id,
+                "turn-approval",
+                "call-approval",
+                /*approval_id*/ None,
+            ),
+        )
+        .await?;
+
+        assert_eq!(app.chat_widget.has_active_view(), false);
+        assert!(app.chat_widget.pending_thread_approvals().is_empty());
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::NeedsApproval)
+        );
+
+        let snapshot = {
+            let channel = app
+                .thread_event_channels
+                .get(&parent_thread_id)
+                .expect("parent thread channel");
+            let store = channel.store.lock().await;
+            store.snapshot()
+        };
+        app.side_threads.remove(&side_thread_id);
+        app.active_thread_id = Some(parent_thread_id);
+        app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
+
+        assert_eq!(app.chat_widget.has_active_view(), true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replay_snapshot_with_pending_request_suppresses_replay_notices() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000011").expect("valid thread");
+        let stale_warning = "stale startup warning that should not cover the approval";
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session: Some(test_thread_session(thread_id, test_path_buf("/tmp/main"))),
+                turns: Vec::new(),
+                events: vec![
+                    ThreadBufferedEvent::Notification(ServerNotification::Warning(
+                        WarningNotification {
+                            thread_id: Some(thread_id.to_string()),
+                            message: stale_warning.to_string(),
+                        },
+                    )),
+                    ThreadBufferedEvent::Request(exec_approval_request(
+                        thread_id,
+                        "turn-approval",
+                        "call-approval",
+                        /*approval_id*/ None,
+                    )),
+                ],
+                input_state: None,
+            },
+            /*resume_restored_queue*/ false,
+        );
+
+        assert_eq!(app.chat_widget.has_active_view(), true);
+
+        let mut replayed_history = String::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                replayed_history.push_str(&lines_to_single_string(
+                    &cell.transcript_lines(/*width*/ 80),
+                ));
+            }
+        }
+
+        assert!(
+            replayed_history.is_empty(),
+            "expected pending approval replay to suppress session notices, got {replayed_history:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn side_defers_subagent_approval_overlay_until_side_exits() -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000011").expect("valid thread");
+        let side_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000022").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000033").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(main_thread_id));
+        app.thread_event_channels.insert(
+            agent_thread_id,
+            ThreadEventChannel::new_with_session(
+                /*capacity*/ 4,
+                ThreadSessionState {
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    rollout_path: Some(test_path_buf("/tmp/agent-rollout.jsonl")),
+                    ..test_thread_session(agent_thread_id, test_path_buf("/tmp/agent"))
+                },
+                Vec::new(),
+            ),
+        );
+        app.agent_navigation.upsert(
+            agent_thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            /*is_closed*/ false,
+        );
+
+        app.enqueue_thread_request(
+            agent_thread_id,
+            exec_approval_request(
+                agent_thread_id,
+                "turn-approval",
+                "call-approval",
+                /*approval_id*/ None,
+            ),
+        )
+        .await?;
+
+        assert_eq!(app.chat_widget.has_active_view(), false);
+        assert_eq!(
+            app.chat_widget.pending_thread_approvals(),
+            &["Robie [explorer]".to_string()]
+        );
+
+        app.side_threads.remove(&side_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.surface_pending_inactive_thread_interactive_requests()
+            .await;
+
+        assert_eq!(app.chat_widget.has_active_view(), true);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn inactive_thread_exec_approval_preserves_context() {
         let app = make_test_app().await;
         let thread_id = ThreadId::new();
@@ -9515,6 +9851,7 @@ guardian_approval = true
             file_system: Some(AdditionalFileSystemPermissions {
                 read: Some(vec![test_absolute_path("/tmp/read-only")]),
                 write: Some(vec![test_absolute_path("/tmp/write")]),
+                entries: None,
             }),
         });
         params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
@@ -9547,10 +9884,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![test_absolute_path("/tmp/read-only")]),
+                    Some(vec![test_absolute_path("/tmp/write")]),
+                )),
             })
         );
         assert_eq!(
@@ -9622,6 +9959,7 @@ guardian_approval = true
                     file_system: Some(AdditionalFileSystemPermissions {
                         read: Some(vec![test_absolute_path("/tmp/read-only")]),
                         write: Some(vec![test_absolute_path("/tmp/write")]),
+                        entries: None,
                     }),
                 },
             },
@@ -9643,10 +9981,10 @@ guardian_approval = true
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
-                file_system: Some(FileSystemPermissions {
-                    read: Some(vec![test_absolute_path("/tmp/read-only")]),
-                    write: Some(vec![test_absolute_path("/tmp/write")]),
-                }),
+                file_system: Some(FileSystemPermissions::from_read_write_roots(
+                    Some(vec![test_absolute_path("/tmp/read-only")]),
+                    Some(vec![test_absolute_path("/tmp/write")]),
+                )),
             }
         );
     }
@@ -10059,7 +10397,7 @@ guardian_approval = true
         let parent_thread_id = ThreadId::new();
         let side_thread_id = ThreadId::new();
         app.side_threads
-            .insert(side_thread_id, SideThreadState { parent_thread_id });
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
         assert_eq!(
             app.side_start_block_message(),
@@ -10070,6 +10408,131 @@ guardian_approval = true
 
         app.side_threads.remove(&side_thread_id);
         assert_eq!(app.side_start_block_message(), None);
+    }
+
+    #[tokio::test]
+    async fn side_parent_status_tracks_parent_turn_lifecycle() -> Result<()> {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            turn_completed_notification(parent_thread_id, "turn-1", TurnStatus::Completed),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::Finished)
+        );
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            turn_started_notification(parent_thread_id, "turn-2"),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            None
+        );
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            turn_completed_notification(parent_thread_id, "turn-2", TurnStatus::Failed),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::Failed)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn side_parent_status_prioritizes_input_over_approval() -> Result<()> {
+        let mut app = make_test_app().await;
+        let parent_thread_id = ThreadId::new();
+        let side_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(parent_thread_id);
+        app.active_thread_id = Some(side_thread_id);
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+
+        app.enqueue_thread_request(
+            parent_thread_id,
+            exec_approval_request(
+                parent_thread_id,
+                "turn-approval",
+                "call-approval",
+                /*approval_id*/ None,
+            ),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::NeedsApproval)
+        );
+
+        app.enqueue_thread_request(
+            parent_thread_id,
+            request_user_input_request(parent_thread_id, "turn-input", "call-input"),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::NeedsInput)
+        );
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            ServerNotification::ServerRequestResolved(
+                codex_app_server_protocol::ServerRequestResolvedNotification {
+                    thread_id: parent_thread_id.to_string(),
+                    request_id: AppServerRequestId::Integer(2),
+                },
+            ),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            Some(SideParentStatus::NeedsApproval)
+        );
+
+        app.enqueue_thread_notification(
+            parent_thread_id,
+            ServerNotification::ServerRequestResolved(
+                codex_app_server_protocol::ServerRequestResolvedNotification {
+                    thread_id: parent_thread_id.to_string(),
+                    request_id: AppServerRequestId::Integer(1),
+                },
+            ),
+        )
+        .await?;
+        assert_eq!(
+            app.side_threads
+                .get(&side_thread_id)
+                .and_then(|state| state.parent_status),
+            None
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -10130,7 +10593,7 @@ guardian_approval = true
         let parent_thread_id = ThreadId::new();
         let side_thread_id = ThreadId::new();
         app.side_threads
-            .insert(side_thread_id, SideThreadState { parent_thread_id });
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
         let snapshot = ThreadEventSnapshot {
             session: Some(ThreadSessionState {
@@ -10158,7 +10621,7 @@ guardian_approval = true
         let side_thread_id = ThreadId::new();
         app.primary_thread_id = Some(parent_thread_id);
         app.side_threads
-            .insert(side_thread_id, SideThreadState { parent_thread_id });
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
         let snapshot = ThreadEventSnapshot {
             session: Some(ThreadSessionState {
@@ -10198,7 +10661,7 @@ guardian_approval = true
         app.primary_thread_id = Some(parent_thread_id);
         app.active_thread_id = Some(side_thread_id);
         app.side_threads
-            .insert(side_thread_id, SideThreadState { parent_thread_id });
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
         app.sync_side_thread_ui();
 
         app.handle_app_server_event(
@@ -10236,7 +10699,7 @@ guardian_approval = true
         let side_thread_id = ThreadId::new();
         app.active_thread_id = Some(side_thread_id);
         app.side_threads
-            .insert(side_thread_id, SideThreadState { parent_thread_id });
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
 
         assert_eq!(
             app.side_thread_to_discard_after_switch(side_thread_id),
@@ -10257,12 +10720,8 @@ guardian_approval = true
         side_config.ephemeral = true;
         let started = app_server.start_thread(&side_config).await?;
         let side_thread_id = started.session.thread_id;
-        app.side_threads.insert(
-            side_thread_id,
-            SideThreadState {
-                parent_thread_id: ThreadId::new(),
-            },
-        );
+        app.side_threads
+            .insert(side_thread_id, SideThreadState::new(ThreadId::new()));
         app.agent_navigation.upsert(
             side_thread_id,
             Some("Side".to_string()),
@@ -10289,7 +10748,7 @@ guardian_approval = true
         let side_thread_id = ThreadId::new();
         app.active_thread_id = Some(side_thread_id);
         app.side_threads
-            .insert(side_thread_id, SideThreadState { parent_thread_id });
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
         app.agent_navigation.upsert(
             side_thread_id,
             Some("Side".to_string()),
@@ -10320,7 +10779,7 @@ guardian_approval = true
         let side_thread_id = ThreadId::new();
         app.active_thread_id = Some(side_thread_id);
         app.side_threads
-            .insert(side_thread_id, SideThreadState { parent_thread_id });
+            .insert(side_thread_id, SideThreadState::new(parent_thread_id));
         app.thread_event_channels
             .insert(side_thread_id, ThreadEventChannel::new(/*capacity*/ 4));
         app.agent_navigation.upsert(
@@ -10880,6 +11339,22 @@ guardian_approval = true
                 proposed_execpolicy_amendment: None,
                 proposed_network_policy_amendments: None,
                 available_decisions: None,
+            },
+        }
+    }
+
+    fn request_user_input_request(
+        thread_id: ThreadId,
+        turn_id: &str,
+        item_id: &str,
+    ) -> ServerRequest {
+        ServerRequest::ToolRequestUserInput {
+            request_id: AppServerRequestId::Integer(2),
+            params: ToolRequestUserInputParams {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: item_id.to_string(),
+                questions: Vec::new(),
             },
         }
     }
@@ -12514,7 +12989,7 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn session_summary_prefers_name_over_id() {
+    async fn session_summary_uses_id_even_when_thread_has_name() {
         let usage = TokenUsage {
             input_tokens: 10,
             output_tokens: 2,
@@ -12535,7 +13010,7 @@ guardian_approval = true
         .expect("summary");
         assert_eq!(
             summary.resume_command,
-            Some("codex resume my-session".to_string())
+            Some("codex resume 123e4567-e89b-12d3-a456-426614174000".to_string())
         );
     }
 }

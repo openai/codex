@@ -385,6 +385,10 @@ impl PendingInteractiveReplayState {
             || !self.request_permissions_call_ids.is_empty()
     }
 
+    pub(super) fn has_pending_thread_user_input(&self) -> bool {
+        !self.request_user_input_call_ids.is_empty()
+    }
+
     fn clear_request_user_input_turn(&mut self, turn_id: &str) {
         if let Some(call_ids) = self.request_user_input_call_ids_by_turn_id.remove(turn_id) {
             for call_id in call_ids {

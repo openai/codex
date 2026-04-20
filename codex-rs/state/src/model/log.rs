@@ -32,7 +32,7 @@ pub struct LogRow {
 
 #[derive(Clone, Debug, Default)]
 pub struct LogQuery {
-    pub level_upper: Option<String>,
+    pub levels_upper: Vec<String>,
     pub from_ts: Option<i64>,
     pub to_ts: Option<i64>,
     pub module_like: Vec<String>,

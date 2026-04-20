@@ -71,20 +71,19 @@ fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) 
         .features
         .enable(Feature::ToolSuggest)
         .expect("test config should allow feature update");
-    config.chatgpt_base_url = apps_base_url.to_string();
-    config.model = Some("gpt-5-codex".to_string());
-    config.tool_suggest.discoverables = vec![ToolSuggestDiscoverable {
-        kind: ToolSuggestDiscoverableType::Connector,
-        id: DISCOVERABLE_GMAIL_ID.to_string(),
-    }];
-
     let mut model_catalog = bundled_models_response()
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     let model = model_catalog
         .models
         .iter_mut()
-        .find(|model| model.slug == "gpt-5-codex")
-        .expect("gpt-5-codex exists in bundled models.json");
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("gpt-5.4 exists in bundled models.json");
+    config.chatgpt_base_url = apps_base_url.to_string();
+    config.model = Some("gpt-5.4".to_string());
+    config.tool_suggest.discoverables = vec![ToolSuggestDiscoverable {
+        kind: ToolSuggestDiscoverableType::Connector,
+        id: DISCOVERABLE_GMAIL_ID.to_string(),
+    }];
     model.supports_search_tool = false;
     config.model_catalog = Some(model_catalog);
 }

@@ -10,8 +10,11 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::AddCreditsNudgeCreditType;
+use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
@@ -32,11 +35,9 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
-use crate::history_cell::HistoryCell;
-use crate::legacy_core::plugins::PluginCapabilitySummary;
-
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
+use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -45,6 +46,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
+
+use crate::history_cell::HistoryCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -207,6 +210,16 @@ pub(crate) enum AppEvent {
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
+    /// Send a user-confirmed request to notify the workspace owner.
+    SendAddCreditsNudgeEmail {
+        credit_type: AddCreditsNudgeCreditType,
+    },
+
+    /// Result of notifying the workspace owner.
+    AddCreditsNudgeEmailFinished {
+        result: Result<AddCreditsNudgeEmailStatus, String>,
+    },
+
     /// Result of prefetching connectors.
     ConnectorsLoaded {
         result: Result<ConnectorsSnapshot, String>,
@@ -339,11 +352,14 @@ pub(crate) enum AppEvent {
     PluginInstallAuthAbandon,
 
     /// Fetch MCP inventory via app-server RPCs and render it into history.
-    FetchMcpInventory,
+    FetchMcpInventory {
+        detail: McpServerStatusDetail,
+    },
 
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
         result: Result<Vec<McpServerStatus>, String>,
+        detail: McpServerStatusDetail,
     },
 
     /// Result of the startup skills refresh that runs after the first frame is scheduled.
