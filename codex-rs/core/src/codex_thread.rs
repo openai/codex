@@ -133,6 +133,12 @@ impl CodexThread {
                     .session
                     .clear_queued_goal_continuations_for_next_turn()
                     .await;
+                if goal_was_replaced {
+                    self.codex
+                        .session
+                        .abort_all_tasks_without_restart(TurnAbortReason::Replaced)
+                        .await;
+                }
             }
             ThreadGoalStatus::Paused | ThreadGoalStatus::Complete
                 if goal_may_have_in_flight_turn =>
