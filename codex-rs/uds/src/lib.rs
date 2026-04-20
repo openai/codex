@@ -125,6 +125,10 @@ mod platform {
         }
 
         let permissions = metadata.permissions();
+        // The SSH-over-UDS control socket is reachable by path, so the
+        // rendezvous directory must be owner-traversable while denying
+        // group/other access; exact 0700 fixes insecure modes and unusable
+        // owner-only modes like 0600.
         if permissions.mode() & SOCKET_DIR_PERMISSION_BITS != SOCKET_DIR_MODE {
             fs::set_permissions(socket_dir, std::fs::Permissions::from_mode(SOCKET_DIR_MODE))
                 .await?;
