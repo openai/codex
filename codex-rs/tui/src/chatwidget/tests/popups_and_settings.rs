@@ -1683,6 +1683,16 @@ async fn experimental_features_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn experimental_features_popup_from_registry_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert_chatwidget_snapshot!("experimental_features_popup_from_registry", popup);
+}
+
+#[tokio::test]
 async fn experimental_features_toggle_saves_on_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

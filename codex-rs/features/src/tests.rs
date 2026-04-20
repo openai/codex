@@ -121,6 +121,22 @@ fn external_migration_is_experimental_and_disabled_by_default() {
 }
 
 #[test]
+fn hooks_is_experimental_and_user_toggleable() {
+    let spec = Feature::CodexHooks.info();
+    let stage = spec.stage;
+
+    assert_eq!(spec.key, "hooks");
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("Hooks"));
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some("Run deterministic scripts during the Codex lifecycle")
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert_eq!(Feature::CodexHooks.default_enabled(), false);
+}
+
+#[test]
 fn request_permissions_is_under_development() {
     assert_eq!(
         Feature::ExecPermissionApprovals.stage(),
@@ -245,6 +261,12 @@ fn workspace_dependencies_is_stable_and_enabled_by_default() {
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+}
+
+#[test]
+fn codex_hooks_is_legacy_alias_for_hooks() {
+    assert_eq!(feature_for_key("hooks"), Some(Feature::CodexHooks));
+    assert_eq!(feature_for_key("codex_hooks"), Some(Feature::CodexHooks));
 }
 
 #[test]
