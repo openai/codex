@@ -25,6 +25,8 @@ const EXTERNAL_AGENT_CONFIG_DETECT_METRIC: &str = "codex.external_agent_config.d
 const EXTERNAL_AGENT_CONFIG_IMPORT_METRIC: &str = "codex.external_agent_config.import";
 const EXTERNAL_AGENT_DIR: &str = ".claude";
 const EXTERNAL_AGENT_CONFIG_MD: &str = "CLAUDE.md";
+const EXTERNAL_OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
+const EXTERNAL_OFFICIAL_MARKETPLACE_SOURCE: &str = "anthropics/claude-plugins-official";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAgentConfigDetectOptions {
@@ -706,6 +708,16 @@ fn collect_enabled_plugins(settings: &JsonValue) -> Vec<String> {
         .collect()
 }
 
+fn has_enabled_plugin_for_marketplace(settings: &JsonValue, marketplace_name: &str) -> bool {
+    collect_enabled_plugins(settings)
+        .into_iter()
+        .any(|plugin_id| {
+            PluginId::parse(&plugin_id)
+                .map(|plugin_id| plugin_id.marketplace_name == marketplace_name)
+                .unwrap_or(false)
+        })
+}
+
 fn configured_marketplace_plugins(
     config: &Config,
     plugins_manager: &PluginsManager,
@@ -741,48 +753,61 @@ fn collect_marketplace_import_sources(
     settings: &JsonValue,
     source_root: &Path,
 ) -> BTreeMap<String, MarketplaceImportSource> {
-    let Some(extra_known_marketplaces) = settings
+    let mut import_sources: BTreeMap<String, MarketplaceImportSource> = settings
         .as_object()
         .and_then(|settings| settings.get("extraKnownMarketplaces"))
         .and_then(JsonValue::as_object)
-    else {
-        return BTreeMap::new();
-    };
+        .map(|extra_known_marketplaces| {
+            extra_known_marketplaces
+                .iter()
+                .filter_map(|(name, value)| {
+                    let source_fields = if let Some(source) = value.get("source")
+                        && source.is_object()
+                    {
+                        source.as_object()?
+                    } else {
+                        value.as_object()?
+                    };
+                    let source = source_fields
+                        .get("repo")
+                        .or_else(|| source_fields.get("url"))
+                        .or_else(|| source_fields.get("path"))
+                        .or_else(|| value.get("source"))?
+                        .as_str()?
+                        .trim()
+                        .to_string();
+                    if source.is_empty() {
+                        return None;
+                    }
+                    let source = resolve_external_marketplace_source(&source, source_root);
 
-    extra_known_marketplaces
-        .iter()
-        .filter_map(|(name, value)| {
-            let source_fields = if let Some(source) = value.get("source")
-                && source.is_object()
-            {
-                source.as_object()?
-            } else {
-                value.as_object()?
-            };
-            let source = source_fields
-                .get("repo")
-                .or_else(|| source_fields.get("url"))
-                .or_else(|| source_fields.get("path"))
-                .or_else(|| value.get("source"))?
-                .as_str()?
-                .trim()
-                .to_string();
-            if source.is_empty() {
-                return None;
-            }
-            let source = resolve_external_marketplace_source(&source, source_root);
+                    let ref_name = source_fields
+                        .get("ref")
+                        .or_else(|| value.get("ref"))
+                        .and_then(JsonValue::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned);
 
-            let ref_name = source_fields
-                .get("ref")
-                .or_else(|| value.get("ref"))
-                .and_then(JsonValue::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned);
-
-            Some((name.clone(), MarketplaceImportSource { source, ref_name }))
+                    Some((name.clone(), MarketplaceImportSource { source, ref_name }))
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default();
+
+    if has_enabled_plugin_for_marketplace(settings, EXTERNAL_OFFICIAL_MARKETPLACE_NAME)
+        && !import_sources.contains_key(EXTERNAL_OFFICIAL_MARKETPLACE_NAME)
+    {
+        import_sources.insert(
+            EXTERNAL_OFFICIAL_MARKETPLACE_NAME.to_string(),
+            MarketplaceImportSource {
+                source: EXTERNAL_OFFICIAL_MARKETPLACE_SOURCE.to_string(),
+                ref_name: None,
+            },
+        );
+    }
+
+    import_sources
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

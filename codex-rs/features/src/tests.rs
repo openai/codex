@@ -242,6 +242,14 @@ fn workspace_dependencies_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn telepathy_is_legacy_alias_for_chronicle() {
+    assert_eq!(Feature::Chronicle.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::Chronicle.default_enabled(), false);
+    assert_eq!(feature_for_key("chronicle"), Some(Feature::Chronicle));
+    assert_eq!(feature_for_key("telepathy"), Some(Feature::Chronicle));
+}
+
+#[test]
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));

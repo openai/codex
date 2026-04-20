@@ -48,6 +48,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::MarketplaceAddParams;
+use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
@@ -553,6 +554,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("marketplace/add", params).await
+    }
+
+    /// Send a `marketplace/remove` JSON-RPC request.
+    pub async fn send_marketplace_remove_request(
+        &mut self,
+        params: MarketplaceRemoveParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("marketplace/remove", params).await
     }
 
     /// Send a `plugin/install` JSON-RPC request.
