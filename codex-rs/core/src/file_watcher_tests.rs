@@ -163,7 +163,7 @@ fn subscriber_drop_unregisters_paths() {
 
 #[test]
 fn missing_path_registers_nearest_existing_parent() {
-    // Missing targets use a recursive parent fallback because they may become directories.
+    // Missing targets start with a bounded non-recursive parent fallback.
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let missing_file = temp_dir.path().join("FETCH_HEAD");
 
@@ -171,7 +171,7 @@ fn missing_path_registers_nearest_existing_parent() {
     let (subscriber, _rx) = watcher.add_subscriber();
     let registration = subscriber.register_path(missing_file.clone(), /*recursive*/ false);
 
-    assert_eq!(watcher.watch_counts_for_test(temp_dir.path()), Some((0, 1)));
+    assert_eq!(watcher.watch_counts_for_test(temp_dir.path()), Some((1, 0)));
     assert_eq!(watcher.watch_counts_for_test(&missing_file), None);
 
     drop(registration);
@@ -180,8 +180,8 @@ fn missing_path_registers_nearest_existing_parent() {
 }
 
 #[test]
-fn deeply_missing_path_registers_nearest_existing_ancestor_recursively() {
-    // A missing nested target skips file prefixes and watches the closest directory.
+fn deeply_missing_path_registers_nearest_existing_directory_ancestor() {
+    // Missing nested targets skip file prefixes and keep the fallback non-recursive.
     let temp_dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(temp_dir.path().join("refs"), "not a dir").expect("write refs file");
     let missing_file = temp_dir.path().join("refs").join("heads").join("main");
@@ -190,7 +190,7 @@ fn deeply_missing_path_registers_nearest_existing_ancestor_recursively() {
     let (subscriber, _rx) = watcher.add_subscriber();
     let _registration = subscriber.register_path(missing_file, /*recursive*/ false);
 
-    assert_eq!(watcher.watch_counts_for_test(temp_dir.path()), Some((0, 1)));
+    assert_eq!(watcher.watch_counts_for_test(temp_dir.path()), Some((1, 0)));
 }
 
 #[tokio::test]
@@ -438,6 +438,54 @@ async fn missing_file_watch_reports_requested_path_when_parent_delete_event_arri
         deleted,
         FileWatcherEvent {
             paths: vec![missing_file],
+        }
+    );
+}
+
+#[tokio::test]
+async fn missing_directory_watch_moves_to_created_directory_for_child_events() {
+    // Missing directory watches move closer as components appear, without recursive fallback.
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let skills_dir = temp_dir.path().join("skills");
+    let skill_file = skills_dir.join("SKILL.md");
+
+    let watcher = Arc::new(FileWatcher::noop());
+    let (subscriber, rx) = watcher.add_subscriber();
+    let _registration = subscriber.register_path(skills_dir.clone(), /*recursive*/ false);
+    let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
+
+    assert_eq!(watcher.watch_counts_for_test(temp_dir.path()), Some((1, 0)));
+    assert_eq!(watcher.watch_counts_for_test(&skills_dir), None);
+
+    std::fs::create_dir(&skills_dir).expect("create skills dir");
+    watcher
+        .send_paths_for_test(vec![temp_dir.path().into()])
+        .await;
+
+    let created = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("created dir event timeout")
+        .expect("created dir event");
+    assert_eq!(
+        created,
+        FileWatcherEvent {
+            paths: vec![skills_dir.clone()],
+        }
+    );
+    assert_eq!(watcher.watch_counts_for_test(temp_dir.path()), None);
+    assert_eq!(watcher.watch_counts_for_test(&skills_dir), Some((1, 0)));
+
+    std::fs::write(&skill_file, "name: rust\n").expect("write skill file");
+    watcher.send_paths_for_test(vec![skill_file.clone()]).await;
+
+    let changed_child = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("changed child event timeout")
+        .expect("changed child event");
+    assert_eq!(
+        changed_child,
+        FileWatcherEvent {
+            paths: vec![skill_file],
         }
     );
 }
