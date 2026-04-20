@@ -2190,6 +2190,7 @@ mod tests {
             turn_id: None,
             trace_id: None,
             cwd,
+            environments: None,
             current_date: None,
             timezone: None,
             approval_policy: config.permissions.approval_policy.value(),

@@ -1,6 +1,5 @@
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
-use codex_features::Feature;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use std::path::PathBuf;
@@ -41,6 +40,7 @@ impl NetworkContext {
 }
 
 impl EnvironmentContext {
+    #[cfg(test)]
     pub(crate) fn new(
         cwd: Option<PathBuf>,
         shell: String,
@@ -117,7 +117,7 @@ impl EnvironmentContext {
         };
         EnvironmentContext::new_with_environments(
             cwd,
-            after.environments.clone(),
+            Self::environments_for_diff(before, after),
             after.shell.clone(),
             after.current_date.clone(),
             after.timezone.clone(),
@@ -142,8 +142,9 @@ impl EnvironmentContext {
         turn_context_item: &TurnContextItem,
         shell: String,
     ) -> Self {
-        Self::new(
+        Self::new_with_environments(
             Some(turn_context_item.cwd.clone()),
+            Self::environments_from_turn_context_item(turn_context_item),
             shell,
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
@@ -197,7 +198,7 @@ impl EnvironmentContext {
     fn environments_from_turn_context(
         turn_context: &TurnContext,
     ) -> Option<Vec<EnvironmentContextEnvironment>> {
-        if !turn_context.features.enabled(Feature::MultiEnvironmentTools) {
+        if !turn_context.tools_config.multi_environment_tools {
             return None;
         }
         let environments = turn_context.environments.as_ref()?;
@@ -216,6 +217,39 @@ impl EnvironmentContext {
                 })
                 .collect(),
         )
+    }
+
+    fn environments_from_turn_context_item(
+        turn_context_item: &TurnContextItem,
+    ) -> Option<Vec<EnvironmentContextEnvironment>> {
+        let environments = turn_context_item.environments.as_ref()?;
+        if environments.is_empty() {
+            return None;
+        }
+
+        Some(
+            environments
+                .iter()
+                .enumerate()
+                .map(|(index, environment)| EnvironmentContextEnvironment {
+                    id: environment.environment_id.clone(),
+                    cwd: environment.cwd.to_path_buf(),
+                    primary: index == 0,
+                })
+                .collect(),
+        )
+    }
+
+    fn environments_for_diff(
+        before: &TurnContextItem,
+        after: &EnvironmentContext,
+    ) -> Option<Vec<EnvironmentContextEnvironment>> {
+        let before_environments = Self::environments_from_turn_context_item(before);
+        if before_environments == after.environments {
+            None
+        } else {
+            after.environments.clone()
+        }
     }
 }
 

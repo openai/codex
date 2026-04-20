@@ -1257,11 +1257,19 @@ impl Session {
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
+        let environment_selections = reconstructed_rollout
+            .reference_context_item
+            .as_ref()
+            .and_then(|context_item| context_item.environments.clone());
         self.replace_history(
             reconstructed_rollout.history,
             reconstructed_rollout.reference_context_item,
         )
         .await;
+        if let Some(environment_selections) = environment_selections {
+            let mut state = self.state.lock().await;
+            state.session_configuration.environment_selections = Some(environment_selections);
+        }
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         previous_turn_settings

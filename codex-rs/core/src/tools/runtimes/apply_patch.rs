@@ -16,6 +16,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
+use codex_exec_server::Environment;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -35,16 +36,26 @@ use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
+    pub environment_id: Option<String>,
+    pub environment: Arc<Environment>,
+    pub cwd: AbsolutePathBuf,
     pub action: ApplyPatchAction,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
     pub additional_permissions: Option<PermissionProfile>,
     pub permissions_preapproved: bool,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize)]
+pub struct ApplyPatchApprovalKey {
+    pub environment_id: Option<String>,
+    pub path: AbsolutePathBuf,
 }
 
 #[derive(Default)]
@@ -61,7 +72,7 @@ impl ApplyPatchRuntime {
     ) -> GuardianApprovalRequest {
         GuardianApprovalRequest::ApplyPatch {
             id: call_id.to_string(),
-            cwd: req.action.cwd.clone(),
+            cwd: req.cwd.clone(),
             files: req.file_paths.clone(),
             patch: req.action.patch.clone(),
         }
@@ -121,10 +132,17 @@ impl Sandboxable for ApplyPatchRuntime {
 }
 
 impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
-    type ApprovalKey = AbsolutePathBuf;
+    type ApprovalKey = ApplyPatchApprovalKey;
 
     fn approval_keys(&self, req: &ApplyPatchRequest) -> Vec<Self::ApprovalKey> {
-        req.file_paths.clone()
+        req.file_paths
+            .iter()
+            .cloned()
+            .map(|path| ApplyPatchApprovalKey {
+                environment_id: req.environment_id.clone(),
+                path,
+            })
+            .collect()
     }
 
     fn start_approval_async<'a>(
@@ -201,23 +219,28 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 }
 
 impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
+    fn sandbox_cwd<'a>(
+        &self,
+        req: &'a ApplyPatchRequest,
+        _turn_ctx: &'a crate::session::turn_context::TurnContext,
+    ) -> &'a AbsolutePathBuf {
+        &req.cwd
+    }
+
     async fn run(
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let environment = ctx.turn.environment.as_ref().ok_or_else(|| {
-            ToolError::Rejected("apply_patch is unavailable in this session".to_string())
-        })?;
         let started_at = Instant::now();
-        let fs = environment.get_filesystem();
+        let fs = req.environment.get_filesystem();
         let sandbox = Self::file_system_sandbox_context_for_attempt(req, attempt);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let result = codex_apply_patch::apply_patch(
             &req.action.patch,
-            &req.action.cwd,
+            &req.cwd,
             &mut stdout,
             &mut stderr,
             fs.as_ref(),

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewImageToolOptions {
     pub can_request_original_image_detail: bool,
+    pub multi_environment_tools: bool,
 }
 
 pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
@@ -21,6 +22,14 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
             "detail".to_string(),
             JsonSchema::string(Some(
                 "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
+            )),
+        );
+    }
+    if options.multi_environment_tools {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Optional selected environment id to load the image from; omit to use the primary environment.".to_string(),
             )),
         );
     }

@@ -45,6 +45,6 @@ fn parse_listen_url_rejects_unsupported_url() {
         parse_listen_url("http://127.0.0.1:1234").expect_err("unsupported scheme should fail");
     assert_eq!(
         err.to_string(),
-        "unsupported --listen URL `http://127.0.0.1:1234`; expected `ws://IP:PORT`"
+        "unsupported --listen URL `http://127.0.0.1:1234`; expected `ws://IP:PORT` or `stdio://`"
     );
 }

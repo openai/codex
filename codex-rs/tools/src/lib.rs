@@ -41,6 +41,7 @@ pub use agent_tool::create_spawn_agent_tool_v2;
 pub use agent_tool::create_wait_agent_tool_v1;
 pub use agent_tool::create_wait_agent_tool_v2;
 pub use apply_patch_tool::ApplyPatchToolArgs;
+pub use apply_patch_tool::ApplyPatchToolOptions;
 pub use apply_patch_tool::create_apply_patch_freeform_tool;
 pub use apply_patch_tool::create_apply_patch_json_tool;
 pub use code_mode::augment_tool_spec_for_code_mode;
