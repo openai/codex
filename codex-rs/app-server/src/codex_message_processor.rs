@@ -337,6 +337,7 @@ use codex_thread_store::ArchiveThreadParams as StoreArchiveThreadParams;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams as StoreReadThreadParams;
+use codex_thread_store::RemoteThreadStore;
 use codex_thread_store::SortDirection as StoreSortDirection;
 use codex_thread_store::StoredThread;
 use codex_thread_store::ThreadMetadataPatch as StoreThreadMetadataPatch;
@@ -474,7 +475,7 @@ pub(crate) struct CodexMessageProcessor {
     analytics_events_client: AnalyticsEventsClient,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
-    thread_store: LocalThreadStore,
+    thread_store: Arc<dyn ThreadStore>,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
@@ -642,6 +643,15 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) log_db: Option<LogDbLayer>,
 }
 
+fn configured_thread_store(config: &Config) -> Arc<dyn ThreadStore> {
+    match config.experimental_thread_store_endpoint.as_deref() {
+        Some(endpoint) => Arc::new(RemoteThreadStore::new(endpoint)),
+        None => Arc::new(LocalThreadStore::new(
+            codex_rollout::RolloutConfig::from_view(config),
+        )),
+    }
+}
+
 impl CodexMessageProcessor {
     async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
         codex_core::AgentsMdManager::new(config)
@@ -725,7 +735,7 @@ impl CodexMessageProcessor {
             outgoing: outgoing.clone(),
             analytics_events_client,
             arg0_paths,
-            thread_store: LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(&config)),
+            thread_store: configured_thread_store(&config),
             config,
             cli_overrides,
             runtime_feature_enablement,
@@ -2851,8 +2861,36 @@ impl CodexMessageProcessor {
             }
         };
 
-        let thread_id_str = thread_id.to_string();
-        if let Err(err) = self
+        let mut thread_ids = vec![thread_id];
+        if let Some(state_db_ctx) = get_state_db(&self.config).await {
+            let descendants = match state_db_ctx.list_thread_spawn_descendants(thread_id).await {
+                Ok(descendants) => descendants,
+                Err(err) => {
+                    self.outgoing
+                        .send_error(
+                            request_id,
+                            JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!(
+                                    "failed to list spawned descendants for thread id {thread_id}: {err}"
+                                ),
+                                data: None,
+                            },
+                        )
+                        .await;
+                    return;
+                }
+            };
+            let mut seen = HashSet::from([thread_id]);
+            for descendant_id in descendants {
+                if seen.insert(descendant_id) {
+                    thread_ids.push(descendant_id);
+                }
+            }
+        }
+
+        let mut archive_thread_ids = Vec::new();
+        match self
             .thread_store
             .read_thread(StoreReadThreadParams {
                 thread_id,
@@ -2861,33 +2899,97 @@ impl CodexMessageProcessor {
             })
             .await
         {
-            self.outgoing
-                .send_error(request_id, thread_store_archive_error("archive", err))
-                .await;
-            return;
-        }
-        self.prepare_thread_for_archive(thread_id).await;
-
-        match self
-            .thread_store
-            .archive_thread(StoreArchiveThreadParams { thread_id })
-            .await
-        {
-            Ok(()) => {
-                let response = ThreadArchiveResponse {};
-                self.outgoing.send_response(request_id, response).await;
-                let notification = ThreadArchivedNotification {
-                    thread_id: thread_id_str,
-                };
-                self.outgoing
-                    .send_server_notification(ServerNotification::ThreadArchived(notification))
-                    .await;
+            Ok(thread) => {
+                if thread.archived_at.is_none() {
+                    archive_thread_ids.push(thread_id);
+                }
             }
             Err(err) => {
                 self.outgoing
                     .send_error(request_id, thread_store_archive_error("archive", err))
                     .await;
+                return;
             }
+        }
+        for descendant_thread_id in thread_ids.into_iter().skip(1) {
+            match self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id: descendant_thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await
+            {
+                Ok(thread) => {
+                    if thread.archived_at.is_none() {
+                        archive_thread_ids.push(descendant_thread_id);
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to read spawned descendant thread {descendant_thread_id} while archiving {thread_id}: {err}"
+                    );
+                }
+            }
+        }
+
+        let mut archived_thread_ids = Vec::new();
+        let Some((parent_thread_id, descendant_thread_ids)) = archive_thread_ids.split_first()
+        else {
+            self.outgoing
+                .send_response(request_id, ThreadArchiveResponse {})
+                .await;
+            return;
+        };
+
+        self.prepare_thread_for_archive(*parent_thread_id).await;
+        match self
+            .thread_store
+            .archive_thread(StoreArchiveThreadParams {
+                thread_id: *parent_thread_id,
+            })
+            .await
+        {
+            Ok(()) => {
+                archived_thread_ids.push(parent_thread_id.to_string());
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(request_id, thread_store_archive_error("archive", err))
+                    .await;
+                return;
+            }
+        }
+
+        for descendant_thread_id in descendant_thread_ids.iter().rev().copied() {
+            self.prepare_thread_for_archive(descendant_thread_id).await;
+            match self
+                .thread_store
+                .archive_thread(StoreArchiveThreadParams {
+                    thread_id: descendant_thread_id,
+                })
+                .await
+            {
+                Ok(()) => {
+                    archived_thread_ids.push(descendant_thread_id.to_string());
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to archive spawned descendant thread {descendant_thread_id} while archiving {thread_id}: {err}"
+                    );
+                }
+            }
+        }
+
+        self.outgoing
+            .send_response(request_id, ThreadArchiveResponse {})
+            .await;
+        for thread_id in archived_thread_ids {
+            let notification = ThreadArchivedNotification { thread_id };
+            self.outgoing
+                .send_server_notification(ServerNotification::ThreadArchived(notification))
+                .await;
         }
     }
 
@@ -5110,62 +5212,62 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: GetConversationSummaryParams,
     ) {
-        if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
-            && let Some(summary) =
-                read_summary_from_state_db_by_thread_id(&self.config, *conversation_id).await
-        {
-            let response = GetConversationSummaryResponse { summary };
-            self.outgoing.send_response(request_id, response).await;
-            return;
-        }
-
-        let path = match params {
-            GetConversationSummaryParams::RolloutPath { rollout_path } => {
-                if rollout_path.is_relative() {
-                    self.config.codex_home.join(&rollout_path).to_path_buf()
-                } else {
-                    rollout_path
-                }
-            }
-            GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match codex_core::find_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &conversation_id.to_string(),
-                )
+        let fallback_provider = self.config.model_provider_id.as_str();
+        let read_result = match params {
+            GetConversationSummaryParams::ThreadId { conversation_id } => self
+                .thread_store
+                .read_thread(StoreReadThreadParams {
+                    thread_id: conversation_id,
+                    include_archived: true,
+                    include_history: false,
+                })
                 .await
-                {
-                    Ok(Some(p)) => p,
-                    _ => {
-                        let error = JSONRPCErrorError {
-                            code: INVALID_REQUEST_ERROR_CODE,
-                            message: format!(
-                                "no rollout found for conversation id {conversation_id}"
-                            ),
-                            data: None,
-                        };
-                        self.outgoing.send_error(request_id, error).await;
-                        return;
-                    }
-                }
+                .map_err(|err| conversation_summary_thread_id_read_error(conversation_id, err)),
+            GetConversationSummaryParams::RolloutPath { rollout_path } => {
+                let Some(local_thread_store) = self
+                    .thread_store
+                    .as_any()
+                    .downcast_ref::<LocalThreadStore>()
+                else {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message:
+                            "rollout path queries are only supported with the local thread store"
+                                .to_string(),
+                        data: None,
+                    };
+                    return self.outgoing.send_error(request_id, error).await;
+                };
+
+                local_thread_store
+                    .read_thread_by_rollout_path(
+                        rollout_path.clone(),
+                        /*include_archived*/ true,
+                        /*include_history*/ false,
+                    )
+                    .await
+                    .map_err(|err| conversation_summary_rollout_path_read_error(&rollout_path, err))
             }
         };
 
-        let fallback_provider = self.config.model_provider_id.as_str();
-        match read_summary_from_rollout(&path, fallback_provider).await {
-            Ok(summary) => {
+        match read_result {
+            Ok(stored_thread) => {
+                let Some(summary) = summary_from_stored_thread(stored_thread, fallback_provider)
+                else {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message:
+                            "failed to load conversation summary: thread is missing rollout path"
+                                .to_string(),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                };
                 let response = GetConversationSummaryResponse { summary };
                 self.outgoing.send_response(request_id, response).await;
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!(
-                        "failed to load conversation summary from {}: {}",
-                        path.display(),
-                        err
-                    ),
-                    data: None,
-                };
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -9526,6 +9628,61 @@ fn thread_store_list_error(err: ThreadStoreError) -> JSONRPCErrorError {
         err => JSONRPCErrorError {
             code: INTERNAL_ERROR_CODE,
             message: format!("failed to list threads: {err}"),
+            data: None,
+        },
+    }
+}
+
+fn conversation_summary_thread_id_read_error(
+    conversation_id: ThreadId,
+    err: ThreadStoreError,
+) -> JSONRPCErrorError {
+    let no_rollout_message = format!("no rollout found for thread id {conversation_id}");
+    match err {
+        ThreadStoreError::InvalidRequest { message } if message == no_rollout_message => {
+            conversation_summary_not_found_error(conversation_id)
+        }
+        ThreadStoreError::ThreadNotFound { thread_id } if thread_id == conversation_id => {
+            conversation_summary_not_found_error(conversation_id)
+        }
+        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        },
+        err => JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("failed to load conversation summary for {conversation_id}: {err}"),
+            data: None,
+        },
+    }
+}
+
+fn conversation_summary_not_found_error(conversation_id: ThreadId) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: INVALID_REQUEST_ERROR_CODE,
+        message: format!("no rollout found for conversation id {conversation_id}"),
+        data: None,
+    }
+}
+
+fn conversation_summary_rollout_path_read_error(
+    path: &Path,
+    err: ThreadStoreError,
+) -> JSONRPCErrorError {
+    match err {
+        ThreadStoreError::InvalidRequest { message } => JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message,
+            data: None,
+        },
+        err => JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!(
+                "failed to load conversation summary from {}: {}",
+                path.display(),
+                err
+            ),
             data: None,
         },
     }
