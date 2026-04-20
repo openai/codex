@@ -9,6 +9,12 @@ use crate::memories::ensure_layout;
 use crate::memories::raw_memories_file;
 use crate::memories::rollout_summaries_dir;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EmptyArtifactCleanup {
+    RemoveConsolidated,
+    PreserveConsolidated,
+}
+
 /// Rebuild `raw_memories.md` from DB-backed stage-1 outputs.
 pub(super) async fn rebuild_raw_memories_file_from_memories(
     root: &Path,
@@ -24,6 +30,7 @@ pub(super) async fn sync_rollout_summaries_from_memories(
     root: &Path,
     memories: &[Stage1Output],
     max_raw_memories_for_consolidation: usize,
+    empty_artifact_cleanup: EmptyArtifactCleanup,
 ) -> std::io::Result<()> {
     ensure_layout(root).await?;
 
@@ -38,7 +45,7 @@ pub(super) async fn sync_rollout_summaries_from_memories(
         write_rollout_summary_for_thread(root, memory).await?;
     }
 
-    if retained.is_empty() {
+    if retained.is_empty() && empty_artifact_cleanup == EmptyArtifactCleanup::RemoveConsolidated {
         for file_name in ["MEMORY.md", "memory_summary.md"] {
             let path = root.join(file_name);
             if let Err(err) = tokio::fs::remove_file(path).await

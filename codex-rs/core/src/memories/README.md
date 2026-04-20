@@ -123,8 +123,10 @@ Selection diff behavior:
 - rows that were previously selected but still exist outside the current top-N
   selection are surfaced as `removed`
 - before the agent starts, local `rollout_summaries/` and `raw_memories.md`
-  keep the union of the current selection and the previous successful
-  selection, so removed-thread evidence stays available during forgetting
+  reflect the current selection so removed-thread summaries show up as
+  workspace deletions during forgetting; when removals are pending, existing
+  consolidated artifacts such as `MEMORY.md`, `memory_summary.md`, and
+  `skills/` are preserved for the agent's targeted cleanup
 
 Watermark behavior:
 

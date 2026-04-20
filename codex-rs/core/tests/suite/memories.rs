@@ -55,14 +55,15 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
 
     let first = build_test_codex(&server, home.clone()).await?;
     let first_request = wait_for_single_request(&first_phase2).await;
-    let first_prompt = phase2_prompt_text(&first_request);
+    let _first_prompt = phase2_prompt_text(&first_request);
+    let first_workspace_diff = read_workspace_diff(&home).await?;
     assert!(
-        first_prompt.contains("- A raw_memories.md"),
-        "expected raw memories to be added in first prompt: {first_prompt}"
+        first_workspace_diff.contains("- A raw_memories.md"),
+        "expected raw memories to be added in first workspace diff: {first_workspace_diff}"
     );
     assert!(
-        first_prompt.contains("rollout_a.md"),
-        "expected rollout A summary to be added: {first_prompt}"
+        first_workspace_diff.contains("rollout_a.md"),
+        "expected rollout A summary to be added: {first_workspace_diff}"
     );
 
     wait_for_phase2_success(db.as_ref(), thread_a).await?;
@@ -99,18 +100,19 @@ async fn memories_startup_phase2_tracks_added_and_removed_inputs_across_runs() -
 
     let second = build_test_codex(&server, home.clone()).await?;
     let second_request = wait_for_single_request(&second_phase2).await;
-    let second_prompt = phase2_prompt_text(&second_request);
+    let _second_prompt = phase2_prompt_text(&second_request);
+    let second_workspace_diff = read_workspace_diff(&home).await?;
     assert!(
-        second_prompt.contains("- M raw_memories.md"),
-        "expected raw memories to be modified in second prompt: {second_prompt}"
+        second_workspace_diff.contains("- M raw_memories.md"),
+        "expected raw memories to be modified in second workspace diff: {second_workspace_diff}"
     );
     assert!(
-        second_prompt.contains("rollout_b.md"),
-        "expected rollout B summary to be added: {second_prompt}"
+        second_workspace_diff.contains("rollout_b.md"),
+        "expected rollout B summary to be added: {second_workspace_diff}"
     );
     assert!(
-        second_prompt.contains("- D rollout_summaries/"),
-        "expected rollout A summary to be deleted: {second_prompt}"
+        second_workspace_diff.contains("- D rollout_summaries/"),
+        "expected rollout A summary to be deleted: {second_workspace_diff}"
     );
 
     wait_for_phase2_success(db.as_ref(), thread_b).await?;
@@ -155,11 +157,11 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
     )
     .await?;
 
-    let chronicle_resources = home.path().join("memories_extensions/chronicle/resources");
+    let chronicle_resources = home.path().join("memories/extensions/chronicle/resources");
     tokio::fs::create_dir_all(&chronicle_resources).await?;
     tokio::fs::write(
         home.path()
-            .join("memories_extensions/chronicle/instructions.md"),
+            .join("memories/extensions/chronicle/instructions.md"),
         "instructions",
     )
     .await?;
@@ -167,8 +169,8 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
         "{}-abcd-10min-old.md",
         (now - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
     );
-    let legacy_old_file = chronicle_resources.join(&old_file_name);
-    tokio::fs::write(&legacy_old_file, "old resource").await?;
+    let old_file = chronicle_resources.join(&old_file_name);
+    tokio::fs::write(&old_file, "old resource").await?;
     let recent_file = chronicle_resources.join(format!(
         "{}-abcd-10min-recent.md",
         (now - ChronoDuration::days(6)).format("%Y-%m-%dT%H-%M-%S")
@@ -187,13 +189,14 @@ async fn memories_startup_phase2_prunes_old_extension_resources_and_reports_them
 
     let codex = build_test_codex(&server, home.clone()).await?;
     let request = wait_for_single_request(&phase2).await;
-    let prompt = phase2_prompt_text(&request);
+    let _prompt = phase2_prompt_text(&request);
+    let workspace_diff = read_workspace_diff(&home).await?;
 
     assert!(
-        prompt.contains(&format!(
+        workspace_diff.contains(&format!(
             "- D extensions/chronicle/resources/{old_file_name}"
         )),
-        "expected old resource deletion in prompt: {prompt}"
+        "expected old resource deletion in workspace diff: {workspace_diff}"
     );
 
     wait_for_phase2_success(db.as_ref(), thread_id).await?;
@@ -229,11 +232,11 @@ async fn memories_startup_phase2_processes_old_extension_resources_without_stage
         .await?;
 
     let now = Utc::now();
-    let chronicle_resources = home.path().join("memories_extensions/chronicle/resources");
+    let chronicle_resources = home.path().join("memories/extensions/chronicle/resources");
     tokio::fs::create_dir_all(&chronicle_resources).await?;
     tokio::fs::write(
         home.path()
-            .join("memories_extensions/chronicle/instructions.md"),
+            .join("memories/extensions/chronicle/instructions.md"),
         "instructions",
     )
     .await?;
@@ -241,8 +244,8 @@ async fn memories_startup_phase2_processes_old_extension_resources_without_stage
         "{}-abcd-10min-old.md",
         (now - ChronoDuration::days(8)).format("%Y-%m-%dT%H-%M-%S")
     );
-    let legacy_old_file = chronicle_resources.join(&old_file_name);
-    tokio::fs::write(&legacy_old_file, "old resource").await?;
+    let old_file = chronicle_resources.join(&old_file_name);
+    tokio::fs::write(&old_file, "old resource").await?;
 
     let phase2 = mount_sse_once(
         &server,
@@ -256,13 +259,14 @@ async fn memories_startup_phase2_processes_old_extension_resources_without_stage
 
     let codex = build_test_codex(&server, home.clone()).await?;
     let request = wait_for_single_request(&phase2).await;
-    let prompt = phase2_prompt_text(&request);
+    let _prompt = phase2_prompt_text(&request);
+    let workspace_diff = read_workspace_diff(&home).await?;
 
     assert!(
-        prompt.contains(&format!(
+        workspace_diff.contains(&format!(
             "- D extensions/chronicle/resources/{old_file_name}"
         )),
-        "expected old resource deletion in prompt: {prompt}"
+        "expected old resource deletion in workspace diff: {workspace_diff}"
     );
     let old_file = home.path().join(format!(
         "memories/extensions/chronicle/resources/{old_file_name}"
@@ -370,10 +374,11 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
     let first_phase2_request = wait_for_request(&responses, /*expected_count*/ 1)
         .await
         .remove(0);
-    let first_phase2_prompt = phase2_prompt_text(&first_phase2_request);
+    let _first_phase2_prompt = phase2_prompt_text(&first_phase2_request);
+    let first_workspace_diff = read_workspace_diff(&home).await?;
     assert!(
-        first_phase2_prompt.contains("- A raw_memories.md"),
-        "expected raw memories to be added before pollution: {first_phase2_prompt}"
+        first_workspace_diff.contains("- A raw_memories.md"),
+        "expected raw memories to be added before pollution: {first_workspace_diff}"
     );
 
     wait_for_phase2_success(db.as_ref(), thread_id).await?;
@@ -440,16 +445,14 @@ async fn web_search_pollution_moves_selected_thread_into_removed_phase2_inputs()
     .await;
     let cleanup = build_test_codex(&server, home.clone()).await?;
     let removed_request = wait_for_single_request(&removed_phase2).await;
-    let removed_prompt = phase2_prompt_text(&removed_request);
+    let _removed_prompt = phase2_prompt_text(&removed_request);
+    let workspace_diff = read_workspace_diff(&home).await?;
     assert!(
-        removed_prompt.contains("- D rollout_summaries/"),
-        "expected polluted thread rollout summary to be deleted: {removed_prompt}"
+        workspace_diff.contains("- D rollout_summaries/"),
+        "expected polluted thread rollout summary to be deleted: {workspace_diff}"
     );
-
-    let workspace_diff =
-        tokio::fs::read_to_string(home.path().join("memories/phase2_workspace_diff.md")).await?;
     assert!(
-        workspace_diff.contains("Status: deleted"),
+        workspace_diff.contains("deleted file mode 100644"),
         "expected deleted file section in workspace diff: {workspace_diff}"
     );
     assert!(
@@ -527,6 +530,10 @@ async fn wait_for_single_request(mock: &ResponseMock) -> ResponsesRequest {
     wait_for_request(mock, /*expected_count*/ 1).await.remove(0)
 }
 
+async fn read_workspace_diff(home: &TempDir) -> Result<String> {
+    Ok(tokio::fs::read_to_string(home.path().join("memories/phase2_workspace_diff.md")).await?)
+}
+
 async fn wait_for_file_removed(path: &Path) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -562,7 +569,7 @@ fn phase2_prompt_text(request: &ResponsesRequest) -> String {
     request
         .message_input_texts("user")
         .into_iter()
-        .find(|text| text.contains("Memory workspace changes:"))
+        .find(|text| text.contains("Memory workspace diff:"))
         .expect("phase2 prompt text")
 }
 

@@ -7,6 +7,7 @@ use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
 use crate::memories::prompts::build_consolidation_prompt;
+use crate::memories::storage::EmptyArtifactCleanup;
 use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use crate::memories::workspace::commit_all;
@@ -102,14 +103,23 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     };
     let raw_memories = selection.selected.to_vec();
     let artifact_memories = selection.selected.clone();
+    let empty_artifact_cleanup = if selection.removed.is_empty() {
+        EmptyArtifactCleanup::RemoveConsolidated
+    } else {
+        EmptyArtifactCleanup::PreserveConsolidated
+    };
     let new_watermark = get_watermark(claim.watermark, &raw_memories);
 
     // 4. Update the file system by syncing the raw memories with the one extracted from DB at
     //    step 3
     // [`rollout_summaries/`]
-    if let Err(err) =
-        sync_rollout_summaries_from_memories(&root, &artifact_memories, artifact_memories.len())
-            .await
+    if let Err(err) = sync_rollout_summaries_from_memories(
+        &root,
+        &artifact_memories,
+        artifact_memories.len(),
+        empty_artifact_cleanup,
+    )
+    .await
     {
         tracing::error!("failed syncing local memory artifacts for global consolidation: {err}");
         job::failed(session, db, &claim, "failed_sync_artifacts").await;

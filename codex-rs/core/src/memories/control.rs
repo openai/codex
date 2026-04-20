@@ -2,7 +2,14 @@ use std::path::Path;
 
 pub async fn clear_memory_roots_contents(codex_home: &Path) -> std::io::Result<()> {
     let memory_root = codex_home.join("memories");
-    clear_memory_root_contents(&memory_root).await
+    clear_memory_root_contents(&memory_root).await?;
+
+    let legacy_extensions_root = codex_home.join("memories_extensions");
+    match tokio::fs::symlink_metadata(&legacy_extensions_root).await {
+        Ok(_) => clear_memory_root_contents(&legacy_extensions_root).await,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 pub(crate) async fn clear_memory_root_contents(memory_root: &Path) -> std::io::Result<()> {

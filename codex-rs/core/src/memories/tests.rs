@@ -1,4 +1,6 @@
 use super::control::clear_memory_root_contents;
+use super::control::clear_memory_roots_contents;
+use super::storage::EmptyArtifactCleanup;
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
 use crate::memories::ensure_layout;
@@ -102,6 +104,59 @@ async fn clear_memory_root_contents_preserves_root_directory() {
     );
 }
 
+#[tokio::test]
+async fn clear_memory_roots_contents_clears_legacy_extensions_root() {
+    let dir = tempdir().expect("tempdir");
+    let memory_root = dir.path().join("memories");
+    let new_extensions_root = memory_root.join("extensions");
+    let legacy_extensions_root = dir.path().join("memories_extensions");
+    tokio::fs::create_dir_all(&new_extensions_root)
+        .await
+        .expect("create new extensions dir");
+    tokio::fs::create_dir_all(&legacy_extensions_root)
+        .await
+        .expect("create legacy extensions dir");
+    tokio::fs::write(
+        new_extensions_root.join("stale.md"),
+        "new stale extension\n",
+    )
+    .await
+    .expect("write new extension artifact");
+    tokio::fs::write(
+        legacy_extensions_root.join("stale.md"),
+        "legacy stale extension\n",
+    )
+    .await
+    .expect("write legacy extension artifact");
+
+    clear_memory_roots_contents(dir.path())
+        .await
+        .expect("clear memory roots contents");
+
+    let mut memory_entries = tokio::fs::read_dir(&memory_root)
+        .await
+        .expect("read memory root after clear");
+    assert!(
+        memory_entries
+            .next_entry()
+            .await
+            .expect("read memory root entry")
+            .is_none(),
+        "memory root should be empty after clearing contents"
+    );
+    let mut legacy_entries = tokio::fs::read_dir(&legacy_extensions_root)
+        .await
+        .expect("read legacy extensions root after clear");
+    assert!(
+        legacy_entries
+            .next_entry()
+            .await
+            .expect("read legacy extensions root entry")
+            .is_none(),
+        "legacy extensions root should be empty after clearing contents"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn clear_memory_root_contents_rejects_symlinked_root() {
@@ -163,6 +218,7 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
         &root,
         &memories,
         DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+        EmptyArtifactCleanup::RemoveConsolidated,
     )
     .await
     .expect("sync rollout summaries");
@@ -237,6 +293,70 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
 }
 
 #[tokio::test]
+async fn sync_rollout_summaries_preserves_consolidated_artifacts_for_removed_inputs() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("memory");
+    let summaries_dir = rollout_summaries_dir(&root);
+    let skills_dir = root.join("skills/demo");
+    tokio::fs::create_dir_all(&summaries_dir)
+        .await
+        .expect("create rollout summaries dir");
+    tokio::fs::create_dir_all(&skills_dir)
+        .await
+        .expect("create skills dir");
+    let stale_summary_path = summaries_dir.join("stale.md");
+    let memory_path = root.join("MEMORY.md");
+    let memory_summary_path = root.join("memory_summary.md");
+    let skill_path = skills_dir.join("SKILL.md");
+    tokio::fs::write(&stale_summary_path, "stale rollout summary\n")
+        .await
+        .expect("write stale rollout summary");
+    tokio::fs::write(&memory_path, "consolidated memory\n")
+        .await
+        .expect("write memory");
+    tokio::fs::write(&memory_summary_path, "summary\n")
+        .await
+        .expect("write memory summary");
+    tokio::fs::write(&skill_path, "skill\n")
+        .await
+        .expect("write skill");
+
+    sync_rollout_summaries_from_memories(
+        &root,
+        &[],
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+        EmptyArtifactCleanup::PreserveConsolidated,
+    )
+    .await
+    .expect("sync rollout summaries");
+
+    assert!(
+        !tokio::fs::try_exists(&stale_summary_path)
+            .await
+            .expect("check stale summary path"),
+        "removed-only sync should still prune stale rollout summaries"
+    );
+    assert!(
+        tokio::fs::try_exists(&memory_path)
+            .await
+            .expect("check memory path"),
+        "removed-only sync should preserve MEMORY.md for surgical cleanup"
+    );
+    assert!(
+        tokio::fs::try_exists(&memory_summary_path)
+            .await
+            .expect("check memory summary path"),
+        "removed-only sync should preserve memory_summary.md for surgical cleanup"
+    );
+    assert!(
+        tokio::fs::try_exists(&skill_path)
+            .await
+            .expect("check skill path"),
+        "removed-only sync should preserve skills for surgical cleanup"
+    );
+}
+
+#[tokio::test]
 async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
@@ -269,6 +389,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
         &root,
         &memories,
         DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+        EmptyArtifactCleanup::RemoveConsolidated,
     )
     .await
     .expect("sync rollout summaries");
@@ -372,6 +493,7 @@ task_outcome: success
         &root,
         &memories,
         DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
+        EmptyArtifactCleanup::RemoveConsolidated,
     )
     .await
     .expect("sync rollout summaries");
@@ -422,6 +544,7 @@ mod phase2 {
     use crate::memories::phase2;
     use crate::memories::raw_memories_file;
     use crate::memories::rollout_summaries_dir;
+    use crate::memories::storage::EmptyArtifactCleanup;
     use crate::memories::storage::rebuild_raw_memories_file_from_memories;
     use crate::memories::storage::sync_rollout_summaries_from_memories;
     use crate::memories::workspace::prepare_git_repo;
@@ -872,6 +995,112 @@ mod phase2 {
     }
 
     #[tokio::test]
+    async fn dispatch_with_removed_only_inputs_preserves_consolidated_artifacts() {
+        let harness = DispatchHarness::new().await;
+        let source_updated_at = Utc::now().timestamp();
+        let thread_id = harness.seed_stage1_output(source_updated_at).await;
+        let root = memory_root(&harness.config.codex_home);
+        let selection = harness
+            .state_db
+            .get_phase2_input_selection(/*n*/ 1, /*max_unused_days*/ 30)
+            .await
+            .expect("load phase2 input selection");
+        let selected = selection.selected.clone();
+        sync_rollout_summaries_from_memories(
+            &root,
+            &selected,
+            selected.len(),
+            EmptyArtifactCleanup::RemoveConsolidated,
+        )
+        .await
+        .expect("sync selected rollout summaries");
+        rebuild_raw_memories_file_from_memories(&root, &selected, selected.len())
+            .await
+            .expect("sync selected raw memories");
+        let memory_index_path = root.join("MEMORY.md");
+        let memory_summary_path = root.join("memory_summary.md");
+        let skill_path = root.join("skills/demo/SKILL.md");
+        tokio::fs::write(&memory_index_path, "consolidated memory index\n")
+            .await
+            .expect("write memory index");
+        tokio::fs::write(&memory_summary_path, "consolidated memory summary\n")
+            .await
+            .expect("write memory summary");
+        tokio::fs::create_dir_all(skill_path.parent().expect("skill parent"))
+            .await
+            .expect("create skill dir");
+        tokio::fs::write(&skill_path, "consolidated skill\n")
+            .await
+            .expect("write skill");
+        prepare_git_repo(&root)
+            .await
+            .expect("commit current memory workspace as baseline");
+
+        let claim = harness
+            .state_db
+            .try_claim_global_phase2_job(ThreadId::new(), /*lease_seconds*/ 3_600)
+            .await
+            .expect("claim global phase2 job");
+        let Phase2JobClaimOutcome::Claimed {
+            ownership_token, ..
+        } = claim
+        else {
+            panic!("unexpected phase2 claim outcome: {claim:?}");
+        };
+        assert!(
+            harness
+                .state_db
+                .mark_global_phase2_job_succeeded(&ownership_token, source_updated_at, &selected,)
+                .await
+                .expect("mark phase2 succeeded"),
+            "phase2 success should update selected baseline"
+        );
+        assert!(
+            harness
+                .state_db
+                .mark_thread_memory_mode_polluted(thread_id)
+                .await
+                .expect("mark thread polluted"),
+            "polluted selected thread should enqueue phase2 forgetting"
+        );
+
+        phase2::run(&harness.session, Arc::clone(&harness.config)).await;
+
+        pretty_assertions::assert_eq!(harness.user_input_ops_count(), 1);
+        assert!(
+            tokio::fs::try_exists(&memory_index_path)
+                .await
+                .expect("check memory index existence"),
+            "removed-only phase2 should preserve MEMORY.md before agent cleanup"
+        );
+        assert!(
+            tokio::fs::try_exists(&memory_summary_path)
+                .await
+                .expect("check memory summary existence"),
+            "removed-only phase2 should preserve memory_summary.md before agent cleanup"
+        );
+        assert!(
+            tokio::fs::try_exists(&skill_path)
+                .await
+                .expect("check skill existence"),
+            "removed-only phase2 should preserve skills before agent cleanup"
+        );
+        let workspace_diff = tokio::fs::read_to_string(root.join("phase2_workspace_diff.md"))
+            .await
+            .expect("read workspace diff");
+        assert!(
+            workspace_diff.contains("- D rollout_summaries/"),
+            "removed-only phase2 should surface deleted rollout summaries: {workspace_diff}"
+        );
+        assert!(
+            !workspace_diff.contains("- D MEMORY.md"),
+            "removed-only phase2 should not delete consolidated memory wholesale: {workspace_diff}"
+        );
+
+        harness.shutdown_threads().await;
+    }
+
+    #[tokio::test]
     async fn dispatch_with_clean_workspace_preserves_selected_phase2_baseline() {
         let harness = DispatchHarness::new().await;
         let thread_id = harness.seed_stage1_output(Utc::now().timestamp()).await;
@@ -883,9 +1112,14 @@ mod phase2 {
             .expect("load phase2 input selection");
         let selected = selection.selected.clone();
 
-        sync_rollout_summaries_from_memories(&root, &selected, selected.len())
-            .await
-            .expect("sync selected rollout summaries");
+        sync_rollout_summaries_from_memories(
+            &root,
+            &selected,
+            selected.len(),
+            EmptyArtifactCleanup::RemoveConsolidated,
+        )
+        .await
+        .expect("sync selected rollout summaries");
         rebuild_raw_memories_file_from_memories(&root, &selected, selected.len())
             .await
             .expect("sync selected raw memories");
@@ -1081,21 +1315,8 @@ mod phase2 {
         assert!(
             !tokio::fs::try_exists(&old_file)
                 .await
-                .expect("check legacy old extension resource"),
-            "phase2 should migrate extension resources into the memory workspace before spawn"
-        );
-        let migrated_old_file = config.codex_home.join(format!(
-            "memories/extensions/chronicle/resources/{}",
-            old_file
-                .file_name()
-                .expect("old file name")
-                .to_string_lossy()
-        ));
-        assert!(
-            !tokio::fs::try_exists(&migrated_old_file)
-                .await
-                .expect("check migrated old extension resource"),
-            "old extension resources are pruned before spawn so retry sees the git deletion"
+                .expect("check old extension resource"),
+            "phase2 should prune old extension resources before spawn"
         );
     }
 }
