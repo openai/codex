@@ -632,7 +632,7 @@ impl Inner {
     fn disconnected_error(&self) -> Option<ExecServerError> {
         self.disconnected
             .get()
-            .clone()
+            .cloned()
             .map(ExecServerError::Disconnected)
     }
 
