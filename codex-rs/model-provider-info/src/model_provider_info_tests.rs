@@ -276,6 +276,102 @@ fn test_built_in_model_providers_include_amazon_bedrock() {
 }
 
 #[test]
+fn test_merge_configured_model_providers_adds_custom_provider() {
+    let custom_provider = ModelProviderInfo {
+        name: "Custom".to_string(),
+        base_url: Some("https://example.com/v1".to_string()),
+        ..ModelProviderInfo::default()
+    };
+    let configured_model_providers =
+        std::collections::HashMap::from([("custom".to_string(), custom_provider.clone())]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    expected.insert("custom".to_string(), custom_provider);
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            aws: Some(ModelProviderAwsAuthInfo {
+                profile: Some("codex-bedrock".to_string()),
+            }),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    let mut expected = built_in_model_providers(/*openai_base_url*/ None);
+    expected
+        .get_mut(AMAZON_BEDROCK_PROVIDER_ID)
+        .expect("Amazon Bedrock provider should be built in")
+        .aws = Some(ModelProviderAwsAuthInfo {
+        profile: Some("codex-bedrock".to_string()),
+    });
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fields() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            name: "Custom Bedrock".to_string(),
+            aws: Some(ModelProviderAwsAuthInfo {
+                profile: Some("codex-bedrock".to_string()),
+            }),
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Err(
+            "model_providers.amazon-bedrock only supports changing `aws.profile`; other non-default provider fields are not supported"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn test_merge_configured_model_providers_allows_amazon_bedrock_default_fields() {
+    let configured_model_providers = std::collections::HashMap::from([(
+        AMAZON_BEDROCK_PROVIDER_ID.to_string(),
+        ModelProviderInfo {
+            aws: Some(ModelProviderAwsAuthInfo { profile: None }),
+            wire_api: WireApi::Responses,
+            ..ModelProviderInfo::default()
+        },
+    )]);
+
+    assert_eq!(
+        merge_configured_model_providers(
+            built_in_model_providers(/*openai_base_url*/ None),
+            configured_model_providers,
+        ),
+        Ok(built_in_model_providers(/*openai_base_url*/ None))
+    );
+}
+
+#[test]
 fn test_validate_provider_aws_rejects_conflicting_auth() {
     let provider = ModelProviderInfo {
         aws: Some(ModelProviderAwsAuthInfo { profile: None }),

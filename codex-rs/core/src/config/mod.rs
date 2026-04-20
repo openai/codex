@@ -60,11 +60,11 @@ use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_login::BackgroundAgentTaskAuthMode;
 use codex_mcp::McpConfig;
-use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
+use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -1805,31 +1805,9 @@ impl Config {
             .clone()
             .filter(|value| !value.is_empty());
 
-        let mut model_providers = built_in_model_providers(openai_base_url);
-        // Merge user-defined providers into the built-in list.
-        for (key, provider) in cfg.model_providers.into_iter() {
-            if key == AMAZON_BEDROCK_PROVIDER_ID {
-                let mut unsupported = provider.clone();
-                unsupported.aws = None;
-                if unsupported != ModelProviderInfo::default() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "model_providers.{AMAZON_BEDROCK_PROVIDER_ID} only supports changing `aws.profile`; other non-default provider fields are not supported"
-                        ),
-                    ));
-                }
-
-                if let Some(profile) = provider.aws.and_then(|aws| aws.profile)
-                    && let Some(built_in) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID)
-                    && let Some(aws) = built_in.aws.as_mut()
-                {
-                    aws.profile = Some(profile);
-                }
-            } else {
-                model_providers.entry(key).or_insert(provider);
-            }
-        }
+        let model_providers =
+            merge_configured_model_providers(built_in_model_providers(openai_base_url), cfg.model_providers)
+                .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
 
         let model_provider_id = model_provider
             .or(config_profile.model_provider)
