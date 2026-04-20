@@ -894,6 +894,7 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
         ThreadItem::ContextCompaction { id } => {
             Some(TurnItem::ContextCompaction(ContextCompactionItem {
                 id: id.clone(),
+                is_prefix: false,
             }))
         }
         ThreadItem::CommandExecution { .. }

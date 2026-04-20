@@ -2206,11 +2206,16 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_context_compacted(&mut self) {
+    fn on_context_compacted(&mut self, is_prefix: bool) {
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
+        let label = if is_prefix {
+            "Context prefix compacted"
+        } else {
+            "Context compacted"
+        };
         self.add_to_history(history_cell::new_info_event(
-            "Context compacted".to_owned(),
+            label.to_owned(),
             /*hint*/ None,
         ));
         self.request_redraw();
@@ -5990,7 +5995,7 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
-                self.on_context_compacted();
+                self.on_context_compacted(/*is_prefix*/ false);
             }
             ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
@@ -6912,6 +6917,9 @@ impl ChatWidget {
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());
+                }
+                if let codex_protocol::items::TurnItem::ContextCompaction(item) = &item {
+                    self.on_context_compacted(item.is_prefix);
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
                     self.on_agent_message_item_completed(item);

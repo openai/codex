@@ -130,12 +130,24 @@ pub struct ImageGenerationItem {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ContextCompactionItem {
     pub id: String,
+    #[serde(default, skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub is_prefix: bool,
 }
 
 impl ContextCompactionItem {
     pub fn new() -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
+            is_prefix: false,
+        }
+    }
+
+    pub fn new_prefix() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            is_prefix: true,
         }
     }
 

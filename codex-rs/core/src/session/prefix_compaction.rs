@@ -176,7 +176,7 @@ async fn apply_prefix_compact_candidate(
         return Ok(false);
     }
 
-    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new_prefix());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
 
