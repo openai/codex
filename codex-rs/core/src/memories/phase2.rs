@@ -362,6 +362,7 @@ mod agent {
     }
 
     /// Handle the agent while it is running.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn handle(
         session: &Arc<Session>,
         claim: Claim,
