@@ -3641,7 +3641,6 @@ impl App {
             if let Err(err) = Self::unsubscribe_thread_with_timeout(app_server, *thread_id).await {
                 self.chat_widget
                     .add_error_message(format!("Failed to stop thread {thread_id}: {err}"));
-                return;
             }
         }
         for thread_id in tracked_thread_ids {
