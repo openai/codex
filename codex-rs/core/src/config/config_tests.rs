@@ -3410,62 +3410,6 @@ async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::
     Ok(())
 }
 
-#[tokio::test]
-async fn set_feature_enabled_clears_legacy_auto_review_key() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        "[features]\nguardian_approval = true\nauto_review = true\n",
-    )?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .set_feature_enabled("auto_review", /*enabled*/ false)
-        .apply()
-        .await?;
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(!serialized.contains("guardian_approval"));
-    assert!(!serialized.contains("auto_review"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn set_feature_enabled_legacy_auto_review_key_writes_canonical_key() -> anyhow::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        "[features]\nguardian_approval = true\nauto_review = true\n",
-    )?;
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .set_feature_enabled("guardian_approval", /*enabled*/ false)
-        .apply()
-        .await?;
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(!serialized.contains("guardian_approval"));
-    assert!(!serialized.contains("auto_review"));
-
-    ConfigEditsBuilder::new(codex_home.path())
-        .set_feature_enabled("guardian_approval", /*enabled*/ true)
-        .apply()
-        .await?;
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    let parsed: ConfigToml = toml::from_str(&serialized)?;
-    assert_eq!(
-        parsed
-            .features
-            .as_ref()
-            .and_then(|features| features.entries().get("auto_review").copied()),
-        Some(true),
-    );
-    assert!(!serialized.contains("guardian_approval"));
-
-    Ok(())
-}
-
 struct PrecedenceTestFixture {
     cwd: TempDir,
     codex_home: TempDir,

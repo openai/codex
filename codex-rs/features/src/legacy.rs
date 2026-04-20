@@ -6,68 +6,54 @@ use tracing::info;
 struct Alias {
     legacy_key: &'static str,
     feature: Feature,
-    include_in_schema: bool,
 }
 
 const ALIASES: &[Alias] = &[
     Alias {
         legacy_key: "connectors",
         feature: Feature::Apps,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "enable_experimental_windows_sandbox",
         feature: Feature::WindowsSandbox,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "experimental_use_unified_exec_tool",
         feature: Feature::UnifiedExec,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "experimental_use_freeform_apply_patch",
         feature: Feature::ApplyPatchFreeform,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "include_apply_patch_tool",
         feature: Feature::ApplyPatchFreeform,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "request_permissions",
         feature: Feature::ExecPermissionApprovals,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "web_search",
         feature: Feature::WebSearchRequest,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "collab",
         feature: Feature::Collab,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "memory_tool",
         feature: Feature::MemoryTool,
-        include_in_schema: true,
     },
     Alias {
         legacy_key: "guardian_approval",
         feature: Feature::GuardianApproval,
-        include_in_schema: true,
     },
 ];
 
 /// Legacy feature keys that should still be advertised in the config schema.
 pub fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {
-    ALIASES
-        .iter()
-        .filter(|alias| alias.include_in_schema)
-        .map(|alias| alias.legacy_key)
+    ALIASES.iter().map(|alias| alias.legacy_key)
 }
 
 pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {

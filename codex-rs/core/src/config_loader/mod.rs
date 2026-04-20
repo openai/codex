@@ -1071,7 +1071,7 @@ foo = "xyzzy"
 
         assert_eq!(
             requirements.allowed_approvals_reviewers,
-            Some(vec![ApprovalsReviewer::AutoReview, ApprovalsReviewer::User])
+            Some(vec![ApprovalsReviewer::AutoReview, ApprovalsReviewer::User,])
         );
     }
 

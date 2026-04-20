@@ -52,6 +52,7 @@ use crate::responses_cmd::run_responses_command;
 use codex_core::clear_memory_roots_contents;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
@@ -60,6 +61,9 @@ use codex_features::is_known_feature_key;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
+
+const AUTO_REVIEW_FEATURE_KEY: &str = "auto_review";
+const LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY: &str = "guardian_approval";
 
 /// Codex CLI
 ///
@@ -1168,10 +1172,15 @@ async fn run_exec_server_command(
 
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
+    let write_feature = if feature == LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY {
+        AUTO_REVIEW_FEATURE_KEY
+    } else {
+        feature
+    };
     let codex_home = find_codex_home()?;
     ConfigEditsBuilder::new(&codex_home)
         .with_profile(interactive.config_profile.as_deref())
-        .set_feature_enabled(feature, /*enabled*/ true)
+        .set_feature_enabled(write_feature, /*enabled*/ true)
         .apply()
         .await?;
     println!("Enabled feature `{feature}` in config.toml.");
@@ -1182,8 +1191,25 @@ async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow
 async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
     let codex_home = find_codex_home()?;
-    ConfigEditsBuilder::new(&codex_home)
-        .with_profile(interactive.config_profile.as_deref())
+    let mut builder =
+        ConfigEditsBuilder::new(&codex_home).with_profile(interactive.config_profile.as_deref());
+    if feature == AUTO_REVIEW_FEATURE_KEY {
+        let segments = if let Some(profile) = interactive.config_profile.as_deref() {
+            vec![
+                "profiles".to_string(),
+                profile.to_string(),
+                "features".to_string(),
+                LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY.to_string(),
+            ]
+        } else {
+            vec![
+                "features".to_string(),
+                LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY.to_string(),
+            ]
+        };
+        builder = builder.with_edits([ConfigEdit::ClearPath { segments }]);
+    }
+    builder
         .set_feature_enabled(feature, /*enabled*/ false)
         .apply()
         .await?;

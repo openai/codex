@@ -20,8 +20,6 @@ use toml_edit::Table as TomlTable;
 use toml_edit::value;
 
 const NOTICE_TABLE_KEY: &str = "notice";
-const AUTO_REVIEW_FEATURE_KEY: &str = "auto_review";
-const LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY: &str = "guardian_approval";
 
 /// Discrete config mutations supported by the persistence engine.
 #[derive(Clone, Debug)]
@@ -1044,33 +1042,19 @@ impl ConfigEditsBuilder {
     /// `false` so they can override an inherited root enable.
     pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
         let profile_scoped = self.profile.is_some();
-        let profile = self.profile.clone();
-        let segments_for_key = |feature_key: &str| {
-            if let Some(profile) = profile.as_ref() {
-                vec![
-                    "profiles".to_string(),
-                    profile.clone(),
-                    "features".to_string(),
-                    feature_key.to_string(),
-                ]
-            } else {
-                vec!["features".to_string(), feature_key.to_string()]
-            }
-        };
-        let write_key = if key == LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY {
-            AUTO_REVIEW_FEATURE_KEY
+        let segments = if let Some(profile) = self.profile.as_ref() {
+            vec![
+                "profiles".to_string(),
+                profile.clone(),
+                "features".to_string(),
+                key.to_string(),
+            ]
         } else {
-            key
-        };
-        let segments = segments_for_key(write_key);
-        let legacy_auto_review_segments = if write_key == AUTO_REVIEW_FEATURE_KEY {
-            Some(segments_for_key(LEGACY_GUARDIAN_APPROVAL_FEATURE_KEY))
-        } else {
-            None
+            vec!["features".to_string(), key.to_string()]
         };
         let is_default_false_feature = FEATURES
             .iter()
-            .find(|spec| spec.key == write_key)
+            .find(|spec| spec.key == key)
             .is_some_and(|spec| !spec.default_enabled);
         if enabled || profile_scoped || !is_default_false_feature {
             self.edits.push(ConfigEdit::SetPath {
@@ -1078,9 +1062,6 @@ impl ConfigEditsBuilder {
                 value: value(enabled),
             });
         } else {
-            self.edits.push(ConfigEdit::ClearPath { segments });
-        }
-        if let Some(segments) = legacy_auto_review_segments {
             self.edits.push(ConfigEdit::ClearPath { segments });
         }
         self

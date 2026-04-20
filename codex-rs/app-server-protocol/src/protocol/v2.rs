@@ -315,7 +315,6 @@ impl From<CoreAskForApproval> for AskForApproval {
 /// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
-    #[serde(rename = "user")]
     User,
     #[serde(rename = "auto_review", alias = "guardian_subagent")]
     AutoReview,

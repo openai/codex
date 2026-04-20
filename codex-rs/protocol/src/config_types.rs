@@ -84,8 +84,6 @@ pub enum SandboxMode {
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     #[default]
-    #[serde(rename = "user")]
-    #[strum(serialize = "user")]
     User,
     #[serde(rename = "auto_review", alias = "guardian_subagent")]
     #[strum(serialize = "auto_review")]
