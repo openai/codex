@@ -556,7 +556,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.model = Some("gpt-5.1".to_string());
+            config.model = Some("gpt-5.4".to_string());
         });
     let TestCodex {
         codex,
@@ -680,7 +680,7 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.model = Some("gpt-5.1".to_string());
+            config.model = Some("gpt-5.4".to_string());
         });
     let test = builder.build(&server).await?;
 
@@ -726,7 +726,7 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.model = Some("gpt-5.1".to_string());
+            config.model = Some("gpt-5.4".to_string());
             config.tool_output_token_limit = Some(50);
         });
     let test = builder.build(&server).await?;
@@ -815,7 +815,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.model = Some("gpt-5.1".to_string());
+            config.model = Some("gpt-5.2".to_string());
         });
     let TestCodex {
         codex,
@@ -867,7 +867,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let base_model_info = models_manager
-        .get_model_info("gpt-5.1", &config.to_models_manager_config())
+        .get_model_info("gpt-5.2", &config.to_models_manager_config())
         .await;
     let body = response_mock.single_request().body_json();
     let instructions = body["instructions"].as_str().unwrap();
