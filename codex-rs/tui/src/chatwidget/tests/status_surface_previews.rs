@@ -252,8 +252,10 @@ async fn terminal_title_preview_uses_title_truncation_for_live_values() {
         &mut chat,
         &[TerminalTitleItem::Thread, TerminalTitleItem::GitBranch],
     );
-    let truncated_thread = ChatWidget::truncate_terminal_title_part(long_thread.to_string(), 48);
-    let truncated_branch = ChatWidget::truncate_terminal_title_part(long_branch.to_string(), 32);
+    let truncated_thread =
+        ChatWidget::truncate_terminal_title_part(long_thread.to_string(), /*max_chars*/ 48);
+    let truncated_branch =
+        ChatWidget::truncate_terminal_title_part(long_branch.to_string(), /*max_chars*/ 32);
 
     assert_eq!(preview, format!("{truncated_thread} | {truncated_branch}"));
 }
