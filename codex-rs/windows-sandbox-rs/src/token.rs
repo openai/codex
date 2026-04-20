@@ -26,6 +26,7 @@ use windows_sys::Win32::Security::SetTokenInformation;
 
 use windows_sys::Win32::Security::TokenDefaultDacl;
 use windows_sys::Win32::Security::TokenGroups;
+use windows_sys::Win32::Security::TokenUser;
 use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
@@ -251,6 +252,48 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
 
     Err(anyhow!("Logon SID not present on token"))
 }
+
+pub unsafe fn get_token_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
+    #[repr(C)]
+    struct TokenUserInfo {
+        user: SID_AND_ATTRIBUTES,
+    }
+
+    let mut needed: u32 = 0;
+    GetTokenInformation(h_token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
+    if needed == 0 {
+        return Err(anyhow!("GetTokenInformation(TokenUser) size query failed"));
+    }
+
+    let mut buf: Vec<u8> = vec![0u8; needed as usize];
+    let ok = GetTokenInformation(
+        h_token,
+        TokenUser,
+        buf.as_mut_ptr() as *mut c_void,
+        needed,
+        &mut needed,
+    );
+    if ok == 0 || (needed as usize) < std::mem::size_of::<TokenUserInfo>() {
+        return Err(anyhow!(
+            "GetTokenInformation(TokenUser) failed: {}",
+            GetLastError()
+        ));
+    }
+
+    let info = std::ptr::read_unaligned(buf.as_ptr() as *const TokenUserInfo);
+    let sid = info.user.Sid;
+    let sid_len = GetLengthSid(sid);
+    if sid_len == 0 {
+        return Err(anyhow!("GetLengthSid failed for TokenUser SID"));
+    }
+
+    let mut out = vec![0u8; sid_len as usize];
+    if CopySid(sid_len, out.as_mut_ptr() as *mut c_void, sid) == 0 {
+        return Err(anyhow!("CopySid failed for TokenUser SID"));
+    }
+    Ok(out)
+}
+
 unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     let mut luid = LUID {
         LowPart: 0,
@@ -336,10 +379,12 @@ unsafe fn create_token_with_caps_from(
     }
     let mut logon_sid_bytes = get_logon_sid_bytes(base_token)?;
     let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
-    let mut everyone = world_sid()?;
-    let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
+    let mut sandbox_user_sid_bytes = get_token_user_sid_bytes(base_token)?;
+    let psid_sandbox_user = sandbox_user_sid_bytes.as_mut_ptr() as *mut c_void;
 
-    // Exact order: Capabilities..., Logon, Everyone
+    // Keep the write-restricted set scoped to this sandbox identity. Including
+    // Everyone here lets broad world-writable ACLs satisfy WRITE_RESTRICTED and
+    // defeats the workspace capability boundary.
     let mut entries: Vec<SID_AND_ATTRIBUTES> =
         vec![std::mem::zeroed(); psid_capabilities.len() + 2];
     for (i, psid) in psid_capabilities.iter().enumerate() {
@@ -349,7 +394,7 @@ unsafe fn create_token_with_caps_from(
     let logon_idx = psid_capabilities.len();
     entries[logon_idx].Sid = psid_logon;
     entries[logon_idx].Attributes = 0;
-    entries[logon_idx + 1].Sid = psid_everyone;
+    entries[logon_idx + 1].Sid = psid_sandbox_user;
     entries[logon_idx + 1].Attributes = 0;
 
     let mut new_token: HANDLE = 0;
@@ -371,7 +416,7 @@ unsafe fn create_token_with_caps_from(
 
     let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
     dacl_sids.push(psid_logon);
-    dacl_sids.push(psid_everyone);
+    dacl_sids.push(psid_sandbox_user);
     dacl_sids.extend_from_slice(psid_capabilities);
     set_default_dacl(new_token, &dacl_sids)?;
 
