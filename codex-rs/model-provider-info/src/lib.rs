@@ -34,6 +34,9 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
+pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
+pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str = "https://bedrock-mantle.us-east-1.api.aws/v1";
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
@@ -75,6 +78,7 @@ impl<'de> Deserialize<'de> for WireApi {
 #[schemars(deny_unknown_fields)]
 pub struct ModelProviderInfo {
     /// Friendly display name.
+    #[serde(default)]
     pub name: String,
     /// Base URL for the provider's OpenAI-compatible API.
     pub base_url: Option<String>,
@@ -90,6 +94,8 @@ pub struct ModelProviderInfo {
     pub experimental_bearer_token: Option<String>,
     /// Command-backed bearer-token configuration for this provider.
     pub auth: Option<ModelProviderAuthInfo>,
+    /// AWS SigV4 auth configuration for this provider.
+    pub aws: Option<ModelProviderAwsAuthInfo>,
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
@@ -124,8 +130,63 @@ pub struct ModelProviderInfo {
     pub supports_websockets: bool,
 }
 
+/// AWS SigV4 auth configuration for a model provider.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelProviderAwsAuthInfo {
+    /// AWS profile name to use. When unset, the AWS SDK default chain decides.
+    pub profile: Option<String>,
+    /// AWS region to use. When unset, the AWS SDK default chain decides.
+    pub region: Option<String>,
+    /// AWS SigV4 service name. Defaults to `bedrock` when unset.
+    pub service: Option<String>,
+}
+
+impl ModelProviderAwsAuthInfo {
+    pub fn service_name(&self) -> &str {
+        self.service.as_deref().unwrap_or("bedrock")
+    }
+}
+
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if let Some(aws) = self.aws.as_ref() {
+            if aws
+                .service
+                .as_ref()
+                .is_some_and(|service| service.trim().is_empty())
+            {
+                return Err("provider aws.service must not be empty".to_string());
+            }
+            if self.supports_websockets {
+                // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
+                // upgrade requests before allowing AWS-authenticated providers
+                // to enable Responses-over-WebSocket.
+                return Err("provider aws cannot be combined with supports_websockets".to_string());
+            }
+
+            let mut conflicts = Vec::new();
+            if self.env_key.is_some() {
+                conflicts.push("env_key");
+            }
+            if self.experimental_bearer_token.is_some() {
+                conflicts.push("experimental_bearer_token");
+            }
+            if self.auth.is_some() {
+                conflicts.push("auth");
+            }
+            if self.requires_openai_auth {
+                conflicts.push("requires_openai_auth");
+            }
+
+            if !conflicts.is_empty() {
+                return Err(format!(
+                    "provider aws cannot be combined with {}",
+                    conflicts.join(", ")
+                ));
+            }
+        }
+
         let Some(auth) = self.auth.as_ref() else {
             return Ok(());
         };
@@ -269,6 +330,7 @@ impl ModelProviderInfo {
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
+            aws: None,
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
@@ -297,8 +359,40 @@ impl ModelProviderInfo {
         }
     }
 
+    pub fn create_amazon_bedrock_provider(
+        aws: Option<ModelProviderAwsAuthInfo>,
+    ) -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: AMAZON_BEDROCK_PROVIDER_NAME.into(),
+            base_url: Some(AMAZON_BEDROCK_DEFAULT_BASE_URL.into()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: Some(aws.unwrap_or(ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+                service: None,
+            })),
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     pub fn is_openai(&self) -> bool {
         self.name == OPENAI_PROVIDER_NAME
+    }
+
+    pub fn is_amazon_bedrock(&self) -> bool {
+        self.name == AMAZON_BEDROCK_PROVIDER_NAME
     }
 
     pub fn supports_remote_compaction(&self) -> bool {
@@ -322,6 +416,7 @@ pub fn built_in_model_providers(
 ) -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
     let openai_provider = P::create_openai_provider(openai_base_url);
+    let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
 
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
@@ -329,6 +424,7 @@ pub fn built_in_model_providers(
     // `model_providers` in config.toml to add their own providers.
     [
         (OPENAI_PROVIDER_ID, openai_provider),
+        (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
@@ -370,6 +466,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api,
         query_params: None,
         http_headers: None,

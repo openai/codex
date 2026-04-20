@@ -18,6 +18,7 @@ base_url = "http://localhost:11434/v1"
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -49,6 +50,7 @@ query_params = { api-version = "2025-04-01-preview" }
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
@@ -83,6 +85,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: Some(maplit::hashmap! {
@@ -145,6 +148,7 @@ fn test_supports_remote_compaction_for_azure_name() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -169,6 +173,7 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
         http_headers: None,
@@ -209,6 +214,128 @@ args = ["--format=text"]
             refresh_interval_ms: 300_000,
             cwd: AbsolutePathBuf::resolve_path_against_base(".", base_dir.path()),
         })
+    );
+}
+
+#[test]
+fn test_deserialize_provider_aws_config() {
+    let provider_toml = r#"
+name = "Amazon Bedrock"
+base_url = "https://bedrock.example.com/v1"
+
+[aws]
+profile = "codex-bedrock"
+region = "us-east-1"
+service = "bedrock"
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+
+    assert_eq!(
+        provider.aws,
+        Some(ModelProviderAwsAuthInfo {
+            profile: Some("codex-bedrock".to_string()),
+            region: Some("us-east-1".to_string()),
+            service: Some("bedrock".to_string()),
+        })
+    );
+}
+
+#[test]
+fn test_create_amazon_bedrock_provider() {
+    assert_eq!(
+        ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+        ModelProviderInfo {
+            name: "Amazon Bedrock".to_string(),
+            base_url: Some("https://bedrock-mantle.us-east-1.api.aws/v1".to_string()),
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: Some(ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+                service: None,
+            }),
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    );
+}
+
+#[test]
+fn test_built_in_model_providers_include_amazon_bedrock() {
+    let providers = built_in_model_providers(/*openai_base_url*/ None);
+
+    assert_eq!(
+        providers
+            .get(AMAZON_BEDROCK_PROVIDER_ID)
+            .map(ModelProviderInfo::is_amazon_bedrock),
+        Some(true)
+    );
+}
+
+#[test]
+fn test_validate_provider_aws_rejects_conflicting_auth() {
+    let provider = ModelProviderInfo {
+        aws: Some(ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+            service: None,
+        }),
+        env_key: Some("AWS_BEARER_TOKEN_BEDROCK".to_string()),
+        supports_websockets: false,
+        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+    };
+
+    assert_eq!(
+        provider.validate(),
+        Err("provider aws cannot be combined with env_key, requires_openai_auth".to_string())
+    );
+}
+
+#[test]
+fn test_validate_provider_aws_rejects_websockets() {
+    let provider = ModelProviderInfo {
+        aws: Some(ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+            service: None,
+        }),
+        requires_openai_auth: false,
+        supports_websockets: true,
+        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+    };
+
+    assert_eq!(
+        provider.validate(),
+        Err("provider aws cannot be combined with supports_websockets".to_string())
+    );
+}
+
+#[test]
+fn test_validate_provider_aws_rejects_empty_service() {
+    let provider = ModelProviderInfo {
+        aws: Some(ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+            service: Some("   ".to_string()),
+        }),
+        requires_openai_auth: false,
+        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+    };
+
+    assert_eq!(
+        provider.validate(),
+        Err("provider aws.service must not be empty".to_string())
     );
 }
 

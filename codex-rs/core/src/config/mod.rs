@@ -60,6 +60,7 @@ use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_login::AuthManagerConfig;
 use codex_login::BackgroundAgentTaskAuthMode;
 use codex_mcp::McpConfig;
+use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
@@ -1807,7 +1808,13 @@ impl Config {
         let mut model_providers = built_in_model_providers(openai_base_url);
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
-            model_providers.entry(key).or_insert(provider);
+            if key == AMAZON_BEDROCK_PROVIDER_ID {
+                if let Some(built_in) = model_providers.get_mut(AMAZON_BEDROCK_PROVIDER_ID) {
+                    built_in.aws = provider.aws;
+                }
+            } else {
+                model_providers.entry(key).or_insert(provider);
+            }
         }
 
         let model_provider_id = model_provider
