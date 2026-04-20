@@ -1034,6 +1034,14 @@
         "profile": {
           "description": "AWS profile name to use. When unset, the AWS SDK default chain decides.",
           "type": "string"
+        },
+        "region": {
+          "description": "AWS region to use. When unset, the AWS SDK default chain decides.",
+          "type": "string"
+        },
+        "service": {
+          "description": "AWS SigV4 service name. Defaults to `bedrock` when unset.",
+          "type": "string"
         }
       },
       "type": "object"

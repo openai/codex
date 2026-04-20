@@ -439,9 +439,9 @@ profile = "codex-bedrock"
     );
 }
 
-#[tokio::test]
-async fn load_config_rejects_unsupported_amazon_bedrock_overrides() {
-    let cfg = toml::from_str::<ConfigToml>(
+#[test]
+fn rejects_unsupported_amazon_bedrock_overrides() {
+    let err = toml::from_str::<ConfigToml>(
         r#"
 model_provider = "amazon-bedrock"
 
@@ -455,19 +455,10 @@ supports_websockets = true
 profile = "codex-bedrock"
 "#,
     )
-    .expect("Amazon Bedrock unsupported overrides should deserialize");
-
-    let err = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        tempdir().expect("tempdir").abs(),
-    )
-    .await
     .unwrap_err();
 
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(err.to_string().contains(
-        "model_providers.amazon-bedrock only supports changing `aws.profile`; other non-default provider fields are not supported"
+        "model_providers.amazon-bedrock: `amazon-bedrock` is a built-in provider; only `aws.profile` can be configured"
     ));
 }
 

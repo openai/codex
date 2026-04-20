@@ -225,6 +225,8 @@ base_url = "https://bedrock.example.com/v1"
 
 [aws]
 profile = "codex-bedrock"
+region = "us-east-1"
+service = "bedrock"
         "#;
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
@@ -233,6 +235,8 @@ profile = "codex-bedrock"
         provider.aws,
         Some(ModelProviderAwsAuthInfo {
             profile: Some("codex-bedrock".to_string()),
+            region: Some("us-east-1".to_string()),
+            service: Some("bedrock".to_string()),
         })
     );
 }
@@ -248,7 +252,11 @@ fn test_create_amazon_bedrock_provider() {
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
-            aws: Some(ModelProviderAwsAuthInfo { profile: None }),
+            aws: Some(ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+                service: None,
+            }),
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
@@ -304,6 +312,8 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override
         ModelProviderInfo {
             aws: Some(ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
+                region: None,
+                service: None,
             }),
             ..ModelProviderInfo::default()
         },
@@ -315,6 +325,8 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_profile_override
         .expect("Amazon Bedrock provider should be built in")
         .aws = Some(ModelProviderAwsAuthInfo {
         profile: Some("codex-bedrock".to_string()),
+        region: None,
+        service: None,
     });
 
     assert_eq!(
@@ -334,6 +346,8 @@ fn test_merge_configured_model_providers_rejects_amazon_bedrock_non_default_fiel
             name: "Custom Bedrock".to_string(),
             aws: Some(ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
+                region: None,
+                service: None,
             }),
             ..ModelProviderInfo::default()
         },
@@ -356,7 +370,11 @@ fn test_merge_configured_model_providers_allows_amazon_bedrock_default_fields() 
     let configured_model_providers = std::collections::HashMap::from([(
         AMAZON_BEDROCK_PROVIDER_ID.to_string(),
         ModelProviderInfo {
-            aws: Some(ModelProviderAwsAuthInfo { profile: None }),
+            aws: Some(ModelProviderAwsAuthInfo {
+                profile: None,
+                region: None,
+                service: None,
+            }),
             wire_api: WireApi::Responses,
             ..ModelProviderInfo::default()
         },
@@ -374,7 +392,11 @@ fn test_merge_configured_model_providers_allows_amazon_bedrock_default_fields() 
 #[test]
 fn test_validate_provider_aws_rejects_conflicting_auth() {
     let provider = ModelProviderInfo {
-        aws: Some(ModelProviderAwsAuthInfo { profile: None }),
+        aws: Some(ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+            service: None,
+        }),
         env_key: Some("AWS_BEARER_TOKEN_BEDROCK".to_string()),
         supports_websockets: false,
         ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
@@ -389,7 +411,11 @@ fn test_validate_provider_aws_rejects_conflicting_auth() {
 #[test]
 fn test_validate_provider_aws_rejects_websockets() {
     let provider = ModelProviderInfo {
-        aws: Some(ModelProviderAwsAuthInfo { profile: None }),
+        aws: Some(ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+            service: None,
+        }),
         requires_openai_auth: false,
         supports_websockets: true,
         ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
@@ -398,6 +424,24 @@ fn test_validate_provider_aws_rejects_websockets() {
     assert_eq!(
         provider.validate(),
         Err("provider aws cannot be combined with supports_websockets".to_string())
+    );
+}
+
+#[test]
+fn test_validate_provider_aws_rejects_empty_service() {
+    let provider = ModelProviderInfo {
+        aws: Some(ModelProviderAwsAuthInfo {
+            profile: None,
+            region: None,
+            service: Some("   ".to_string()),
+        }),
+        requires_openai_auth: false,
+        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+    };
+
+    assert_eq!(
+        provider.validate(),
+        Err("provider aws.service must not be empty".to_string())
     );
 }
 
