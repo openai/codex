@@ -317,6 +317,7 @@ impl MessageProcessor {
         params: Option<rmcp::model::PaginatedRequestParams>,
     ) {
         tracing::trace!("tools/list -> {params:?}");
+        let _ = std::fs::write(std::env::temp_dir().join("codex-tools-list"), "listed");
         let result = rmcp::model::ListToolsResult {
             meta: None,
             tools: vec![
