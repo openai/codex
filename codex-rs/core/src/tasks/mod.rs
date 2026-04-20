@@ -550,6 +550,7 @@ impl Session {
                 None
             }
         };
+        let turn_completed = turn_state.is_some();
         if let Some(turn_state) = turn_state {
             let mut ts = turn_state.lock().await;
             pending_input = ts.take_pending_input();
@@ -676,9 +677,10 @@ impl Session {
         });
         self.send_event(turn_context.as_ref(), event).await;
 
-        if let Err(err) = self
-            .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
-            .await
+        if turn_completed
+            && let Err(err) = self
+                .account_thread_goal_progress(turn_context.as_ref(), GoalAccountingBoundary::Turn)
+                .await
         {
             warn!("failed to account thread goal progress at turn end: {err}");
         }
