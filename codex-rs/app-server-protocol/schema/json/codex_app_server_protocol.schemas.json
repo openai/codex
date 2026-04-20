@@ -4294,6 +4294,26 @@
           "properties": {
             "method": {
               "enum": [
+                "item/fileChange/patchUpdated"
+              ],
+              "title": "Item/fileChange/patchUpdatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FileChangePatchUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/fileChange/patchUpdatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "serverRequest/resolved"
               ],
               "title": "ServerRequest/resolvedNotificationMethod",
@@ -7983,6 +8003,34 @@
           "turnId"
         ],
         "title": "FileChangeOutputDeltaNotification",
+        "type": "object"
+      },
+      "FileChangePatchUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/definitions/v2/FileUpdateChange"
+            },
+            "type": "array"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "changes",
+          "itemId",
+          "threadId",
+          "turnId"
+        ],
+        "title": "FileChangePatchUpdatedNotification",
         "type": "object"
       },
       "FileUpdateChange": {

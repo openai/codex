@@ -202,8 +202,8 @@ fn test_session_telemetry_without_metadata() -> SessionTelemetry {
     .expect("in-memory metrics client");
     SessionTelemetry::new(
         ThreadId::new(),
-        "gpt-5.1",
-        "gpt-5.1",
+        "gpt-5.4",
+        "gpt-5.4",
         /*account_id*/ None,
         /*account_email*/ None,
         /*auth_mode*/ None,
@@ -455,7 +455,7 @@ async fn preview_session_start_hooks(
             session_id: ThreadId::new(),
             cwd: config.cwd.clone(),
             transcript_path: None,
-            model: "gpt-5".to_string(),
+            model: "gpt-5.2".to_string(),
             permission_mode: "default".to_string(),
             source: codex_hooks::SessionStartSource::Startup,
         }),
@@ -1042,19 +1042,19 @@ async fn get_base_instructions_no_user_content() {
     };
     let test_cases = vec![
         InstructionsTestCase {
-            slug: "gpt-5",
+            slug: "gpt-5.4",
             expects_apply_patch_description: false,
         },
         InstructionsTestCase {
-            slug: "gpt-5.1",
+            slug: "gpt-5.4-mini",
             expects_apply_patch_description: false,
         },
         InstructionsTestCase {
-            slug: "gpt-5.1-codex",
+            slug: "gpt-5.3-codex",
             expects_apply_patch_description: false,
         },
         InstructionsTestCase {
-            slug: "gpt-5.1-codex-max",
+            slug: "gpt-5.2",
             expects_apply_patch_description: false,
         },
     ];
@@ -2538,19 +2538,19 @@ async fn turn_context_with_model_updates_model_fields() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
     let updated = turn_context
-        .with_model("gpt-5.1".to_string(), &session.services.models_manager)
+        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
         .await;
     let expected_model_info = session
         .services
         .models_manager
         .get_model_info(
-            "gpt-5.1",
+            "gpt-5.4",
             &updated.config.as_ref().to_models_manager_config(),
         )
         .await;
 
-    assert_eq!(updated.config.model.as_deref(), Some("gpt-5.1"));
-    assert_eq!(updated.collaboration_mode.model(), "gpt-5.1");
+    assert_eq!(updated.config.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(updated.collaboration_mode.model(), "gpt-5.4");
     assert_eq!(updated.model_info, expected_model_info);
     assert_eq!(
         updated.reasoning_effort,
@@ -5303,10 +5303,10 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 async fn record_context_updates_and_set_reference_context_item_persists_baseline_without_emitting_diffs()
  {
     let (session, previous_context) = make_session_and_context().await;
-    let next_model = if previous_context.model_info.slug == "gpt-5.1" {
-        "gpt-5"
+    let next_model = if previous_context.model_info.slug == "gpt-5.4" {
+        "gpt-5.2"
     } else {
-        "gpt-5.1"
+        "gpt-5.4"
     };
     let turn_context = previous_context
         .with_model(next_model.to_string(), &session.services.models_manager)
@@ -5455,10 +5455,10 @@ async fn build_initial_context_prepends_model_switch_message() {
 async fn record_context_updates_and_set_reference_context_item_persists_full_reinjection_to_rollout()
  {
     let (session, previous_context) = make_session_and_context().await;
-    let next_model = if previous_context.model_info.slug == "gpt-5.1" {
-        "gpt-5"
+    let next_model = if previous_context.model_info.slug == "gpt-5.4" {
+        "gpt-5.2"
     } else {
-        "gpt-5.1"
+        "gpt-5.4"
     };
     let turn_context = previous_context
         .with_model(next_model.to_string(), &session.services.models_manager)
