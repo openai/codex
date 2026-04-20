@@ -5,6 +5,8 @@ use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCompactionEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
+use crate::events::CodexResponsesApiCallEventParams;
+use crate::events::CodexResponsesApiCallEventRequest;
 use crate::events::CodexRuntimeMetadata;
 use crate::events::CodexTurnEventParams;
 use crate::events::CodexTurnEventRequest;
@@ -44,6 +46,7 @@ use crate::facts::TurnSteerRejectionReason;
 use crate::facts::TurnSteerResult;
 use crate::facts::TurnTokenUsageFact;
 use crate::now_unix_seconds;
+use crate::responses_api::CodexResponsesApiCallFact;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo;
@@ -198,6 +201,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::Compaction(input) => {
                     self.ingest_compaction(*input, out);
+                }
+                CustomAnalyticsFact::ResponsesApiCall(input) => {
+                    self.ingest_responses_api_call(*input, out);
                 }
                 CustomAnalyticsFact::GuardianReview(input) => {
                     self.ingest_guardian_review(*input, out);
@@ -721,6 +727,91 @@ impl AnalyticsReducer {
                     thread_metadata.subagent_source.clone(),
                     thread_metadata.parent_thread_id.clone(),
                 ),
+            },
+        )));
+    }
+
+    fn ingest_responses_api_call(
+        &mut self,
+        input: CodexResponsesApiCallFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let Some(connection_id) = self.thread_connections.get(&input.thread_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping responses api call analytics event: missing thread connection metadata"
+            );
+            return;
+        };
+        let Some(connection_state) = self.connections.get(connection_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                connection_id,
+                "dropping responses api call analytics event: missing connection metadata"
+            );
+            return;
+        };
+        let Some(thread_metadata) = self.thread_metadata.get(&input.thread_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping responses api call analytics event: missing thread lifecycle metadata"
+            );
+            return;
+        };
+        let Some(turn_state) = self.turns.get(&input.turn_id) else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping responses api call analytics event: missing turn metadata"
+            );
+            return;
+        };
+        let Some(resolved_config) = turn_state.resolved_config.as_ref() else {
+            tracing::warn!(
+                thread_id = %input.thread_id,
+                turn_id = %input.turn_id,
+                "dropping responses api call analytics event: missing turn resolved config"
+            );
+            return;
+        };
+
+        out.push(TrackEventRequest::ResponsesApiCall(Box::new(
+            CodexResponsesApiCallEventRequest {
+                event_type: "codex_responses_api_call_event",
+                event_params: CodexResponsesApiCallEventParams {
+                    thread_id: input.thread_id,
+                    turn_id: input.turn_id,
+                    ephemeral: resolved_config.ephemeral,
+                    thread_source: thread_metadata.thread_source.map(str::to_string),
+                    initialization_mode: thread_metadata.initialization_mode,
+                    subagent_source: thread_metadata.subagent_source.clone(),
+                    parent_thread_id: thread_metadata.parent_thread_id.clone(),
+                    app_server_client: connection_state.app_server_client.clone(),
+                    runtime: connection_state.runtime.clone(),
+                    responses_id: input.responses_id,
+                    turn_responses_call_index: input.turn_responses_call_index,
+                    model: Some(resolved_config.model.clone()),
+                    model_provider: Some(resolved_config.model_provider.clone()),
+                    reasoning_effort: resolved_config
+                        .reasoning_effort
+                        .map(|value| value.to_string()),
+                    status: input.status,
+                    error: input.error,
+                    started_at: input.started_at,
+                    completed_at: input.completed_at,
+                    duration_ms: input.duration_ms,
+                    input_item_count: input.input_item_count,
+                    output_item_count: input.output_item_count,
+                    input_tokens: input.input_tokens,
+                    cached_input_tokens: input.cached_input_tokens,
+                    output_tokens: input.output_tokens,
+                    reasoning_output_tokens: input.reasoning_output_tokens,
+                    total_tokens: input.total_tokens,
+                    items: input.items,
+                },
             },
         )));
     }
