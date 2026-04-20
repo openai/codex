@@ -10,6 +10,8 @@ use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
 use crate::events::CodexRuntimeMetadata;
+use crate::events::CodexToolCallReviewEventParams;
+use crate::events::CodexToolCallReviewEventRequest;
 use crate::events::CodexToolItemEventBase;
 use crate::events::CodexTurnEventRequest;
 use crate::events::CommandExecutionFamily;
@@ -24,6 +26,10 @@ use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
 use crate::events::ToolItemFinalApprovalOutcome;
 use crate::events::ToolItemTerminalStatus;
+use crate::events::ToolReviewReviewer;
+use crate::events::ToolReviewStatus;
+use crate::events::ToolReviewToolKind;
+use crate::events::ToolReviewTrigger;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
 use crate::events::codex_hook_run_metadata;
@@ -62,23 +68,45 @@ use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::normalize_path_for_skill_id;
 use crate::reducer::skill_id_for_local_skill;
+use codex_app_server_protocol::AdditionalNetworkPermissions;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponse;
 use codex_app_server_protocol::CodexErrorInfo;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::GrantedPermissionProfile;
+use codex_app_server_protocol::GuardianApprovalReview;
+use codex_app_server_protocol::GuardianApprovalReviewAction;
+use codex_app_server_protocol::GuardianApprovalReviewStatus;
+use codex_app_server_protocol::GuardianCommandSource as AppServerGuardianCommandSource;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
+use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::NetworkPolicyAmendment;
+use codex_app_server_protocol::NetworkPolicyRuleAction;
 use codex_app_server_protocol::NonSteerableTurnKind;
+use codex_app_server_protocol::PermissionGrantScope;
+use codex_app_server_protocol::PermissionsRequestApprovalParams;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RequestPermissionProfile;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerResponse;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
@@ -602,6 +630,190 @@ fn sample_command_execution_item(
     }
 }
 
+async fn ingest_tool_review_prerequisites(
+    reducer: &mut AnalyticsReducer,
+    events: &mut Vec<TrackEventRequest>,
+) {
+    reducer
+        .ingest(sample_initialize_fact(/*connection_id*/ 7), events)
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                response: Box::new(sample_thread_start_response(
+                    "thread-1", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            events,
+        )
+        .await;
+    events.clear();
+}
+
+fn sample_command_approval_request(request_id: i64, approval_id: Option<&str>) -> ServerRequest {
+    ServerRequest::CommandExecutionRequestApproval {
+        request_id: RequestId::Integer(request_id),
+        params: CommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            approval_id: approval_id.map(str::to_string),
+            reason: None,
+            network_approval_context: None,
+            command: Some("echo hi".to_string()),
+            cwd: None,
+            command_actions: None,
+            additional_permissions: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: None,
+        },
+    }
+}
+
+fn sample_command_approval_response(
+    request_id: i64,
+    decision: CommandExecutionApprovalDecision,
+) -> ServerResponse {
+    ServerResponse::CommandExecutionRequestApproval {
+        request_id: RequestId::Integer(request_id),
+        response: CommandExecutionRequestApprovalResponse { decision },
+    }
+}
+
+fn sample_network_policy_command_approval_request(request_id: i64) -> ServerRequest {
+    ServerRequest::CommandExecutionRequestApproval {
+        request_id: RequestId::Integer(request_id),
+        params: CommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            approval_id: None,
+            reason: Some("network access requested".to_string()),
+            network_approval_context: None,
+            command: None,
+            cwd: None,
+            command_actions: None,
+            additional_permissions: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: Some(vec![NetworkPolicyAmendment {
+                host: "example.com".to_string(),
+                action: NetworkPolicyRuleAction::Allow,
+            }]),
+            available_decisions: None,
+        },
+    }
+}
+
+fn sample_file_change_approval_request(request_id: i64) -> ServerRequest {
+    ServerRequest::FileChangeRequestApproval {
+        request_id: RequestId::Integer(request_id),
+        params: FileChangeRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            reason: None,
+            grant_root: Some(PathBuf::from("/tmp")),
+        },
+    }
+}
+
+fn sample_file_change_approval_response(
+    request_id: i64,
+    decision: FileChangeApprovalDecision,
+) -> ServerResponse {
+    ServerResponse::FileChangeRequestApproval {
+        request_id: RequestId::Integer(request_id),
+        response: FileChangeRequestApprovalResponse { decision },
+    }
+}
+
+fn sample_permissions_approval_request(request_id: i64) -> ServerRequest {
+    ServerRequest::PermissionsRequestApproval {
+        request_id: RequestId::Integer(request_id),
+        params: PermissionsRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            reason: None,
+            permissions: RequestPermissionProfile {
+                network: Some(AdditionalNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: None,
+            },
+        },
+    }
+}
+
+fn sample_permissions_approval_response(request_id: i64) -> ServerResponse {
+    ServerResponse::PermissionsRequestApproval {
+        request_id: RequestId::Integer(request_id),
+        response: PermissionsRequestApprovalResponse {
+            permissions: GrantedPermissionProfile {
+                network: Some(AdditionalNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: None,
+            },
+            scope: PermissionGrantScope::Session,
+        },
+    }
+}
+
+fn sample_guardian_review_started(
+    review_id: &str,
+    target_item_id: Option<&str>,
+) -> ServerNotification {
+    ServerNotification::ItemGuardianApprovalReviewStarted(
+        ItemGuardianApprovalReviewStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            review_id: review_id.to_string(),
+            target_item_id: target_item_id.map(str::to_string),
+            review: GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::InProgress,
+                risk_level: None,
+                user_authorization: None,
+                rationale: None,
+            },
+            action: GuardianApprovalReviewAction::Command {
+                source: AppServerGuardianCommandSource::Shell,
+                command: "echo hi".to_string(),
+                cwd: test_path_buf("/tmp").abs(),
+            },
+        },
+    )
+}
+
+fn sample_guardian_review_completed(
+    review_id: &str,
+    target_item_id: Option<&str>,
+    status: GuardianApprovalReviewStatus,
+) -> ServerNotification {
+    ServerNotification::ItemGuardianApprovalReviewCompleted(
+        ItemGuardianApprovalReviewCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            review_id: review_id.to_string(),
+            target_item_id: target_item_id.map(str::to_string),
+            decision_source: codex_app_server_protocol::AutoReviewDecisionSource::Agent,
+            review: GuardianApprovalReview {
+                status,
+                risk_level: None,
+                user_authorization: None,
+                rationale: None,
+            },
+            action: GuardianApprovalReviewAction::Command {
+                source: AppServerGuardianCommandSource::Shell,
+                command: "echo hi".to_string(),
+                cwd: test_path_buf("/tmp").abs(),
+            },
+        },
+    )
+}
+
 fn expected_absolute_path(path: &PathBuf) -> String {
     std::fs::canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf())
@@ -1051,6 +1263,55 @@ fn command_execution_event_allows_null_thread_denormalization() {
     assert_eq!(payload["event_params"]["thread_source"], json!(null));
 }
 
+#[test]
+fn tool_call_review_event_serializes_expected_shape() {
+    let event = TrackEventRequest::ToolCallReview(CodexToolCallReviewEventRequest {
+        event_type: "codex_tool_call_review_event",
+        event_params: CodexToolCallReviewEventParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: None,
+            review_id: "review-1".to_string(),
+            thread_source: Some("subagent"),
+            subagent_source: Some("thread_spawn".to_string()),
+            parent_thread_id: Some("parent-thread-1".to_string()),
+            tool_kind: ToolReviewToolKind::NetworkAccess,
+            tool_name: "network_access".to_string(),
+            reviewer: ToolReviewReviewer::User,
+            trigger: ToolReviewTrigger::NetworkRetry,
+            status: ToolReviewStatus::NetworkPolicyAllow,
+            created_at: 123,
+            completed_at: Some(125),
+            duration_ms: Some(2000),
+        },
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize tool review event");
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_tool_call_review_event",
+            "event_params": {
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "item_id": null,
+                "review_id": "review-1",
+                "thread_source": "subagent",
+                "subagent_source": "thread_spawn",
+                "parent_thread_id": "parent-thread-1",
+                "tool_kind": "network_access",
+                "tool_name": "network_access",
+                "reviewer": "user",
+                "trigger": "network_retry",
+                "status": "network_policy_allow",
+                "created_at": 123,
+                "completed_at": 125,
+                "duration_ms": 2000
+            }
+        })
+    );
+}
+
 #[tokio::test]
 async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialized() {
     let mut reducer = AnalyticsReducer::default();
@@ -1471,6 +1732,337 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
         "codex-tui"
     );
     assert_eq!(payload[0]["event_params"]["thread_source"], json!(null));
+}
+
+#[tokio::test]
+async fn command_execution_approval_response_publishes_user_review_event() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerRequest {
+                connection_id: 7,
+                request: Box::new(sample_command_approval_request(
+                    /*request_id*/ 41, /*approval_id*/ None,
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    assert!(events.is_empty());
+
+    reducer
+        .ingest(
+            AnalyticsFact::ServerResponse {
+                response: Box::new(sample_command_approval_response(
+                    /*request_id*/ 41,
+                    CommandExecutionApprovalDecision::Accept,
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events).expect("serialize events");
+    assert_eq!(payload.as_array().expect("events array").len(), 1);
+    assert_eq!(payload[0]["event_type"], "codex_tool_call_review_event");
+    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
+    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-1");
+    assert_eq!(payload[0]["event_params"]["item_id"], "item-1");
+    assert_eq!(payload[0]["event_params"]["review_id"], "user:41");
+    assert_eq!(payload[0]["event_params"]["thread_source"], "user");
+    assert_eq!(payload[0]["event_params"]["tool_kind"], "command_execution");
+    assert_eq!(payload[0]["event_params"]["tool_name"], "shell");
+    assert_eq!(payload[0]["event_params"]["reviewer"], "user");
+    assert_eq!(payload[0]["event_params"]["trigger"], "initial");
+    assert_eq!(payload[0]["event_params"]["status"], "approved");
+    assert!(payload[0]["event_params"]["created_at"].as_u64().is_some());
+    assert!(
+        payload[0]["event_params"]["completed_at"]
+            .as_u64()
+            .is_some()
+    );
+    assert!(payload[0]["event_params"]["duration_ms"].as_u64().is_some());
+}
+
+#[tokio::test]
+async fn command_subapproval_maps_to_subcommand_execve_trigger() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerRequest {
+                connection_id: 7,
+                request: Box::new(sample_command_approval_request(
+                    /*request_id*/ 42,
+                    Some("approval-1"),
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerResponse {
+                response: Box::new(sample_command_approval_response(
+                    /*request_id*/ 42,
+                    CommandExecutionApprovalDecision::AcceptForSession,
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events[0]).expect("serialize review event");
+    assert_eq!(payload["event_params"]["trigger"], "subcommand_execve");
+    assert_eq!(payload["event_params"]["status"], "approved_for_session");
+}
+
+#[tokio::test]
+async fn network_policy_amendment_maps_to_network_review_status() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerRequest {
+                connection_id: 7,
+                request: Box::new(sample_network_policy_command_approval_request(
+                    /*request_id*/ 43,
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerResponse {
+                response: Box::new(sample_command_approval_response(
+                    /*request_id*/ 43,
+                    CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                        network_policy_amendment: NetworkPolicyAmendment {
+                            host: "example.com".to_string(),
+                            action: NetworkPolicyRuleAction::Allow,
+                        },
+                    },
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events[0]).expect("serialize review event");
+    assert_eq!(payload["event_params"]["trigger"], "network_retry");
+    assert_eq!(payload["event_params"]["status"], "network_policy_allow");
+}
+
+#[tokio::test]
+async fn file_change_approval_response_maps_terminal_statuses() {
+    for (request_id, decision, expected_status) in [
+        (51, FileChangeApprovalDecision::Accept, "approved"),
+        (52, FileChangeApprovalDecision::Decline, "denied"),
+        (53, FileChangeApprovalDecision::Cancel, "aborted"),
+    ] {
+        let mut reducer = AnalyticsReducer::default();
+        let mut events = Vec::new();
+
+        ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
+        reducer
+            .ingest(
+                AnalyticsFact::ServerRequest {
+                    connection_id: 7,
+                    request: Box::new(sample_file_change_approval_request(request_id)),
+                },
+                &mut events,
+            )
+            .await;
+        reducer
+            .ingest(
+                AnalyticsFact::ServerResponse {
+                    response: Box::new(sample_file_change_approval_response(request_id, decision)),
+                },
+                &mut events,
+            )
+            .await;
+
+        let payload = serde_json::to_value(&events[0]).expect("serialize review event");
+        assert_eq!(payload["event_params"]["tool_kind"], "file_change");
+        assert_eq!(payload["event_params"]["tool_name"], "apply_patch");
+        assert_eq!(payload["event_params"]["trigger"], "sandbox_retry");
+        assert_eq!(payload["event_params"]["status"], expected_status);
+    }
+}
+
+#[tokio::test]
+async fn permissions_approval_response_maps_to_network_trigger() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerRequest {
+                connection_id: 7,
+                request: Box::new(sample_permissions_approval_request(/*request_id*/ 61)),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerResponse {
+                response: Box::new(sample_permissions_approval_response(/*request_id*/ 61)),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events[0]).expect("serialize review event");
+    assert_eq!(payload["event_params"]["tool_kind"], "permissions");
+    assert_eq!(payload["event_params"]["trigger"], "network_retry");
+    assert_eq!(payload["event_params"]["status"], "approved_for_session");
+}
+
+#[tokio::test]
+async fn guardian_completed_notification_publishes_review_event_with_thread_metadata() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            notification_fact(sample_guardian_review_started(
+                "guardian-review-1",
+                Some("item-1"),
+            )),
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            notification_fact(sample_guardian_review_completed(
+                "guardian-review-1",
+                Some("item-1"),
+                GuardianApprovalReviewStatus::Denied,
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events[0]).expect("serialize review event");
+    assert_eq!(payload["event_type"], "codex_tool_call_review_event");
+    assert_eq!(payload["event_params"]["review_id"], "guardian-review-1");
+    assert_eq!(payload["event_params"]["item_id"], "item-1");
+    assert_eq!(payload["event_params"]["thread_source"], "user");
+    assert_eq!(payload["event_params"]["tool_kind"], "command_execution");
+    assert_eq!(payload["event_params"]["reviewer"], "guardian");
+    assert_eq!(payload["event_params"]["status"], "denied");
+    assert!(payload["event_params"]["duration_ms"].as_u64().is_some());
+}
+
+#[tokio::test]
+async fn guardian_completed_without_started_uses_null_duration() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            notification_fact(sample_guardian_review_completed(
+                "guardian-review-2",
+                None,
+                GuardianApprovalReviewStatus::TimedOut,
+            )),
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events[0]).expect("serialize review event");
+    assert_eq!(payload["event_params"]["item_id"], json!(null));
+    assert_eq!(payload["event_params"]["status"], "timed_out");
+    assert_eq!(payload["event_params"]["duration_ms"], json!(null));
+}
+
+#[tokio::test]
+async fn terminal_reviews_denormalize_counts_onto_tool_item_events() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_tool_review_prerequisites(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerRequest {
+                connection_id: 7,
+                request: Box::new(sample_command_approval_request(
+                    /*request_id*/ 71, /*approval_id*/ None,
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::ServerResponse {
+                response: Box::new(sample_command_approval_response(
+                    /*request_id*/ 71,
+                    CommandExecutionApprovalDecision::AcceptForSession,
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    events.clear();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Notification {
+                connection_id: 7,
+                notification: Box::new(ServerNotification::ItemStarted(ItemStartedNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item: sample_command_execution_item(
+                        CommandExecutionStatus::InProgress,
+                        /*exit_code*/ None,
+                        /*duration_ms*/ None,
+                    ),
+                })),
+            },
+            &mut events,
+        )
+        .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification {
+                connection_id: 7,
+                notification: Box::new(ServerNotification::ItemCompleted(
+                    ItemCompletedNotification {
+                        thread_id: "thread-1".to_string(),
+                        turn_id: "turn-1".to_string(),
+                        item: sample_command_execution_item(
+                            CommandExecutionStatus::Completed,
+                            Some(0),
+                            Some(42),
+                        ),
+                    },
+                )),
+            },
+            &mut events,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&events[0]).expect("serialize tool item event");
+    assert_eq!(payload["event_params"]["review_count"], 1);
+    assert_eq!(payload["event_params"]["user_review_count"], 1);
+    assert_eq!(payload["event_params"]["guardian_review_count"], 0);
+    assert_eq!(
+        payload["event_params"]["final_approval_outcome"],
+        "user_approved_for_session"
+    );
 }
 
 #[test]

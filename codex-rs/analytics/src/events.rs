@@ -71,6 +71,7 @@ pub(crate) enum TrackEventRequest {
     WebSearch(CodexWebSearchEventRequest),
     #[allow(dead_code)]
     ImageGeneration(CodexImageGenerationEventRequest),
+    ToolCallReview(CodexToolCallReviewEventRequest),
     PluginUsed(CodexPluginUsedEventRequest),
     PluginInstalled(CodexPluginEventRequest),
     PluginUninstalled(CodexPluginEventRequest),
@@ -320,6 +321,70 @@ pub(crate) struct CodexToolItemEventBase {
     pub(crate) requested_additional_permissions: bool,
     pub(crate) requested_network_access: bool,
     pub(crate) retry_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolReviewToolKind {
+    CommandExecution,
+    FileChange,
+    McpToolCall,
+    Permissions,
+    NetworkAccess,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolReviewReviewer {
+    Guardian,
+    User,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolReviewTrigger {
+    Initial,
+    SandboxRetry,
+    NetworkRetry,
+    SubcommandExecve,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolReviewStatus {
+    Approved,
+    ApprovedForSession,
+    ApprovedExecpolicyAmendment,
+    NetworkPolicyAllow,
+    NetworkPolicyDeny,
+    Denied,
+    Aborted,
+    TimedOut,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexToolCallReviewEventParams {
+    pub(crate) thread_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) item_id: Option<String>,
+    pub(crate) review_id: String,
+    pub(crate) thread_source: Option<&'static str>,
+    pub(crate) subagent_source: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) tool_kind: ToolReviewToolKind,
+    pub(crate) tool_name: String,
+    pub(crate) reviewer: ToolReviewReviewer,
+    pub(crate) trigger: ToolReviewTrigger,
+    pub(crate) status: ToolReviewStatus,
+    pub(crate) created_at: u64,
+    pub(crate) completed_at: Option<u64>,
+    pub(crate) duration_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CodexToolCallReviewEventRequest {
+    pub(crate) event_type: &'static str,
+    pub(crate) event_params: CodexToolCallReviewEventParams,
 }
 
 #[allow(dead_code)]
