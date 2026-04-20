@@ -287,8 +287,8 @@ impl FileWatcherSubscriber {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn register_path(&self, path: PathBuf, recursive: bool) -> WatchRegistration {
+    #[doc(hidden)]
+    pub fn register_path(&self, path: PathBuf, recursive: bool) -> WatchRegistration {
         self.register_paths(vec![WatchPath { path, recursive }])
     }
 }
@@ -689,8 +689,8 @@ impl FileWatcher {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) async fn send_paths_for_test(&self, paths: Vec<PathBuf>) {
+    #[doc(hidden)]
+    pub async fn send_paths_for_test(&self, paths: Vec<PathBuf>) {
         Self::notify_subscribers(&self.state, self.inner.as_ref(), &paths).await;
     }
 
