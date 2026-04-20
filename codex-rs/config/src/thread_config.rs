@@ -258,8 +258,10 @@ mod tests {
         let layers = loader
             .load_config_layers(ThreadConfigContext {
                 cwd: Some(
-                    AbsolutePathBuf::from_absolute_path_checked("/tmp/project")
-                        .expect("absolute cwd"),
+                    AbsolutePathBuf::from_absolute_path_checked(
+                        std::env::temp_dir().join("project"),
+                    )
+                    .expect("absolute cwd"),
                 ),
                 ..Default::default()
             })
