@@ -889,6 +889,7 @@ pub struct ConfigRequirements {
     #[experimental("configRequirements/read.allowedApprovalsReviewers")]
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
+    pub remote_allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     pub enforce_residency: Option<ResidencyRequirement>,
@@ -7884,6 +7885,7 @@ mod tests {
                 }]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 enforce_residency: None,

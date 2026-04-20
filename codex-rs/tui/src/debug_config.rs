@@ -129,6 +129,21 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         ));
     }
 
+    if let Some(modes) = requirements_toml.remote_allowed_sandbox_modes.as_ref() {
+        let value = join_or_empty(
+            modes
+                .iter()
+                .copied()
+                .map(format_sandbox_mode_requirement)
+                .collect::<Vec<_>>(),
+        );
+        requirement_lines.push(requirement_line(
+            "remote_allowed_sandbox_modes",
+            value,
+            /*source*/ None,
+        ));
+    }
+
     if let Some(modes) = requirements_toml.allowed_web_search_modes.as_ref() {
         let normalized = normalize_allowed_web_search_modes(modes);
         let value = join_or_empty(
@@ -640,6 +655,10 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::GuardianSubagent]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
+            remote_allowed_sandbox_modes: Some(vec![
+                SandboxModeRequirement::ReadOnly,
+                SandboxModeRequirement::WorkspaceWrite,
+            ]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             guardian_policy_config: None,
             feature_requirements: Some(FeatureRequirementsToml {
@@ -691,6 +710,9 @@ mod tests {
                 .as_str(),
             )
         );
+        assert!(rendered.contains(
+            "remote_allowed_sandbox_modes: read-only, workspace-write (source: <unspecified>)"
+        ));
         assert!(
             rendered.contains(
                 "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
@@ -843,6 +865,7 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,

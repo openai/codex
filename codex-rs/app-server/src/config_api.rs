@@ -381,6 +381,12 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
+        remote_allowed_sandbox_modes: requirements.remote_allowed_sandbox_modes.map(|modes| {
+            modes
+                .into_iter()
+                .filter_map(map_sandbox_mode_requirement_to_api)
+                .collect()
+        }),
         allowed_web_search_modes: requirements.allowed_web_search_modes.map(|modes| {
             let mut normalized = modes
                 .into_iter()
@@ -563,6 +569,10 @@ mod tests {
                 CoreSandboxModeRequirement::ReadOnly,
                 CoreSandboxModeRequirement::ExternalSandbox,
             ]),
+            remote_allowed_sandbox_modes: Some(vec![
+                CoreSandboxModeRequirement::ReadOnly,
+                CoreSandboxModeRequirement::WorkspaceWrite,
+            ]),
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
@@ -629,6 +639,10 @@ mod tests {
             Some(vec![SandboxMode::ReadOnly]),
         );
         assert_eq!(
+            mapped.remote_allowed_sandbox_modes,
+            Some(vec![SandboxMode::ReadOnly, SandboxMode::WorkspaceWrite]),
+        );
+        assert_eq!(
             mapped.allowed_web_search_modes,
             Some(vec![WebSearchMode::Cached, WebSearchMode::Disabled]),
         );
@@ -675,6 +689,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
             guardian_policy_config: None,
             feature_requirements: None,
@@ -733,6 +748,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             guardian_policy_config: None,
             feature_requirements: None,

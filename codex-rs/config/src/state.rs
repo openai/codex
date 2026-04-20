@@ -22,6 +22,7 @@ pub struct LoaderOverrides {
     #[cfg(target_os = "macos")]
     pub managed_preferences_base64: Option<String>,
     pub macos_managed_config_requirements_base64: Option<String>,
+    pub requirements_remote_machine: Option<bool>,
 }
 
 impl LoaderOverrides {
@@ -45,6 +46,7 @@ impl LoaderOverrides {
             #[cfg(target_os = "macos")]
             managed_preferences_base64: Some(String::new()),
             macos_managed_config_requirements_base64: Some(String::new()),
+            requirements_remote_machine: None,
         }
     }
 }

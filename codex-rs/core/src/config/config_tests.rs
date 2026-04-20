@@ -5367,6 +5367,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
+        remote_allowed_sandbox_modes: None,
         allowed_web_search_modes: Some(vec![
             crate::config_loader::WebSearchModeRequirement::Cached,
         ]),
@@ -6043,6 +6044,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
+        remote_allowed_sandbox_modes: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,
@@ -6066,6 +6068,75 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         *config.permissions.sandbox_policy.get(),
         SandboxPolicy::new_read_only_policy()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn environment_specific_sandbox_requirements_follow_remote_override() -> std::io::Result<()> {
+    let local_home = TempDir::new()?;
+    std::fs::write(
+        local_home.path().join(CONFIG_TOML_FILE),
+        r#"sandbox_mode = "danger-full-access"
+"#,
+    )?;
+    let mut local_loader_overrides =
+        crate::config_loader::LoaderOverrides::without_managed_config_for_tests();
+    local_loader_overrides.requirements_remote_machine = Some(false);
+    let local_config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(local_home.path().to_path_buf())
+        .fallback_cwd(Some(local_home.path().to_path_buf()))
+        .loader_overrides(local_loader_overrides)
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                allowed_sandbox_modes: Some(vec![
+                    crate::config_loader::SandboxModeRequirement::ReadOnly,
+                ]),
+                remote_allowed_sandbox_modes: Some(vec![
+                    crate::config_loader::SandboxModeRequirement::ReadOnly,
+                    crate::config_loader::SandboxModeRequirement::DangerFullAccess,
+                ]),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+    assert_eq!(
+        *local_config.permissions.sandbox_policy.get(),
+        SandboxPolicy::new_read_only_policy()
+    );
+
+    let remote_home = TempDir::new()?;
+    std::fs::write(
+        remote_home.path().join(CONFIG_TOML_FILE),
+        r#"sandbox_mode = "danger-full-access"
+"#,
+    )?;
+    let mut remote_loader_overrides =
+        crate::config_loader::LoaderOverrides::without_managed_config_for_tests();
+    remote_loader_overrides.requirements_remote_machine = Some(true);
+    let remote_config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(remote_home.path().to_path_buf())
+        .fallback_cwd(Some(remote_home.path().to_path_buf()))
+        .loader_overrides(remote_loader_overrides)
+        .cloud_requirements(CloudRequirementsLoader::new(async {
+            Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                allowed_sandbox_modes: Some(vec![
+                    crate::config_loader::SandboxModeRequirement::ReadOnly,
+                ]),
+                remote_allowed_sandbox_modes: Some(vec![
+                    crate::config_loader::SandboxModeRequirement::ReadOnly,
+                    crate::config_loader::SandboxModeRequirement::DangerFullAccess,
+                ]),
+                ..Default::default()
+            }))
+        }))
+        .build()
+        .await?;
+    assert_eq!(
+        *remote_config.permissions.sandbox_policy.get(),
+        SandboxPolicy::DangerFullAccess
+    );
+
     Ok(())
 }
 

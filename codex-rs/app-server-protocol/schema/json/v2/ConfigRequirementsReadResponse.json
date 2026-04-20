@@ -106,6 +106,15 @@
             "object",
             "null"
           ]
+        },
+        "remoteAllowedSandboxModes": {
+          "items": {
+            "$ref": "#/definitions/SandboxMode"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"

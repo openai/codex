@@ -7020,6 +7020,15 @@
               "object",
               "null"
             ]
+          },
+          "remoteAllowedSandboxModes": {
+            "items": {
+              "$ref": "#/definitions/v2/SandboxMode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "type": "object"

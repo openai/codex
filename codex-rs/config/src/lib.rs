@@ -47,6 +47,7 @@ pub use config_requirements::ResidencyRequirement;
 pub use config_requirements::SandboxModeRequirement;
 pub use config_requirements::Sourced;
 pub use config_requirements::WebSearchModeRequirement;
+pub use config_requirements::is_remote_machine;
 pub use constraint::Constrained;
 pub use constraint::ConstraintError;
 pub use constraint::ConstraintResult;

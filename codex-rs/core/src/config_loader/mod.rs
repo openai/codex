@@ -11,6 +11,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ProjectConfig;
+use codex_config::is_remote_machine;
 use codex_exec_server::ExecutorFileSystem;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -129,10 +130,15 @@ pub async fn load_config_layers_state(
     cloud_requirements: CloudRequirementsLoader,
 ) -> io::Result<ConfigLayerStack> {
     let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    let requirements_remote_machine = overrides.requirements_remote_machine;
 
     if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
-        config_requirements_toml
-            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
+        merge_requirements(
+            &mut config_requirements_toml,
+            RequirementSource::CloudRequirements,
+            requirements,
+            requirements_remote_machine,
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -141,12 +147,19 @@ pub async fn load_config_layers_state(
         overrides
             .macos_managed_config_requirements_base64
             .as_deref(),
+        requirements_remote_machine,
     )
     .await?;
 
     // Honor the system requirements.toml location.
     let requirements_toml_file = system_requirements_toml_file()?;
-    load_requirements_toml(fs, &mut config_requirements_toml, &requirements_toml_file).await?;
+    load_requirements_toml(
+        fs,
+        &mut config_requirements_toml,
+        &requirements_toml_file,
+        requirements_remote_machine,
+    )
+    .await?;
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
@@ -319,6 +332,21 @@ pub async fn load_config_layers_state(
     )
 }
 
+pub(super) fn merge_requirements(
+    target: &mut ConfigRequirementsWithSources,
+    source: RequirementSource,
+    mut requirements: ConfigRequirementsToml,
+    remote_machine: Option<bool>,
+) {
+    if remote_machine.unwrap_or_else(is_remote_machine)
+        && let Some(remote_allowed_sandbox_modes) =
+            requirements.remote_allowed_sandbox_modes.clone()
+    {
+        requirements.allowed_sandbox_modes = Some(remote_allowed_sandbox_modes);
+    }
+    target.merge_unset_fields(source, requirements);
+}
+
 /// Attempts to load a config.toml file from `config_toml`.
 /// - If the file exists and is valid TOML, passes the parsed `toml::Value` to
 ///   `create_entry` and returns the resulting layer entry.
@@ -374,6 +402,7 @@ async fn load_requirements_toml(
     fs: &dyn ExecutorFileSystem,
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: &AbsolutePathBuf,
+    remote_machine: Option<bool>,
 ) -> io::Result<()> {
     match fs
         .read_file_text(requirements_toml_file, /*sandbox*/ None)
@@ -400,11 +429,13 @@ async fn load_requirements_toml(
                         ),
                     )
                 })?;
-            config_requirements_toml.merge_unset_fields(
+            merge_requirements(
+                config_requirements_toml,
                 RequirementSource::SystemRequirementsToml {
                     file: requirements_toml_file.clone(),
                 },
                 requirements_config,
+                remote_machine,
             );
         }
         Err(e) => {

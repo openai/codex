@@ -544,6 +544,7 @@ personality = true
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*remote_machine*/ None,
     )
     .await?;
 
@@ -645,6 +646,7 @@ allowed_approval_policies = ["on-request"]
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                remote_allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
@@ -698,6 +700,7 @@ allowed_approval_policies = ["on-request"]
             allowed_approval_policies: Some(vec![AskForApproval::Never]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            remote_allowed_sandbox_modes: None,
             allowed_web_search_modes: None,
             feature_requirements: None,
             mcp_servers: None,
@@ -713,6 +716,7 @@ allowed_approval_policies = ["on-request"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &AbsolutePathBuf::try_from(requirements_file)?,
+        /*remote_machine*/ None,
     )
     .await?;
 
@@ -755,6 +759,7 @@ deny_read = ["./sensitive", "../shared/secret.txt"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*remote_machine*/ None,
     )
     .await?;
 
@@ -809,6 +814,7 @@ deny_read = ["./sensitive/**/*.txt"]
         LOCAL_FS.as_ref(),
         &mut config_requirements_toml,
         &requirements_file,
+        /*remote_machine*/ None,
     )
     .await?;
 
@@ -854,6 +860,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_approval_policies: Some(vec![AskForApproval::Never]),
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
+        remote_allowed_sandbox_modes: None,
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,
